@@ -1,0 +1,14 @@
+{
+  "dataset_name": "operandi",
+  "id_extraction": {
+    "source": "auto",
+    "force_dicom_read": false,
+    "patient_key": { "from_tag": "PatientName", "fallback": "path" },
+    "study_id":    { "from_tag": "StudyInstanceUID", "fallback": "path" },
+    "series_id":   { "from_tag": "SeriesInstanceUID", "fallback": "path" }
+  },
+  "id_standardization": {
+    "hook_module": "datasets_config.hooks.operandi",
+    "patient_key": "standardize_operandi_patient_key"
+  }
+}
