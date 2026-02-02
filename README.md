@@ -1,2 +1,2 @@
 # IMPERANDI
-IMaging PERsistence And Normalization for Diagnostic Interoperability
+IMaging PREprocessing And Normalization for Diagnostic Interoperability
