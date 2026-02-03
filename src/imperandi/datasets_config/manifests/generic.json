@@ -9,6 +9,6 @@
   },
   "id_standardization": {
     "hook_module": "datasets_config.hooks.generic",
-    "patient_key": "standardize_patient_key"
+    "function": "standardize_patient_key"
   }
 }

@@ -9,6 +9,14 @@
   },
   "id_standardization": {
     "hook_module": "datasets_config.hooks.operandi",
-    "patient_key": "standardize_operandi_patient_key"
-  }
+    "function":    "standardize_operandi_patient_key"
+  },
+  "derived_columns": [
+    {
+      "from_column": "patient_key",
+      "hook_module": "datasets_config.hooks.operandi",
+      "function":    "extract_from_patient_key",
+      "join_mode":   "missing_only"
+    }
+  ]
 }
