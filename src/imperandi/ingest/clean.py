@@ -48,35 +48,41 @@ COLUMNS_TO_USE = [
 pd.options.mode.chained_assignment = None
 
 
-def parse_arguments():
-    parser = argparse.ArgumentParser(
-        description="Clean and process DICOM metadata CSV."
-    )
-    parser.add_argument(
-        "--csv_path",
-        type=str,
-        nargs="+",
-        required=True,
-        help="Path to the input CSV file / File pattern for multi-file CSV",
-    )
-    parser.add_argument(
-        "--csv_path_out",
-        type=str,
-        required=True,
-        help="Path to save the cleaned CSV file",
-    )
+def add_clean_arguments(
+    parser: argparse.ArgumentParser,
+    include_manifest: bool = True,
+    include_csv_path: bool = True,
+    include_csv_path_out: bool = True,
+    include_dry_run: bool = True,
+) -> None:
+    if include_csv_path:
+        parser.add_argument(
+            "--csv_path",
+            type=str,
+            nargs="+",
+            required=True,
+            help="Path to the input CSV file / File pattern for multi-file CSV",
+        )
+    if include_csv_path_out:
+        parser.add_argument(
+            "--csv_path_out",
+            type=str,
+            required=True,
+            help="Path to save the cleaned CSV file",
+        )
     parser.add_argument(
         "--csv_dict_path",
         type=str,
         default=None,
         help="Path to the CSV tag dictionary file",
     )
-    parser.add_argument(
-        "--manifest",
-        type=str,
-        default=None,
-        help="Dataset manifest name or path to manifest JSON.",
-    )
+    if include_manifest:
+        parser.add_argument(
+            "--manifest",
+            type=str,
+            default=None,
+            help="Dataset manifest name or path to manifest JSON.",
+        )
     parser.add_argument(
         "--volume_min",
         type=float,
@@ -89,6 +95,36 @@ def parse_arguments():
         default=DEFAULT_VOLUME_UPPERBOUND,
         help="Maximum allowable volume depth.",
     )
+    if include_dry_run:
+        parser.add_argument(
+            "--dry-run",
+            dest="dry_run",
+            action="store_true",
+            default=False,
+            help="Print planned actions without running.",
+        )
+
+
+def build_parser(
+    add_help: bool = True,
+    include_manifest: bool = True,
+) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Clean and process DICOM metadata CSV.",
+        add_help=add_help,
+    )
+    add_clean_arguments(
+        parser,
+        include_manifest=include_manifest,
+        include_csv_path=True,
+        include_csv_path_out=True,
+        include_dry_run=True,
+    )
+    return parser
+
+
+def parse_arguments():
+    parser = build_parser()
     args = parser.parse_args()
 
     print(f"Running {Path(__file__).name} script with arguments: {args}")
@@ -723,6 +759,15 @@ def clean_and_save_data(csv_path, csv_path_out, csv_dict_path, manifest, volume_
 
 if __name__ == "__main__":
     args = parse_arguments()
+    if args.dry_run:
+        print("Dry run: clean")
+        print(f"  csv_path={args.csv_path}")
+        print(f"  csv_path_out={args.csv_path_out}")
+        print(f"  csv_dict_path={args.csv_dict_path}")
+        print(f"  manifest={args.manifest}")
+        print(f"  volume_min={args.volume_min}")
+        print(f"  volume_max={args.volume_max}")
+        raise SystemExit(0)
     manifest = load_manifest(args.manifest, base_path=Path(__file__).resolve().parents[1])
     clean_and_save_data(
         args.csv_path,

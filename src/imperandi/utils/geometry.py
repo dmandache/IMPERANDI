@@ -86,7 +86,7 @@ def classify_plane_from_iop(iop, angle_thresh_deg=10.0):
     angle = float(np.degrees(np.arccos(np.clip(max_dot, -1.0, 1.0))))
 
     axis = ["X", "Y", "Z"][k]
-    if angle > angle_thresh_deg:
+    if angle > angle_thresh_deg and not np.isclose(angle, angle_thresh_deg, atol=1e-6):
         return "OBL", angle, axis
 
     plane = {"X": "SAG", "Y": "COR", "Z": "AX"}[axis]

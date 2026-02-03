@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "imperandi"
+version = "0.0.0"
+description = "IMaging PREprocessing And Normalization for Diagnostic Interoperability"
+readme = "README.md"
+requires-python = ">=3.9"
+
+[project.scripts]
+imperandi = "imperandi.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

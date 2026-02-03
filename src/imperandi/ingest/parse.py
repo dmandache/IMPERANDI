@@ -16,10 +16,11 @@ warnings.filterwarnings("ignore")
 # -------------------------
 # CLI
 # -------------------------
-def parse_arguments():
-    parser = argparse.ArgumentParser(
-        description="Process DICOM files: read header tags once, then compute patient/study/series IDs from tags or path."
-    )
+def add_parse_arguments(
+    parser: argparse.ArgumentParser,
+    include_manifest: bool = True,
+    include_dry_run: bool = True,
+) -> None:
     parser.add_argument(
         "--root_path",
         type=str,
@@ -32,12 +33,13 @@ def parse_arguments():
         required=True,
         help="Directory to save output CSV files.",
     )
-    parser.add_argument(
-        "--manifest",
-        type=str,
-        default=None,
-        help="Dataset manifest name or path to manifest JSON.",
-    )
+    if include_manifest:
+        parser.add_argument(
+            "--manifest",
+            type=str,
+            default=None,
+            help="Dataset manifest name or path to manifest JSON.",
+        )
 
     # Tag reading
     parser.add_argument(
@@ -105,7 +107,37 @@ def parse_arguments():
     parser.add_argument(
         "--verbose", "-v", action="store_true", default=False, help="Verbose mode."
     )
+    if include_dry_run:
+        parser.add_argument(
+            "--dry-run",
+            dest="dry_run",
+            action="store_true",
+            default=False,
+            help="Print planned actions without running.",
+        )
 
+
+def build_parser(
+    add_help: bool = True,
+    include_manifest: bool = True,
+    include_dry_run: bool = True,
+) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Process DICOM files: read header tags once, then compute patient/study/series IDs from tags or path."
+        ),
+        add_help=add_help,
+    )
+    add_parse_arguments(
+        parser,
+        include_manifest=include_manifest,
+        include_dry_run=include_dry_run,
+    )
+    return parser
+
+
+def parse_arguments():
+    parser = build_parser()
     args = parser.parse_args()
     print(f"Running {Path(__file__).name} with args: {args}")
     return args
@@ -414,5 +446,21 @@ def main(args):
 
 if __name__ == "__main__":
     args = parse_arguments()
+    if args.dry_run:
+        print("Dry run: parse")
+        print(f"  root_path={args.root_path}")
+        print(f"  output_dir={args.output_dir}")
+        print(f"  manifest={args.manifest}")
+        print(f"  flatten_all_tags={args.flatten_all_tags}")
+        print(f"  tags={args.tags}")
+        print(f"  force_dicom_read={args.force_dicom_read}")
+        print(f"  id_source={args.id_source}")
+        print(f"  patient_key_from={args.patient_key_from}")
+        print(f"  study_id_from={args.study_id_from}")
+        print(f"  series_id_from={args.series_id_from}")
+        print(f"  checkpoint_frequency={args.checkpoint_frequency}")
+        print(f"  num_workers={args.num_workers}")
+        print(f"  verbose={args.verbose}")
+        raise SystemExit(0)
     pandarallel.initialize(progress_bar=args.verbose, nb_workers=args.num_workers)
     main(args)
