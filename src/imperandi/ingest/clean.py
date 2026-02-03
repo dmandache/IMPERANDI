@@ -10,17 +10,40 @@ from dateutil.parser import parse
 from pydicom.uid import UID
 from unidecode import unidecode
 
-from imperandi.ingest.config import (
-    COLUMNS_TO_USE,
-    DEFAULT_VOLUME_LOWERBOUND,
-    DEFAULT_VOLUME_UPPERBOUND,
-)
 from imperandi.utils.manifest import load_manifest, resolve_hook
 from imperandi.utils.geometry import (
     as_float_array,
     classify_plane_from_iop,
     standardize_iop,
 )
+
+DEFAULT_VOLUME_LOWERBOUND = 30.0
+DEFAULT_VOLUME_UPPERBOUND = 500.0
+
+COLUMNS_TO_USE = [
+    "patient_key",
+    "study_id",
+    "series_id",
+    "dicom_path",
+    "Modality",
+    "ModalitiesInStudy",
+    "SOPClassUID",
+    "StudyDate",
+    "ImageType",
+    "Rows",
+    "Columns",
+    "PixelSpacing",
+    "SliceThickness",
+    "SpacingBetweenSlices",
+    "ImageOrientationPatient",
+    "ImagePositionPatient",
+    "FrameOfReferenceUID",
+    "InstanceNumber",
+    "AcquisitionNumber",
+    "SliceLocation",
+    "SeriesDescription",
+    "InstanceCreationTime",
+]
 
 pd.options.mode.chained_assignment = None
 
