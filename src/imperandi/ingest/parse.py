@@ -32,6 +32,12 @@ def parse_arguments():
         required=True,
         help="Directory to save output CSV files.",
     )
+    parser.add_argument(
+        "--manifest",
+        type=str,
+        default=None,
+        help="Dataset manifest name or path to manifest JSON.",
+    )
 
     # Tag reading
     parser.add_argument(
@@ -103,6 +109,45 @@ def parse_arguments():
     args = parser.parse_args()
     print(f"Running {Path(__file__).name} with args: {args}")
     return args
+
+
+from imperandi.utils.manifest import load_manifest, resolve_hook
+
+
+def apply_id_standardization(df: pd.DataFrame, manifest: dict) -> pd.DataFrame:
+    hook_config = manifest.get("id_standardization", {})
+    hook = resolve_hook(hook_config)
+    if not hook or "patient_key" not in df.columns:
+        return df
+    df["patient_key"] = df["patient_key"].apply(hook)
+    return df
+
+
+def apply_derived_columns(df: pd.DataFrame, manifest: dict) -> pd.DataFrame:
+    derived_columns = manifest.get("derived_columns", [])
+    if not derived_columns:
+        return df
+
+    for derived in derived_columns:
+        from_column = derived.get("from_column")
+        if not from_column or from_column not in df.columns:
+            continue
+        hook = resolve_hook(derived)
+        if not hook:
+            continue
+        derived_values = df[from_column].apply(hook)
+        derived_df = derived_values.apply(pd.Series)
+        if derived_df.empty:
+            continue
+        join_mode = derived.get("join_mode", "missing_only")
+        if join_mode == "overwrite":
+            df = df.drop(columns=[col for col in derived_df.columns if col in df.columns])
+            df = df.join(derived_df)
+        else:
+            derived_df = derived_df.loc[:, ~derived_df.columns.isin(df.columns)]
+            if not derived_df.empty:
+                df = df.join(derived_df)
+    return df
 
 
 # -------------------------
@@ -294,6 +339,7 @@ def main(args):
     output_dir = Path(args.output_dir)
     ensure_directory_exists(output_dir)
     print(f"Output directory: {output_dir}")
+    manifest = load_manifest(args.manifest, base_path=Path(__file__).resolve().parents[1])
 
     dicom_paths = get_dicom_paths(root_path)
     print(f"Found {len(dicom_paths)} DICOM files under {root_path}")
@@ -335,6 +381,8 @@ def main(args):
         study_tag=args.study_id_from,
         series_tag=args.series_id_from,
     )
+    df = apply_id_standardization(df, manifest)
+    df = apply_derived_columns(df, manifest)
 
     # 4) output final df
     out_final = output_dir / "dicom_index.csv"
