@@ -2,17 +2,22 @@ import re
 
 def standardize_patient_key(x: str | None) -> str | None:
     """
-    Extract numeric patient ID from strings like:
-      - Eg: PatientName in IRCAD Dataset : "liver_13^patient" -> "13"
-    Returns original if no integer is found.
+    Extract numeric parts from a string, strip leading zeros,
+    join with '-', and fall back to original if no numbers are found.
+
+    Examples:
+      "liver_13^patient" -> "13"
+      "patient_0012_030" -> "12-30"
+      "no_numbers_here"  -> "no_numbers_here"
     """
-    if not x:
+    if x is None:
         return None
 
-    x = str(x)
+    s = str(x)
+    nums = re.findall(r"\d+", s)
 
-    m = re.search(r"\b(\d+)\b", x)
-    if not m:
-        return 
+    if not nums:
+        return s
 
-    return m.group(1)
+    cleaned = [n.lstrip("0") or "0" for n in nums]
+    return "-".join(cleaned)

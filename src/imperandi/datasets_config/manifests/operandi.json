@@ -13,9 +13,9 @@
   },
   "derived_columns": [
     {
-      "from_column": "patient_key",
       "hook_module": "datasets_config.hooks.operandi",
       "function":    "extract_from_patient_key",
+      "from_column": "patient_key",
       "join_mode":   "missing_only"
     }
   ]

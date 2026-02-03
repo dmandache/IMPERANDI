@@ -267,7 +267,9 @@ def choose_ids(
     # Path-derived patient_key
     # -------------------------
     rel = df["dicom_path"].map(lambda p: Path(p).relative_to(root_path))
-    df["patient_key_path"] = rel.map(lambda p: p.parts[0] if len(p.parts) > 0 else None)
+    df["patient_key_path"] = rel.map(lambda p: p.parts[0] if len(p.parts) > 1 else None)
+    df["study_path"] = rel.map(lambda p: p.parts[1] if len(p.parts) > 2 else None)
+    df["series_path"] = rel.map(lambda p: p.parts[2] if len(p.parts) > 3 else None)
     df["dicom_filename"]   = rel.map(lambda p: p.name)
 
     # -------------------------
@@ -289,8 +291,8 @@ def choose_ids(
     # -------------------------
     if id_source == "path":
         df["patient_key"] = df["patient_key_path"]
-        df["study_id"]    = "0"
-        df["series_id"]   = "0"
+        df["study_id"]    = df["study_path"]
+        df["series_id"]   = df["series_path"]
 
     elif id_source == "tags":
         df["patient_key"] = patient_key_tags
@@ -302,6 +304,8 @@ def choose_ids(
         df["study_id"]    = study_id_tags.fillna("0")
         df["series_id"]   = series_id_tags.fillna("0")
 
+    df = df.drop(columns=["patient_key_path", "study_path", "series_path"])
+    
     return df
 
 
