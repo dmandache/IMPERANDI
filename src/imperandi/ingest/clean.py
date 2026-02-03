@@ -222,8 +222,10 @@ def remove_pet_ct(df):
 def add_date(df):
     if "StudyDate" not in df.columns:
         return df
-    df["date"] = df.StudyDate.apply(
-        lambda x: parse(str(x)) if not isinstance(x, list) else pd.NaN
+    df["date"] = df["StudyDate"].apply(
+        lambda x: pd.to_datetime(x, errors="coerce")
+        if not isinstance(x, list)
+        else pd.NaT
     )
     return df
 
@@ -381,8 +383,8 @@ def correct_volume_ids(df, z_tolerance=1e-3):
         "PixelSpacingXY",
     ]
 
-    df["ImageOrientationPatient"] = df["ImageOrientationPatient"].apply(as_float_array)
-    df["ImagePositionPatient"] = df["ImagePositionPatient"].apply(as_float_array)
+    df["ImageOrientationPatient"] = df["ImageOrientationPatient"].apply(lambda x: tuple(as_float_array(x)) if x is not None else None)
+    df["ImagePositionPatient"] = df["ImagePositionPatient"].apply(lambda x: tuple(as_float_array(x)) if x is not None else None)
 
     updated_ids = {}
     grouped = df.groupby(unique_cols)
@@ -433,14 +435,26 @@ def correct_volume_ids(df, z_tolerance=1e-3):
 
 def group_volumes(df):
     def agg_fun(col):
-        vals = list(col.dropna())
-        agg_col = list(set(vals))
+        vals = col.dropna()
+        uniq = set()
+
+        for v in vals:
+            try:
+                key = tuple(v)
+            except TypeError:
+                # fallback for float / scalar / weird objects
+                key = (str(v),)
+
+            uniq.add(key)
+
+        agg_col = [list(v) for v in uniq]
+
         if len(agg_col) == 0:
             return float("NaN")
         if len(agg_col) == 1:
             return agg_col[0]
         return agg_col
-
+        
     df = df.groupby("volume_id").agg(agg_fun)
     df = df.reset_index()
     df = df.dropna(axis=1, how="all")
@@ -462,7 +476,6 @@ def calculate_volume_length(df):
     df["n_files"] = df["dicom_path"].apply(
         lambda x: len(x) if isinstance(x, list) else 1
     )
-    df = df[df["n_files"] > 1]
     df["volume_length"] = df.apply(calculate_total_volume_length, axis=1)
     return df
 

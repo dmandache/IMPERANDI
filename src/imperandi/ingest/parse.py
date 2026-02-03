@@ -278,7 +278,7 @@ def choose_ids(
     def _tagcol(tag: str) -> pd.Series:
         if tag in df.columns:
             return df[tag].map(
-                lambda v: None if v is None or str(v).strip() == "" else str(v).strip()
+                lambda v: None if pd.isna(v) or str(v).strip() == "" else str(v).strip()
             )
         return pd.Series([None] * len(df), index=df.index)
 
@@ -291,8 +291,8 @@ def choose_ids(
     # -------------------------
     if id_source == "path":
         df["patient_key"] = df["patient_key_path"]
-        df["study_id"]    = df["study_path"]
-        df["series_id"]   = df["series_path"]
+        df["study_id"]    = df["study_path"].fillna("0")
+        df["series_id"]   = df["series_path"].fillna("0")
 
     elif id_source == "tags":
         df["patient_key"] = patient_key_tags
@@ -300,9 +300,9 @@ def choose_ids(
         df["series_id"]   = series_id_tags.fillna("0")
 
     else:  # auto
-        df["patient_key"] = patient_key_tags.fillna(df["patient_key_path"])
-        df["study_id"]    = study_id_tags.fillna("0")
-        df["series_id"]   = series_id_tags.fillna("0")
+        df["patient_key"] = patient_key_tags.fillna(df["patient_key_path"]).fillna("UNKNOWN")
+        df["study_id"]    = study_id_tags.fillna(df["study_path"]).fillna("0")
+        df["series_id"]   = series_id_tags.fillna(df["series_path"]).fillna("0")
 
     df = df.drop(columns=["patient_key_path", "study_path", "series_path"])
     

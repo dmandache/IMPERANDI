@@ -11,7 +11,8 @@ from imperandi.ingest import clean
 
 
 def test_uniform_string_and_remove_other_organs_description():
-    assert clean.uniform_string("  Abc  .0 ") == "abc"
+    assert clean.uniform_string("  Abc  .0") == "abc"
+    assert clean.uniform_string("RévoluTion") == "revolution"
     df = pd.DataFrame({"SeriesDescription": ["Pelvis CT", "Liver", None, "FEMUR study"]})
     out = clean.remove_other_organs_description(df.copy())
     # 'Pelvis' and 'femur' should be filtered out
