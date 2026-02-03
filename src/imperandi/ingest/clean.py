@@ -1,0 +1,726 @@
+import argparse
+import hashlib
+import importlib
+import json
+from ast import literal_eval
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+from dateutil.parser import parse
+from pydicom.uid import UID
+from unidecode import unidecode
+
+from imperandi.ingest.config import (
+    COLUMNS_TO_USE,
+    DEFAULT_VOLUME_LOWERBOUND,
+    DEFAULT_VOLUME_UPPERBOUND,
+)
+from imperandi.utils.geometry import (
+    as_float_array,
+    classify_plane_from_iop,
+    standardize_iop,
+)
+
+pd.options.mode.chained_assignment = None
+
+
+def parse_arguments():
+    parser = argparse.ArgumentParser(
+        description="Clean and process DICOM metadata CSV."
+    )
+    parser.add_argument(
+        "--csv_path",
+        type=str,
+        nargs="+",
+        required=True,
+        help="Path to the input CSV file / File pattern for multi-file CSV",
+    )
+    parser.add_argument(
+        "--csv_path_out",
+        type=str,
+        required=True,
+        help="Path to save the cleaned CSV file",
+    )
+    parser.add_argument(
+        "--csv_dict_path",
+        type=str,
+        default=None,
+        help="Path to the CSV tag dictionary file",
+    )
+    parser.add_argument(
+        "--manifest",
+        type=str,
+        default=None,
+        help="Dataset manifest name or path to manifest JSON.",
+    )
+    parser.add_argument(
+        "--volume_min",
+        type=float,
+        default=DEFAULT_VOLUME_LOWERBOUND,
+        help="Minimum allowable volume depth.",
+    )
+    parser.add_argument(
+        "--volume_max",
+        type=float,
+        default=DEFAULT_VOLUME_UPPERBOUND,
+        help="Maximum allowable volume depth.",
+    )
+    args = parser.parse_args()
+
+    print(f"Running {Path(__file__).name} script with arguments: {args}")
+    return args
+
+
+def load_manifest(manifest_arg: str | None) -> dict:
+    if not manifest_arg:
+        return {}
+
+    manifest_path = Path(manifest_arg)
+    if not manifest_path.suffix:
+        manifest_path = (
+            Path(__file__).resolve().parents[1]
+            / "datasets_config"
+            / "manifests"
+            / f"{manifest_arg}.json"
+        )
+    elif not manifest_path.is_file():
+        manifest_path = (
+            Path(__file__).resolve().parents[1]
+            / "datasets_config"
+            / "manifests"
+            / manifest_arg
+        )
+
+    if not manifest_path.exists():
+        raise FileNotFoundError(f"Manifest not found: {manifest_arg}")
+
+    with manifest_path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def resolve_hook(manifest: dict, hook_key: str):
+    hook_config = manifest.get("id_standardization", {})
+    module_name = hook_config.get("hook_module")
+    function_name = hook_config.get(hook_key)
+    if not module_name or not function_name:
+        return None
+    module = importlib.import_module(f"imperandi.{module_name}")
+    return getattr(module, function_name)
+
+
+def resolve_hook_module(manifest: dict):
+    hook_config = manifest.get("id_standardization", {})
+    module_name = hook_config.get("hook_module")
+    if not module_name:
+        return None
+    return importlib.import_module(f"imperandi.{module_name}")
+
+
+def read_csv_with_valid_columns(file):
+    available_columns = pd.read_csv(file, nrows=0).columns
+    valid_columns = [col for col in COLUMNS_TO_USE if col in available_columns]
+    return pd.read_csv(file, usecols=valid_columns)
+
+
+def load_data(csv_path):
+    if len(csv_path) == 1:
+        df = read_csv_with_valid_columns(csv_path[0])
+    else:
+        dfs = [read_csv_with_valid_columns(file) for file in csv_path]
+        df = pd.concat(dfs, ignore_index=True)
+
+    df = df.loc[:, ~df.columns.str.startswith("Unnamed")]
+    df = df.dropna(axis=1, how="all")
+    print(df.shape, df.columns)
+
+    return df
+
+
+def report_volumes(df, step_name=None):
+    unique_counts = df[["patient_key", "study_id", "series_id"]].nunique()
+    if step_name:
+        print(f"\nAfter {step_name}:")
+    print(f"Unique patients: {unique_counts['patient_key']}")
+    print(f"Unique studies: {unique_counts['study_id']}")
+    print(f"Unique series: {unique_counts['series_id']}")
+
+    if "volume_id" in df.columns:
+        unique_volumes = df["volume_id"].nunique()
+        print(f"Unique volumes: {unique_volumes}")
+
+
+def report_change(df, previous_df, col=None):
+    prev_patients = set(previous_df["patient_key"].unique())
+    curr_patients = set(df["patient_key"].unique())
+    missing_patients = sorted(prev_patients - curr_patients)
+    if missing_patients:
+        print(
+            f"⚠️  {len(missing_patients)} patients removed in this step: {missing_patients}"
+        )
+        if col is not None:
+            print(f"{col} :")
+            print(
+                previous_df[previous_df["patient_key"].isin(missing_patients)][
+                    col
+                ].value_counts(dropna=False)
+            )
+
+    prev_studies = set(previous_df["study_id"].unique())
+    curr_studies = set(df["study_id"].unique())
+    missing_studies = sorted(prev_studies - curr_studies)
+    if missing_studies:
+        missing_df = previous_df[previous_df["study_id"].isin(missing_studies)]
+        if "date" in missing_df.columns:
+            missing_df["date_str"] = pd.to_datetime(missing_df["date"]).dt.strftime(
+                "%Y-%m-%d"
+            )
+            missing_info = missing_df[["patient_key", "date_str"]].drop_duplicates()
+            missing_list = list(missing_info.itertuples(index=False, name=None))
+            print(
+                f"⚠️  {len(missing_list)} studies removed in this step: {missing_list}"
+            )
+        if col is not None:
+            print(f"{col} :")
+            print(missing_df[col].value_counts(dropna=False))
+
+
+def standardize_patient_keys(df, manifest: dict):
+    hook = resolve_hook(manifest, "patient_key")
+    if not hook:
+        return df
+    df["patient_key"] = df["patient_key"].apply(hook)
+    return df
+
+
+def unravel_patient_key(df, manifest: dict):
+    module = resolve_hook_module(manifest)
+    if not module or not hasattr(module, "extract_from_patient_key"):
+        return df
+    newcols = df.patient_key.apply(module.extract_from_patient_key)
+    newcols_to_add = newcols.loc[:, ~newcols.columns.isin(df.columns)]
+    df = df.join(newcols_to_add)
+    return df
+
+
+def filter_ct_modality(df):
+    if "Modality" not in df.columns or "SOPClassUID" not in df.columns:
+        return df
+    df = df[df.Modality == "CT"]
+    df["sop_class"] = df.SOPClassUID.apply(lambda x: UID(x).keyword)
+    df = df[df.sop_class == "CTImageStorage"]
+    return df
+
+
+def remove_pet_ct(df):
+    if "ModalitiesInStudy" not in df.columns:
+        return df
+    unwanted_modalities = ["PT", "NM"]
+    df = df[
+        ~df["ModalitiesInStudy"].apply(
+            lambda mods: any(m in str(mods) for m in unwanted_modalities)
+        )
+    ]
+    return df
+
+
+def add_date(df):
+    if "StudyDate" not in df.columns:
+        return df
+    df["date"] = df.StudyDate.apply(
+        lambda x: parse(str(x)) if not isinstance(x, list) else pd.NaN
+    )
+    return df
+
+
+def filter_image_type(df):
+    if "ImageType" not in df.columns:
+        return df
+    df = df.dropna(subset=["ImageType"])
+    parsed = []
+    for value in df["ImageType"]:
+        if isinstance(value, list):
+            parsed.append(value)
+            continue
+        try:
+            parsed.append(literal_eval(value))
+        except (ValueError, SyntaxError):
+            parsed.append([])
+    df_imagetype = pd.DataFrame(parsed)
+    df_imagetype = df_imagetype.add_prefix("ImageType_value_")
+    df = pd.concat(
+        [df.reset_index(drop=True), df_imagetype.reset_index(drop=True)], axis=1
+    )
+    return df
+
+
+def remove_scouts_localizers(df):
+    if "ImageType" not in df.columns or "SeriesDescription" not in df.columns:
+        return df
+    df = df.dropna(subset=["ImageType", "SeriesDescription"])
+    df = df[~df["ImageType"].str.contains("LOCALIZER")]
+    df = df[df["SeriesDescription"].apply(lambda x: "scout" not in str(x).lower())]
+    return df
+
+
+def remove_mpr(df):
+    if "ImageType" not in df.columns or "SeriesDescription" not in df.columns:
+        return df
+    df = df[
+        ~(
+            (df.ImageType.str.contains("mpr", case=False, na=False))
+            | (df.SeriesDescription.str.contains("mpr", case=False, na=False))
+        )
+    ]
+    return df
+
+
+def uniform_string(s):
+    s = str(s).rstrip(".0")
+    s = " ".join(s.split())
+    return unidecode(s.lower())
+
+
+def remove_other_organs_description(df):
+    if "SeriesDescription" not in df.columns:
+        return df
+    excluded_substrings = [
+        "pelvis",
+        "crane",
+        "rachis",
+        "prostate",
+        "phlebo",
+        "meckel",
+        "femur",
+        "orl",
+    ]
+
+    df["SeriesDescription"] = df["SeriesDescription"].apply(uniform_string)
+    df = df[
+        df["SeriesDescription"].apply(
+            lambda x: not any(sub in x for sub in excluded_substrings)
+        )
+    ]
+
+    return df
+
+
+def clean_scan_size(df):
+    df = df.dropna(axis=1, how="all")
+    if "Rows" in df.columns and "Columns" in df.columns:
+        df = df.dropna(subset=["Rows", "Columns"])
+    if "SliceThickness" in df.columns:
+        df = df[
+            (df["SliceThickness"].astype(float) <= 3)
+            | (df["SliceThickness"].isna())
+        ]
+    return df
+
+
+def clean_pixel_spacing(df):
+    if "PixelSpacing" not in df.columns:
+        return df
+    df["PixelSpacingXY"] = df["PixelSpacing"].apply(
+        lambda x: literal_eval(x)[0] if isinstance(x, str) else None
+    )
+    return df
+
+
+def generate_volume_id(df):
+    if "ImageOrientationPatient" not in df.columns:
+        return df
+    df["ImageOrientationPatient"] = df["ImageOrientationPatient"].apply(
+        lambda x: tuple(x) if isinstance(x, (list, tuple)) else tuple(literal_eval(x))
+    )
+
+    unique_ids = (
+        df[
+            [
+                "patient_key",
+                "study_id",
+                "series_id",
+                "ImageType",
+                "AcquisitionNumber",
+                "ImageOrientationPatient",
+                "SliceThickness",
+                "PixelSpacingXY",
+            ]
+        ]
+        .astype(str)
+        .agg("".join, 1)
+        .apply(lambda x: hashlib.sha1(x.encode()).hexdigest())
+    )
+
+    df["volume_id"] = unique_ids
+
+    return df
+
+
+def filter_by_acquisition_plane(df, angle_thresh_deg=10.0):
+    if "ImageOrientationPatient" not in df.columns:
+        return df
+    (
+        df["acquisition_plane"],
+        df["acquisition_angle"],
+        df["acquisition_axis"],
+    ) = zip(
+        *df["ImageOrientationPatient"].map(
+            lambda x: classify_plane_from_iop(x, angle_thresh_deg)
+        )
+    )
+    df = df[df["acquisition_axis"] == "Z"]
+    return df
+
+
+def correct_volume_ids(df, z_tolerance=1e-3):
+    if "volume_id" not in df.columns:
+        return df
+
+    unique_cols = [
+        "patient_key",
+        "study_id",
+        "series_id",
+        "ImageType",
+        "ImageOrientationPatient",
+        "SliceThickness",
+        "PixelSpacingXY",
+    ]
+
+    df["ImageOrientationPatient"] = df["ImageOrientationPatient"].apply(as_float_array)
+    df["ImagePositionPatient"] = df["ImagePositionPatient"].apply(as_float_array)
+
+    updated_ids = {}
+    grouped = df.groupby(unique_cols)
+
+    for group_key, group_df in grouped:
+        volume_ids = group_df["volume_id"].unique()
+
+        if len(volume_ids) <= 1:
+            continue
+
+        if (
+            "ImagePositionPatient" in group_df.columns
+            and group_df["ImagePositionPatient"].notna().all()
+        ):
+            z_positions = np.array(
+                group_df["ImagePositionPatient"].apply(lambda x: x[2])
+            )
+        elif (
+            "SliceLocation" in group_df.columns
+            and group_df["SliceLocation"].notna().all()
+        ):
+            z_positions = np.array(group_df["SliceLocation"])
+        else:
+            continue
+
+        if len(z_positions) < 2:
+            continue
+
+        z_sorted = np.sort(z_positions)
+        z_diff = np.diff(z_sorted)
+        consistent_spacing = np.all(np.isclose(z_diff, z_diff[0], atol=z_tolerance))
+
+        print(
+            f"{group_df[['patient_key', 'date', 'SeriesDescription']].apply(lambda col: col.unique())} : {len(volume_ids)} pseudo-volumes {len(group_df)} total slices"
+        )
+
+        if consistent_spacing:
+            print("👫 Merged \n")
+            canonical_id = sorted(volume_ids)[0]
+            for vol_id in volume_ids:
+                updated_ids[vol_id] = canonical_id
+        else:
+            print("👍 They are different volumes\n")
+
+    df["volume_id"] = df["volume_id"].apply(lambda vid: updated_ids.get(vid, vid))
+    return df
+
+
+def group_volumes(df):
+    def agg_fun(col):
+        vals = list(col.dropna())
+        agg_col = list(set(vals))
+        if len(agg_col) == 0:
+            return float("NaN")
+        if len(agg_col) == 1:
+            return agg_col[0]
+        return agg_col
+
+    df = df.groupby("volume_id").agg(agg_fun)
+    df = df.reset_index()
+    df = df.dropna(axis=1, how="all")
+    return df
+
+
+def calculate_volume_length(df):
+    def calculate_total_volume_length(row):
+        try:
+            n_files = row["n_files"]
+            thickness = abs(row["SliceThickness"])
+            spacing = row.get("SpacingBetweenSlices", thickness)
+            spacing = abs(spacing) if pd.notna(spacing) else thickness
+            total_length = thickness + (n_files - 1) * abs(spacing)
+            return total_length
+        except Exception:
+            return None
+
+    df["n_files"] = df["dicom_path"].apply(
+        lambda x: len(x) if isinstance(x, list) else 1
+    )
+    df = df[df["n_files"] > 1]
+    df["volume_length"] = df.apply(calculate_total_volume_length, axis=1)
+    return df
+
+
+def filter_volumes_by_size(df, t_min, t_max):
+    df = df[
+        (df["volume_length"].isna())
+        | ((df["volume_length"] >= t_min) & (df["volume_length"] <= t_max))
+    ]
+    return df
+
+
+def map_series_description(df, csv_tag_dict):
+    if not csv_tag_dict or "SeriesDescription" not in df.columns:
+        return df
+
+    df_dict = pd.read_csv(csv_tag_dict)
+    df_dict["SeriesDescription"] = df_dict["SeriesDescription"].apply(uniform_string)
+
+    data_dict = df_dict.set_index("SeriesDescription")["phase"].to_dict()
+
+    df["SeriesDescription"] = df["SeriesDescription"].fillna("inconnu")
+    df["phase"] = df["SeriesDescription"].apply(uniform_string).replace(data_dict)
+
+    mixt_phase_mask = df["phase"].str.lower().eq("mixte")
+    acq = pd.to_numeric(df["AcquisitionNumber"], errors="coerce")
+    df.loc[mixt_phase_mask & (acq == 1), "phase"] = "arteriel"
+    df.loc[mixt_phase_mask & (acq == 2), "phase"] = "portal"
+
+    known_phases = ["sans_injection", "arteriel", "mixte", "portal", "tardif"]
+    known_discards = ["inutile", "inconnu"]
+
+    unknown_descriptions = df[~df.phase.isin(known_phases + known_discards)].phase
+    unique_unknown_descriptions = unknown_descriptions.unique().tolist()
+
+    if len(unknown_descriptions) == 0:
+        print("No unknown SeriesDescription in dataset.")
+    else:
+        print(
+            f"{len(unknown_descriptions)} unmapped SeriesDescription, {len(unique_unknown_descriptions)} unique : {unique_unknown_descriptions}",
+        )
+
+    df = df[df.phase != "inutile"]
+
+    return df
+
+
+def compute_visit_order(df):
+    if "date" not in df.columns:
+        return df
+    df_study = (
+        df.reset_index()
+        .groupby(["patient_key", "study_id"], group_keys=False)
+        .first()
+        .groupby("patient_key", group_keys=False)
+        .apply(lambda x: x.sort_values(by=["date"]))
+    )
+
+    df_study["time_elapsed"] = df_study.groupby("patient_key")["date"].diff()
+    df_study["time_since_first_exam"] = df_study.groupby("patient_key")[
+        "time_elapsed"
+    ].cumsum()
+    df_study["visit_order"] = df_study.groupby("patient_key")["date"].cumcount()
+    print(df.shape, df_study.shape)
+
+    df = df.merge(
+        df_study[["time_elapsed", "time_since_first_exam", "visit_order"]],
+        on=["patient_key", "study_id"],
+        left_index=False,
+        right_index=False,
+        how="left",
+    )
+    return df
+
+
+def compute_acquisition_order(df):
+    if "InstanceCreationTime" not in df.columns:
+        return df
+
+    df["time"] = pd.to_datetime(
+        df["InstanceCreationTime"]
+        .fillna("0")
+        .apply(literal_eval)
+        .apply(lambda x: x[0] if isinstance(x, list) else x)
+        .astype(str),
+        format="%H%M%S.%f",
+        errors="coerce",
+    )
+
+    df_study = (
+        df.reset_index()
+        .groupby(["patient_key", "study_id", "volume_id"], group_keys=False)
+        .first()
+        .groupby("patient_key", group_keys=False)
+        .apply(lambda x: x.sort_values(by=["time"]))
+    )
+
+    df_study["time_elapsed_sec"] = (
+        df_study.groupby(["patient_key", "study_id"])["time"].diff().dt.total_seconds()
+    )
+    df_study["time_since_first_acquisition_sec"] = (
+        df_study.groupby(["patient_key", "study_id"])["time_elapsed_sec"]
+        .cumsum()
+        .fillna(0)
+    )
+    df_study["acquisition_order"] = df_study.groupby(["patient_key", "study_id"])[
+        "time"
+    ].cumcount()
+
+    df = df.merge(
+        df_study[
+            [
+                "time_elapsed_sec",
+                "time_since_first_acquisition_sec",
+                "acquisition_order",
+            ]
+        ],
+        on=["patient_key", "study_id", "volume_id"],
+        left_index=False,
+        right_index=False,
+        how="left",
+    )
+    return df
+
+
+def drop_irrelevant_dicom_tags(df):
+    important_dicom_tags = [
+        "SeriesDescription",
+        "PixelSpacingXY",
+        "Rows",
+        "Columns",
+        "SliceThickness",
+        "SpacingBetweenSlices",
+        "InstanceNumber",
+        "AcquisitionNumber",
+        "SliceLocation",
+        "ImagePositionPatient",
+    ] + df.columns[df.isna().sum() == 0].to_list()
+    print(important_dicom_tags)
+    dicom_tags = [
+        col
+        for col in df.columns
+        if any(c.isupper() for c in col)
+        and "UID" not in col
+        and col not in important_dicom_tags
+    ]
+    df = df.drop(columns=dicom_tags)
+    return df
+
+
+def clean_and_save_data(csv_path, csv_path_out, csv_dict_path, manifest, volume_min, volume_max):
+    df = load_data(csv_path)
+    report_volumes(df, "initial load")
+
+    df = standardize_patient_keys(df, manifest)
+    report_volumes(df, "standardize patient key")
+
+    df = add_date(df)
+
+    df_prev = df.copy()
+    df = unravel_patient_key(df, manifest)
+    report_volumes(df, "add new columns based on patient key")
+    report_change(df, df_prev)
+
+    df_prev = df.copy()
+    df = filter_ct_modality(df)
+    report_volumes(df, "filtering CT modality")
+    report_change(df, df_prev, col="Modality")
+
+    df_prev = df.copy()
+    df = remove_pet_ct(df)
+    report_volumes(df, "removing PET-CT modality")
+    report_change(df, df_prev, col="ModalitiesInStudy")
+
+    df_prev = df.copy()
+    df = filter_image_type(df)
+    report_volumes(df, "filtering image type")
+    report_change(df, df_prev, col="ImageType")
+
+    df_prev = df.copy()
+    df = clean_scan_size(df)
+    report_volumes(df, "cleaning scan size")
+    report_change(df, df_prev)
+
+    df_prev = df.copy()
+    df = remove_scouts_localizers(df)
+    report_volumes(df, "removing localizers / scouts")
+    report_change(df, df_prev)
+
+    df_prev = df.copy()
+    df = remove_other_organs_description(df)
+    report_volumes(df, "removing other organs")
+    report_change(df, df_prev, col="SeriesDescription")
+
+    df_prev = df.copy()
+    df = clean_pixel_spacing(df)
+    report_volumes(df, "cleaning pixel spacing")
+
+    if "ImageOrientationPatient" in df.columns:
+        df_prev = df.copy()
+        df["ImageOrientationPatient"] = df["ImageOrientationPatient"].apply(standardize_iop)
+        df = filter_by_acquisition_plane(df)
+        report_volumes(df, "keeping only AXIAL acquisitions")
+        report_change(df, df_prev)
+
+    df_prev = df.copy()
+    df = generate_volume_id(df)
+    report_volumes(df, "generating volume IDs")
+    report_change(df, df_prev)
+
+    df_prev = df.copy()
+    df = correct_volume_ids(df)
+    report_volumes(df, "merging multi-acquisition volumes IDs")
+    report_change(df, df_prev)
+
+    df = group_volumes(df)
+    report_volumes(df, "grouping by volume IDs")
+
+    df = calculate_volume_length(df)
+    report_volumes(df, "computing volume length")
+
+    df_prev = df.copy()
+    df = filter_volumes_by_size(df, volume_min, volume_max)
+    report_volumes(
+        df, f"filtering volumes by size [{volume_min}, {volume_max}]"
+    )
+    report_change(df, df_prev)
+
+    df_prev = df.copy()
+    df = map_series_description(df, csv_dict_path)
+    report_volumes(df, "mapping series descriptions")
+    report_change(df, df_prev, col="SeriesDescription")
+
+    df = compute_visit_order(df)
+    df = compute_acquisition_order(df)
+
+    df = df.dropna(axis=1, how="all")
+
+    if csv_path_out:
+        df.to_csv(csv_path_out, index=False)
+        print(f"Cleaned data saved to {csv_path_out}")
+    print("shape : ", df.shape)
+    print("columns : ", df.columns)
+
+
+if __name__ == "__main__":
+    args = parse_arguments()
+    manifest = load_manifest(args.manifest)
+    clean_and_save_data(
+        args.csv_path,
+        args.csv_path_out,
+        args.csv_dict_path,
+        manifest,
+        args.volume_min,
+        args.volume_max,
+    )
