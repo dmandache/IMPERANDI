@@ -1,7 +1,6 @@
 import argparse
 import hashlib
 import importlib
-import json
 from ast import literal_eval
 from pathlib import Path
 
@@ -16,6 +15,7 @@ from imperandi.ingest.config import (
     DEFAULT_VOLUME_LOWERBOUND,
     DEFAULT_VOLUME_UPPERBOUND,
 )
+from imperandi.utils.manifest import load_manifest, resolve_hook
 from imperandi.utils.geometry import (
     as_float_array,
     classify_plane_from_iop,
@@ -72,41 +72,13 @@ def parse_arguments():
     return args
 
 
-def load_manifest(manifest_arg: str | None) -> dict:
-    if not manifest_arg:
-        return {}
-
-    manifest_path = Path(manifest_arg)
-    if not manifest_path.suffix:
-        manifest_path = (
-            Path(__file__).resolve().parents[1]
-            / "datasets_config"
-            / "manifests"
-            / f"{manifest_arg}.json"
-        )
-    elif not manifest_path.is_file():
-        manifest_path = (
-            Path(__file__).resolve().parents[1]
-            / "datasets_config"
-            / "manifests"
-            / manifest_arg
-        )
-
-    if not manifest_path.exists():
-        raise FileNotFoundError(f"Manifest not found: {manifest_arg}")
-
-    with manifest_path.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
-
-
-def resolve_hook(manifest: dict, hook_key: str):
+def resolve_standardization_hook(manifest: dict, hook_key: str):
     hook_config = manifest.get("id_standardization", {})
-    module_name = hook_config.get("hook_module")
-    function_name = hook_config.get(hook_key)
-    if not module_name or not function_name:
-        return None
-    module = importlib.import_module(f"imperandi.{module_name}")
-    return getattr(module, function_name)
+    normalized_config = {
+        "hook_module": hook_config.get("hook_module"),
+        "function": hook_config.get(hook_key),
+    }
+    return resolve_hook(normalized_config)
 
 
 def resolve_hook_module(manifest: dict):
@@ -186,7 +158,7 @@ def report_change(df, previous_df, col=None):
 
 
 def standardize_patient_keys(df, manifest: dict):
-    hook = resolve_hook(manifest, "patient_key")
+    hook = resolve_standardization_hook(manifest, "patient_key")
     if not hook:
         return df
     df["patient_key"] = df["patient_key"].apply(hook)
@@ -715,7 +687,7 @@ def clean_and_save_data(csv_path, csv_path_out, csv_dict_path, manifest, volume_
 
 if __name__ == "__main__":
     args = parse_arguments()
-    manifest = load_manifest(args.manifest)
+    manifest = load_manifest(args.manifest, base_path=Path(__file__).resolve().parents[1])
     clean_and_save_data(
         args.csv_path,
         args.csv_path_out,
