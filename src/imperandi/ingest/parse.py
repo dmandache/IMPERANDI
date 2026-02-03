@@ -115,11 +115,28 @@ from imperandi.utils.manifest import load_manifest, resolve_hook
 
 
 def apply_id_standardization(df: pd.DataFrame, manifest: dict) -> pd.DataFrame:
-    hook_config = manifest.get("id_standardization", {})
-    hook = resolve_hook(hook_config)
-    if not hook or "patient_key" not in df.columns:
+    hook = resolve_hook(manifest.get("id_standardization") or {})
+    if "patient_key" not in df.columns:
         return df
-    df["patient_key"] = df["patient_key"].apply(hook)
+
+    # save raw once
+    if "patient_key_raw" not in df.columns:
+        df["patient_key_raw"] = df["patient_key"]
+
+    if not hook:
+        return df
+
+    df["patient_key"] = df["patient_key_raw"].apply(hook)
+
+    raw_ok = df["patient_key_raw"].notna() & (df["patient_key_raw"].astype(str).str.strip() != "")
+    std_bad = df["patient_key"].isna() | (df["patient_key"].astype(str).str.strip() == "")
+    failed = raw_ok & std_bad
+
+    if failed.any():
+        df["patient_key_std_failed"] = failed
+        n_keys = int(df.loc[failed, "patient_key_raw"].nunique())
+        print(f"[id_standardization] failed on unique raw keys={n_keys}")
+
     return df
 
 
