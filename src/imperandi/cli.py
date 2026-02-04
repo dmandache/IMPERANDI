@@ -1,10 +1,8 @@
-"""Command-line interface for imperandi ingest workflows."""
-
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Sequence
+from typing import Optional, Sequence
 
 from pandarallel import pandarallel
 
@@ -55,6 +53,7 @@ def _add_ingest_subcommand(subparsers: argparse._SubParsersAction) -> None:
         ),
     )
     parser.set_defaults(_handler=_handle_ingest)
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="imperandi",
@@ -69,22 +68,20 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _print_args(args: argparse.Namespace) -> None:
+    items = vars(args)
+    width = max(len(k) for k in items)
+
+    for arg in sorted(items):
+        value = items[arg]
+        value_str = "None" if value is None else repr(value)
+        print(f"{arg:<{width}} : {value_str}")
+
+
 def _handle_parse(args: argparse.Namespace) -> int:
     if args.dry_run:
         print("Dry run: parse")
-        print(f"  root_path={args.root_path}")
-        print(f"  output_dir={args.output_dir}")
-        print(f"  manifest={args.manifest}")
-        print(f"  flatten_all_tags={args.flatten_all_tags}")
-        print(f"  tags={args.tags}")
-        print(f"  force_dicom_read={args.force_dicom_read}")
-        print(f"  id_source={args.id_source}")
-        print(f"  patient_key_from={args.patient_key_from}")
-        print(f"  study_id_from={args.study_id_from}")
-        print(f"  series_id_from={args.series_id_from}")
-        print(f"  checkpoint_frequency={args.checkpoint_frequency}")
-        print(f"  num_workers={args.num_workers}")
-        print(f"  verbose={args.verbose}")
+        _print_args(args)
         return 0
     pandarallel.initialize(progress_bar=args.verbose, nb_workers=args.num_workers)
     parse_module.main(args)
@@ -94,12 +91,7 @@ def _handle_parse(args: argparse.Namespace) -> int:
 def _handle_clean(args: argparse.Namespace) -> int:
     if args.dry_run:
         print("Dry run: clean")
-        print(f"  csv_path={args.csv_path}")
-        print(f"  csv_path_out={args.csv_path_out}")
-        print(f"  csv_dict_path={args.csv_dict_path}")
-        print(f"  manifest={args.manifest}")
-        print(f"  volume_min={args.volume_min}")
-        print(f"  volume_max={args.volume_max}")
+        _print_args(args)
         return 0
     manifest = load_manifest(args.manifest, base_path=Path(__file__).resolve().parents[1])
     clean_module.clean_and_save_data(
@@ -123,25 +115,7 @@ def _handle_ingest(args: argparse.Namespace) -> int:
     )
     if args.dry_run:
         print("Dry run: ingest (parse -> clean)")
-        print(f"  parse.root_path={args.root_path}")
-        print(f"  parse.output_dir={args.output_dir}")
-        print(f"  parse.manifest={args.manifest}")
-        print(f"  parse.flatten_all_tags={args.flatten_all_tags}")
-        print(f"  parse.tags={args.tags}")
-        print(f"  parse.force_dicom_read={args.force_dicom_read}")
-        print(f"  parse.id_source={args.id_source}")
-        print(f"  parse.patient_key_from={args.patient_key_from}")
-        print(f"  parse.study_id_from={args.study_id_from}")
-        print(f"  parse.series_id_from={args.series_id_from}")
-        print(f"  parse.checkpoint_frequency={args.checkpoint_frequency}")
-        print(f"  parse.num_workers={args.num_workers}")
-        print(f"  parse.verbose={args.verbose}")
-        print(f"  clean.csv_path=[{parsed_csv}]")
-        print(f"  clean.csv_path_out={clean_out}")
-        print(f"  clean.csv_dict_path={args.csv_dict_path}")
-        print(f"  clean.manifest={args.manifest}")
-        print(f"  clean.volume_min={args.volume_min}")
-        print(f"  clean.volume_max={args.volume_max}")
+        _print_args(args)
         return 0
     pandarallel.initialize(progress_bar=args.verbose, nb_workers=args.num_workers)
     parse_module.main(args)
@@ -158,7 +132,7 @@ def _handle_ingest(args: argparse.Namespace) -> int:
     return 0
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     return args._handler(args)

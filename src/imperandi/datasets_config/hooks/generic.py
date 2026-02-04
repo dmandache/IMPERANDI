@@ -1,6 +1,7 @@
-import re
+﻿import re
+from typing import Optional
 
-def standardize_patient_key(x: str | None) -> str | None:
+def standardize_patient_key(x: Optional[str]) -> Optional[str]:
     """
     Extract numeric parts from a string, strip leading zeros,
     join with '-', and fall back to original if no numbers are found.

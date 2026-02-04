@@ -1,0 +1,7 @@
+﻿numpy<2.0
+pandas<2.1
+python-dateutil<3.0
+pydicom<3.0
+unidecode<2.0
+tqdm<5.0
+pandarallel<2.0

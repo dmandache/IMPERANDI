@@ -1,9 +1,10 @@
-import importlib
+﻿import importlib
 import json
 from pathlib import Path
+from typing import Optional
 
 
-def load_manifest(manifest_arg: str | None, *, base_path: Path) -> dict:
+def load_manifest(manifest_arg: Optional[str], *, base_path: Path) -> dict:
     if not manifest_arg:
         return {}
 

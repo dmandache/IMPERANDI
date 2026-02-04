@@ -1,8 +1,9 @@
-import warnings
+﻿import warnings
 import glob
 from pathlib import Path
 import argparse
 from multiprocessing import cpu_count
+from typing import Optional
 
 import pandas as pd
 from tqdm import tqdm
@@ -348,7 +349,7 @@ def choose_ids(
 def process_with_checkpoint(
     df_paths: pd.DataFrame,
     read_func,
-    checkpoint_frequency: int | None,
+    checkpoint_frequency: Optional[int],
     output_dir: Path,
     final_name: str,
 ):
