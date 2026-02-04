@@ -1,6 +1,7 @@
 ﻿import re
 from typing import Optional
 
+
 def standardize_patient_key(x: Optional[str]) -> Optional[str]:
     """
     Extract numeric parts from a string, strip leading zeros,

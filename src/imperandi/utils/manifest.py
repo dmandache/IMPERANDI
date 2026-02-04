@@ -10,7 +10,9 @@ def load_manifest(manifest_arg: Optional[str], *, base_path: Path) -> dict:
 
     manifest_path = Path(manifest_arg)
     if not manifest_path.suffix:
-        manifest_path = base_path / "datasets_config" / "manifests" / f"{manifest_arg}.json"
+        manifest_path = (
+            base_path / "datasets_config" / "manifests" / f"{manifest_arg}.json"
+        )
     elif not manifest_path.is_file():
         manifest_path = base_path / "datasets_config" / "manifests" / manifest_arg
 

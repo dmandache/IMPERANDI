@@ -8,7 +8,10 @@ from pandarallel import pandarallel
 
 from imperandi.ingest import clean as clean_module
 from imperandi.ingest import parse as parse_module
+from imperandi.process import convert as convert_module
 from imperandi.utils.manifest import load_manifest
+from imperandi.utils.misc import print_args
+
 
 def _add_parse_subcommand(subparsers: argparse._SubParsersAction) -> None:
     parser = subparsers.add_parser(
@@ -54,6 +57,16 @@ def _add_ingest_subcommand(subparsers: argparse._SubParsersAction) -> None:
     )
     parser.set_defaults(_handler=_handle_ingest)
 
+
+def _add_convert_subcommand(subparsers: argparse._SubParsersAction) -> None:
+    parser = subparsers.add_parser(
+        "convert",
+        help="Convert DICOM series to NIfTI files.",
+    )
+    convert_module.add_convert_arguments(parser)
+    parser.set_defaults(_handler=_handle_convert)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="imperandi",
@@ -64,24 +77,15 @@ def build_parser() -> argparse.ArgumentParser:
     _add_parse_subcommand(subparsers)
     _add_clean_subcommand(subparsers)
     _add_ingest_subcommand(subparsers)
+    _add_convert_subcommand(subparsers)
 
     return parser
-
-
-def _print_args(args: argparse.Namespace) -> None:
-    items = vars(args)
-    width = max(len(k) for k in items)
-
-    for arg in sorted(items):
-        value = items[arg]
-        value_str = "None" if value is None else repr(value)
-        print(f"{arg:<{width}} : {value_str}")
 
 
 def _handle_parse(args: argparse.Namespace) -> int:
     if args.dry_run:
         print("Dry run: parse")
-        _print_args(args)
+        print_args(args)
         return 0
     pandarallel.initialize(progress_bar=args.verbose, nb_workers=args.num_workers)
     parse_module.main(args)
@@ -91,9 +95,11 @@ def _handle_parse(args: argparse.Namespace) -> int:
 def _handle_clean(args: argparse.Namespace) -> int:
     if args.dry_run:
         print("Dry run: clean")
-        _print_args(args)
+        print_args(args)
         return 0
-    manifest = load_manifest(args.manifest, base_path=Path(__file__).resolve().parents[1])
+    manifest = load_manifest(
+        args.manifest, base_path=Path(__file__).resolve().parents[1]
+    )
     clean_module.clean_and_save_data(
         args.csv_path,
         args.csv_path_out,
@@ -115,11 +121,13 @@ def _handle_ingest(args: argparse.Namespace) -> int:
     )
     if args.dry_run:
         print("Dry run: ingest (parse -> clean)")
-        _print_args(args)
+        print_args(args)
         return 0
     pandarallel.initialize(progress_bar=args.verbose, nb_workers=args.num_workers)
     parse_module.main(args)
-    manifest = load_manifest(args.manifest, base_path=Path(__file__).resolve().parents[1])
+    manifest = load_manifest(
+        args.manifest, base_path=Path(__file__).resolve().parents[1]
+    )
 
     clean_module.clean_and_save_data(
         [str(parsed_csv)],
@@ -129,6 +137,15 @@ def _handle_ingest(args: argparse.Namespace) -> int:
         args.volume_min,
         args.volume_max,
     )
+    return 0
+
+
+def _handle_convert(args: argparse.Namespace) -> int:
+    if args.dry_run:
+        print("Dry run: convert")
+        print_args(args)
+        return 0
+    convert_module.main(args)
     return 0
 
 

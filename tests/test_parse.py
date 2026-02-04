@@ -120,7 +120,9 @@ def test_apply_id_standardization_monkeypatched_hook(monkeypatch):
 
     monkeypatch.setattr(parse_module, "resolve_hook", lambda _cfg: hook)
 
-    out = parse_module.apply_id_standardization(df.copy(), manifest={"id_standardization": {"dummy": True}})
+    out = parse_module.apply_id_standardization(
+        df.copy(), manifest={"id_standardization": {"dummy": True}}
+    )
 
     print(out)
     # raw preserved
@@ -136,7 +138,11 @@ def test_apply_id_standardization_monkeypatched_hook(monkeypatch):
 
 def test_adds_new_columns(monkeypatch):
     df = pd.DataFrame({"value": [1, 2]})
-    monkeypatch.setattr(parse, "resolve_hook", lambda d: (lambda x: {"double": x * 2, "is_odd": x % 2 == 1}))
+    monkeypatch.setattr(
+        parse,
+        "resolve_hook",
+        lambda d: (lambda x: {"double": x * 2, "is_odd": x % 2 == 1}),
+    )
     manifest = {"derived_columns": [{"from_column": "value"}]}
     out = parse.apply_derived_columns(df.copy(), manifest)
     assert "double" in out.columns and "is_odd" in out.columns

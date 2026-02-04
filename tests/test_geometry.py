@@ -126,33 +126,33 @@ def test_classify_plane_from_iop_standard_planes():
 
 
 def test_classify_plane_from_iop_oblique_and_invalid():
-    plane, angle, axis = geometry.classify_plane_from_iop([1, 0, 0, 0, 1, 1], angle_thresh_deg=10.0)
+    plane, angle, axis = geometry.classify_plane_from_iop(
+        [1, 0, 0, 0, 1, 1], angle_thresh_deg=10.0
+    )
     assert plane == "OBL"
-    assert axis  == "Y"
+    assert axis == "Y"
     assert angle > 10.0
 
     # negative normal should still be axial (abs used)
     plane2, angle2, axis2 = geometry.classify_plane_from_iop([1, 0, 0, 0, -1, 0])
     assert plane2 == "AX"
-    assert axis2  == "Z"
+    assert axis2 == "Z"
     assert angle2 == 0.0
 
     # angle equal to threshold => not oblique
     plane3, angle3, axis3 = geometry.classify_plane_from_iop(
-        [1, 0, 0, 0, 0.984807753, 0.173648178], 
-        angle_thresh_deg=10.0
-        )
+        [1, 0, 0, 0, 0.984807753, 0.173648178], angle_thresh_deg=10.0
+    )
     assert plane3 == "AX"
-    assert axis3  == "Z"
+    assert axis3 == "Z"
     assert angle3 == pytest.approx(10.0, abs=1e-6)
 
     # angle slightly smaller than threshold
     plane4, angle4, axis4 = geometry.classify_plane_from_iop(
-        [1, 0, 0, 0, 0.139173, 0.990268],
-        angle_thresh_deg=10.0
+        [1, 0, 0, 0, 0.139173, 0.990268], angle_thresh_deg=10.0
     )
     assert plane4 == "COR"
-    assert axis4  == "Y"
+    assert axis4 == "Y"
     assert angle4 == pytest.approx(8.0, abs=1e-3)
 
     plane, angle, axis = geometry.classify_plane_from_iop(None)

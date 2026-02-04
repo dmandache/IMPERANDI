@@ -1,7 +1,11 @@
 numpy
 pandas
+pandarallel
 python-dateutil
-pydicom
 unidecode
 tqdm
-pandarallel
+pydicom
+dicom2nifti
+nibabel
+TotalSegmentator
+torchio

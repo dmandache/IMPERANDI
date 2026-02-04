@@ -11,6 +11,8 @@ from pandarallel import pandarallel
 from pydicom import dcmread
 from pydicom.errors import InvalidDicomError
 
+from imperandi.utils.misc import print_args
+
 warnings.filterwarnings("ignore")
 
 
@@ -54,7 +56,7 @@ def add_parse_arguments(
         type=str,
         default="",
         help="Comma-separated list of DICOM keyword tags to read (e.g. PatientID,StudyInstanceUID,SeriesInstanceUID,Modality). "
-             "If empty and --flatten_all_tags is not set, only the ID tags are read.",
+        "If empty and --flatten_all_tags is not set, only the ID tags are read.",
     )
     parser.add_argument(
         "--force_dicom_read",
@@ -70,8 +72,8 @@ def add_parse_arguments(
         default="auto",
         choices=["path", "tags", "auto"],
         help="'path': use root/patient/study/series structure. "
-             "'tags': use DICOM tags. "
-             "'auto': use tags when present else fallback to path.",
+        "'tags': use DICOM tags. "
+        "'auto': use tags when present else fallback to path.",
     )
     parser.add_argument(
         "--patient_key_from",
@@ -161,8 +163,12 @@ def apply_id_standardization(df: pd.DataFrame, manifest: dict) -> pd.DataFrame:
 
     df["patient_key"] = df["patient_key_raw"].apply(hook)
 
-    raw_ok = df["patient_key_raw"].notna() & (df["patient_key_raw"].astype(str).str.strip() != "")
-    std_bad = df["patient_key"].isna() | (df["patient_key"].astype(str).str.strip() == "")
+    raw_ok = df["patient_key_raw"].notna() & (
+        df["patient_key_raw"].astype(str).str.strip() != ""
+    )
+    std_bad = df["patient_key"].isna() | (
+        df["patient_key"].astype(str).str.strip() == ""
+    )
     failed = raw_ok & std_bad
 
     if failed.any():
@@ -191,7 +197,9 @@ def apply_derived_columns(df: pd.DataFrame, manifest: dict) -> pd.DataFrame:
             continue
         join_mode = derived.get("join_mode", "missing_only")
         if join_mode == "overwrite":
-            df = df.drop(columns=[col for col in derived_df.columns if col in df.columns])
+            df = df.drop(
+                columns=[col for col in derived_df.columns if col in df.columns]
+            )
             df = df.join(derived_df)
         else:
             derived_df = derived_df.loc[:, ~derived_df.columns.isin(df.columns)]
@@ -229,6 +237,7 @@ def get_dicom_paths(root_path):
             continue
     return dicom_paths
 
+
 # -------------------------
 # DICOM tag extraction
 # -------------------------
@@ -256,7 +265,9 @@ def read_dicom_header(fp, *, specific_tags=None, force=False, flatten_all=False)
             fp,
             stop_before_pixels=True,
             force=force,
-            specific_tags=specific_tags if (specific_tags and not flatten_all) else None,
+            specific_tags=(
+                specific_tags if (specific_tags and not flatten_all) else None
+            ),
         )
 
         if flatten_all:
@@ -264,7 +275,7 @@ def read_dicom_header(fp, *, specific_tags=None, force=False, flatten_all=False)
             return pd.Series(tags)
 
         out = {}
-        for t in (specific_tags or []):
+        for t in specific_tags or []:
             out[t] = getattr(ds, t, None)
         return pd.Series(out)
 
@@ -277,6 +288,7 @@ def read_dicom_header(fp, *, specific_tags=None, force=False, flatten_all=False)
 # -------------------------
 # ID selection logic
 # -------------------------
+
 
 def choose_ids(
     df: pd.DataFrame,
@@ -303,7 +315,7 @@ def choose_ids(
     df["patient_key_path"] = rel.map(lambda p: p.parts[0] if len(p.parts) > 1 else None)
     df["study_path"] = rel.map(lambda p: p.parts[1] if len(p.parts) > 2 else None)
     df["series_path"] = rel.map(lambda p: p.parts[2] if len(p.parts) > 3 else None)
-    df["dicom_filename"]   = rel.map(lambda p: p.name)
+    df["dicom_filename"] = rel.map(lambda p: p.name)
 
     # -------------------------
     # Tag-derived IDs
@@ -316,31 +328,32 @@ def choose_ids(
         return pd.Series([None] * len(df), index=df.index)
 
     patient_key_tags = _tagcol(patient_tag)
-    study_id_tags    = _tagcol(study_tag)
-    series_id_tags   = _tagcol(series_tag)
+    study_id_tags = _tagcol(study_tag)
+    series_id_tags = _tagcol(series_tag)
 
     # -------------------------
     # Choose source
     # -------------------------
     if id_source == "path":
         df["patient_key"] = df["patient_key_path"]
-        df["study_id"]    = df["study_path"].fillna("0")
-        df["series_id"]   = df["series_path"].fillna("0")
+        df["study_id"] = df["study_path"].fillna("0")
+        df["series_id"] = df["series_path"].fillna("0")
 
     elif id_source == "tags":
         df["patient_key"] = patient_key_tags
-        df["study_id"]    = study_id_tags.fillna("0")
-        df["series_id"]   = series_id_tags.fillna("0")
+        df["study_id"] = study_id_tags.fillna("0")
+        df["series_id"] = series_id_tags.fillna("0")
 
     else:  # auto
-        df["patient_key"] = patient_key_tags.fillna(df["patient_key_path"]).fillna("UNKNOWN")
-        df["study_id"]    = study_id_tags.fillna(df["study_path"]).fillna("0")
-        df["series_id"]   = series_id_tags.fillna(df["series_path"]).fillna("0")
+        df["patient_key"] = patient_key_tags.fillna(df["patient_key_path"]).fillna(
+            "UNKNOWN"
+        )
+        df["study_id"] = study_id_tags.fillna(df["study_path"]).fillna("0")
+        df["series_id"] = series_id_tags.fillna(df["series_path"]).fillna("0")
 
     df = df.drop(columns=["patient_key_path", "study_path", "series_path"])
-    
-    return df
 
+    return df
 
 
 # -------------------------
@@ -370,7 +383,7 @@ def process_with_checkpoint(
         ckpt = output_dir / f"{Path(final_name).stem}_{chunk_idx:03d}.csv"
         if ckpt.exists():
             continue
-        chunk = df_paths.iloc[i:i + checkpoint_frequency].copy()
+        chunk = df_paths.iloc[i : i + checkpoint_frequency].copy()
         tags_chunk = chunk["dicom_path"].parallel_apply(read_func)
         tags_chunk = tags_chunk.replace("", float("NaN")).dropna(how="all", axis=1)
         out_chunk = pd.concat([chunk, tags_chunk], axis=1)
@@ -393,7 +406,9 @@ def main(args):
     output_dir = Path(args.output_dir)
     ensure_directory_exists(output_dir)
     print(f"Output directory: {output_dir}")
-    manifest = load_manifest(args.manifest, base_path=Path(__file__).resolve().parents[1])
+    manifest = load_manifest(
+        args.manifest, base_path=Path(__file__).resolve().parents[1]
+    )
 
     dicom_paths = get_dicom_paths(root_path)
     print(f"Found {len(dicom_paths)} DICOM files under {root_path}")
@@ -405,9 +420,13 @@ def main(args):
     #    - always include the ID tags if we might use them (tags/auto)
     user_tags = [t.strip() for t in args.tags.split(",") if t.strip()]
     id_tags = [args.patient_key_from, args.study_id_from, args.series_id_from]
-    tags_to_read = sorted(set(user_tags + (id_tags if not args.flatten_all_tags else [])))
+    tags_to_read = sorted(
+        set(user_tags + (id_tags if not args.flatten_all_tags else []))
+    )
 
-    print(f"Reading DICOM tags: flatten_all={args.flatten_all_tags}, tags_to_read={tags_to_read}")
+    print(
+        f"Reading DICOM tags: flatten_all={args.flatten_all_tags}, tags_to_read={tags_to_read}"
+    )
 
     read_func = lambda fp: read_dicom_header(
         fp,
@@ -449,19 +468,7 @@ if __name__ == "__main__":
     args = parse_arguments()
     if args.dry_run:
         print("Dry run: parse")
-        print(f"  root_path={args.root_path}")
-        print(f"  output_dir={args.output_dir}")
-        print(f"  manifest={args.manifest}")
-        print(f"  flatten_all_tags={args.flatten_all_tags}")
-        print(f"  tags={args.tags}")
-        print(f"  force_dicom_read={args.force_dicom_read}")
-        print(f"  id_source={args.id_source}")
-        print(f"  patient_key_from={args.patient_key_from}")
-        print(f"  study_id_from={args.study_id_from}")
-        print(f"  series_id_from={args.series_id_from}")
-        print(f"  checkpoint_frequency={args.checkpoint_frequency}")
-        print(f"  num_workers={args.num_workers}")
-        print(f"  verbose={args.verbose}")
+        print_args(args)
         raise SystemExit(0)
     pandarallel.initialize(progress_bar=args.verbose, nb_workers=args.num_workers)
     main(args)

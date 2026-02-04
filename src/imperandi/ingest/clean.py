@@ -16,9 +16,13 @@ from imperandi.utils.geometry import (
     classify_plane_from_iop,
     standardize_iop,
 )
+from imperandi.utils.misc import print_args, report_volumes, report_change
 
 DEFAULT_VOLUME_LOWERBOUND = 30.0
 DEFAULT_VOLUME_UPPERBOUND = 500.0
+
+DEFAULT_MAX_PIXEL_SPACING_MM = 1.25
+DEFAULT_MAX_SLICE_THICKNESS_MM = 3.0
 
 COLUMNS_TO_USE = [
     "patient_key",
@@ -168,54 +172,6 @@ def load_data(csv_path):
     return df
 
 
-def report_volumes(df, step_name=None):
-    unique_counts = df[["patient_key", "study_id", "series_id"]].nunique()
-    if step_name:
-        print(f"\nAfter {step_name}:")
-    print(f"Unique patients: {unique_counts['patient_key']}")
-    print(f"Unique studies: {unique_counts['study_id']}")
-    print(f"Unique series: {unique_counts['series_id']}")
-
-    if "volume_id" in df.columns:
-        unique_volumes = df["volume_id"].nunique()
-        print(f"Unique volumes: {unique_volumes}")
-
-
-def report_change(df, previous_df, col=None):
-    prev_patients = set(previous_df["patient_key"].unique())
-    curr_patients = set(df["patient_key"].unique())
-    missing_patients = sorted(prev_patients - curr_patients)
-    if missing_patients:
-        print(
-            f"⚠️  {len(missing_patients)} patients removed in this step: {missing_patients}"
-        )
-        if col is not None:
-            print(f"{col} :")
-            print(
-                previous_df[previous_df["patient_key"].isin(missing_patients)][
-                    col
-                ].value_counts(dropna=False)
-            )
-
-    prev_studies = set(previous_df["study_id"].unique())
-    curr_studies = set(df["study_id"].unique())
-    missing_studies = sorted(prev_studies - curr_studies)
-    if missing_studies:
-        missing_df = previous_df[previous_df["study_id"].isin(missing_studies)]
-        if "date" in missing_df.columns:
-            missing_df["date_str"] = pd.to_datetime(missing_df["date"]).dt.strftime(
-                "%Y-%m-%d"
-            )
-            missing_info = missing_df[["patient_key", "date_str"]].drop_duplicates()
-            missing_list = list(missing_info.itertuples(index=False, name=None))
-            print(
-                f"⚠️  {len(missing_list)} studies removed in this step: {missing_list}"
-            )
-        if col is not None:
-            print(f"{col} :")
-            print(missing_df[col].value_counts(dropna=False))
-
-
 def standardize_patient_keys(df, manifest: dict):
     hook = resolve_standardization_hook(manifest, "patient_key")
     if not hook:
@@ -259,9 +215,9 @@ def add_date(df):
     if "StudyDate" not in df.columns:
         return df
     df["date"] = df["StudyDate"].apply(
-        lambda x: pd.to_datetime(x, errors="coerce")
-        if not isinstance(x, list)
-        else pd.NaT
+        lambda x: (
+            pd.to_datetime(x, errors="coerce") if not isinstance(x, list) else pd.NaT
+        )
     )
     return df
 
@@ -344,7 +300,7 @@ def clean_scan_size(df):
         df = df.dropna(subset=["Rows", "Columns"])
     if "SliceThickness" in df.columns:
         df = df[
-            (df["SliceThickness"].astype(float) <= 3)
+            (df["SliceThickness"].astype(float) <= DEFAULT_MAX_SLICE_THICKNESS_MM)
             | (df["SliceThickness"].isna())
         ]
     return df
@@ -356,6 +312,11 @@ def clean_pixel_spacing(df):
     df["PixelSpacingXY"] = df["PixelSpacing"].apply(
         lambda x: literal_eval(x)[0] if isinstance(x, str) else None
     )
+    df["PixelSpacingXY"] = pd.to_numeric(df["PixelSpacingXY"], errors="coerce")
+    df = df[
+        (df["PixelSpacingXY"].isna())
+        | (df["PixelSpacingXY"] <= DEFAULT_MAX_PIXEL_SPACING_MM)
+    ]
     return df
 
 
@@ -419,8 +380,12 @@ def correct_volume_ids(df, z_tolerance=1e-3):
         "PixelSpacingXY",
     ]
 
-    df["ImageOrientationPatient"] = df["ImageOrientationPatient"].apply(lambda x: tuple(as_float_array(x)) if x is not None else None)
-    df["ImagePositionPatient"] = df["ImagePositionPatient"].apply(lambda x: tuple(as_float_array(x)) if x is not None else None)
+    df["ImageOrientationPatient"] = df["ImageOrientationPatient"].apply(
+        lambda x: tuple(as_float_array(x)) if x is not None else None
+    )
+    df["ImagePositionPatient"] = df["ImagePositionPatient"].apply(
+        lambda x: tuple(as_float_array(x)) if x is not None else None
+    )
 
     updated_ids = {}
     grouped = df.groupby(unique_cols)
@@ -490,7 +455,7 @@ def group_volumes(df):
         if len(agg_col) == 1:
             return agg_col[0]
         return agg_col
-        
+
     df = df.groupby("volume_id").agg(agg_fun)
     df = df.reset_index()
     df = df.dropna(axis=1, how="all")
@@ -662,7 +627,9 @@ def drop_irrelevant_dicom_tags(df):
     return df
 
 
-def clean_and_save_data(csv_path, csv_path_out, csv_dict_path, manifest, volume_min, volume_max):
+def clean_and_save_data(
+    csv_path, csv_path_out, csv_dict_path, manifest, volume_min, volume_max
+):
     df = load_data(csv_path)
     report_volumes(df, "initial load")
 
@@ -712,7 +679,9 @@ def clean_and_save_data(csv_path, csv_path_out, csv_dict_path, manifest, volume_
 
     if "ImageOrientationPatient" in df.columns:
         df_prev = df.copy()
-        df["ImageOrientationPatient"] = df["ImageOrientationPatient"].apply(standardize_iop)
+        df["ImageOrientationPatient"] = df["ImageOrientationPatient"].apply(
+            standardize_iop
+        )
         df = filter_by_acquisition_plane(df)
         report_volumes(df, "keeping only AXIAL acquisitions")
         report_change(df, df_prev)
@@ -735,9 +704,7 @@ def clean_and_save_data(csv_path, csv_path_out, csv_dict_path, manifest, volume_
 
     df_prev = df.copy()
     df = filter_volumes_by_size(df, volume_min, volume_max)
-    report_volumes(
-        df, f"filtering volumes by size [{volume_min}, {volume_max}]"
-    )
+    report_volumes(df, f"filtering volumes by size [{volume_min}, {volume_max}]")
     report_change(df, df_prev)
 
     df_prev = df.copy()
@@ -761,14 +728,11 @@ if __name__ == "__main__":
     args = parse_arguments()
     if args.dry_run:
         print("Dry run: clean")
-        print(f"  csv_path={args.csv_path}")
-        print(f"  csv_path_out={args.csv_path_out}")
-        print(f"  csv_dict_path={args.csv_dict_path}")
-        print(f"  manifest={args.manifest}")
-        print(f"  volume_min={args.volume_min}")
-        print(f"  volume_max={args.volume_max}")
+        print_args(args)
         raise SystemExit(0)
-    manifest = load_manifest(args.manifest, base_path=Path(__file__).resolve().parents[1])
+    manifest = load_manifest(
+        args.manifest, base_path=Path(__file__).resolve().parents[1]
+    )
     clean_and_save_data(
         args.csv_path,
         args.csv_path_out,

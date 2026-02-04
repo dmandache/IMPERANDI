@@ -1,3 +1,6 @@
+# Big test data
+tests/data/IRCAD_DICOM
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -138,6 +141,7 @@ celerybeat.pid
 .env
 .envrc
 .venv
+.conda
 env/
 venv/
 ENV/

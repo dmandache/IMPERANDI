@@ -13,7 +13,9 @@ from imperandi.ingest import clean
 def test_uniform_string_and_remove_other_organs_description():
     assert clean.uniform_string("  Abc  .0") == "abc"
     assert clean.uniform_string("RévoluTion") == "revolution"
-    df = pd.DataFrame({"SeriesDescription": ["Pelvis CT", "Liver", None, "FEMUR study"]})
+    df = pd.DataFrame(
+        {"SeriesDescription": ["Pelvis CT", "Liver", None, "FEMUR study"]}
+    )
     out = clean.remove_other_organs_description(df.copy())
     # 'Pelvis' and 'femur' should be filtered out
     assert "pelvis" not in " ".join(out["SeriesDescription"].astype(str))
@@ -75,7 +77,9 @@ def test_add_date_and_filter_image_type_and_remove_localizers_mpr():
         )
     )
     # both mpr occurrences removed
-    assert not df_nompr.apply(lambda r: "mpr" in (str(r.ImageType) + str(r.SeriesDescription)).lower(), axis=1).any()
+    assert not df_nompr.apply(
+        lambda r: "mpr" in (str(r.ImageType) + str(r.SeriesDescription)).lower(), axis=1
+    ).any()
 
 
 def test_clean_scan_size_and_pixel_spacing():
@@ -83,7 +87,10 @@ def test_clean_scan_size_and_pixel_spacing():
         {
             "Rows": [512, None],
             "Columns": [512, 512],
-            "SliceThickness": ["2", "5"],  # second should be filtered out (thickness > 3)
+            "SliceThickness": [
+                "2",
+                "5",
+            ],  # second should be filtered out (thickness > 3)
             "PixelSpacing": ["[0.7, 0.7]", None],
         }
     )
@@ -128,7 +135,10 @@ def test_correct_volume_ids_merging(tmp_path, capsys):
             "study_id": ["s", "s"],
             "series_id": ["sr", "sr"],
             "ImageType": ["A", "A"],
-            "ImageOrientationPatient": [(1.0, 0.0, 0.0, 0.0, 1.0, 0.0), (1.0, 0.0, 0.0, 0.0, 1.0, 0.0)],
+            "ImageOrientationPatient": [
+                (1.0, 0.0, 0.0, 0.0, 1.0, 0.0),
+                (1.0, 0.0, 0.0, 0.0, 1.0, 0.0),
+            ],
             "SliceThickness": [1.0, 1.0],
             "PixelSpacingXY": [0.7, 0.7],
             "volume_id": ["b", "c"],
@@ -164,13 +174,21 @@ def test_group_volumes_and_calculate_length_and_filter_by_size():
 def test_map_series_description(tmp_path, capsys):
     df = pd.DataFrame(
         {
-            "SeriesDescription": ["Arteriel study", "Mixte sequence", "Inutile scan", None],
+            "SeriesDescription": [
+                "Arteriel study",
+                "Mixte sequence",
+                "Inutile scan",
+                None,
+            ],
             "AcquisitionNumber": [1, 2, 1, 1],
         }
     )
     csv_dict = tmp_path / "dict.csv"
     pd.DataFrame(
-        {"SeriesDescription": ["arteriel study", "mixte sequence", "inutile scan"], "phase": ["arteriel", "mixte", "inutile"]}
+        {
+            "SeriesDescription": ["arteriel study", "mixte sequence", "inutile scan"],
+            "phase": ["arteriel", "mixte", "inutile"],
+        }
     ).to_csv(csv_dict, index=False)
     out = clean.map_series_description(df.copy(), str(csv_dict))
     # inutile rows removed
@@ -185,7 +203,11 @@ def test_compute_visit_and_acquisition_order():
         {
             "patient_key": ["p", "p", "q"],
             "study_id": ["s1", "s2", "s3"],
-            "date": [pd.Timestamp("2020-01-01"), pd.Timestamp("2020-02-01"), pd.Timestamp("2020-01-01")],
+            "date": [
+                pd.Timestamp("2020-01-01"),
+                pd.Timestamp("2020-02-01"),
+                pd.Timestamp("2020-01-01"),
+            ],
             "volume_id": ["v1", "v2", "v3"],
         }
     )
@@ -197,7 +219,11 @@ def test_compute_visit_and_acquisition_order():
             "patient_key": ["p", "p", "p"],
             "study_id": ["s", "s", "s"],
             "volume_id": ["v1", "v2", "v3"],
-            "InstanceCreationTime": ["['120000.000']", "['120100.000']", "['120200.000']"],
+            "InstanceCreationTime": [
+                "['120000.000']",
+                "['120100.000']",
+                "['120200.000']",
+            ],
         }
     )
     out2 = clean.compute_acquisition_order(df2.copy())
@@ -217,18 +243,24 @@ def test_drop_irrelevant_dicom_tags():
     )
     out = clean.drop_irrelevant_dicom_tags(df.copy())
     # Columns that look like dicom tags (contain uppercase) except important ones are dropped
-    assert "SomeTag" not in out.columns or "SomeTag" in out.columns  # just ensure func runs without error
+    assert (
+        "SomeTag" not in out.columns or "SomeTag" in out.columns
+    )  # just ensure func runs without error
 
 
 def test_load_data_and_read_csv_with_valid_columns(tmp_path):
     # create a csv with some columns - include one from COLUMNS_TO_USE if available
     csv = tmp_path / "t.csv"
-    pd.DataFrame({"patient_key": ["p"], "SeriesDescription": ["s"], "Extra": [1]}).to_csv(csv, index=False)
+    pd.DataFrame(
+        {"patient_key": ["p"], "SeriesDescription": ["s"], "Extra": [1]}
+    ).to_csv(csv, index=False)
     df = clean.read_csv_with_valid_columns(str(csv))
     assert "patient_key" in df.columns or "SeriesDescription" in df.columns
 
     # test load_data with multiple files
     csv2 = tmp_path / "t2.csv"
-    pd.DataFrame({"patient_key": ["q"], "SeriesDescription": ["s2"]}).to_csv(csv2, index=False)
+    pd.DataFrame({"patient_key": ["q"], "SeriesDescription": ["s2"]}).to_csv(
+        csv2, index=False
+    )
     combined = clean.load_data([str(csv), str(csv2)])
     assert combined.shape[0] == 2
