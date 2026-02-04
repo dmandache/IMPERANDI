@@ -1,5 +1,5 @@
 # Big test data
-tests/data/IRCAD_DICOM
+tests/data/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

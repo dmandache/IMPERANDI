@@ -17,6 +17,7 @@ from imperandi.utils.geometry import (
     standardize_iop,
 )
 from imperandi.utils.misc import print_args, report_volumes, report_change
+from imperandi.utils.datetime import to_dates, to_times
 
 DEFAULT_VOLUME_LOWERBOUND = 30.0
 DEFAULT_VOLUME_UPPERBOUND = 500.0
@@ -321,32 +322,65 @@ def clean_pixel_spacing(df):
 
 
 def generate_volume_id(df):
-    if "ImageOrientationPatient" not in df.columns:
+
+    preferred_cols = [
+        "patient_key",
+        "study_id",
+        "series_id",
+        "ImageType",
+        "AcquisitionNumber",
+        "ImageOrientationPatient",
+        "SliceThickness",
+        "PixelSpacingXY",
+    ]
+    fallback_cols = ["patient_key", "study_id", "series_id"]
+
+    if "ImageOrientationPatient" in df.columns:
+        df = df.copy()
+        df["ImageOrientationPatient"] = df["ImageOrientationPatient"].apply(
+            lambda x: tuple(x) if isinstance(x, (list, tuple)) else tuple(literal_eval(x))
+        )
+
+    # Choose the maximum available columns among preferred
+    cols_to_use = [c for c in preferred_cols if c in df.columns]
+
+    # If none of the preferred columns exist, enforce fallback
+    if not cols_to_use:
+        cols_to_use = [c for c in fallback_cols if c in df.columns]
+
+    # If even fallback columns are missing, use any columns that exist
+    if not cols_to_use:
+        cols_to_use = list(df.columns)
+
+    # If df truly has no columns (or empty selection), assign a single id
+    if not cols_to_use:
+        df = df.copy()
+        df["volume_id"] = hashlib.sha1(b"volume").hexdigest()
         return df
-    df["ImageOrientationPatient"] = df["ImageOrientationPatient"].apply(
-        lambda x: tuple(x) if isinstance(x, (list, tuple)) else tuple(literal_eval(x))
+
+    def _to_stable_str(x):
+        # None/NaN -> empty
+        if x is None:
+            return ""
+        try:
+            if x != x:  # NaN
+                return ""
+        except Exception:
+            pass
+        # tuples/lists -> pipe-joined
+        if isinstance(x, (list, tuple)):
+            return "|".join(map(str, x))
+        return str(x)
+
+    # Build a per-row stable string and hash it
+    joined = (
+        df[cols_to_use]
+        .applymap(_to_stable_str)
+        .agg("||".join, axis=1)
     )
 
-    unique_ids = (
-        df[
-            [
-                "patient_key",
-                "study_id",
-                "series_id",
-                "ImageType",
-                "AcquisitionNumber",
-                "ImageOrientationPatient",
-                "SliceThickness",
-                "PixelSpacingXY",
-            ]
-        ]
-        .astype(str)
-        .agg("".join, 1)
-        .apply(lambda x: hashlib.sha1(x.encode()).hexdigest())
-    )
-
-    df["volume_id"] = unique_ids
-
+    df = df.copy()
+    df["volume_id"] = joined.apply(lambda s: hashlib.sha1(s.encode("utf-8")).hexdigest())
     return df
 
 
@@ -367,10 +401,25 @@ def filter_by_acquisition_plane(df, angle_thresh_deg=10.0):
 
 
 def correct_volume_ids(df, z_tolerance=1e-3):
+    """
+    Merge "pseudo-volumes" (multiple volume_id values) that actually belong to the same volume,
+    but do it robustly when DICOM tags/columns are missing.
+
+    Strategy:
+    - If volume_id missing -> return df unchanged.
+    - Group by the *maximum available* columns from a preferred list.
+      If none available -> fallback to grouping by patient_key, study_id, series_id (subset that exists).
+    - Determine z positions using the best available source:
+        1) ImagePositionPatient (z component)
+        2) SliceLocation
+      If neither usable -> skip that group.
+    - If spacing between sorted z positions is consistent (within tolerance) -> merge volume_ids.
+    """
+
     if "volume_id" not in df.columns:
         return df
 
-    unique_cols = [
+    preferred_group_cols = [
         "patient_key",
         "study_id",
         "series_id",
@@ -379,52 +428,88 @@ def correct_volume_ids(df, z_tolerance=1e-3):
         "SliceThickness",
         "PixelSpacingXY",
     ]
+    fallback_group_cols = ["patient_key", "study_id", "series_id"]
 
-    df["ImageOrientationPatient"] = df["ImageOrientationPatient"].apply(
-        lambda x: tuple(as_float_array(x)) if x is not None else None
-    )
-    df["ImagePositionPatient"] = df["ImagePositionPatient"].apply(
-        lambda x: tuple(as_float_array(x)) if x is not None else None
-    )
+    # Choose grouping columns: maximum available
+    group_cols = [c for c in preferred_group_cols if c in df.columns]
+    if not group_cols:
+        group_cols = [c for c in fallback_group_cols if c in df.columns]
+    if not group_cols:
+        # last resort: keep everything in one group
+        group_cols = None
+
+    df = df.copy()
+
+    # Normalize position/orientation if present (but don't require them)
+    if "ImageOrientationPatient" in df.columns:
+        df["ImageOrientationPatient"] = df["ImageOrientationPatient"].apply(
+            lambda x: tuple(as_float_array(x)) if x is not None and x == x else None
+        )
+
+    if "ImagePositionPatient" in df.columns:
+        df["ImagePositionPatient"] = df["ImagePositionPatient"].apply(
+            lambda x: tuple(as_float_array(x)) if x is not None and x == x else None
+        )
 
     updated_ids = {}
-    grouped = df.groupby(unique_cols)
 
-    for group_key, group_df in grouped:
-        volume_ids = group_df["volume_id"].unique()
+    grouped = df.groupby(group_cols, dropna=False) if group_cols else [(None, df)]
 
+    for _, group_df in grouped:
+        volume_ids = group_df["volume_id"].dropna().unique()
         if len(volume_ids) <= 1:
             continue
 
-        if (
-            "ImagePositionPatient" in group_df.columns
-            and group_df["ImagePositionPatient"].notna().all()
-        ):
-            z_positions = np.array(
-                group_df["ImagePositionPatient"].apply(lambda x: x[2])
-            )
-        elif (
-            "SliceLocation" in group_df.columns
-            and group_df["SliceLocation"].notna().all()
-        ):
-            z_positions = np.array(group_df["SliceLocation"])
-        else:
+        # --- get z positions robustly ---
+        z_positions = None
+
+        if "ImagePositionPatient" in group_df.columns:
+            s = group_df["ImagePositionPatient"]
+            # keep only rows with a usable tuple/list of len>=3
+            mask = s.notna() & s.apply(lambda v: isinstance(v, (list, tuple)) and len(v) >= 3)
+            if mask.any():
+                z_positions = s[mask].apply(lambda v: float(v[2])).to_numpy()
+
+        if (z_positions is None or len(z_positions) < 2) and "SliceLocation" in group_df.columns:
+            s = group_df["SliceLocation"]
+            mask = s.notna()
+            if mask.any():
+                try:
+                    z_positions = s[mask].astype(float).to_numpy()
+                except Exception:
+                    # non-numeric slice locations -> skip
+                    z_positions = None
+
+        if z_positions is None or len(z_positions) < 2:
             continue
 
-        if len(z_positions) < 2:
-            continue
-
+        # --- check consistent spacing ---
         z_sorted = np.sort(z_positions)
         z_diff = np.diff(z_sorted)
-        consistent_spacing = np.all(np.isclose(z_diff, z_diff[0], atol=z_tolerance))
 
-        print(
-            f"{group_df[['patient_key', 'date', 'SeriesDescription']].apply(lambda col: col.unique())} : {len(volume_ids)} pseudo-volumes {len(group_df)} total slices"
-        )
+        # If duplicates exist, drop zeros before checking (common with repeated slices)
+        z_diff_nz = z_diff[np.abs(z_diff) > z_tolerance]
+
+        if len(z_diff_nz) < 1:
+            # all slices same z (or too few distinct) -> can't decide
+            continue
+
+        consistent_spacing = np.all(np.isclose(z_diff_nz, z_diff_nz[0], atol=z_tolerance))
+
+        # --- optional debug print (robust to missing cols) ---
+        debug_cols = [c for c in ["patient_key", "date", "SeriesDescription"] if c in group_df.columns]
+        if debug_cols:
+            summary = {
+                c: group_df[c].dropna().unique().tolist()[:5] for c in debug_cols
+            }
+        else:
+            summary = {}
+
+        print(f"{summary} : {len(volume_ids)} pseudo-volumes, {len(group_df)} total rows")
 
         if consistent_spacing:
-            print("👫 Merged \n")
-            canonical_id = sorted(volume_ids)[0]
+            print("👫 Merged\n")
+            canonical_id = sorted(map(str, volume_ids))[0]
             for vol_id in volume_ids:
                 updated_ids[vol_id] = canonical_id
         else:
@@ -435,26 +520,16 @@ def correct_volume_ids(df, z_tolerance=1e-3):
 
 
 def group_volumes(df):
+
     def agg_fun(col):
-        vals = col.dropna()
-        uniq = set()
-
-        for v in vals:
-            try:
-                key = tuple(v)
-            except TypeError:
-                # fallback for float / scalar / weird objects
-                key = (str(v),)
-
-            uniq.add(key)
-
-        agg_col = [list(v) for v in uniq]
-
+        vals = list(col.dropna())
+        agg_col = list(set(vals))
         if len(agg_col) == 0:
             return float("NaN")
-        if len(agg_col) == 1:
+        elif len(agg_col) == 1:
             return agg_col[0]
-        return agg_col
+        else:
+            return agg_col
 
     df = df.groupby("volume_id").agg(agg_fun)
     df = df.reset_index()
@@ -636,7 +711,9 @@ def clean_and_save_data(
     df = standardize_patient_keys(df, manifest)
     report_volumes(df, "standardize patient key")
 
-    df = add_date(df)
+    df = to_dates(df)
+    df = to_times(df)
+    df = add_date(df) # generic date column
 
     df_prev = df.copy()
     df = unravel_patient_key(df, manifest)

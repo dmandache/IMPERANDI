@@ -27,14 +27,14 @@ def add_parse_arguments(
     parser.add_argument(
         "--root_path",
         type=str,
-        required=True,
-        help="Root path where the DICOM files are located.",
+        default=None,
+        help="Root path where the DICOM files are located. Defaults to current working directory.",
     )
     parser.add_argument(
         "--output_dir",
         type=str,
-        required=True,
-        help="Directory to save output CSV files.",
+        default=None,
+        help="Directory to save output CSV files. Defaults to parent of root_path.",
     )
     if include_manifest:
         parser.add_argument(
@@ -139,9 +139,18 @@ def build_parser(
     return parser
 
 
+def normalize_parse_args(args: argparse.Namespace) -> argparse.Namespace:
+    root_path = Path(args.root_path) if args.root_path else Path.cwd()
+    output_dir = Path(args.output_dir) if args.output_dir else root_path.parent
+    args.root_path = str(root_path)
+    args.output_dir = str(output_dir)
+    return args
+
+
 def parse_arguments():
     parser = build_parser()
     args = parser.parse_args()
+    args = normalize_parse_args(args)
     print(f"Running {Path(__file__).name} with args: {args}")
     return args
 
@@ -402,6 +411,7 @@ def process_with_checkpoint(
 # Main
 # -------------------------
 def main(args):
+    args = normalize_parse_args(args)
     root_path = Path(args.root_path)
     output_dir = Path(args.output_dir)
     ensure_directory_exists(output_dir)

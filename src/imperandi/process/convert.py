@@ -133,7 +133,7 @@ def process_single_volume(k, row, output_dir, verbose):
             series_id = row.series_id
 
         export_dir = (
-            Path(output_dir) / row.patient_key / row.study_id / series_id / row.Modality
+            Path(output_dir) / str(row.patient_key) / str(row.study_id) / str(series_id) #/ row.Modality
         )
         # export_dir = Path(output_dir) / row.patient_key / row.date / row.Modality / row.volume_id
         export_path = export_dir / "scan.nii.gz"

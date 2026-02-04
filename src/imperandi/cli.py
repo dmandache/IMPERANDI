@@ -83,6 +83,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _handle_parse(args: argparse.Namespace) -> int:
+    args = parse_module.normalize_parse_args(args)
     if args.dry_run:
         print("Dry run: parse")
         print_args(args)
@@ -98,7 +99,7 @@ def _handle_clean(args: argparse.Namespace) -> int:
         print_args(args)
         return 0
     manifest = load_manifest(
-        args.manifest, base_path=Path(__file__).resolve().parents[1]
+        args.manifest, base_path=Path(__file__).resolve().parents[0]
     )
     clean_module.clean_and_save_data(
         args.csv_path,
@@ -112,6 +113,7 @@ def _handle_clean(args: argparse.Namespace) -> int:
 
 
 def _handle_ingest(args: argparse.Namespace) -> int:
+    args = parse_module.normalize_parse_args(args)
     output_dir = Path(args.output_dir)
     parsed_csv = output_dir / "dicom_index.csv"
     clean_out = (
@@ -126,7 +128,7 @@ def _handle_ingest(args: argparse.Namespace) -> int:
     pandarallel.initialize(progress_bar=args.verbose, nb_workers=args.num_workers)
     parse_module.main(args)
     manifest = load_manifest(
-        args.manifest, base_path=Path(__file__).resolve().parents[1]
+        args.manifest, base_path=Path(__file__).resolve().parents[0]
     )
 
     clean_module.clean_and_save_data(
