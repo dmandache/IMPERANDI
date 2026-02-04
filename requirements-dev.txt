@@ -1,1 +1,1 @@
-﻿pytest
+﻿pytestpytest-cov

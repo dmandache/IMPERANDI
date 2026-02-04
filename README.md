@@ -1,9 +1,11 @@
-﻿# IMPERANDI
-**IMaging PREprocessing And Normalization for Diagnostic Interoperability**
+﻿# IMPERANDI - **IM**aging **PRE**processing **A**nd **N**ormalization for **D**iagnostic **I**nteroperability
+
+![Tests](https://github.com/dmandache/IMPERANDI/actions/workflows/tests.yml/badge.svg?branch=main)
+[![codecov](https://codecov.io/gh/dmandache/IMPERANDI/branch/main/graph/badge.svg)](https://codecov.io/gh/dmandache/IMPERANDI)
 
 IMPERANDI is a Python toolkit and CLI for building clean, analysis-ready indexes from DICOM datasets. It scans DICOM files, extracts header tags, standardizes IDs, and applies dataset-specific cleaning rules so downstream pipelines can rely on consistent metadata.
 
-This project is a work in progress. A fuller data pipeline is coming soon, including ingestion, filtering, processing (conversion to NIfTI, segmentation with TotalSegmentator, registration), feature exctraction with PyRadiomics, quality control, and descriptive dashboards.
+This project is a 🚧work in progress. A fuller data pipeline is coming soon, including ingestion, filtering, processing (conversion to NIfTI, segmentation with TotalSegmentator, registration), feature exctraction with PyRadiomics, quality control, and descriptive dashboards.
 
 IMPERANDI targets multi-phasic, longitudinal CT imaging data and addresses the challenges of cleaning and harmonizing heterogeneous hospital datasets. Its dependency footprint is intentionally minimal, reflecting its intended use within closed, secure hospital data-warehouse environments.
 
