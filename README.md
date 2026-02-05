@@ -81,7 +81,7 @@ Hook implementations live under:
 **Performance Notes**
 - Use `--num_workers` to control parallelism.
 - Use `--checkpoint_frequency` to write intermediate CSV chunks for very large datasets.
-- Use `--flatten_all_tags` only when you need the full DICOM header; it can be very large.
+- All DICOM tags are read recursively and flattened into columns by default, which can result in large output CSVs.
 
 **Data Expectations**
 - By default, IMPERANDI looks for `*.dcm` files. If none are found, it scans all files and attempts a header read.

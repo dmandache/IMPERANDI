@@ -17,7 +17,9 @@ def load_manifest(manifest_arg: Optional[str], *, base_path: Path) -> dict:
         manifest_path = base_path / "datasets_config" / "manifests" / manifest_arg
 
     if not manifest_path.exists():
-        raise FileNotFoundError(f"Manifest *{manifest_arg}* not found at {manifest_path}")
+        raise FileNotFoundError(
+            f"Manifest *{manifest_arg}* not found at {manifest_path}"
+        )
 
     with manifest_path.open("r", encoding="utf-8") as handle:
         return json.load(handle)

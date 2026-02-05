@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 from pathlib import Path
@@ -143,6 +143,7 @@ def _handle_ingest(args: argparse.Namespace) -> int:
 
 
 def _handle_convert(args: argparse.Namespace) -> int:
+    args = convert_module.normalize_convert_args(args)
     if args.dry_run:
         print("Dry run: convert")
         print_args(args)

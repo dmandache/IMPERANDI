@@ -1,4 +1,5 @@
-﻿import warnings
+﻿from email import parser
+import warnings
 import glob
 from pathlib import Path
 import argparse
@@ -25,16 +26,26 @@ def add_parse_arguments(
     include_dry_run: bool = True,
 ) -> None:
     parser.add_argument(
-        "--root_path",
+        "root_path",
         type=str,
+        nargs="?",
         default=None,
         help="Root path where the DICOM files are located. Defaults to current working directory.",
     )
     parser.add_argument(
-        "--output_dir",
+        "output_dir",
         type=str,
+        nargs="?",
         default=None,
         help="Directory to save output CSV files. Defaults to parent of root_path.",
+    )
+    parser.add_argument(
+        "--root_path",
+        type=str,
+    )
+    parser.add_argument(
+        "--output_dir",
+        type=str,
     )
     if include_manifest:
         parser.add_argument(
@@ -46,17 +57,11 @@ def add_parse_arguments(
 
     # Tag reading
     parser.add_argument(
-        "--flatten_all_tags",
-        action="store_true",
-        default=False,
-        help="If set, flattens (recursive) all DICOM header tags into columns (can be huge).",
-    )
-    parser.add_argument(
         "--tags",
         type=str,
         default="",
-        help="Comma-separated list of DICOM keyword tags to read (e.g. PatientID,StudyInstanceUID,SeriesInstanceUID,Modality). "
-        "If empty and --flatten_all_tags is not set, only the ID tags are read.",
+        help="Comma-separated list of additional DICOM keyword tags to read (e.g. PatientID,StudyInstanceUID,SeriesInstanceUID,Modality). "
+        "All DICOM tags are read recursively by default; this extends the default set.",
     )
     parser.add_argument(
         "--force_dicom_read",
@@ -262,36 +267,22 @@ def extract_dicom_tags_recursive(ds, parent_key=""):
     return tags
 
 
-def read_dicom_header(fp, *, specific_tags=None, force=False, flatten_all=False):
+def read_dicom_header(fp, *, force=False):
     """
-    Read header once:
-      - flatten_all=True  => recursive flatten all tags into columns
-      - flatten_all=False => only read specific_tags (fast) and return those columns
-    Returns pd.Series
+    Read header once: recursively extract all DICOM tags into columns.
+    Returns pd.Series with all tags flattened.
     """
     try:
         ds = dcmread(
             fp,
             stop_before_pixels=True,
             force=force,
-            specific_tags=(
-                specific_tags if (specific_tags and not flatten_all) else None
-            ),
         )
-
-        if flatten_all:
-            tags = extract_dicom_tags_recursive(ds)
-            return pd.Series(tags)
-
-        out = {}
-        for t in specific_tags or []:
-            out[t] = getattr(ds, t, None)
-        return pd.Series(out)
+        tags = extract_dicom_tags_recursive(ds)
+        return pd.Series(tags)
 
     except Exception:
-        if flatten_all:
-            return pd.Series({})
-        return pd.Series({t: None for t in (specific_tags or [])})
+        return pd.Series({})
 
 
 # -------------------------
@@ -427,22 +418,15 @@ def main(args):
     df = pd.DataFrame({"dicom_path": [str(p) for p in dicom_paths]})
 
     # 2) read tags once for all files
-    #    - always include the ID tags if we might use them (tags/auto)
+    #    - always read all tags recursively (comprehensive extraction)
     user_tags = [t.strip() for t in args.tags.split(",") if t.strip()]
-    id_tags = [args.patient_key_from, args.study_id_from, args.series_id_from]
-    tags_to_read = sorted(
-        set(user_tags + (id_tags if not args.flatten_all_tags else []))
-    )
-
     print(
-        f"Reading DICOM tags: flatten_all={args.flatten_all_tags}, tags_to_read={tags_to_read}"
+        f"Reading all DICOM tags recursively (user tags to include: {user_tags or 'none'})"
     )
 
     read_func = lambda fp: read_dicom_header(
         fp,
-        specific_tags=tags_to_read,
         force=args.force_dicom_read,
-        flatten_all=args.flatten_all_tags,
     )
 
     df = process_with_checkpoint(

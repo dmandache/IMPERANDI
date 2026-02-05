@@ -1,6 +1,7 @@
 import argparse
 import pandas as pd
 
+
 def print_args(args: argparse.Namespace) -> None:
     items = vars(args)
     width = max(len(k) for k in items)

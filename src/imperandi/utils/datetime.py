@@ -15,7 +15,7 @@ def _get(meta: Any, key: str, default=None):
         return meta.get(key, default)
     return default
 
-    
+
 def _parse_dicom_time(s, include_ms=False) -> Optional[time]:
     """
     DICOM TM can be:
@@ -40,13 +40,13 @@ def _parse_dicom_time(s, include_ms=False) -> Optional[time]:
         main, frac = s, "000000"
 
     main = main.strip()
-    
-    if len(main) >= 8: # is datetime, keep time only
+
+    if len(main) >= 8:  # is datetime, keep time only
         main = main[8:14]
     if not main.isdigit():
         return None
     if main == 0:
-        print('zero detected')
+        print("zero detected")
         return None
 
     # If odd length (e.g. '93015'), assume missing leading zero -> left pad
@@ -54,11 +54,11 @@ def _parse_dicom_time(s, include_ms=False) -> Optional[time]:
         main = "0" + main
 
     # Interpret based on number of components provided
-    if len(main) <= 2:        # HH
+    if len(main) <= 2:  # HH
         main = main.zfill(2) + "0000"
-    elif len(main) <= 4:      # HHMM
+    elif len(main) <= 4:  # HHMM
         main = main.zfill(4) + "00"
-    else:                     # HHMMSS (or longer -> take first 6)
+    else:  # HHMMSS (or longer -> take first 6)
         main = main.zfill(6)[:6]
 
     try:
@@ -66,7 +66,7 @@ def _parse_dicom_time(s, include_ms=False) -> Optional[time]:
         mm = int(main[2:4])
         ss = int(main[4:6])
         if ss == 60:
-            ss =  0
+            ss = 0
             mm += 1
         if include_ms:
             us = int(frac)
@@ -78,9 +78,10 @@ def _parse_dicom_time(s, include_ms=False) -> Optional[time]:
     except Exception:
         return None
 
+
 def earliest_acquisition_datetime(tm_or_list) -> Optional[time]:
-    import ast 
-    
+    import ast
+
     if tm_or_list is None or (isinstance(tm_or_list, float) and pd.isna(tm_or_list)):
         return None
 
@@ -102,6 +103,7 @@ def earliest_acquisition_datetime(tm_or_list) -> Optional[time]:
     # Scalar case
     return _parse_dicom_time(tm_or_list)
 
+
 def to_times(df: pd.DataFrame) -> pd.DataFrame:
     """
     Convert time columns to python datetime.time.
@@ -115,9 +117,11 @@ def to_times(df: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
+
 import re
 
 _ISO_REGEX = re.compile(r"^\d{4}([-/]?\d{2}){2}$")
+
 
 def _is_iso_like(series, n_samples=20):
     s = series.dropna().astype(str).head(n_samples)
@@ -125,16 +129,13 @@ def _is_iso_like(series, n_samples=20):
         return False
     return s.map(lambda x: bool(_ISO_REGEX.match(x))).all()
 
+
 def _infer_dayfirst(series, n_samples=50):
     """
     Infer whether dayfirst=True or False is more plausible for a date-like Series.
     Returns True or False.
     """
-    s = (
-        series.dropna()
-        .astype(str)
-        .head(n_samples)
-    )
+    s = series.dropna().astype(str).head(n_samples)
 
     if s.empty:
         return True  # default fallback (EU-style)
@@ -163,6 +164,7 @@ def _infer_dayfirst(series, n_samples=50):
     # fallback
     return True
 
+
 def to_dates(df):
     date_cols = [c for c in df.columns if "date" in c.lower()]
     print("\nDetected date columns:", date_cols)
@@ -172,10 +174,10 @@ def to_dates(df):
             # ISO dates: dayfirst irrelevant → silence warnings
             dayfirst = False
             print(f"{c}: \t ISO format detected → dayfirst=False")
-            df[c] = pd.to_datetime(df[c], dayfirst=False, errors="coerce")
+            df[c] = pd.to_datetime(df[c], dayfirst=False, format="%Y%m%d", errors="coerce")
         else:
             dayfirst = _infer_dayfirst(df[c])
             print(f"{c}: \t dayfirst = {dayfirst}")
-            df[c] = pd.to_datetime(df[c], dayfirst=dayfirst, errors="coerce")
+            df[c] = pd.to_datetime(df[c], dayfirst=dayfirst, format="%Y%m%d",errors="coerce")
 
     return df

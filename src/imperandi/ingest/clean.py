@@ -26,15 +26,63 @@ DEFAULT_MAX_PIXEL_SPACING_MM = 1.25
 DEFAULT_MAX_SLICE_THICKNESS_MM = 3.0
 
 COLUMNS_TO_USE = [
+    # ─────────────────────────
+    # Identifiers & paths
+    # ─────────────────────────
     "patient_key",
+    "PatientID",
+    "PatientName",
+    "StudyInstanceUID",
+    "SeriesInstanceUID",
+    "SOPInstanceUID",
     "study_id",
     "series_id",
     "dicom_path",
+
+    # ─────────────────────────
+    # Modality & SOP
+    # ─────────────────────────
     "Modality",
     "ModalitiesInStudy",
     "SOPClassUID",
+    "Manufacturer",
+    "ManufacturerModelName",
+    "SoftwareVersions",
+
+    # ─────────────────────────
+    # Study-level metadata
+    # ─────────────────────────
     "StudyDate",
-    "ImageType",
+    "StudyTime",
+    "StudyDescription",
+    "StudyID",
+    "AccessionNumber",
+    "ReferringPhysicianName",
+
+    # ─────────────────────────
+    # Series-level metadata
+    # ─────────────────────────
+    "SeriesDate",
+    "SeriesTime",
+    "SeriesDescription",
+    "SeriesNumber",
+    "ProtocolName",
+    "BodyPartExamined",
+    "Laterality",
+
+    # ─────────────────────────
+    # Instance-level metadata
+    # ─────────────────────────
+    "InstanceNumber",
+    "AcquisitionNumber",
+    "InstanceCreationDate",
+    "InstanceCreationTime",
+    "ContentDate",
+    "ContentTime",
+
+    # ─────────────────────────
+    # Image geometry
+    # ─────────────────────────
     "Rows",
     "Columns",
     "PixelSpacing",
@@ -42,13 +90,64 @@ COLUMNS_TO_USE = [
     "SpacingBetweenSlices",
     "ImageOrientationPatient",
     "ImagePositionPatient",
-    "FrameOfReferenceUID",
-    "InstanceNumber",
-    "AcquisitionNumber",
     "SliceLocation",
-    "SeriesDescription",
-    "InstanceCreationTime",
+    "FrameOfReferenceUID",
+
+    # ─────────────────────────
+    # Image type & acquisition
+    # ─────────────────────────
+    "ImageType",
+    "AcquisitionDate",
+    "AcquisitionTime",
+    "AcquisitionDateTime",
+    "AcquisitionMatrix",
+    "ScanningSequence",
+    "SequenceVariant",
+    "ScanOptions",
+    "RepetitionTime",
+    "EchoTime",
+    "EchoNumbers",
+    "FlipAngle",
+
+    # ─────────────────────────
+    # CT-specific (very common)
+    # ─────────────────────────
+    "KVP",
+    "ExposureTime",
+    "XRayTubeCurrent",
+    "Exposure",
+    "ExposureModulationType",
+    "ConvolutionKernel",
+    "ReconstructionDiameter",
+
+    # ─────────────────────────
+    # Pixel data interpretation
+    # ─────────────────────────
+    "PhotometricInterpretation",
+    "SamplesPerPixel",
+    "BitsAllocated",
+    "BitsStored",
+    "HighBit",
+    "PixelRepresentation",
+    "RescaleIntercept",
+    "RescaleSlope",
+    "RescaleType",
+
+    # ─────────────────────────
+    # Patient info (non-sensitive subset)
+    # ─────────────────────────
+    "PatientSex",
+    "PatientAge",
+    "PatientBirthDate",
+
+    # ─────────────────────────
+    # Misc / QC helpers
+    # ─────────────────────────
+    "NumberOfFrames",
+    "PositionReferenceIndicator",
+    "BurnedInAnnotation",
 ]
+
 
 pd.options.mode.chained_assignment = None
 
@@ -62,18 +161,30 @@ def add_clean_arguments(
 ) -> None:
     if include_csv_path:
         parser.add_argument(
-            "--csv_path",
+            "csv_path",
             type=str,
             nargs="+",
-            required=True,
-            help="Path to the input CSV file / File pattern for multi-file CSV",
+            default=None,
+            help=(
+                "Path to the input CSV file / File pattern for multi-file CSV. "
+                "Defaults to ./dicom_index.csv."
+            ),
         )
+        parser.add_argument(
+            "--csv_path",
+            type=str,
+        )
+
     if include_csv_path_out:
         parser.add_argument(
             "--csv_path_out",
             type=str,
-            required=True,
-            help="Path to save the cleaned CSV file",
+            required=False,
+            default=None,
+            help=(
+                "Path to save the cleaned CSV file. "
+                "Defaults to <csv_dir>/<csv_stem>_clean.csv."
+            ),
         )
     parser.add_argument(
         "--csv_dict_path",
@@ -131,8 +242,28 @@ def build_parser(
 def parse_arguments():
     parser = build_parser()
     args = parser.parse_args()
+    args = normalize_clean_args(args)
 
     print(f"Running {Path(__file__).name} script with arguments: {args}")
+    return args
+
+
+def _default_clean_output_path(csv_path: Path) -> Path:
+    stem = csv_path.stem
+    if stem.endswith("_clean"):
+        return csv_path.parent / f"{stem}_out.csv"
+    return csv_path.parent / f"{stem}_clean.csv"
+
+
+def normalize_clean_args(args: argparse.Namespace) -> argparse.Namespace:
+    if not args.csv_path:
+        args.csv_path = [str(Path.cwd() / "dicom_index.csv")]
+
+    first_csv = Path(args.csv_path[0])
+
+    if not args.csv_path_out:
+        args.csv_path_out = str(_default_clean_output_path(first_csv))
+
     return args
 
 
@@ -338,7 +469,9 @@ def generate_volume_id(df):
     if "ImageOrientationPatient" in df.columns:
         df = df.copy()
         df["ImageOrientationPatient"] = df["ImageOrientationPatient"].apply(
-            lambda x: tuple(x) if isinstance(x, (list, tuple)) else tuple(literal_eval(x))
+            lambda x: (
+                tuple(x) if isinstance(x, (list, tuple)) else tuple(literal_eval(x))
+            )
         )
 
     # Choose the maximum available columns among preferred
@@ -373,14 +506,12 @@ def generate_volume_id(df):
         return str(x)
 
     # Build a per-row stable string and hash it
-    joined = (
-        df[cols_to_use]
-        .applymap(_to_stable_str)
-        .agg("||".join, axis=1)
-    )
+    joined = df[cols_to_use].map(_to_stable_str).agg("||".join, axis=1)
 
     df = df.copy()
-    df["volume_id"] = joined.apply(lambda s: hashlib.sha1(s.encode("utf-8")).hexdigest())
+    df["volume_id"] = joined.apply(
+        lambda s: hashlib.sha1(s.encode("utf-8")).hexdigest()
+    )
     return df
 
 
@@ -440,16 +571,16 @@ def correct_volume_ids(df, z_tolerance=1e-3):
 
     df = df.copy()
 
-    # Normalize position/orientation if present (but don't require them)
-    if "ImageOrientationPatient" in df.columns:
-        df["ImageOrientationPatient"] = df["ImageOrientationPatient"].apply(
-            lambda x: tuple(as_float_array(x)) if x is not None and x == x else None
-        )
+    # # Normalize position/orientation if present (but don't require them)
+    # if "ImageOrientationPatient" in df.columns:
+    #     df["ImageOrientationPatient"] = df["ImageOrientationPatient"].apply(
+    #         lambda x: tuple(as_float_array(x)) if x is not None and x == x else None
+    #     )
 
-    if "ImagePositionPatient" in df.columns:
-        df["ImagePositionPatient"] = df["ImagePositionPatient"].apply(
-            lambda x: tuple(as_float_array(x)) if x is not None and x == x else None
-        )
+    # if "ImagePositionPatient" in df.columns:
+    #     df["ImagePositionPatient"] = df["ImagePositionPatient"].apply(
+    #         lambda x: tuple(as_float_array(x)) if x is not None and x == x else None
+    #     )
 
     updated_ids = {}
 
@@ -466,11 +597,15 @@ def correct_volume_ids(df, z_tolerance=1e-3):
         if "ImagePositionPatient" in group_df.columns:
             s = group_df["ImagePositionPatient"]
             # keep only rows with a usable tuple/list of len>=3
-            mask = s.notna() & s.apply(lambda v: isinstance(v, (list, tuple)) and len(v) >= 3)
+            mask = s.notna() & s.apply(
+                lambda v: isinstance(v, (list, tuple)) and len(v) >= 3
+            )
             if mask.any():
                 z_positions = s[mask].apply(lambda v: float(v[2])).to_numpy()
 
-        if (z_positions is None or len(z_positions) < 2) and "SliceLocation" in group_df.columns:
+        if (
+            z_positions is None or len(z_positions) < 2
+        ) and "SliceLocation" in group_df.columns:
             s = group_df["SliceLocation"]
             mask = s.notna()
             if mask.any():
@@ -494,10 +629,16 @@ def correct_volume_ids(df, z_tolerance=1e-3):
             # all slices same z (or too few distinct) -> can't decide
             continue
 
-        consistent_spacing = np.all(np.isclose(z_diff_nz, z_diff_nz[0], atol=z_tolerance))
+        consistent_spacing = np.all(
+            np.isclose(z_diff_nz, z_diff_nz[0], atol=z_tolerance)
+        )
 
         # --- optional debug print (robust to missing cols) ---
-        debug_cols = [c for c in ["patient_key", "date", "SeriesDescription"] if c in group_df.columns]
+        debug_cols = [
+            c
+            for c in ["patient_key", "date", "SeriesDescription"]
+            if c in group_df.columns
+        ]
         if debug_cols:
             summary = {
                 c: group_df[c].dropna().unique().tolist()[:5] for c in debug_cols
@@ -505,7 +646,9 @@ def correct_volume_ids(df, z_tolerance=1e-3):
         else:
             summary = {}
 
-        print(f"{summary} : {len(volume_ids)} pseudo-volumes, {len(group_df)} total rows")
+        print(
+            f"{summary} : {len(volume_ids)} pseudo-volumes, {len(group_df)} total rows"
+        )
 
         if consistent_spacing:
             print("👫 Merged\n")
@@ -523,6 +666,7 @@ def group_volumes(df):
 
     def agg_fun(col):
         vals = list(col.dropna())
+        #vals = str(vals)#.split(",")  # flatten lists/tuples into strings for uniqueness
         agg_col = list(set(vals))
         if len(agg_col) == 0:
             return float("NaN")
@@ -701,6 +845,24 @@ def drop_irrelevant_dicom_tags(df):
     df = df.drop(columns=dicom_tags)
     return df
 
+def reorder_columns(df):
+    PRIORITY_COLS = [
+        "patient_key",
+        "volume_id",
+        "study_id",
+        "series_id",
+        "date",
+    ]
+
+    cols = df.columns.tolist()
+
+    ordered_cols = (
+        [c for c in PRIORITY_COLS if c in cols] +
+        [c for c in cols if c not in PRIORITY_COLS]
+    )
+
+    return df[ordered_cols]
+
 
 def clean_and_save_data(
     csv_path, csv_path_out, csv_dict_path, manifest, volume_min, volume_max
@@ -713,7 +875,7 @@ def clean_and_save_data(
 
     df = to_dates(df)
     df = to_times(df)
-    df = add_date(df) # generic date column
+    df = add_date(df)  # generic date column
 
     df_prev = df.copy()
     df = unravel_patient_key(df, manifest)
@@ -793,6 +955,8 @@ def clean_and_save_data(
     df = compute_acquisition_order(df)
 
     df = df.dropna(axis=1, how="all")
+
+    df = reorder_columns(df)
 
     if csv_path_out:
         df.to_csv(csv_path_out, index=False)

@@ -22,29 +22,50 @@ def add_convert_arguments(
     include_dry_run: bool = True,
 ):
     parser.add_argument(
-        "--output_dir",
+        "csv_path_pos",
+        nargs="?",
         type=str,
-        required=True,
-        help="Root directory for NIFTI data",
+        default=None,
+        help="Path to the input CSV file(s). Defaults to ./dicom_index.csv.",
     )
     parser.add_argument(
         "--csv_path",
-        type=str,
+        dest="csv_path_opt",
         nargs="+",
-        required=True,
-        help="Path to the input CSV file(s)",
+        type=str,
     )
+
+    parser.add_argument(
+        "output_dir_pos",
+        nargs="?",
+        type=str,
+        default=None,
+        help="Root directory for NIFTI data.",
+    )
+    parser.add_argument(
+        "--output_dir",
+        dest="output_dir_opt",
+        type=str,
+    )
+
     parser.add_argument(
         "--csv_path_out",
         type=str,
-        required=True,
-        help="Path to save the final output CSV file",
+        required=False,
+        default=None,
+        help=(
+            "Path to save the final output CSV file. "
+            "Defaults to <csv_dir>/nifti_index.csv."
+        ),
     )
     parser.add_argument(
         "--error_csv_path",
         type=str,
-        default="df_errors.csv",
-        help="Path to save the error CSV file",
+        default=None,
+        help=(
+            "Path to save the error CSV file. "
+            "Defaults to <csv_dir>/nifti_index_errors.csv."
+        ),
     )
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose mode")
     parser.add_argument(
@@ -82,7 +103,52 @@ def build_parser(add_help: bool = True) -> argparse.ArgumentParser:
 def parse_arguments():
     parser = build_parser()
     args = parser.parse_args()
+    args = normalize_convert_args(args)
     print(f"Running {Path(__file__).name} script with arguments: {args}")
+    return args
+
+
+def normalize_convert_args(args: argparse.Namespace) -> argparse.Namespace:
+    # pick optionals over positionals
+    csv_in = args.csv_path_opt if args.csv_path_opt is not None else args.csv_path_pos
+    out_in = args.output_dir_opt if args.output_dir_opt is not None else args.output_dir_pos
+
+    # csv_path -> list[str]
+    if csv_in is None:
+        csv_paths = [Path.cwd() / "dicom_index.csv"]
+    elif isinstance(csv_in, str):
+        csv_paths = [Path(csv_in)]
+    else:
+        csv_paths = [Path(p) for p in csv_in]
+
+    for p in csv_paths:
+        if not p.exists():
+            raise FileNotFoundError(f"CSV file not found: {p}")
+        if p.suffix.lower() != ".csv":
+            raise ValueError(f"Not a CSV file: {p}")
+
+    args.csv_path = [str(p.resolve()) for p in csv_paths]
+
+    # output_dir -> directory
+    if out_in is None:
+        raise ValueError("output_dir is required (positional or --output_dir).")
+    
+    args.output_dir = out_in
+
+    del args.csv_path_pos
+    del args.csv_path_opt
+    del args.output_dir_pos
+    del args.output_dir_opt
+
+    first_csv = Path(args.csv_path[0])
+    csv_dir = first_csv.parent
+
+    if not args.csv_path_out:
+        args.csv_path_out = str(csv_dir / "nifti_index.csv")
+
+    if not args.error_csv_path:
+        args.error_csv_path = str(csv_dir / "nifti_index_errors.csv")
+
     return args
 
 
@@ -133,7 +199,10 @@ def process_single_volume(k, row, output_dir, verbose):
             series_id = row.series_id
 
         export_dir = (
-            Path(output_dir) / str(row.patient_key) / str(row.study_id) / str(series_id) #/ row.Modality
+            Path(output_dir)
+            / str(row.patient_key)
+            / str(row.study_id)
+            / str(series_id)  # / row.Modality
         )
         # export_dir = Path(output_dir) / row.patient_key / row.date / row.Modality / row.volume_id
         export_path = export_dir / "scan.nii.gz"
@@ -307,7 +376,7 @@ def main(args):
     df["nifti_path"] = None
 
     # Convert any list-like strings to actual lists
-    df = df.applymap(lambda x: convert_list_str_to_list(x) if isinstance(x, str) else x)
+    df = df.map(lambda x: convert_list_str_to_list(x) if isinstance(x, str) else x)
 
     print("Before conversion:")
     report_volumes(df)
