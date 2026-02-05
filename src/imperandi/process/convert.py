@@ -64,7 +64,7 @@ def add_convert_arguments(
         default=None,
         help=(
             "Path to save the error CSV file. "
-            "Defaults to <csv_dir>/nifti_index_errors.csv."
+            "Defaults to <csv_dir>/conv_errors.csv."
         ),
     )
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose mode")
@@ -147,7 +147,7 @@ def normalize_convert_args(args: argparse.Namespace) -> argparse.Namespace:
         args.csv_path_out = str(csv_dir / "nifti_index.csv")
 
     if not args.error_csv_path:
-        args.error_csv_path = str(csv_dir / "nifti_index_errors.csv")
+        args.error_csv_path = str(csv_dir / "conv_errors.csv")
 
     return args
 

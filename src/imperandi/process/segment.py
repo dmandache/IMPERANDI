@@ -39,7 +39,7 @@ from imperandi.utils.misc import report_volumes  # type: ignore
 # Configuration & logging
 # -----------------------------------------------------------------------------
 # Path where TotalSegmentator models are cached (edit as needed)
-os.environ.setdefault("TOTALSEG_HOME_DIR", str(Path.home() / ".totalsegmentator_v2"))
+#os.environ.setdefault("TOTALSEG_HOME_DIR", str(Path.home() / ".totalsegmentator_v2"))
 
 DEFAULT_TIMEOUT = 15 * 60  # seconds – hard wall per study inside the pool
 
@@ -379,8 +379,8 @@ def add_segment_arguments(
     parser.add_argument(
         "--error_csv_path",
         type=str,
-        default="df_errors.csv",
-        help="CSV for failures only",
+        default=None,
+        help="CSV for failures only (default: alongside input CSV).",
     )
     parser.add_argument(
         "--tasks_config",
@@ -454,7 +454,10 @@ def normalize_segment_args(args: argparse.Namespace) -> argparse.Namespace:
     else:
         args.csv_path_out = str(Path(args.csv_path_out))
 
-    args.error_csv_path = str(Path(args.error_csv_path))
+    if args.error_csv_path:
+        args.error_csv_path = str(Path(args.error_csv_path))
+    else:
+        args.error_csv_path = str(Path(args.csv_path).parent / "seg_errors.csv")
 
     if args.tasks_config:
         args.tasks_config = str(Path(args.tasks_config))
