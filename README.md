@@ -107,6 +107,9 @@ Example segmentation config (JSON):
 
 `clean` writes the cleaned CSV to `--csv_path_out` (or `dicom_index_clean.csv` when using `ingest`).
 
+**Philosophy**
+IMPERANDI is designed to work end‑to‑end out of the box, while still being easy to personalize. You can run the full pipeline in one go or tailor behavior through dataset manifests and user‑defined hooks. At the same time, each stage is modular, so you can intervene between steps to edit or enrich CSVs before moving on. The choice of CSV as the interchange format is intentional: it is generic, lightweight, and easy to inspect, edit, and share.
+
 **Manifests And Hooks**
 Manifests define dataset-specific behavior and live in:
 - `src/imperandi/datasets_config/manifests/*.json`
