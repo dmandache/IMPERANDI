@@ -22,10 +22,12 @@ python -m pip install -e .
 ```
 
 **CLI Overview**
-IMPERANDI ships a single CLI with three subcommands:
+IMPERANDI ships a single CLI with several subcommands:
 - `parse`: scan DICOMs and build a metadata index.
 - `clean`: filter and normalize the index.
 - `ingest`: run `parse` then `clean` in one step.
+- `convert`: converts DICOMs from index to NIfTI.
+- `segment`: run configurable segmentation on NIfTI volumes.
 
 Get help:
 ```bash
@@ -33,6 +35,8 @@ imperandi --help
 imperandi parse --help
 imperandi clean --help
 imperandi ingest --help
+imperandi convert --help
+imperandi segment --help
 ```
 
 **Quickstart**
@@ -58,6 +62,42 @@ imperandi ingest \
   --root_path /path/to/dicom \
   --output_dir /path/to/output \
   --manifest operandi
+```
+
+Segment NIfTI volumes (default liver config):
+```bash
+imperandi segment \
+  --csv_path /path/to/output/nifti_index.csv \
+  --csv_path_out /path/to/output/nifti_index_segmented.csv
+```
+
+Example segmentation config (JSON):
+```json
+{
+  "backend": "totalsegmentator",
+  "tasks": [
+    {
+      "key": "liver",
+      "task": "total",
+      "output": "liver.nii.gz",
+      "extra": { "roi_subset_robust": ["liver"] }
+    },
+    {
+      "key": "vessels",
+      "task": "liver_vessels",
+      "output": "liver_tumor.nii.gz",
+      "extra": {}
+    }
+  ],
+  "postprocess": {
+    "merge_keys": ["liver", "vessels"],
+    "output": "liver_all.nii.gz",
+    "radius_mm": 5.0,
+    "largest_cc": true,
+    "fill_holes": true,
+    "close": true
+  }
+}
 ```
 
 **Outputs**

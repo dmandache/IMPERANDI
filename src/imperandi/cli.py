@@ -9,6 +9,7 @@ from pandarallel import pandarallel
 from imperandi.ingest import clean as clean_module
 from imperandi.ingest import parse as parse_module
 from imperandi.process import convert as convert_module
+from imperandi.process import segment as segment_module
 from imperandi.utils.manifest import load_manifest
 from imperandi.utils.misc import print_args
 
@@ -67,6 +68,15 @@ def _add_convert_subcommand(subparsers: argparse._SubParsersAction) -> None:
     parser.set_defaults(_handler=_handle_convert)
 
 
+def _add_segment_subcommand(subparsers: argparse._SubParsersAction) -> None:
+    parser = subparsers.add_parser(
+        "segment",
+        help="Segment NIfTI volumes with configurable tasks.",
+    )
+    segment_module.add_segment_arguments(parser)
+    parser.set_defaults(_handler=_handle_segment)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="imperandi",
@@ -78,6 +88,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_clean_subcommand(subparsers)
     _add_ingest_subcommand(subparsers)
     _add_convert_subcommand(subparsers)
+    _add_segment_subcommand(subparsers)
 
     return parser
 
@@ -149,6 +160,16 @@ def _handle_convert(args: argparse.Namespace) -> int:
         print_args(args)
         return 0
     convert_module.main(args)
+    return 0
+
+
+def _handle_segment(args: argparse.Namespace) -> int:
+    args = segment_module.normalize_segment_args(args)
+    if args.dry_run:
+        print("Dry run: segment")
+        print_args(args)
+        return 0
+    segment_module.main(args)
     return 0
 
 
