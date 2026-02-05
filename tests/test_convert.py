@@ -5,6 +5,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import pandas as pd
+import pytest
+from unittest.mock import Mock, MagicMock
 
 from imperandi.process import convert as convert_module
 
@@ -61,17 +63,37 @@ def test_process_single_volume_skips_existing(tmp_path, monkeypatch):
     out_root = tmp_path / "out"
     out_root.mkdir()
 
-    row = make_series(tmp_path, out_root, create_nifti=True)
+    series_dir = tmp_path / "series"
+    series_dir.mkdir()
+    (series_dir / "img1.dcm").write_text("dummy")
 
-    # ensure is_valid_nifti returns True for the created file
+    # Create the expected output directory and file
+    export_dir = out_root / "P1" / "ST1" / "S1"
+    export_dir.mkdir(parents=True, exist_ok=True)
+    nifti_file = export_dir / "scan.nii.gz"
+    nifti_file.write_text("fake nifti")
+
+    row = pd.Series(
+        {
+            "series_dir": str(series_dir),
+            "dicom_path": [str(series_dir / "img1.dcm")],
+            "volume_ordinal_in_series": 1,
+            "series_id": "S1",
+            "patient_key": "P1",
+            "study_id": "ST1",
+            "Modality": "CT",
+        }
+    )
+
+    # Mock is_valid_nifti to return True
     monkeypatch.setattr(convert_module, "is_valid_nifti", lambda p: True)
 
     k, export_path, error = convert_module.process_single_volume(
         0, row, out_root, verbose=False
     )
+
     assert error is None
-    assert export_path is not None
-    assert Path(export_path).exists()
+    assert export_path == nifti_file
 
 
 def test_process_single_volume_handles_conversion_error(tmp_path, monkeypatch):
@@ -100,3 +122,45 @@ def test_process_single_volume_handles_conversion_error(tmp_path, monkeypatch):
     assert export_path is None
     assert error_row is not None
     assert "error" in error_row
+
+
+def test_process_single_volume_successful_conversion(tmp_path, monkeypatch):
+    out_root = tmp_path / "out"
+    out_root.mkdir()
+
+    series_dir = tmp_path / "series"
+    series_dir.mkdir()
+    (series_dir / "img1.dcm").write_text("dummy")
+
+    row = pd.Series(
+        {
+            "series_dir": str(series_dir),
+            "dicom_path": [str(series_dir / "img1.dcm")],
+            "volume_ordinal_in_series": 1,
+            "series_id": "S1",
+            "patient_key": "P1",
+            "study_id": "ST1",
+            "Modality": "CT",
+        }
+    )
+
+    # Mock the dicom2nifti functions
+    monkeypatch.setattr(
+        convert_module.dicom2nifti.common,
+        "read_dicom_directory",
+        MagicMock(return_value=MagicMock()),
+    )
+    monkeypatch.setattr(
+        convert_module.dicom2nifti.convert_dicom,
+        "dicom_array_to_nifti",
+        MagicMock(),
+    )
+    monkeypatch.setattr(convert_module, "is_valid_nifti", lambda p: True)
+
+    k, export_path, error = convert_module.process_single_volume(
+        0, row, out_root, verbose=False
+    )
+
+    assert error is None
+    assert export_path is not None
+    assert "P1" in str(export_path)

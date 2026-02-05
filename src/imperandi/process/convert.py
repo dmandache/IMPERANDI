@@ -248,7 +248,7 @@ def process_single_volume(k, row, output_dir, verbose):
                     f"{n_files_in_vol} files in volume vs. {n_files_in_dir} files in series dir"
                 )
 
-            temp_dir_root = "/data/scratch/bdr220003/temp/"
+            temp_dir_root = ".tmp" #"/data/scratch/bdr220003/temp/"
             os.makedirs(temp_dir_root, exist_ok=True)
             with tempfile.TemporaryDirectory(
                 dir=temp_dir_root, prefix="temp_convert_"
