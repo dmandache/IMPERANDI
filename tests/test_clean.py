@@ -10,6 +10,42 @@ import numpy as np
 from imperandi.ingest import clean
 
 
+def test_normalize_clean_args_prefers_optional_csv_path(tmp_path):
+    csv_pos = tmp_path / "pos.csv"
+    csv_opt = tmp_path / "opt.csv"
+    csv_pos.write_text("patient_key\np1\n")
+    csv_opt.write_text("patient_key\np2\n")
+
+    args = clean.normalize_clean_args(
+        clean.argparse.Namespace(
+            csv_path_pos=[str(csv_pos)],
+            csv_path_opt=[str(csv_opt)],
+            csv_path_out=None,
+        )
+    )
+
+    assert args.csv_path == [str(csv_opt)]
+    assert args.csv_path_out.endswith("opt_clean.csv")
+    assert not hasattr(args, "csv_path_pos")
+    assert not hasattr(args, "csv_path_opt")
+
+
+def test_normalize_clean_args_accepts_positional_only(tmp_path):
+    csv_pos = tmp_path / "input.csv"
+    csv_pos.write_text("patient_key\np1\n")
+
+    args = clean.normalize_clean_args(
+        clean.argparse.Namespace(
+            csv_path_pos=[str(csv_pos)],
+            csv_path_opt=None,
+            csv_path_out=None,
+        )
+    )
+
+    assert args.csv_path == [str(csv_pos)]
+    assert args.csv_path_out.endswith("input_clean.csv")
+
+
 def test_uniform_string_and_remove_other_organs_description():
     assert clean.uniform_string("  Abc  .0") == "abc"
     assert clean.uniform_string("RévoluTion") == "revolution"

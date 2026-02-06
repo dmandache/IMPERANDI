@@ -361,11 +361,8 @@ def main(args):
             check_file(p)
 
     # Load manifest if provided
-    manifest = None
     if hasattr(args, "manifest") and args.manifest:
-        manifest = load_manifest(
-            args.manifest, base_path=Path(__file__).resolve().parents[1]
-        )
+        load_manifest(args.manifest, base_path=Path(__file__).resolve().parents[1])
 
     # Load data (support multiple CSV paths)
     df_list = [pd.read_csv(p) for p in args.csv_path]

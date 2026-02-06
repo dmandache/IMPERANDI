@@ -1,5 +1,6 @@
 ﻿import warnings
 import glob
+from functools import partial
 from pathlib import Path
 import argparse
 from multiprocessing import cpu_count
@@ -12,6 +13,7 @@ from pydicom import dcmread
 from pydicom.errors import InvalidDicomError
 
 from imperandi.utils.misc import print_args
+from imperandi.utils.manifest import load_manifest, resolve_hook
 
 warnings.filterwarnings("ignore")
 
@@ -25,14 +27,14 @@ def add_parse_arguments(
     include_dry_run: bool = True,
 ) -> None:
     parser.add_argument(
-        "root_path",
+        "root_path_pos",
         type=str,
         nargs="?",
         default=None,
         help="Root path where the DICOM files are located. Defaults to current working directory.",
     )
     parser.add_argument(
-        "output_dir",
+        "output_dir_pos",
         type=str,
         nargs="?",
         default=None,
@@ -40,10 +42,12 @@ def add_parse_arguments(
     )
     parser.add_argument(
         "--root_path",
+        dest="root_path_opt",
         type=str,
     )
     parser.add_argument(
         "--output_dir",
+        dest="output_dir_opt",
         type=str,
     )
     if include_manifest:
@@ -144,10 +148,34 @@ def build_parser(
 
 
 def normalize_parse_args(args: argparse.Namespace) -> argparse.Namespace:
-    root_path = Path(args.root_path) if args.root_path else Path.cwd()
-    output_dir = Path(args.output_dir) if args.output_dir else root_path.parent
+    root_in = (
+        args.root_path_opt
+        if getattr(args, "root_path_opt", None) is not None
+        else (
+            getattr(args, "root_path_pos", None)
+            if getattr(args, "root_path_pos", None) is not None
+            else getattr(args, "root_path", None)
+        )
+    )
+    output_in = (
+        args.output_dir_opt
+        if getattr(args, "output_dir_opt", None) is not None
+        else (
+            getattr(args, "output_dir_pos", None)
+            if getattr(args, "output_dir_pos", None) is not None
+            else getattr(args, "output_dir", None)
+        )
+    )
+
+    root_path = Path(root_in) if root_in else Path.cwd()
+    output_dir = Path(output_in) if output_in else root_path.parent
     args.root_path = str(root_path)
     args.output_dir = str(output_dir)
+
+    for attr in ("root_path_pos", "root_path_opt", "output_dir_pos", "output_dir_opt"):
+        if hasattr(args, attr):
+            delattr(args, attr)
+
     return args
 
 
@@ -157,9 +185,6 @@ def parse_arguments():
     args = normalize_parse_args(args)
     print(f"Running {Path(__file__).name} with args: {args}")
     return args
-
-
-from imperandi.utils.manifest import load_manifest, resolve_hook
 
 
 def apply_id_standardization(df: pd.DataFrame, manifest: dict) -> pd.DataFrame:
@@ -282,6 +307,10 @@ def read_dicom_header(fp, *, force=False):
 
     except Exception:
         return pd.Series({})
+
+
+def read_dicom_header_with_force(fp, force):
+    return read_dicom_header(fp, force=force)
 
 
 # -------------------------
@@ -423,10 +452,7 @@ def main(args):
         f"Reading all DICOM tags recursively (user tags to include: {user_tags or 'none'})"
     )
 
-    read_func = lambda fp: read_dicom_header(
-        fp,
-        force=args.force_dicom_read,
-    )
+    read_func = partial(read_dicom_header_with_force, force=args.force_dicom_read)
 
     df = process_with_checkpoint(
         df_paths=df,

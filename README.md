@@ -23,8 +23,17 @@ IMPERANDI targets multi-phasic, longitudinal CT imaging data and addresses the c
 
 **Install**
 ```bash
-python -m pip install -r requirements.txt
 python -m pip install -e .
+```
+
+Install segmentation dependencies (optional):
+```bash
+python -m pip install -e ".[segment]"
+```
+
+Install development/test tooling (includes segmentation extras):
+```bash
+python -m pip install -e ".[dev]"
 ```
 
 **CLI Overview**
@@ -33,7 +42,7 @@ IMPERANDI ships a single CLI with several subcommands:
 - `clean`: filter and normalize the index.
 - `ingest`: run `parse` then `clean` in one step.
 - `convert`: converts DICOMs from index to NIfTI.
-- `segment`: run configurable segmentation on NIfTI volumes.
+- `segment`: run configurable segmentation on NIfTI volumes (requires `.[segment]`).
 
 Get help:
 ```bash
@@ -98,6 +107,7 @@ Example segmentation config (JSON):
   "postprocess": {
     "merge_keys": ["liver", "vessels"],
     "output": "liver_all.nii.gz",
+    "on_failure": "warn_only",
     "radius_mm": 5.0,
     "largest_cc": true,
     "fill_holes": true,

@@ -8,6 +8,38 @@ version = "0.0.0"
 description = "IMaging PREprocessing And Normalization for Diagnostic Interoperability"
 readme = "README.md"
 requires-python = ">=3.10"
+dependencies = [
+  "numpy",
+  "pandas",
+  "pandarallel",
+  "python-dateutil",
+  "unidecode",
+  "tqdm",
+  "pydicom",
+  "dicom2nifti",
+  "nibabel",
+]
+
+[project.optional-dependencies]
+segment = [
+  "TotalSegmentator",
+  "torchio",
+  "scipy",
+  "scikit-image",
+]
+dev = [
+  "pytest",
+  "pytest-cov",
+  "black[jupyter]",
+  "ruff",
+  "ipykernel",
+  "ipympl",
+  "ipywidgets",
+  "TotalSegmentator",
+  "torchio",
+  "scipy",
+  "scikit-image",
+]
 
 [project.scripts]
 imperandi = "imperandi.cli:main"

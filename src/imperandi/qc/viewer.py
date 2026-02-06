@@ -4,8 +4,6 @@ from pathlib import Path
 import time
 import warnings
 
-warnings.filterwarnings("ignore")  # Ignore warnings
-
 import nibabel as nib
 import numpy as np
 import pandas as pd
@@ -13,6 +11,8 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import ipywidgets as widgets
 from IPython.display import clear_output, display
+
+warnings.filterwarnings("ignore")  # Ignore warnings
 
 # List of DICOM tags to display
 DICOM_TAGS_TO_DISPLAY = [

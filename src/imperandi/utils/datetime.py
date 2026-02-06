@@ -3,6 +3,7 @@ from __future__ import annotations
 import pandas as pd
 from datetime import time
 from typing import Optional, Any
+import re
 
 
 def _get(meta: Any, key: str, default=None):
@@ -117,8 +118,6 @@ def to_times(df: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
-
-import re
 
 _ISO_REGEX = re.compile(r"^\d{4}([-/]?\d{2}){2}$")
 

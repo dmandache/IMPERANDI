@@ -1,11 +1,1 @@
-numpy
-pandas
-pandarallel
-python-dateutil
-unidecode
-tqdm
-pydicom
-dicom2nifti
-nibabel
-TotalSegmentator
-torchio
+-e .

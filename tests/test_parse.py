@@ -9,6 +9,44 @@ import pandas as pd
 from imperandi.ingest import parse
 
 
+def test_normalize_parse_args_prefers_flags(tmp_path):
+    root_pos = tmp_path / "root_pos"
+    out_pos = tmp_path / "out_pos"
+    root_opt = tmp_path / "root_opt"
+    out_opt = tmp_path / "out_opt"
+
+    args = parse.normalize_parse_args(
+        parse.argparse.Namespace(
+            root_path_pos=str(root_pos),
+            output_dir_pos=str(out_pos),
+            root_path_opt=str(root_opt),
+            output_dir_opt=str(out_opt),
+        )
+    )
+
+    assert args.root_path == str(root_opt)
+    assert args.output_dir == str(out_opt)
+    assert not hasattr(args, "root_path_pos")
+    assert not hasattr(args, "root_path_opt")
+    assert not hasattr(args, "output_dir_pos")
+    assert not hasattr(args, "output_dir_opt")
+
+
+def test_normalize_parse_args_defaults_to_cwd():
+    args = parse.normalize_parse_args(
+        parse.argparse.Namespace(
+            root_path_pos=None,
+            output_dir_pos=None,
+            root_path_opt=None,
+            output_dir_opt=None,
+        )
+    )
+
+    expected_root = Path.cwd()
+    assert args.root_path == str(expected_root)
+    assert args.output_dir == str(expected_root.parent)
+
+
 def test_choose_ids_path_only(tmp_path):
     root = tmp_path
     p1 = root / "patient1" / "studyA" / "series1" / "img1.dcm"
@@ -130,7 +168,7 @@ def test_apply_id_standardization_monkeypatched_hook(monkeypatch):
     assert out.loc[0, "patient_key"] == "ALICE"
     # failing raw ('X') should mark std_failed True
     assert out.loc[1, "patient_key_raw"] == "X"
-    assert out.loc[1, "patient_key_std_failed"] == True
+    assert out.loc[1, "patient_key_std_failed"]
     # None remains None and not marked as failed
     assert pd.isna(out.loc[2, "patient_key"])
     assert "patient_key_std_failed" in out.columns

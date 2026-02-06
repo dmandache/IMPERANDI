@@ -9,9 +9,19 @@ from pandarallel import pandarallel
 from imperandi.ingest import clean as clean_module
 from imperandi.ingest import parse as parse_module
 from imperandi.process import convert as convert_module
-from imperandi.process import segment as segment_module
 from imperandi.utils.manifest import load_manifest
 from imperandi.utils.misc import print_args
+
+
+def _load_segment_module():
+    try:
+        from imperandi.process import segment as segment_module
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "The 'segment' command requires optional dependencies. "
+            "Install with: pip install -e .[segment]"
+        ) from exc
+    return segment_module
 
 
 def _add_parse_subcommand(subparsers: argparse._SubParsersAction) -> None:
@@ -73,6 +83,16 @@ def _add_segment_subcommand(subparsers: argparse._SubParsersAction) -> None:
         "segment",
         help="Segment NIfTI volumes with configurable tasks.",
     )
+    try:
+        segment_module = _load_segment_module()
+    except RuntimeError as exc:
+        parser.add_argument("segment_args", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
+        parser.set_defaults(
+            _handler=_handle_segment_unavailable,
+            _segment_unavailable_msg=str(exc),
+        )
+        return
+
     segment_module.add_segment_arguments(parser)
     parser.set_defaults(_handler=_handle_segment)
 
@@ -105,6 +125,7 @@ def _handle_parse(args: argparse.Namespace) -> int:
 
 
 def _handle_clean(args: argparse.Namespace) -> int:
+    args = clean_module.normalize_clean_args(args)
     if args.dry_run:
         print("Dry run: clean")
         print_args(args)
@@ -164,6 +185,7 @@ def _handle_convert(args: argparse.Namespace) -> int:
 
 
 def _handle_segment(args: argparse.Namespace) -> int:
+    segment_module = _load_segment_module()
     args = segment_module.normalize_segment_args(args)
     if args.dry_run:
         print("Dry run: segment")
@@ -171,6 +193,11 @@ def _handle_segment(args: argparse.Namespace) -> int:
         return 0
     segment_module.main(args)
     return 0
+
+
+def _handle_segment_unavailable(args: argparse.Namespace) -> int:
+    print(getattr(args, "_segment_unavailable_msg", "Segment command unavailable."))
+    return 2
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

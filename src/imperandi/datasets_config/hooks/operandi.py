@@ -53,7 +53,7 @@ def standardize_operandi_patient_key(patient_key):
         tokens = patient_key.split("-")
         tokens = [s.lstrip("0") for s in tokens]
         return "-".join(tokens[0:4])
-    except:
+    except Exception:
         """
         for AUTRES
         """
@@ -67,7 +67,7 @@ def transform_operandi_patient_key(patient_key):
         center_id = int(tokens[-2])
         ptient_local_id = int(tokens[-1])
         return f"{center_id}-2-{ptient_local_id}-2"
-    except:
+    except Exception:
         return None
 
 

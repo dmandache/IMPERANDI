@@ -1,7 +1,1 @@
-﻿pytest
-pytest-cov
-black[jupyter]
-ruff
-ipykernel
-ipympl
-ipywidgets
+-e .[dev]

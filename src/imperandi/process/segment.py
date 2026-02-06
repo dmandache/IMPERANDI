@@ -86,7 +86,7 @@ def clean_and_merge_masks(
     close: bool = True,
     fill_holes: bool = True,
     largest_cc: bool = True,
-) -> None:
+) -> bool:
     """Merge masks and optionally apply morphological cleanup."""
 
     masks: Dict[str, np.ndarray] = {}
@@ -104,16 +104,16 @@ def clean_and_merge_masks(
             ref_affine, voxel_zooms = affine, zooms
         elif not np.allclose(ref_affine, affine):
             logger.error("Affine mismatch for %s – aborting merge.", src.name)
-            return
+            return False
         masks[fname] = data > 0
 
     if not masks:
         logger.error("No valid masks found to merge in %s", dir_path)
-        return
+        return False
 
     if len({m.shape for m in masks.values()}) > 1:
         logger.error("Mask shape mismatch in %s – aborting merge.", dir_path)
-        return
+        return False
 
     merged = np.logical_or.reduce(list(masks.values()))
     if close:
@@ -141,6 +141,8 @@ def clean_and_merge_masks(
     # Optional: overwrite the originals with their cleaned‑up version
     for fname, mask in masks.items():
         save_nifti(mask & merged, ref_affine, dir_path / fname)
+
+    return True
 
 
 # -----------------------------------------------------------------------------
@@ -330,8 +332,9 @@ def segment_volume(
     verbose: bool = False,
     force: bool = False,
     backend: TotalSegmentatorBackend | None = None,
-) -> None:
-    """Run segmentation tasks and optional post‑processing."""
+) -> List[str]:
+    """Run segmentation tasks and optional post‐processing."""
+    warnings: List[str] = []
     tasks = tasks_config.get("tasks", [])
     if not tasks:
         raise ValueError("No tasks provided in config")
@@ -374,25 +377,31 @@ def segment_volume(
 
     postprocess = tasks_config.get("postprocess")
     if not postprocess:
-        return
+        return warnings
 
     merge_keys = postprocess.get("merge_keys", [])
     if not merge_keys:
-        return
+        return warnings
 
     key_to_output = {task["key"]: task["output"] for task in tasks}
     merge_files = [key_to_output[k] for k in merge_keys if k in key_to_output]
     if not merge_files:
-        return
+        return warnings
 
     merged_name = postprocess.get("output", "mask_merged.nii.gz")
     dst = output_dir / merged_name
     if dst.exists() and not force:
         if verbose:
             logger.info("Skip %s – file exists", dst)
-        return
+        return warnings
 
-    clean_and_merge_masks(
+    on_failure = str(postprocess.get("on_failure", "warn_only")).strip().lower()
+    if on_failure not in {"warn_only", "fail"}:
+        raise ValueError(
+            f"Invalid postprocess.on_failure='{on_failure}'. Use 'warn_only' or 'fail'."
+        )
+
+    merged_ok = clean_and_merge_masks(
         output_dir,
         merge_files,
         output_name=merged_name,
@@ -402,6 +411,14 @@ def segment_volume(
         fill_holes=bool(postprocess.get("fill_holes", True)),
         largest_cc=bool(postprocess.get("largest_cc", True)),
     )
+    if not merged_ok or not dst.exists():
+        message = f"Postprocess merge did not produce expected output: {dst}"
+        if on_failure == "fail":
+            raise RuntimeError(message)
+        logger.warning(message)
+        warnings.append(message)
+
+    return warnings
 
 
 # -----------------------------------------------------------------------------
@@ -418,19 +435,19 @@ def process_single_volume(
     verbose: bool,
     force: bool,
     backend: TotalSegmentatorBackend | None = None,
-) -> Tuple[int, str | None, str | None]:
-    """Return ``(idx, output_dir|None, error_msg|None)``."""
+) -> Tuple[int, str | None, str | None, str | None]:
+    """Return ``(idx, output_dir|None, error_msg|None, warning_msg|None)``."""
 
     try:
         nifti_path = Path(row["nifti_path"])
     except KeyError:
-        return idx, None, "column 'nifti_path' missing"
+        return idx, None, "column 'nifti_path' missing", None
 
     if not nifti_path.exists():
-        return idx, None, "file not found"
+        return idx, None, "file not found", None
 
     try:
-        segment_volume(
+        warnings = segment_volume(
             nifti_path,
             nifti_path.parent,
             tasks_config,
@@ -439,11 +456,12 @@ def process_single_volume(
             force=force,
             backend=backend,
         )
-        return idx, str(nifti_path.parent), None
+        warning_msg = " | ".join(warnings) if warnings else None
+        return idx, str(nifti_path.parent), None, warning_msg
     except Exception as exc:
         # Capture full traceback for later debugging
         logger.debug("Traceback for %s:\n%s", nifti_path.name, traceback.format_exc())
-        return idx, None, str(exc)
+        return idx, None, str(exc), None
 
 
 # -----------------------------------------------------------------------------
@@ -576,18 +594,26 @@ def main(args: argparse.Namespace) -> None:
     prefetch_totalsegmentator_models(tasks_config, fast=args.fast)
 
     # --- read and pre‑clean CSV ------------------------------------------------
-    df = pd.read_csv(args.csv_path, index_col=0).drop_duplicates("nifti_path").copy()
+    df = pd.read_csv(args.csv_path).copy()
+    if "nifti_path" not in df.columns:
+        unnamed = [c for c in df.columns if c.startswith("Unnamed:")]
+        if unnamed:
+            df = df.drop(columns=unnamed)
+    if "nifti_path" not in df.columns:
+        raise KeyError("column 'nifti_path' missing")
+    df = df.drop_duplicates("nifti_path").copy()
     for task in tasks_config.get("tasks", []):
         df[f"mask_{task['key']}"] = None
     if tasks_config.get("postprocess"):
         df["mask_merged"] = None
+    df["warning_message"] = None
 
     # --- spawn multiprocessing pool -------------------------------------------
     ctx = mp.get_context(
         args.start_method
     )  # 'spawn' required for torch / CUDA stability
 
-    results: List[Tuple[int, str | None, str | None]] = []
+    results: List[Tuple[int, str | None, str | None, str | None]] = []
 
     with ProcessPoolExecutor(max_workers=args.num_workers, mp_context=ctx) as pool:
         futures = {
@@ -610,9 +636,9 @@ def main(args: argparse.Namespace) -> None:
             except TimeoutError:
                 logger.warning("Row %d exceeded %ds – killed", i, args.timeout_sec)
                 fut.cancel()
-                res = (i, None, "timeout")
+                res = (i, None, "timeout", None)
             except Exception as exc:
-                res = (i, None, f"worker crash: {exc}")
+                res = (i, None, f"worker crash: {exc}", None)
             results.append(res)
 
         # Force‑kill any orphaned processes (≤ Python 3.10)
@@ -625,21 +651,34 @@ def main(args: argparse.Namespace) -> None:
 
     # --- consolidate results ---------------------------------------------------
     errors: List[Dict[str, Any]] = []
-    for idx, out_dir, err_msg in results:
+    for idx, out_dir, err_msg, warning_msg in results:
         if out_dir:
             base = Path(out_dir)
+            row_warnings: List[str] = []
             for task in tasks_config.get("tasks", []):
-                df.at[idx, f"mask_{task['key']}"] = str(base / task["output"])
+                mask_path = base / task["output"]
+                if mask_path.exists():
+                    df.at[idx, f"mask_{task['key']}"] = str(mask_path)
+                else:
+                    row_warnings.append(f"missing mask: {mask_path}")
             if tasks_config.get("postprocess"):
                 merged_name = tasks_config["postprocess"].get(
                     "output", "mask_merged.nii.gz"
                 )
-                df.at[idx, "mask_merged"] = str(base / merged_name)
+                merged_path = base / merged_name
+                if merged_path.exists():
+                    df.at[idx, "mask_merged"] = str(merged_path)
+                else:
+                    row_warnings.append(f"missing merged mask: {merged_path}")
+            if warning_msg:
+                row_warnings.append(warning_msg)
+            if row_warnings:
+                df.at[idx, "warning_message"] = " | ".join(row_warnings)
         else:
             errors.append({"idx": idx, "error_message": err_msg or "unknown"})
 
     # --- write output tables ---------------------------------------------------
-    df.to_csv(args.csv_path_out)
+    df.to_csv(args.csv_path_out, index=False)
     logger.info("Wrote main table → %s", args.csv_path_out)
 
     if errors:

@@ -159,9 +159,9 @@ def add_clean_arguments(
 ) -> None:
     if include_csv_path:
         parser.add_argument(
-            "csv_path",
+            "csv_path_pos",
             type=str,
-            nargs="+",
+            nargs="*",
             default=None,
             help=(
                 "Path to the input CSV file / File pattern for multi-file CSV. "
@@ -170,6 +170,8 @@ def add_clean_arguments(
         )
         parser.add_argument(
             "--csv_path",
+            dest="csv_path_opt",
+            nargs="+",
             type=str,
         )
 
@@ -254,13 +256,25 @@ def _default_clean_output_path(csv_path: Path) -> Path:
 
 
 def normalize_clean_args(args: argparse.Namespace) -> argparse.Namespace:
-    if not args.csv_path:
-        args.csv_path = [str(Path.cwd() / "dicom_index.csv")]
+    csv_in = (
+        args.csv_path_opt
+        if getattr(args, "csv_path_opt", None) is not None
+        else getattr(args, "csv_path_pos", None)
+    )
+    if not csv_in:
+        csv_paths = [Path.cwd() / "dicom_index.csv"]
+    else:
+        csv_paths = [Path(p) for p in csv_in]
 
-    first_csv = Path(args.csv_path[0])
+    args.csv_path = [str(p) for p in csv_paths]
+    first_csv = csv_paths[0]
 
     if not args.csv_path_out:
         args.csv_path_out = str(_default_clean_output_path(first_csv))
+
+    for attr in ("csv_path_pos", "csv_path_opt"):
+        if hasattr(args, attr):
+            delattr(args, attr)
 
     return args
 
