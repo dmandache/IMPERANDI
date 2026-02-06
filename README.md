@@ -1,6 +1,6 @@
 ﻿# IMPERANDI - **IM**aging **PRE**processing **A**nd **N**ormalization for **D**iagnostic **I**nteroperability
 
-![image](https://github.com/dmandache/IMPERANDI/static/imperandi-logo.png)
+![image](https://raw.githubusercontent.com/dmandache/IMPERANDI/main/static/imperandi-logo.png)
 
 <!-- ![Python](https://img.shields.io/pypi/pyversions/YOUR_PACKAGE_NAME) -->
 ![Python](https://img.shields.io/badge/python-3.10%20|%203.11%20|%203.12-blue)
