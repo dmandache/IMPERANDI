@@ -139,5 +139,20 @@ Hook implementations live under:
 python -m imperandi --help
 ```
 
+**Testing (Slow Datasets)**
+Slow integration tests for the IRCAD dataset are available and are skipped unless data is present.
+- Place the DICOM dataset at `tests/data/IRCAD_DICOM` (gitignored) or set `IRCAD_ROOT` to the dataset path.
+- Optional: place NIfTI outputs at `tests/data/IRCAD_nifti` or set `IRCAD_NIFTI_ROOT`.
+- Run slow tests with:
+```bash
+python -m pytest -m slow
+```
+- Regenerate golden CSVs locally (from repo root):
+```bash
+python -m imperandi parse --root_path tests/data/IRCAD_DICOM --output_dir tests/data
+python -m imperandi clean --csv_path tests/data/dicom_index.csv --csv_path_out tests/data/dicom_index_clean.csv
+```
+- Note: there is no auto-download due to licensing; datasets must be placed manually.
+
 **License**
 See `LICENSE`.
