@@ -221,6 +221,106 @@ def load_tasks_config(path: Path | None) -> Dict[str, Any]:
         return json.load(handle)
 
 
+def prefetch_totalsegmentator_models(
+    tasks_config: Dict[str, Any], *, fast: bool
+) -> None:
+    """Download required TotalSegmentator weights before multiprocessing."""
+    if tasks_config.get("backend", "totalsegmentator") != "totalsegmentator":
+        return
+
+    tasks = tasks_config.get("tasks", [])
+    if not tasks:
+        return
+
+    task_to_id = {
+        "total": [291, 292, 293, 294, 295],
+        "total_fast": [297, 298],
+        "total_mr": [850, 851],
+        "total_fast_mr": [852, 853],
+        "lung_vessels": [258],
+        "cerebral_bleed": [150],
+        "hip_implant": [260],
+        "pleural_pericard_effusion": [315],
+        "body": [299],
+        "body_fast": [300],
+        "body_mr": [597],
+        "body_mr_fast": [598],
+        "vertebrae_mr": [756],
+        "head_glands_cavities": [775],
+        "headneck_bones_vessels": [776],
+        "head_muscles": [777],
+        "headneck_muscles": [778, 779],
+        "liver_vessels": [8],
+        "lung_nodules": [913],
+        "kidney_cysts": [789],
+        "oculomotor_muscles": [351],
+        "breasts": [527],
+        "ventricle_parts": [552],
+        "liver_segments": [570],
+        "liver_segments_mr": [576],
+        "craniofacial_structures": [115],
+        "abdominal_muscles": [952],
+        "teeth": [113],
+        "trunk_cavities": [343],
+        "brain_aneurysm": [615],
+        "heartchambers_highres": [301],
+        "appendicular_bones": [304],
+        "appendicular_bones_mr": [855],
+        "tissue_types": [481],
+        "tissue_types_mr": [925],
+        "tissue_4_types": [485],
+        "vertebrae_body": [305],
+        "face": [303],
+        "face_mr": [856],
+        "brain_structures": [409],
+        "thigh_shoulder_muscles": [857],
+        "thigh_shoulder_muscles_mr": [857],
+        "coronary_arteries": [507],
+    }
+
+    task_names = {task["task"] for task in tasks if "task" in task}
+    if not task_names:
+        return
+
+    resolved_tasks: List[str] = []
+    for name in sorted(task_names):
+        if name == "total" and fast:
+            resolved_tasks.append("total_fast")
+        elif name == "total_mr" and fast:
+            resolved_tasks.append("total_fast_mr")
+        elif name == "body" and fast:
+            resolved_tasks.append("body_fast")
+        elif name == "body_mr" and fast:
+            resolved_tasks.append("body_mr_fast")
+        else:
+            resolved_tasks.append(name)
+
+    missing = [name for name in resolved_tasks if name not in task_to_id]
+    if missing:
+        logger.warning(
+            "Skipping model prefetch for unknown tasks: %s", ", ".join(missing)
+        )
+
+    task_ids: List[int] = []
+    for name in resolved_tasks:
+        ids = task_to_id.get(name)
+        if not ids:
+            continue
+        task_ids.extend(ids)
+
+    if not task_ids:
+        return
+
+    from totalsegmentator.python_api import download_pretrained_weights
+
+    logger.info(
+        "Prefetching TotalSegmentator models for tasks: %s",
+        ", ".join(resolved_tasks),
+    )
+    for task_id in sorted(set(task_ids)):
+        download_pretrained_weights(task_id)
+
+
 def segment_volume(
     nifti_path: Path,
     output_dir: Path,
@@ -473,6 +573,7 @@ def main(args: argparse.Namespace) -> None:
     tasks_config = load_tasks_config(
         Path(args.tasks_config) if args.tasks_config else None
     )
+    prefetch_totalsegmentator_models(tasks_config, fast=args.fast)
 
     # --- read and pre‑clean CSV ------------------------------------------------
     df = pd.read_csv(args.csv_path, index_col=0).drop_duplicates("nifti_path").copy()
