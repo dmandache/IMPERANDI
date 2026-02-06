@@ -6,13 +6,11 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from dateutil.parser import parse
 from pydicom.uid import UID
 from unidecode import unidecode
 
 from imperandi.utils.manifest import load_manifest, resolve_hook
 from imperandi.utils.geometry import (
-    as_float_array,
     classify_plane_from_iop,
     standardize_iop,
 )

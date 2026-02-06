@@ -1,5 +1,4 @@
-﻿from email import parser
-import warnings
+﻿import warnings
 import glob
 from pathlib import Path
 import argparse

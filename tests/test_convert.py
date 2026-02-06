@@ -5,8 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import pandas as pd
-import pytest
-from unittest.mock import Mock, MagicMock
+from unittest.mock import MagicMock
 
 from imperandi.process import convert as convert_module
 

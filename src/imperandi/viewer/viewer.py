@@ -9,10 +9,8 @@ import nibabel as nib
 import numpy as np
 import matplotlib.pyplot as plt
 import ipywidgets as widgets
-from ipywidgets import interact, interactive_output
-from IPython.display import display, clear_output
+from IPython.display import display
 import time
-import pandas as pd
 
 # List of DICOM tags to display
 DICOM_TAGS_TO_DISPLAY = [

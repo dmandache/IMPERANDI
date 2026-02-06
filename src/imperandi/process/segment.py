@@ -19,7 +19,6 @@ import argparse
 import json
 import logging
 import multiprocessing as mp
-import os
 import traceback
 from concurrent.futures import ProcessPoolExecutor, TimeoutError, as_completed
 from pathlib import Path
