@@ -2,5 +2,5 @@
 pytest-cov
 black[jupyter]
 ruff
+ipykernel
 ipywidgets
-
