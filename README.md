@@ -58,6 +58,9 @@ To ensure a reliable installation, install `pyradiomics` **via conda** first, th
 conda create -n imperandi310 python=3.10 -y
 conda activate imperandi310
 
+# Upgrade pip in the conda env
+python -m pip install -U pip setuptools wheel
+
 # Install PyRadiomics as a precompiled binary
 conda install -c radiomics -c conda-forge pyradiomics -y
 
