@@ -70,3 +70,35 @@ def test_cli_ingest_respects_flag_paths(tmp_path, capsys):
     assert exit_code == 0
     assert str(root_opt) in output
     assert str(out_opt) in output
+
+
+def test_cli_phase_accepts_optional_csv_path_only(tmp_path):
+    csv_in = tmp_path / "nifti_index.csv"
+    csv_in.write_text("nifti_path\n")
+
+    exit_code = cli.main(
+        [
+            "phase",
+            "--csv_path",
+            str(csv_in),
+            "--dry-run",
+        ]
+    )
+
+    assert exit_code == 0
+
+
+def test_cli_radiomics_accepts_optional_csv_path_only(tmp_path):
+    csv_in = tmp_path / "nifti_index.csv"
+    csv_in.write_text("patient_key,phase,nifti_path\n")
+
+    exit_code = cli.main(
+        [
+            "radiomics",
+            "--csv_path",
+            str(csv_in),
+            "--dry-run",
+        ]
+    )
+
+    assert exit_code == 0

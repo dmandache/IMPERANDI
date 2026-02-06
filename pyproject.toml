@@ -26,7 +26,14 @@ segment = [
   "torchio",
   "scipy",
   "scikit-image",
+  "xgboost",
+  "pyradiomics"
 ]
+
+radiomics = [
+  "pyradiomics<3.1",   # because 3.1.0 sdist metadata is broken on PyPI right now
+]
+
 dev = [
   "pytest",
   "pytest-cov",
@@ -34,11 +41,7 @@ dev = [
   "ruff",
   "ipykernel",
   "ipympl",
-  "ipywidgets",
-  "TotalSegmentator",
-  "torchio",
-  "scipy",
-  "scikit-image",
+  "ipywidgets"
 ]
 
 [project.scripts]

@@ -4,13 +4,28 @@ import argparse
 from pathlib import Path
 from typing import Optional, Sequence
 
-from pandarallel import pandarallel
+try:
+    from pandarallel import pandarallel
+except ModuleNotFoundError:
+    pandarallel = None
 
 from imperandi.ingest import clean as clean_module
 from imperandi.ingest import parse as parse_module
 from imperandi.process import convert as convert_module
 from imperandi.utils.manifest import load_manifest
 from imperandi.utils.misc import print_args
+
+
+def _load_phase_module():
+    from imperandi.extract import phase as phase_module
+
+    return phase_module
+
+
+def _load_radiomics_module():
+    from imperandi.extract import radiomics as radiomics_module
+
+    return radiomics_module
 
 
 def _load_segment_module():
@@ -22,6 +37,14 @@ def _load_segment_module():
             "Install with: pip install -e .[segment]"
         ) from exc
     return segment_module
+
+
+def _ensure_pandarallel() -> None:
+    if pandarallel is None:
+        raise RuntimeError(
+            "The 'parse' and 'ingest' commands require optional dependencies. "
+            "Install with: pip install pandarallel"
+        )
 
 
 def _add_parse_subcommand(subparsers: argparse._SubParsersAction) -> None:
@@ -78,6 +101,26 @@ def _add_convert_subcommand(subparsers: argparse._SubParsersAction) -> None:
     parser.set_defaults(_handler=_handle_convert)
 
 
+def _add_phase_subcommand(subparsers: argparse._SubParsersAction) -> None:
+    parser = subparsers.add_parser(
+        "phase",
+        help="Extract contrast phase metadata from NIfTI volumes.",
+    )
+    phase_module = _load_phase_module()
+    phase_module.add_phase_arguments(parser)
+    parser.set_defaults(_handler=_handle_phase)
+
+
+def _add_radiomics_subcommand(subparsers: argparse._SubParsersAction) -> None:
+    parser = subparsers.add_parser(
+        "radiomics",
+        help="Extract radiomics features from NIfTI volumes and masks.",
+    )
+    radiomics_module = _load_radiomics_module()
+    radiomics_module.add_radiomics_arguments(parser)
+    parser.set_defaults(_handler=_handle_radiomics)
+
+
 def _add_segment_subcommand(subparsers: argparse._SubParsersAction) -> None:
     parser = subparsers.add_parser(
         "segment",
@@ -108,6 +151,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_clean_subcommand(subparsers)
     _add_ingest_subcommand(subparsers)
     _add_convert_subcommand(subparsers)
+    _add_phase_subcommand(subparsers)
+    _add_radiomics_subcommand(subparsers)
     _add_segment_subcommand(subparsers)
 
     return parser
@@ -119,6 +164,11 @@ def _handle_parse(args: argparse.Namespace) -> int:
         print("Dry run: parse")
         print_args(args)
         return 0
+    try:
+        _ensure_pandarallel()
+    except RuntimeError as exc:
+        print(str(exc))
+        return 2
     pandarallel.initialize(progress_bar=args.verbose, nb_workers=args.num_workers)
     parse_module.main(args)
     return 0
@@ -157,6 +207,11 @@ def _handle_ingest(args: argparse.Namespace) -> int:
         print("Dry run: ingest (parse -> clean)")
         print_args(args)
         return 0
+    try:
+        _ensure_pandarallel()
+    except RuntimeError as exc:
+        print(str(exc))
+        return 2
     pandarallel.initialize(progress_bar=args.verbose, nb_workers=args.num_workers)
     parse_module.main(args)
     manifest = load_manifest(
@@ -181,6 +236,42 @@ def _handle_convert(args: argparse.Namespace) -> int:
         print_args(args)
         return 0
     convert_module.main(args)
+    return 0
+
+
+def _handle_phase(args: argparse.Namespace) -> int:
+    phase_module = _load_phase_module()
+    args = phase_module.normalize_phase_args(args)
+    if args.dry_run:
+        print("Dry run: phase")
+        print_args(args)
+        return 0
+    try:
+        phase_module.main(args)
+    except RuntimeError as exc:
+        message = str(exc)
+        if "requires optional dependencies" in message:
+            print(message)
+            return 2
+        raise
+    return 0
+
+
+def _handle_radiomics(args: argparse.Namespace) -> int:
+    radiomics_module = _load_radiomics_module()
+    args = radiomics_module.normalize_radiomics_args(args)
+    if args.dry_run:
+        print("Dry run: radiomics")
+        print_args(args)
+        return 0
+    try:
+        radiomics_module.main(args)
+    except RuntimeError as exc:
+        message = str(exc)
+        if "requires optional dependencies" in message:
+            print(message)
+            return 2
+        raise
     return 0
 
 

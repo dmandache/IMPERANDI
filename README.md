@@ -42,6 +42,8 @@ IMPERANDI ships a single CLI with several subcommands:
 - `clean`: filter and normalize the index.
 - `ingest`: run `parse` then `clean` in one step.
 - `convert`: converts DICOMs from index to NIfTI.
+- `phase`: extract CT contrast phase metadata from NIfTI volumes (requires `.[segment]`).
+- `radiomics`: extract PyRadiomics features from NIfTI volumes and masks (requires `pyradiomics` + `SimpleITK`).
 - `segment`: run configurable segmentation on NIfTI volumes (requires `.[segment]`).
 
 Get help:
@@ -51,6 +53,8 @@ imperandi parse --help
 imperandi clean --help
 imperandi ingest --help
 imperandi convert --help
+imperandi phase --help
+imperandi radiomics --help
 imperandi segment --help
 ```
 
@@ -84,6 +88,20 @@ Segment NIfTI volumes (default liver config):
 imperandi segment \
   --csv_path /path/to/output/nifti_index.csv \
   --csv_path_out /path/to/output/nifti_index_segmented.csv
+```
+
+Extract CT contrast phase metadata:
+```bash
+imperandi phase \
+  --csv_path /path/to/output/nifti_index.csv \
+  --csv_path_out /path/to/output/nifti_index_phased.csv
+```
+
+Extract radiomics features:
+```bash
+imperandi radiomics \
+  --csv_path /path/to/output/nifti_index_segmented.csv \
+  --csv_path_out /path/to/output/nifti_index_radiomics.csv
 ```
 
 Example segmentation config (JSON):
