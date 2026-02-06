@@ -660,24 +660,140 @@ def correct_volume_ids(df, z_tolerance=1e-3):
     return df
 
 
+def _is_nan(value):
+    try:
+        return bool(value != value)
+    except Exception:
+        return False
+
+
+def _as_python_scalar(value):
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
+def _hashable_key(value):
+    value = _as_python_scalar(value)
+    if value is None:
+        return ("none",)
+    if _is_nan(value):
+        return ("nan",)
+    if isinstance(value, (int, float)):
+        return ("num", float(value))
+    if isinstance(value, str):
+        return ("str", value)
+    if isinstance(value, bytes):
+        return ("bytes", value)
+    if isinstance(value, (list, tuple, np.ndarray)):
+        return ("seq", tuple(_hashable_key(v) for v in value))
+    if isinstance(value, dict):
+        return (
+            "dict",
+            tuple(sorted((_hashable_key(k), _hashable_key(v)) for k, v in value.items())),
+        )
+    try:
+        hash(value)
+    except Exception:
+        return ("repr", repr(value))
+    return ("val", value)
+
+
+def _string_sort_key(value):
+    value = _as_python_scalar(value)
+    if isinstance(value, bytes):
+        return value.decode(errors="ignore")
+    return str(value)
+
+
+def _parse_float(value):
+    value = _as_python_scalar(value)
+    if value is None or _is_nan(value):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except Exception:
+            return None
+    return None
+
+
+def _parse_ipp(value):
+    value = _as_python_scalar(value)
+    if value is None or _is_nan(value):
+        return None
+    seq = None
+    if isinstance(value, (list, tuple, np.ndarray)):
+        seq = value
+    elif isinstance(value, str):
+        try:
+            seq = literal_eval(value)
+        except (ValueError, SyntaxError):
+            return None
+    else:
+        return None
+
+    try:
+        if len(seq) < 3:
+            return None
+        x = float(seq[0])
+        y = float(seq[1])
+        z = float(seq[2])
+        return (z, y, x)
+    except Exception:
+        return None
+
+
+def _sort_key_for_column(col_name):
+    if col_name == "ImagePositionPatient":
+        def key(v):
+            ipp = _parse_ipp(v)
+            if ipp is None:
+                return (1, _string_sort_key(v))
+            return (0, ipp[0], ipp[1], ipp[2])
+        return key
+
+    if col_name in {"SliceLocation", "InstanceNumber", "AcquisitionNumber"}:
+        def key(v):
+            num = _parse_float(v)
+            if num is None:
+                return (1, _string_sort_key(v))
+            return (0, num)
+        return key
+
+    return _string_sort_key
+
+
+def _sorted_unique(values, col_name):
+    seen = {}
+    for v in values:
+        key = _hashable_key(v)
+        if key not in seen:
+            seen[key] = v
+    unique_vals = list(seen.values())
+    if len(unique_vals) <= 1:
+        return unique_vals
+    key_fn = _sort_key_for_column(col_name)
+    return sorted(unique_vals, key=key_fn)
+
+
 def group_volumes(df):
 
     def agg_fun(col):
         vals = list(col.dropna())
-        #vals = str(vals)#.split(",")  # flatten lists/tuples into strings for uniqueness
-        agg_col = list(set(vals))
-        if len(agg_col) == 0:
+        if len(vals) == 0:
             return float("NaN")
-        elif len(agg_col) == 1:
-            return agg_col[0]
-        else:
-            return agg_col
+        unique_vals = _sorted_unique(vals, col.name)
+        if len(unique_vals) == 1:
+            return unique_vals[0]
+        return unique_vals
 
     df = df.groupby("volume_id").agg(agg_fun)
     df = df.reset_index()
     df = df.dropna(axis=1, how="all")
     return df
-
 
 def calculate_volume_length(df):
     def calculate_total_volume_length(row):

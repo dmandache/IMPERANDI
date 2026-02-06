@@ -171,6 +171,31 @@ def test_group_volumes_and_calculate_length_and_filter_by_size():
     assert set(filtered["volume_id"]) == set(grouped["volume_id"])
 
 
+def test_group_volumes_deterministic_ordering():
+    df = pd.DataFrame(
+        {
+            "volume_id": ["v1", "v1", "v1", "v1"],
+            "ImagePositionPatient": [
+                "[0, 0, 5.0]",
+                "[0, 0, 0.0]",
+                "[0, 0, 2.0]",
+                "[0, 0, 2.0]",
+            ],
+            "InstanceNumber": [3, 1, 2, 2],
+            "SliceLocation": [10.0, 2.0, 2.0, 10.0],
+        }
+    )
+    grouped = clean.group_volumes(df.copy())
+    row = grouped.iloc[0]
+    assert row["ImagePositionPatient"] == [
+        "[0, 0, 0.0]",
+        "[0, 0, 2.0]",
+        "[0, 0, 5.0]",
+    ]
+    assert row["InstanceNumber"] == [1, 2, 3]
+    assert row["SliceLocation"] == [2.0, 10.0]
+
+
 def test_map_series_description(tmp_path, capsys):
     df = pd.DataFrame(
         {
