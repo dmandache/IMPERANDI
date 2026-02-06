@@ -26,8 +26,7 @@ segment = [
   "torchio",
   "scipy",
   "scikit-image",
-  "xgboost",
-  "pyradiomics"
+  "xgboost"
 ]
 
 radiomics = [
@@ -57,3 +56,6 @@ where = ["src"]
 markers = [
   "slow: IRCAD dataset integration tests",
 ]
+
+[tool.ruff]
+extend-exclude = ["*.ipynb", "**/*legacy*"]

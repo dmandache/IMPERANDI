@@ -4,7 +4,6 @@ import pandas as pd
 import SimpleITK as sitk
 from radiomics import featureextractor
 from tqdm import tqdm
-import numpy as np
 import os
 import argparse
 

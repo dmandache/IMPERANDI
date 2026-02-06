@@ -31,7 +31,9 @@ updated_df, log_df = register_update_paths_inplace(
 )
 """
 
-import os, time, traceback
+import os
+import time
+import traceback
 from typing import Tuple, Dict, Optional, Iterable, Literal
 from tqdm.auto import tqdm
 
