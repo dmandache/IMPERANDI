@@ -271,7 +271,7 @@ def process_single_volume(k, row, output_dir, verbose):
             row["error"] = "output not valid nifti"
             return k, None, row
 
-    except Exception as e:
+    except Exception:
         error_msg = traceback.format_exc()
         print(f"⚠️ Error processing volume {k}: {error_msg}", flush=True)
         row["error"] = error_msg
