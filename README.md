@@ -16,12 +16,17 @@ This project is a 🚧work in progress. A fuller data pipeline is coming soon, i
 IMPERANDI targets multi-phasic, longitudinal CT imaging data and addresses the challenges of cleaning and harmonizing heterogeneous hospital datasets. Its dependency footprint is intentionally minimal, reflecting its intended use within closed, secure hospital data-warehouse environments.
 
 **Highlights**
+
 - Fast DICOM header parsing with optional parallelism and checkpointing.
 - Flexible ID selection from tags or folder structure.
 - Dataset manifests and hook functions for standardization and derived columns.
 - Cleaning pipeline tailored to CT volumes and acquisition metadata.
 
-**Install**
+**Philosophy**
+
+IMPERANDI is designed to work end‑to‑end out of the box, while still being easy to personalize. You can run the full pipeline in one go or tailor behavior through dataset manifests and user‑defined hooks. At the same time, each stage is modular, so you can intervene between steps to edit or enrich CSVs before moving on. The choice of CSV as the interchange format is intentional: it is generic, lightweight, and easy to inspect, edit, and share.
+
+## Install
 ```bash
 python -m pip install -e .
 ```
@@ -31,12 +36,36 @@ Install segmentation dependencies (optional):
 python -m pip install -e ".[segment]"
 ```
 
-Install development/test tooling (includes segmentation extras):
+Install development/test tooling:
 ```bash
 python -m pip install -e ".[dev]"
 ```
 
-**CLI Overview**
+Install all the dependencies:
+```bash
+python -m pip install -e ".[segment,dev]"
+```
+
+### Installation (PyRadiomics note)
+
+⚠️ **Important**: `pyradiomics` includes compiled extensions and may fail to install via `pip` on some platforms (especially Windows) due to build-time dependencies and PEP517 build isolation.
+
+To ensure a reliable installation, install `pyradiomics` **via conda** first, then install this package with `pip` **without dependency resolution**.
+
+**Recommended setup (Python 3.10)**
+
+```bash
+conda create -n imperandi310 python=3.10 -y
+conda activate imperandi310
+
+# Install PyRadiomics as a precompiled binary
+conda install -c radiomics -c conda-forge pyradiomics -y
+
+# Install this package and extras without re-installing dependencies
+pip install -e .[segment,dev] --no-deps
+```
+
+## CLI Overview
 IMPERANDI ships a single CLI with several subcommands:
 - `parse`: scan DICOMs and build a metadata index.
 - `clean`: filter and normalize the index.
@@ -58,7 +87,8 @@ imperandi radiomics --help
 imperandi segment --help
 ```
 
-**Quickstart**
+## Quickstart
+
 Parse a dataset:
 ```bash
 imperandi parse \
@@ -135,16 +165,16 @@ Example segmentation config (JSON):
 ```
 
 **Outputs**
+
 `parse` writes two CSVs into `--output_dir`:
 - `dicom_paths_with_tags.csv`: raw paths plus extracted tags.
 - `dicom_index.csv`: finalized index with patient/study/series IDs.
 
 `clean` writes the cleaned CSV to `--csv_path_out` (or `dicom_index_clean.csv` when using `ingest`).
 
-**Philosophy**
-IMPERANDI is designed to work end‑to‑end out of the box, while still being easy to personalize. You can run the full pipeline in one go or tailor behavior through dataset manifests and user‑defined hooks. At the same time, each stage is modular, so you can intervene between steps to edit or enrich CSVs before moving on. The choice of CSV as the interchange format is intentional: it is generic, lightweight, and easy to inspect, edit, and share.
 
 **Manifests And Hooks**
+
 Manifests define dataset-specific behavior and live in:
 - `src/imperandi/datasets_config/manifests/*.json`
 
@@ -169,7 +199,7 @@ Hook implementations live under:
 python -m imperandi --help
 ```
 
-**Testing (Slow Datasets)**
+## Testing (Slow Datasets)
 Slow integration tests for the IRCAD dataset are available and are skipped unless data is present.
 - Place the DICOM dataset at `tests/data/IRCAD_DICOM` (gitignored) or set `IRCAD_ROOT` to the dataset path.
 - Optional: place NIfTI outputs at `tests/data/IRCAD_nifti` or set `IRCAD_NIFTI_ROOT`.
@@ -184,5 +214,3 @@ python -m imperandi clean --csv_path tests/data/dicom_index.csv --csv_path_out t
 ```
 - Note: there is no auto-download due to licensing; datasets must be placed manually.
 
-**License**
-See `LICENSE`.
