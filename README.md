@@ -1,4 +1,4 @@
-﻿**IM**aging **PRE**processing **A**nd **N**ormalization for **D**iagnostic **I**nteroperability
+# ﻿**IM**aging **PRE**processing **A**nd **N**ormalization for **D**iagnostic **I**nteroperability
 
 ![image](https://raw.githubusercontent.com/dmandache/IMPERANDI/main/static/imperandi-logo.png)
 
