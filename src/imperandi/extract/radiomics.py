@@ -304,8 +304,8 @@ def extract_radiomics_from_dataframe(
 
     for idx, row in iterator:
         image_path = row.get("nifti_path")
-        liver_mask_path = row.get("liver_path")
-        tumor_mask_path = row.get("liver_tumor_path")
+        liver_mask_path = row.get("mask_liver") # row.get("liver_path")
+        tumor_mask_path = row.get("mask_liver_tumor") # row.get("liver_tumor_path")
 
         if not isinstance(image_path, str) or not Path(image_path).exists():
             error_row = row.to_dict()
