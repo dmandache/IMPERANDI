@@ -68,7 +68,9 @@ def test_main_writes_output_and_error_csv(tmp_path, monkeypatch):
         err = pd.DataFrame([{"nifti_path": "x.nii.gz", "error_message": "mock error"}])
         return out, err
 
-    monkeypatch.setattr(radiomics_module, "extract_radiomics_from_dataframe", fake_extract)
+    monkeypatch.setattr(
+        radiomics_module, "extract_radiomics_from_dataframe", fake_extract
+    )
 
     args = argparse.Namespace(
         csv_path=str(csv_path),

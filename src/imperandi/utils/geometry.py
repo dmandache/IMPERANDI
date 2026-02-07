@@ -61,11 +61,12 @@ def as_float_array(x):
         return np.asarray(x, dtype=float)
     return np.asarray(literal_eval(x), dtype=float)
 
+
 def as_tuple(x):
     if x is None:
         return None
     if isinstance(x, (list, tuple)):
-        return tuple(x) 
+        return tuple(x)
     return tuple(literal_eval(x))
 
 

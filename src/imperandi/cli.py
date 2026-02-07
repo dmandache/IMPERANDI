@@ -129,7 +129,9 @@ def _add_segment_subcommand(subparsers: argparse._SubParsersAction) -> None:
     try:
         segment_module = _load_segment_module()
     except RuntimeError as exc:
-        parser.add_argument("segment_args", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
+        parser.add_argument(
+            "segment_args", nargs=argparse.REMAINDER, help=argparse.SUPPRESS
+        )
         parser.set_defaults(
             _handler=_handle_segment_unavailable,
             _segment_unavailable_msg=str(exc),

@@ -184,14 +184,10 @@ class CTScanViewer:
 
         if self.segmentation_cols:
             for seg_name in self.segmentation_cols:
-                cb = widgets.Checkbox(
-                    value=True, description=seg_name, indent=False
-                )
+                cb = widgets.Checkbox(value=True, description=seg_name, indent=False)
                 cb.observe(self.on_seg_visibility_change, names="value")
                 self.seg_visibility[seg_name] = cb
-            self.seg_visibility_box = widgets.VBox(
-                list(self.seg_visibility.values())
-            )
+            self.seg_visibility_box = widgets.VBox(list(self.seg_visibility.values()))
         else:
             self.seg_visibility_box = widgets.HTML("<i>No segmentations</i>")
 
@@ -260,9 +256,7 @@ class CTScanViewer:
             widgets.HBox([self.prev_button, self.next_button]),
             self.progress_bar,
         ]
-        right_panel = widgets.VBox(
-            right_items, layout=widgets.Layout(width="320px")
-        )
+        right_panel = widgets.VBox(right_items, layout=widgets.Layout(width="320px"))
 
         ui_bot = widgets.HBox([self.display_widget, right_panel])
         display(ui_top, ui_bot)
@@ -493,20 +487,17 @@ class CTScanViewer:
         if self.view_plane == "axial":
             ct_slice = self.ct_scan_raw[:, :, slice_idx]
             seg_slices = {
-                name: seg[:, :, slice_idx]
-                for name, seg in self.segmentations.items()
+                name: seg[:, :, slice_idx] for name, seg in self.segmentations.items()
             }
         elif self.view_plane == "sagittal":
             ct_slice = self.ct_scan_raw[slice_idx, :, :]
             seg_slices = {
-                name: seg[slice_idx, :, :]
-                for name, seg in self.segmentations.items()
+                name: seg[slice_idx, :, :] for name, seg in self.segmentations.items()
             }
         else:
             ct_slice = self.ct_scan_raw[:, slice_idx, :]
             seg_slices = {
-                name: seg[:, slice_idx, :]
-                for name, seg in self.segmentations.items()
+                name: seg[:, slice_idx, :] for name, seg in self.segmentations.items()
             }
 
         ct_slice = clip_hu_values(ct_slice, self.HU_min, self.HU_max)
@@ -541,7 +532,9 @@ class CTScanViewer:
 
         if visible_names:
             handles = [
-                mpatches.Patch(color=self.seg_contour_colors.get(name, "red"), label=name)
+                mpatches.Patch(
+                    color=self.seg_contour_colors.get(name, "red"), label=name
+                )
                 for name in visible_names
             ]
             self.ax.legend(
@@ -570,9 +563,7 @@ class CTScanViewer:
             formatted = self._format_value(value)
             if formatted == "":
                 continue
-            rows.append(
-                f"<tr><td><b>{column}</b></td><td>{formatted}</td></tr>"
-            )
+            rows.append(f"<tr><td><b>{column}</b></td><td>{formatted}</td></tr>")
         if rows:
             html = (
                 "<table style='width: 100%; border-collapse: collapse;'>"

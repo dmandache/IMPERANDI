@@ -15,7 +15,6 @@ from imperandi.ingest import parse as parse_module
 from imperandi.ingest import clean as clean_module
 from imperandi.utils import files as files_module
 
-
 pytestmark = pytest.mark.slow
 
 

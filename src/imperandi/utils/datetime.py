@@ -173,10 +173,14 @@ def to_dates(df):
             # ISO dates: dayfirst irrelevant → silence warnings
             dayfirst = False
             print(f"{c}: \t ISO format detected → dayfirst=False")
-            df[c] = pd.to_datetime(df[c], dayfirst=False, format="%Y%m%d", errors="coerce")
+            df[c] = pd.to_datetime(
+                df[c], dayfirst=False, format="%Y%m%d", errors="coerce"
+            )
         else:
             dayfirst = _infer_dayfirst(df[c])
             print(f"{c}: \t dayfirst = {dayfirst}")
-            df[c] = pd.to_datetime(df[c], dayfirst=dayfirst, format="%Y%m%d",errors="coerce")
+            df[c] = pd.to_datetime(
+                df[c], dayfirst=dayfirst, format="%Y%m%d", errors="coerce"
+            )
 
     return df

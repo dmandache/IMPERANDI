@@ -38,7 +38,9 @@ def ircad_dicom_root() -> Path:
 @pytest.fixture(scope="session")
 def ircad_nifti_root() -> Path:
     return _resolve_dataset_root(
-        "IRCAD_NIFTI_ROOT", Path("tests") / "data" / "IRCAD_nifti", "IRCAD NIfTI dataset"
+        "IRCAD_NIFTI_ROOT",
+        Path("tests") / "data" / "IRCAD_nifti",
+        "IRCAD NIfTI dataset",
     )
 
 

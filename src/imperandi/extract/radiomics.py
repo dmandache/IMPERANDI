@@ -183,7 +183,9 @@ def filter_df(df: pd.DataFrame) -> pd.DataFrame:
         for col in ["patient_key", "date", "phase", "liver_gaussian_noise"]
     ):
         df = df.loc[
-            df.groupby(["patient_key", "date", "phase"])["liver_gaussian_noise"].idxmin()
+            df.groupby(["patient_key", "date", "phase"])[
+                "liver_gaussian_noise"
+            ].idxmin()
         ].reset_index(drop=True)
 
     if (
@@ -220,7 +222,9 @@ def extract_radiomics_safe(
         image = sitk_module.ReadImage(image_path)
         result = extractor.execute(image, mask_image)
         features = {
-            f"{prefix}_{k}": v for k, v in result.items() if str(k).startswith("original")
+            f"{prefix}_{k}": v
+            for k, v in result.items()
+            if str(k).startswith("original")
         }
         return features, None
     except Exception as exc:
@@ -246,7 +250,9 @@ def extract_radiomics_liver_minus_tumor(
         if sitk_module.GetArrayViewFromImage(liver).sum() == 0:
             return {}, "empty liver mask"
 
-        liver_bin = sitk_module.Cast(sitk_module.NotEqual(liver, 0), sitk_module.sitkUInt8)
+        liver_bin = sitk_module.Cast(
+            sitk_module.NotEqual(liver, 0), sitk_module.sitkUInt8
+        )
 
         if tumor_mask_path and Path(tumor_mask_path).exists():
             tumor = sitk_module.ReadImage(tumor_mask_path)
@@ -281,7 +287,9 @@ def extract_radiomics_liver_minus_tumor(
 
         result = extractor.execute(img, liver_bin)
         features = {
-            f"{prefix}_{k}": v for k, v in result.items() if str(k).startswith("original")
+            f"{prefix}_{k}": v
+            for k, v in result.items()
+            if str(k).startswith("original")
         }
         return features, None
     except Exception as exc:
@@ -304,12 +312,14 @@ def extract_radiomics_from_dataframe(
 
     for idx, row in iterator:
         image_path = row.get("nifti_path")
-        liver_mask_path = row.get("mask_liver") # row.get("liver_path")
-        tumor_mask_path = row.get("mask_liver_tumor") # row.get("liver_tumor_path")
+        liver_mask_path = row.get("mask_liver")  # row.get("liver_path")
+        tumor_mask_path = row.get("mask_liver_tumor")  # row.get("liver_tumor_path")
 
         if not isinstance(image_path, str) or not Path(image_path).exists():
             error_row = row.to_dict()
-            error_row["error_message"] = f"CT image path is missing or invalid: {image_path}"
+            error_row["error_message"] = (
+                f"CT image path is missing or invalid: {image_path}"
+            )
             errors.append(error_row)
             all_features.append({})
             continue
@@ -343,7 +353,9 @@ def extract_radiomics_from_dataframe(
         all_features.append(features)
         if not features:
             error_row = row.to_dict()
-            error_row["error_message"] = " | ".join(messages) if messages else "no features extracted"
+            error_row["error_message"] = (
+                " | ".join(messages) if messages else "no features extracted"
+            )
             errors.append(error_row)
 
     features_df = pd.DataFrame(all_features)

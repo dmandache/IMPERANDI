@@ -95,7 +95,7 @@ def normalize_phase_args(args: argparse.Namespace) -> argparse.Namespace:
         args.error_csv_path = str(Path(args.error_csv_path))
     else:
         args.error_csv_path = str(Path(args.csv_path).parent / "phase_errors.csv")
-        
+
     del args.csv_path_pos
     del args.csv_path_opt
     return args

@@ -62,8 +62,7 @@ def add_convert_arguments(
         type=str,
         default=None,
         help=(
-            "Path to save the error CSV file. "
-            "Defaults to <csv_dir>/conv_errors.csv."
+            "Path to save the error CSV file. " "Defaults to <csv_dir>/conv_errors.csv."
         ),
     )
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose mode")
@@ -110,7 +109,9 @@ def parse_arguments():
 def normalize_convert_args(args: argparse.Namespace) -> argparse.Namespace:
     # pick optionals over positionals
     csv_in = args.csv_path_opt if args.csv_path_opt is not None else args.csv_path_pos
-    out_in = args.output_dir_opt if args.output_dir_opt is not None else args.output_dir_pos
+    out_in = (
+        args.output_dir_opt if args.output_dir_opt is not None else args.output_dir_pos
+    )
 
     # csv_path -> list[str]
     if csv_in is None:
@@ -131,7 +132,7 @@ def normalize_convert_args(args: argparse.Namespace) -> argparse.Namespace:
     # output_dir -> directory
     if out_in is None:
         raise ValueError("output_dir is required (positional or --output_dir).")
-    
+
     args.output_dir = out_in
 
     del args.csv_path_pos
@@ -247,7 +248,7 @@ def process_single_volume(k, row, output_dir, verbose):
                     f"{n_files_in_vol} files in volume vs. {n_files_in_dir} files in series dir"
                 )
 
-            temp_dir_root = ".tmp" #"/data/scratch/bdr220003/temp/"
+            temp_dir_root = ".tmp"  # "/data/scratch/bdr220003/temp/"
             os.makedirs(temp_dir_root, exist_ok=True)
             with tempfile.TemporaryDirectory(
                 dir=temp_dir_root, prefix="temp_convert_"

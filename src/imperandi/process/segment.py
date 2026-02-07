@@ -38,7 +38,7 @@ from imperandi.utils.misc import report_volumes  # type: ignore
 # Configuration & logging
 # -----------------------------------------------------------------------------
 # Path where TotalSegmentator models are cached (edit as needed)
-#os.environ.setdefault("TOTALSEG_HOME_DIR", str(Path.home() / ".totalsegmentator_v2"))
+# os.environ.setdefault("TOTALSEG_HOME_DIR", str(Path.home() / ".totalsegmentator_v2"))
 
 DEFAULT_TIMEOUT = 15 * 60  # seconds – hard wall per study inside the pool
 
@@ -695,6 +695,7 @@ def main(args: argparse.Namespace) -> None:
             logger.debug("report_volumes() failed – continuing")
 
     logger.info("All done ✔")
+
 
 if __name__ == "__main__":
     args = build_parser().parse_args()

@@ -36,7 +36,6 @@ COLUMNS_TO_USE = [
     "study_id",
     "series_id",
     "dicom_path",
-
     # ─────────────────────────
     # Modality & SOP
     # ─────────────────────────
@@ -46,7 +45,6 @@ COLUMNS_TO_USE = [
     "Manufacturer",
     "ManufacturerModelName",
     "SoftwareVersions",
-
     # ─────────────────────────
     # Study-level metadata
     # ─────────────────────────
@@ -56,7 +54,6 @@ COLUMNS_TO_USE = [
     "StudyID",
     "AccessionNumber",
     "ReferringPhysicianName",
-
     # ─────────────────────────
     # Series-level metadata
     # ─────────────────────────
@@ -67,7 +64,6 @@ COLUMNS_TO_USE = [
     "ProtocolName",
     "BodyPartExamined",
     "Laterality",
-
     # ─────────────────────────
     # Instance-level metadata
     # ─────────────────────────
@@ -77,7 +73,6 @@ COLUMNS_TO_USE = [
     "InstanceCreationTime",
     "ContentDate",
     "ContentTime",
-
     # ─────────────────────────
     # Image geometry
     # ─────────────────────────
@@ -90,7 +85,6 @@ COLUMNS_TO_USE = [
     "ImagePositionPatient",
     "SliceLocation",
     "FrameOfReferenceUID",
-
     # ─────────────────────────
     # Image type & acquisition
     # ─────────────────────────
@@ -106,7 +100,6 @@ COLUMNS_TO_USE = [
     "EchoTime",
     "EchoNumbers",
     "FlipAngle",
-
     # ─────────────────────────
     # CT-specific (very common)
     # ─────────────────────────
@@ -117,7 +110,6 @@ COLUMNS_TO_USE = [
     "ExposureModulationType",
     "ConvolutionKernel",
     "ReconstructionDiameter",
-
     # ─────────────────────────
     # Pixel data interpretation
     # ─────────────────────────
@@ -130,14 +122,12 @@ COLUMNS_TO_USE = [
     "RescaleIntercept",
     "RescaleSlope",
     "RescaleType",
-
     # ─────────────────────────
     # Patient info (non-sensitive subset)
     # ─────────────────────────
     "PatientSex",
     "PatientAge",
     "PatientBirthDate",
-
     # ─────────────────────────
     # Misc / QC helpers
     # ─────────────────────────
@@ -704,7 +694,9 @@ def _hashable_key(value):
     if isinstance(value, dict):
         return (
             "dict",
-            tuple(sorted((_hashable_key(k), _hashable_key(v)) for k, v in value.items())),
+            tuple(
+                sorted((_hashable_key(k), _hashable_key(v)) for k, v in value.items())
+            ),
         )
     try:
         hash(value)
@@ -762,19 +754,23 @@ def _parse_ipp(value):
 
 def _sort_key_for_column(col_name):
     if col_name == "ImagePositionPatient":
+
         def key(v):
             ipp = _parse_ipp(v)
             if ipp is None:
                 return (1, _string_sort_key(v))
             return (0, ipp[0], ipp[1], ipp[2])
+
         return key
 
     if col_name in {"SliceLocation", "InstanceNumber", "AcquisitionNumber"}:
+
         def key(v):
             num = _parse_float(v)
             if num is None:
                 return (1, _string_sort_key(v))
             return (0, num)
+
         return key
 
     return _string_sort_key
@@ -808,6 +804,7 @@ def group_volumes(df):
     df = df.reset_index()
     df = df.dropna(axis=1, how="all")
     return df
+
 
 def calculate_volume_length(df):
     def calculate_total_volume_length(row):
@@ -973,6 +970,7 @@ def drop_irrelevant_dicom_tags(df):
     df = df.drop(columns=dicom_tags)
     return df
 
+
 def reorder_columns(df):
     PRIORITY_COLS = [
         "patient_key",
@@ -984,10 +982,9 @@ def reorder_columns(df):
 
     cols = df.columns.tolist()
 
-    ordered_cols = (
-        [c for c in PRIORITY_COLS if c in cols] +
-        [c for c in cols if c not in PRIORITY_COLS]
-    )
+    ordered_cols = [c for c in PRIORITY_COLS if c in cols] + [
+        c for c in cols if c not in PRIORITY_COLS
+    ]
 
     return df[ordered_cols]
 

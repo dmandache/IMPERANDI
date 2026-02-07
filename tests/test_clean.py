@@ -194,7 +194,7 @@ def test_group_volumes_and_calculate_length_and_filter_by_size():
             "volume_id": ["v1", "v1", "v2"],
             "SliceThickness": [1.0, 1.0, 2.0],
             "SpacingBetweenSlices": [1.0, 1.0, np.nan],
-            "dicom_path": ["[\"a.dcm\", \"b.dcm\"]", "[\"a.dcm\", \"b.dcm\"]", "[\"c.dcm\"]"],
+            "dicom_path": ['["a.dcm", "b.dcm"]', '["a.dcm", "b.dcm"]', '["c.dcm"]'],
         }
     )
     grouped = clean.group_volumes(df.copy())
