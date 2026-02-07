@@ -1,8 +1,13 @@
 import argparse
 import hashlib
 import importlib
+import json
+import os
+import urllib.error
+import urllib.request
 from ast import literal_eval
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -22,6 +27,74 @@ DEFAULT_VOLUME_UPPERBOUND = 500.0
 
 DEFAULT_MAX_PIXEL_SPACING_MM = 1.25
 DEFAULT_MAX_SLICE_THICKNESS_MM = 3.0
+DEFAULT_OPENAI_MODEL = "gpt-4.1-mini"
+
+FRENCH_PERFUSION_ONTOLOGY = {
+    "sans_injection": [
+        "sans injection",
+        "non injecté",
+        "non contraste",
+        "native",
+        "pré-contraste",
+        "pré-contrastee",
+        "pre-contraste",
+        "pre-contrastee",
+        "t0",
+        "baseline",
+    ],
+    "arteriel": [
+        "artériel",
+        "arterielle",
+        "phase artérielle",
+        "temps artériel",
+        "arteriel",
+        "arterial",
+        "ap",
+        "early arterial",
+        "bolus",
+        "hypervasculaire",
+        "hypervascularisation",
+    ],
+    "portal": [
+        "portal",
+        "portale",
+        "phase portale",
+        "porto-veineuse",
+        "porto veineuse",
+        "portovenous",
+        "pvp",
+        "veineuse",
+        "veineuse portale",
+    ],
+    "tardif": [
+        "tardif",
+        "retard",
+        "retardée",
+        "retardee",
+        "delayed",
+        "late",
+        "équilibre",
+        "equilibre",
+        "phase d'équilibre",
+        "phase d'equilibre",
+        "phase tardive",
+    ],
+    "mixte": [
+        "mixte",
+        "biphasique",
+        "double phase",
+        "double-phase",
+        "multiphase",
+        "multi-phase",
+        "triple phase",
+        "triphasique",
+        "arterioportal",
+        "artério-portale",
+        "arterio-portale",
+        "perfusion",
+        "dynamique",
+    ],
+}
 
 COLUMNS_TO_USE = [
     # ─────────────────────────
@@ -182,6 +255,24 @@ def add_clean_arguments(
         default=None,
         help="Path to the CSV tag dictionary file",
     )
+    parser.add_argument(
+        "--openai_phase",
+        action="store_true",
+        default=False,
+        help="Use OpenAI to map unknown SeriesDescription values to perfusion phases.",
+    )
+    parser.add_argument(
+        "--openai_api_key",
+        type=str,
+        default=None,
+        help="OpenAI API key (or set IMPERANDI_OPENAI_API_KEY).",
+    )
+    parser.add_argument(
+        "--openai_model",
+        type=str,
+        default=None,
+        help="OpenAI model (default from IMPERANDI_OPENAI_MODEL or gpt-4.1-mini).",
+    )
     if include_manifest:
         parser.add_argument(
             "--manifest",
@@ -265,6 +356,13 @@ def normalize_clean_args(args: argparse.Namespace) -> argparse.Namespace:
     for attr in ("csv_path_pos", "csv_path_opt"):
         if hasattr(args, attr):
             delattr(args, attr)
+
+    if not args.openai_api_key:
+        args.openai_api_key = os.environ.get("IMPERANDI_OPENAI_API_KEY")
+    if not args.openai_model:
+        args.openai_model = os.environ.get(
+            "IMPERANDI_OPENAI_MODEL", DEFAULT_OPENAI_MODEL
+        )
 
     return args
 
@@ -833,28 +931,115 @@ def filter_volumes_by_size(df, t_min, t_max):
     return df
 
 
-def map_series_description(df, csv_tag_dict):
-    if not csv_tag_dict or "SeriesDescription" not in df.columns:
+def _format_french_ontology(ontology: dict[str, list[str]]) -> str:
+    lines = []
+    for phase, terms in ontology.items():
+        lines.append(f"- {phase}: {', '.join(sorted(set(terms)))}")
+    return "\n".join(lines)
+
+
+def _extract_openai_text(response_payload: dict[str, Any]) -> str:
+    outputs = response_payload.get("output", [])
+    for output in outputs:
+        for content in output.get("content", []):
+            if content.get("type") == "output_text" and content.get("text"):
+                return content["text"]
+    return ""
+
+
+def _predict_phases_with_openai(
+    series_descriptions: list[str],
+    api_key: str,
+    model: str,
+) -> dict[str, str]:
+    ontology_text = _format_french_ontology(FRENCH_PERFUSION_ONTOLOGY)
+    payload = {
+        "model": model,
+        "input": (
+            "Tu es un assistant de radiologie. Tu dois prédire la phase de perfusion "
+            "à partir du champ DICOM SeriesDescription. Utilise strictement les labels "
+            "suivants: sans_injection, arteriel, portal, tardif, mixte, inconnu.\n\n"
+            "Ontologie française (synonymes fréquents):\n"
+            f"{ontology_text}\n\n"
+            "Règles:\n"
+            "- Choisis un seul label par description.\n"
+            "- Si ambigu ou non pertinent, renvoie 'inconnu'.\n"
+            "- Ne renvoie aucune explication en dehors du JSON.\n\n"
+            "Retourne un JSON strict au format:\n"
+            "[{\"SeriesDescription\": \"...\", \"phase\": \"...\"}, ...]\n\n"
+            f"Descriptions à classer: {json.dumps(series_descriptions, ensure_ascii=False)}"
+        ),
+        "temperature": 0.0,
+    }
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    request = urllib.request.Request(
+        "https://api.openai.com/v1/responses",
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            response_data = json.loads(response.read().decode("utf-8"))
+    except urllib.error.URLError as exc:
+        print(f"OpenAI API request failed: {exc}")
+        return {}
+
+    text = _extract_openai_text(response_data)
+    if not text:
+        print("OpenAI API response did not include text output.")
+        return {}
+
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        print(f"OpenAI API response was not valid JSON: {exc}")
+        return {}
+
+    predictions = {}
+    for item in parsed:
+        description = item.get("SeriesDescription")
+        phase = item.get("phase")
+        if isinstance(description, str) and isinstance(phase, str):
+            predictions[description] = phase
+    return predictions
+
+
+def map_series_description(
+    df,
+    csv_tag_dict,
+    *,
+    openai_enabled: bool = False,
+    openai_api_key: str | None = None,
+    openai_model: str | None = None,
+):
+    if "SeriesDescription" not in df.columns:
         return df
-
-    df_dict = pd.read_csv(csv_tag_dict)
-    df_dict["SeriesDescription"] = df_dict["SeriesDescription"].apply(uniform_string)
-
-    data_dict = df_dict.set_index("SeriesDescription")["phase"].to_dict()
+    data_dict = {}
+    if csv_tag_dict:
+        df_dict = pd.read_csv(csv_tag_dict)
+        df_dict["SeriesDescription"] = df_dict["SeriesDescription"].apply(
+            uniform_string
+        )
+        data_dict = df_dict.set_index("SeriesDescription")["phase"].to_dict()
 
     df["SeriesDescription"] = df["SeriesDescription"].fillna("inconnu")
-    df["phase"] = df["SeriesDescription"].apply(uniform_string).replace(data_dict)
+    series_description_uniform = df["SeriesDescription"].apply(uniform_string)
+    df["phase"] = series_description_uniform.map(data_dict).fillna("inconnu")
 
     mixt_phase_mask = df["phase"].str.lower().eq("mixte")
     acq = pd.to_numeric(df["AcquisitionNumber"], errors="coerce")
     df.loc[mixt_phase_mask & (acq == 1), "phase"] = "arteriel"
     df.loc[mixt_phase_mask & (acq == 2), "phase"] = "portal"
 
-    known_phases = ["sans_injection", "arteriel", "mixte", "portal", "tardif"]
-    known_discards = ["inutile", "inconnu"]
-
-    unknown_descriptions = df[~df.phase.isin(known_phases + known_discards)].phase
-    unique_unknown_descriptions = unknown_descriptions.unique().tolist()
+    unknown_mask = df["phase"].str.lower().eq("inconnu")
+    unknown_descriptions = series_description_uniform[unknown_mask]
+    unique_unknown_descriptions = [
+        desc for desc in unknown_descriptions.unique().tolist() if desc != "inconnu"
+    ]
 
     if len(unknown_descriptions) == 0:
         print("No unknown SeriesDescription in dataset.")
@@ -862,6 +1047,27 @@ def map_series_description(df, csv_tag_dict):
         print(
             f"{len(unknown_descriptions)} unmapped SeriesDescription, {len(unique_unknown_descriptions)} unique : {unique_unknown_descriptions}",
         )
+
+    if (
+        openai_enabled
+        and openai_api_key
+        and openai_model
+        and unique_unknown_descriptions
+    ):
+        predictions = _predict_phases_with_openai(
+            unique_unknown_descriptions,
+            api_key=openai_api_key,
+            model=openai_model,
+        )
+        if predictions:
+            normalized_predictions = {
+                uniform_string(key): value for key, value in predictions.items()
+            }
+            df.loc[df["phase"].str.lower().eq("inconnu"), "phase"] = (
+                series_description_uniform.map(normalized_predictions)
+                .fillna(df["phase"])
+                .values
+            )
 
     df = df[df.phase != "inutile"]
 
@@ -990,7 +1196,15 @@ def reorder_columns(df):
 
 
 def clean_and_save_data(
-    csv_path, csv_path_out, csv_dict_path, manifest, volume_min, volume_max
+    csv_path,
+    csv_path_out,
+    csv_dict_path,
+    manifest,
+    volume_min,
+    volume_max,
+    openai_enabled,
+    openai_api_key,
+    openai_model,
 ):
     df = load_data(csv_path)
     report_volumes(df, "initial load")
@@ -1072,7 +1286,13 @@ def clean_and_save_data(
     report_change(df, df_prev)
 
     df_prev = df.copy()
-    df = map_series_description(df, csv_dict_path)
+    df = map_series_description(
+        df,
+        csv_dict_path,
+        openai_enabled=openai_enabled,
+        openai_api_key=openai_api_key,
+        openai_model=openai_model,
+    )
     report_volumes(df, "mapping series descriptions")
     report_change(df, df_prev, col="SeriesDescription")
 
@@ -1106,4 +1326,7 @@ if __name__ == "__main__":
         manifest,
         args.volume_min,
         args.volume_max,
+        args.openai_phase,
+        args.openai_api_key,
+        args.openai_model,
     )
