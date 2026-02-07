@@ -357,9 +357,9 @@ def normalize_clean_args(args: argparse.Namespace) -> argparse.Namespace:
         if hasattr(args, attr):
             delattr(args, attr)
 
-    if not args.openai_api_key:
+    if not getattr(args, "openai_api_key", None):
         args.openai_api_key = os.environ.get("IMPERANDI_OPENAI_API_KEY")
-    if not args.openai_model:
+    if not getattr(args, "openai_model", None):
         args.openai_model = os.environ.get(
             "IMPERANDI_OPENAI_MODEL", DEFAULT_OPENAI_MODEL
         )
