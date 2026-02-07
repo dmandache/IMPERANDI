@@ -45,6 +45,8 @@ WINDOW_PRESETS = {
 
 COLORMAPS = ["jet", "autumn", "summer", "winter", "viridis"]
 CONTOUR_COLORS = ["blue", "red", "green", "cyan", "magenta"]
+DISPLAY_CANVAS_PX = 650
+FIGURE_DPI = 100
 
 
 def load_nifti(file_path, orientation="LAS"):
@@ -78,10 +80,25 @@ class CTScanViewer:
     ):
         self.df = df
         self.ct_scan_col = ct_scan_col
+        self.patient_col = "patient_key" if "patient_key" in df.columns else None
+        self.date_col = "date" if "date" in df.columns else None
+        if "totalseg_phase" in df.columns:
+            self.phase_col = "totalseg_phase"
+        elif "phase" in df.columns:
+            self.phase_col = "phase"
+        else:
+            self.phase_col = None
 
         # Handle segmentation_cols gracefully
         if segmentation_cols is None:
-            self.segmentation_cols = []
+            auto_cols = [col for col in df.columns if str(col).startswith("mask_")]
+            if not auto_cols:
+                auto_cols = [col for col in ["liver_path", "liver_tumor_path"] if col in df]
+            self.segmentation_cols = [
+                col
+                for col in auto_cols
+                if df[col].apply(lambda v: not self._is_empty_value(v)).any()
+            ]
         elif isinstance(segmentation_cols, str):
             self.segmentation_cols = [segmentation_cols]
         else:
@@ -114,6 +131,9 @@ class CTScanViewer:
         self._uses_output_fallback = False
         self._suspend_jump = False
         self.exploration_mode = exploration_mode
+        self.canvas_size_px = DISPLAY_CANVAS_PX
+        self.figure_dpi = FIGURE_DPI
+        self.image_aspect = "auto"
 
         if self.exploration_mode == "random":
             self.explored_history = [self.current_index]
@@ -165,11 +185,14 @@ class CTScanViewer:
         )
         self.window_preset.observe(self.on_window_preset_change, names="value")
 
-        self.jump_dropdown = widgets.Dropdown(
-            options=self._build_jump_options(),
-            description="Jump",
-        )
-        self.jump_dropdown.observe(self.on_jump_change, names="value")
+        phase_desc = self.phase_col if self.phase_col else "phase"
+        self.patient_dropdown = widgets.Dropdown(description="Patient")
+        self.date_dropdown = widgets.Dropdown(description="Date")
+        self.phase_dropdown = widgets.Dropdown(description=phase_desc)
+        self._refresh_jump_dropdowns()
+        self.patient_dropdown.observe(self.on_patient_change, names="value")
+        self.date_dropdown.observe(self.on_date_change, names="value")
+        self.phase_dropdown.observe(self.on_phase_change, names="value")
 
         self.next_button = widgets.Button(description="Next Scan")
         self.next_button.on_click(self.on_next)
@@ -187,9 +210,15 @@ class CTScanViewer:
                 cb = widgets.Checkbox(value=True, description=seg_name, indent=False)
                 cb.observe(self.on_seg_visibility_change, names="value")
                 self.seg_visibility[seg_name] = cb
-            self.seg_visibility_box = widgets.VBox(list(self.seg_visibility.values()))
+            self.seg_visibility_box = widgets.VBox(
+                list(self.seg_visibility.values()),
+                layout=widgets.Layout(overflow="visible"),
+            )
         else:
-            self.seg_visibility_box = widgets.HTML("<i>No segmentations</i>")
+            self.seg_visibility_box = widgets.HTML(
+                "<i>No segmentations</i>",
+                layout=widgets.Layout(overflow="visible"),
+            )
 
         if self.segmentation_cols:
             self.center_seg_dropdown = widgets.Dropdown(
@@ -210,23 +239,34 @@ class CTScanViewer:
         try:
             # Avoid backend auto-publishing a second figure output in notebooks.
             plt.ioff()
-            self.fig, self.ax = plt.subplots(figsize=(9, 9))
+            figure_size_in = self.canvas_size_px / float(self.figure_dpi)
+            self.fig, self.ax = plt.subplots(
+                figsize=(figure_size_in, figure_size_in),
+                dpi=self.figure_dpi,
+            )
         finally:
             if was_interactive:
                 plt.ion()
+        self._pin_axes_to_canvas()
         if hasattr(self.fig.canvas, "header_visible"):
             self.fig.canvas.header_visible = False
 
         canvas = self.fig.canvas
         if isinstance(canvas, widgets.Widget):
-            canvas.layout = widgets.Layout(width="650px", height="650px")
+            canvas.layout = widgets.Layout(
+                width=f"{self.canvas_size_px}px",
+                height=f"{self.canvas_size_px}px",
+            )
             self.display_widget = canvas
             self._uses_output_fallback = False
             # Keep widget canvas alive; closing it clears the widget comm.
         else:
             self._uses_output_fallback = True
             output = widgets.Output(
-                layout=widgets.Layout(width="650px", height="650px")
+                layout=widgets.Layout(
+                    width=f"{self.canvas_size_px}px",
+                    height=f"{self.canvas_size_px}px",
+                )
             )
             self.display_widget = output
             self._render_output_figure()
@@ -236,42 +276,214 @@ class CTScanViewer:
         if self.fig is not None:
             self.fig.canvas.mpl_connect("key_press_event", self.on_key_press)
 
-        ui_top = widgets.VBox(
+        group_layout = widgets.Layout(
+            border="1px solid #d9d9d9", padding="6px", margin="0 0 6px 0"
+        )
+
+        top_left_controls = widgets.VBox(
             [
-                widgets.HBox(
-                    [self.plane_selector, self.window_preset, self.jump_dropdown]
-                ),
+                widgets.HTML("<b>View</b>"),
+                self.plane_selector,
                 widgets.HBox(
                     [self.prev_slice_button, self.slice_slider, self.next_slice_button]
                 ),
-            ]
+            ],
+            layout=group_layout,
+        )
+        top_right_jump = widgets.VBox(
+            [
+                widgets.HTML("<b>Jump To</b>"),
+                widgets.HBox(
+                    [self.patient_dropdown, self.date_dropdown, self.phase_dropdown],
+                    layout=widgets.Layout(justify_content="flex-end"),
+                ),
+            ],
+            layout=group_layout,
+        )
+        ui_top = widgets.HBox(
+            [top_left_controls, top_right_jump],
+            layout=widgets.Layout(justify_content="space-between", align_items="flex-start"),
+        )
+
+        alpha_and_seg = widgets.HBox(
+            [self.alpha_slider, self.seg_visibility_box],
+            layout=widgets.Layout(align_items="flex-start"),
+        )
+        overlay_group = widgets.VBox(
+            [widgets.HTML("<b>Overlay</b>"), alpha_and_seg],
+            layout=group_layout,
+        )
+        window_group = widgets.VBox(
+            [widgets.HTML("<b>Window</b>"), self.window_preset],
+            layout=group_layout,
+        )
+        center_group = widgets.VBox(
+            [self.center_seg_dropdown, self.center_button],
+            layout=group_layout,
+        )
+        scan_group = widgets.VBox(
+            [widgets.HTML("<b>Scan</b>"), widgets.HBox([self.prev_button, self.next_button])],
+            layout=group_layout,
+        )
+        progress_group = widgets.VBox(
+            [self.progress_bar],
+            layout=group_layout,
         )
 
         right_items = [
-            self.alpha_slider,
-            self.seg_visibility_box,
-            self.center_seg_dropdown,
-            self.center_button,
+            progress_group,
+            scan_group,
+            window_group,
+            overlay_group,
+            center_group,
             self.info_display,
-            widgets.HBox([self.prev_button, self.next_button]),
-            self.progress_bar,
         ]
-        right_panel = widgets.VBox(right_items, layout=widgets.Layout(width="320px"))
+        right_panel = widgets.VBox(right_items, layout=widgets.Layout(width="400px"))
 
         ui_bot = widgets.HBox([self.display_widget, right_panel])
         display(ui_top, ui_bot)
 
-    def _build_jump_options(self):
+    def _option_values(self, options):
+        values = []
+        for option in options:
+            if isinstance(option, tuple) and len(option) == 2:
+                values.append(option[1])
+            else:
+                values.append(option)
+        return values
+
+    def _build_options_for_column(self, column, formatter, frame=None):
+        if column is None:
+            return [("N/A", None)]
+        source = self.df if frame is None else frame
+        seen = set()
         options = []
+        for _, row in source.iterrows():
+            value = formatter(row.get(column))
+            if value == "":
+                continue
+            if value in seen:
+                continue
+            seen.add(value)
+            options.append((value, value))
+        if not options:
+            return [("N/A", None)]
+        return options
+
+    def _filter_frame_for_jump(self, patient_value=None, date_value=None):
+        frame = self.df
+        if self.patient_col and patient_value is not None:
+            frame = frame[
+                frame[self.patient_col].apply(lambda v: self._format_value(v) == patient_value)
+            ]
+        if self.date_col and date_value is not None:
+            frame = frame[frame[self.date_col].apply(lambda v: self._format_date(v) == date_value)]
+        return frame
+
+    def _build_patient_options(self):
+        return self._build_options_for_column(self.patient_col, self._format_value)
+
+    def _build_date_options(self, patient_value):
+        if self.date_col is None:
+            return [("N/A", None)]
+        frame = self._filter_frame_for_jump(patient_value=patient_value)
+        return self._build_options_for_column(self.date_col, self._format_date, frame=frame)
+
+    def _build_phase_options(self, patient_value, date_value):
+        if self.phase_col is None:
+            return [("N/A", None)]
+        frame = self._filter_frame_for_jump(
+            patient_value=patient_value,
+            date_value=date_value,
+        )
+        return self._build_options_for_column(self.phase_col, self._format_value, frame=frame)
+
+    def _set_dropdown_options(self, dropdown, options, preferred=None, disabled=False):
+        values = self._option_values(options)
+        dropdown.options = options
+        if preferred in values:
+            dropdown.value = preferred
+        elif values:
+            dropdown.value = values[0]
+        else:
+            dropdown.value = None
+        dropdown.disabled = disabled or (len(values) == 1 and values[0] is None)
+
+    def _refresh_jump_dropdowns(self, *, use_current_row=False):
+        if not hasattr(self, "patient_dropdown"):
+            return
+
+        row = self.df.iloc[self.current_index]
+        patient_pref = (
+            self._format_value(row.get(self.patient_col))
+            if use_current_row and self.patient_col is not None
+            else getattr(self.patient_dropdown, "value", None)
+        )
+        date_pref = (
+            self._format_date(row.get(self.date_col))
+            if use_current_row and self.date_col is not None
+            else getattr(self.date_dropdown, "value", None)
+        )
+        phase_pref = (
+            self._format_value(row.get(self.phase_col))
+            if use_current_row and self.phase_col is not None
+            else getattr(self.phase_dropdown, "value", None)
+        )
+
+        self._suspend_jump = True
+        try:
+            patient_options = self._build_patient_options()
+            self._set_dropdown_options(
+                self.patient_dropdown,
+                patient_options,
+                preferred=patient_pref,
+                disabled=self.patient_col is None,
+            )
+
+            date_options = self._build_date_options(self.patient_dropdown.value)
+            self._set_dropdown_options(
+                self.date_dropdown,
+                date_options,
+                preferred=date_pref,
+                disabled=self.date_col is None,
+            )
+
+            phase_options = self._build_phase_options(
+                self.patient_dropdown.value,
+                self.date_dropdown.value,
+            )
+            self._set_dropdown_options(
+                self.phase_dropdown,
+                phase_options,
+                preferred=phase_pref,
+                disabled=self.phase_col is None,
+            )
+        finally:
+            self._suspend_jump = False
+
+    def _jump_to_selected_filters(self):
+        if len(self.df) == 0:
+            return
+        patient_value = self.patient_dropdown.value if self.patient_col else None
+        date_value = self.date_dropdown.value if self.date_col else None
+        phase_value = self.phase_dropdown.value if self.phase_col else None
+
         for pos in range(len(self.df)):
             row = self.df.iloc[pos]
-            patient = row.get("patient_key", f"row {pos}")
-            if pd.isna(patient):
-                patient = f"row {pos}"
-            date_str = self._format_date(row.get("date", None))
-            label = f"{patient} | {date_str}"
-            options.append((label, int(pos)))
-        return options
+            if self.patient_col and patient_value is not None:
+                if self._format_value(row.get(self.patient_col)) != patient_value:
+                    continue
+            if self.date_col and date_value is not None:
+                if self._format_date(row.get(self.date_col)) != date_value:
+                    continue
+            if self.phase_col and phase_value is not None:
+                if self._format_value(row.get(self.phase_col)) != phase_value:
+                    continue
+            if int(pos) == int(self.current_index):
+                return
+            self.current_index = int(pos)
+            self.load_data()
+            return
 
     def _format_date(self, value):
         if value is None:
@@ -341,13 +553,7 @@ class CTScanViewer:
         return int(np.argmax(sums))
 
     def _set_jump_value(self):
-        if not hasattr(self, "jump_dropdown"):
-            return
-        self._suspend_jump = True
-        try:
-            self.jump_dropdown.value = int(self.current_index)
-        finally:
-            self._suspend_jump = False
+        self._refresh_jump_dropdowns(use_current_row=True)
 
     def _try_enable_widget_backend(self):
         """Best-effort switch to ipympl when available."""
@@ -371,6 +577,14 @@ class CTScanViewer:
             clear_output(wait=True)
             display(self.fig)
 
+    def _pin_axes_to_canvas(self):
+        if self.fig is None or self.ax is None:
+            return
+        self.fig.subplots_adjust(left=0.0, right=1.0, bottom=0.0, top=1.0)
+        self.ax.set_position([0.0, 0.0, 1.0, 1.0])
+        self.ax.set_aspect(self.image_aspect, adjustable="box")
+        self.ax.margins(0)
+
     def on_window_preset_change(self, change):
         preset = change["new"]
         if preset == "Custom":
@@ -380,16 +594,22 @@ class CTScanViewer:
         self.HU_max = wl + ww / 2.0
         self.update_display()
 
-    def on_jump_change(self, change):
+    def on_patient_change(self, change):
         if self._suspend_jump:
             return
-        new_index = change["new"]
-        if new_index is None:
+        self._refresh_jump_dropdowns(use_current_row=False)
+        self._jump_to_selected_filters()
+
+    def on_date_change(self, change):
+        if self._suspend_jump:
             return
-        if new_index == self.current_index:
+        self._refresh_jump_dropdowns(use_current_row=False)
+        self._jump_to_selected_filters()
+
+    def on_phase_change(self, change):
+        if self._suspend_jump:
             return
-        self.current_index = int(new_index)
-        self.load_data()
+        self._jump_to_selected_filters()
 
     def on_seg_visibility_change(self, change):
         self.update_display()
@@ -503,7 +723,14 @@ class CTScanViewer:
         ct_slice = clip_hu_values(ct_slice, self.HU_min, self.HU_max)
 
         self.ax.clear()
-        self.ax.imshow(ct_slice.T, cmap="gray", origin="lower")
+        self._pin_axes_to_canvas()
+        self.ax.imshow(
+            ct_slice.T,
+            cmap="gray",
+            origin="lower",
+            aspect=self.image_aspect,
+            interpolation="nearest",
+        )
 
         visible_names = []
         for seg_name in self.segmentation_cols:
@@ -521,6 +748,8 @@ class CTScanViewer:
                 cmap=cmap,
                 alpha=alpha,
                 origin="lower",
+                aspect=self.image_aspect,
+                interpolation="nearest",
             )
             self.ax.contour(
                 seg_slice.T,
@@ -545,7 +774,6 @@ class CTScanViewer:
             )
 
         self.ax.axis("off")
-        self.fig.tight_layout()
         if self._uses_output_fallback:
             self._render_output_figure()
         else:
