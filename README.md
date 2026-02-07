@@ -61,6 +61,9 @@ conda activate imperandi310
 # Upgrade pip in the conda env
 python -m pip install -U pip setuptools wheel
 
+# Install Numpy before Pyradiomics
+conda install numpy<2.0 -y
+
 # Install PyRadiomics as a precompiled binary
 conda install -c radiomics -c conda-forge pyradiomics -y
 
@@ -74,9 +77,10 @@ IMPERANDI ships a single CLI with several subcommands:
 - `clean`: filter and normalize the index.
 - `ingest`: run `parse` then `clean` in one step.
 - `convert`: converts DICOMs from index to NIfTI.
-- `phase`: extract CT contrast phase metadata from NIfTI volumes (requires `.[segment]`).
-- `radiomics`: extract PyRadiomics features from NIfTI volumes and masks (requires `pyradiomics` + `SimpleITK`).
 - `segment`: run configurable segmentation on NIfTI volumes (requires `.[segment]`).
+- `phase`: extract CT contrast phase metadata from NIfTI volumes (requires `.[segment]`).
+- `radiomics`: extract PyRadiomics features from NIfTI volumes and masks (requires `pyradiomics`).
+- `register`: register NIfTI volumes from masks (requires `SimpleITK`) : rigid registration for inter-patient, elastic registration for intra-patient (multi-phasic, longitudinal). 🚧work in progress🚧
 
 Get help:
 ```bash

@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
   "numpy",
+  "scipy",
   "pandas",
   "pandarallel",
   "python-dateutil",
@@ -26,7 +27,9 @@ segment = [
   "torchio",
   "scipy",
   "scikit-image",
-  "xgboost"
+  "xgboost",
+  "SimpleITK",
+  "pywavelets"
 ]
 
 radiomics = [
