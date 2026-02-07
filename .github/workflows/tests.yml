@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: ["main", "master"]
 
+env:
+  IMPERANDI_OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
 jobs:
   test:
     runs-on: ubuntu-latest
