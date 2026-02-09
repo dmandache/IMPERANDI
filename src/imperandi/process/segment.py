@@ -33,6 +33,7 @@ from skimage.morphology import ball
 from tqdm import tqdm
 
 from imperandi.utils.misc import report_volumes  # type: ignore
+from imperandi.utils.logging import setup_logging
 
 # -----------------------------------------------------------------------------
 # Configuration & logging
@@ -42,8 +43,6 @@ from imperandi.utils.misc import report_volumes  # type: ignore
 
 DEFAULT_TIMEOUT = 15 * 60  # seconds – hard wall per study inside the pool
 
-LOG_FORMAT = "%(asctime)s | %(levelname)-8s | %(processName)s | %(message)s"
-logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
 logger = logging.getLogger(__name__)
 
 # -----------------------------------------------------------------------------
@@ -438,6 +437,8 @@ def process_single_volume(
 ) -> Tuple[int, str | None, str | None, str | None]:
     """Return ``(idx, output_dir|None, error_msg|None, warning_msg|None)``."""
 
+    setup_logging(verbose=verbose)
+
     try:
         nifti_path = Path(row["nifti_path"])
     except KeyError:
@@ -586,8 +587,7 @@ def normalize_segment_args(args: argparse.Namespace) -> argparse.Namespace:
 
 
 def main(args: argparse.Namespace) -> None:
-    logger.setLevel(logging.DEBUG if args.verbose else logging.INFO)
-
+    setup_logging(verbose=getattr(args, "verbose", False))
     tasks_config = load_tasks_config(
         Path(args.tasks_config) if args.tasks_config else None
     )
@@ -698,10 +698,11 @@ def main(args: argparse.Namespace) -> None:
 
 
 if __name__ == "__main__":
+    setup_logging()
     args = build_parser().parse_args()
     args = normalize_segment_args(args)
     if getattr(args, "dry_run", False):
-        print("Dry run: segment")
-        print(args)
+        logger.info("Dry run: segment")
+        logger.info("%s", args)
         raise SystemExit(0)
     main(args)

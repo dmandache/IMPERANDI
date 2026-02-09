@@ -10,6 +10,7 @@ import nibabel as nib
 import pandas as pd
 from tqdm import tqdm
 
+from imperandi.utils.logging import setup_logging
 from imperandi.utils.misc import print_args
 
 logger = logging.getLogger(__name__)
@@ -105,7 +106,7 @@ def parse_arguments() -> argparse.Namespace:
     parser = build_parser()
     args = parser.parse_args()
     args = normalize_phase_args(args)
-    print(f"Running {Path(__file__).name} script with arguments: {args}")
+    logger.info("Running %s script with arguments: %s", Path(__file__).name, args)
     return args
 
 
@@ -178,8 +179,6 @@ def extract_phase_volumes(
 
 
 def main(args: argparse.Namespace) -> None:
-    logger.setLevel(logging.DEBUG if args.verbose else logging.INFO)
-
     phase_extractor = _load_phase_extractor()
 
     df = pd.read_csv(args.csv_path).copy()
@@ -198,9 +197,11 @@ def main(args: argparse.Namespace) -> None:
 
 
 if __name__ == "__main__":
+    setup_logging()
     args = parse_arguments()
+    setup_logging(verbose=getattr(args, "verbose", False))
     if getattr(args, "dry_run", False):
-        print("Dry run: phase")
+        logger.info("Dry run: phase")
         print_args(args)
         raise SystemExit(0)
     main(args)

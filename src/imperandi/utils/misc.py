@@ -1,5 +1,8 @@
 import argparse
+import logging
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 def print_args(args: argparse.Namespace) -> None:
@@ -9,20 +12,20 @@ def print_args(args: argparse.Namespace) -> None:
     for arg in sorted(items):
         value = items[arg]
         value_str = "None" if value is None else repr(value)
-        print(f"{arg:<{width}} : {value_str}")
+        logger.info("%s : %s", f"{arg:<{width}}", value_str)
 
 
 def report_volumes(df, step_name=None):
     unique_counts = df[["patient_key", "study_id", "series_id"]].nunique()
     if step_name:
-        print(f"\nAfter {step_name}:")
-    print(f"Unique patients: {unique_counts['patient_key']}")
-    print(f"Unique studies: {unique_counts['study_id']}")
-    print(f"Unique series: {unique_counts['series_id']}")
+        logger.info("After %s:", step_name)
+    logger.info("Unique patients: %s", unique_counts["patient_key"])
+    logger.info("Unique studies: %s", unique_counts["study_id"])
+    logger.info("Unique series: %s", unique_counts["series_id"])
 
     if "volume_id" in df.columns:
         unique_volumes = df["volume_id"].nunique()
-        print(f"Unique volumes: {unique_volumes}")
+        logger.info("Unique volumes: %s", unique_volumes)
 
 
 def report_change(df, previous_df, col=None):
@@ -30,15 +33,18 @@ def report_change(df, previous_df, col=None):
     curr_patients = set(df["patient_key"].unique())
     missing_patients = sorted(prev_patients - curr_patients)
     if missing_patients:
-        print(
-            f"⚠️  {len(missing_patients)} patients removed in this step: {missing_patients}"
+        logger.warning(
+            "⚠️  %s patients removed in this step: %s",
+            len(missing_patients),
+            missing_patients,
         )
         if col is not None:
-            print(f"{col} :")
-            print(
+            logger.info("%s :", col)
+            logger.info(
+                "%s",
                 previous_df[previous_df["patient_key"].isin(missing_patients)][
                     col
-                ].value_counts(dropna=False)
+                ].value_counts(dropna=False),
             )
 
     prev_studies = set(previous_df["study_id"].unique())
@@ -52,9 +58,11 @@ def report_change(df, previous_df, col=None):
             )
             missing_info = missing_df[["patient_key", "date_str"]].drop_duplicates()
             missing_list = list(missing_info.itertuples(index=False, name=None))
-            print(
-                f"⚠️  {len(missing_list)} studies removed in this step: {missing_list}"
+            logger.warning(
+                "⚠️  %s studies removed in this step: %s",
+                len(missing_list),
+                missing_list,
             )
         if col is not None:
-            print(f"{col} :")
-            print(missing_df[col].value_counts(dropna=False))
+            logger.info("%s :", col)
+            logger.info("%s", missing_df[col].value_counts(dropna=False))
