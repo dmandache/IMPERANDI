@@ -48,7 +48,7 @@ python -m pip install -e ".[segment,dev]"
 
 ### Installation (PyRadiomics note)
 
-⚠️ **Important**: `pyradiomics` includes compiled extensions and may fail to install via `pip` on some platforms (especially Windows) due to build-time dependencies and PEP517 build isolation.
+⚠️ **Important**: `pyradiomics` includes compiled extensions and may fail to install via `pip` on some platforms due to build-time dependencies and PEP517 build isolation.
 
 To ensure a reliable installation, install `pyradiomics` **via conda** first, then install this package with `pip` **without dependency resolution**.
 
@@ -153,14 +153,14 @@ Example segmentation config (JSON):
       "extra": { "roi_subset_robust": ["liver"] }
     },
     {
-      "key": "vessels",
+      "key": "tumor",
       "task": "liver_vessels",
       "output": "liver_tumor.nii.gz",
       "extra": {}
     }
   ],
   "postprocess": {
-    "merge_keys": ["liver", "vessels"],
+    "merge_keys": ["liver", "tumor"],
     "output": "liver_all.nii.gz",
     "on_failure": "warn_only",
     "radius_mm": 5.0,

@@ -33,7 +33,7 @@ segment = [
 ]
 
 radiomics = [
-  "pyradiomics<3.1",   # because 3.1.0 sdist metadata is broken on PyPI right now
+  "pyradiomics@git+https://github.com/radiomics/pyradiomics.git",   # because 3.1.0 sdist metadata is broken on PyPI right now
 ]
 
 dev = [
