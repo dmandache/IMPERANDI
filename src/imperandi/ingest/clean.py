@@ -270,7 +270,7 @@ def add_clean_arguments(
     parser.add_argument(
         "--openai_model",
         type=str,
-        default=None,
+        default='gpt-4.1-mini',
         help="OpenAI model (default from IMPERANDI_OPENAI_MODEL or gpt-4.1-mini).",
     )
     if include_manifest:
@@ -1017,6 +1017,7 @@ def map_series_description(
     openai_model: str | None = None,
 ):
     if "SeriesDescription" not in df.columns:
+        print("No SeriesDescription column found, skipping phase mapping.")
         return df
     data_dict = {}
     if csv_tag_dict:
@@ -1029,11 +1030,6 @@ def map_series_description(
     df["SeriesDescription"] = df["SeriesDescription"].fillna("inconnu")
     series_description_uniform = df["SeriesDescription"].apply(uniform_string)
     df["phase"] = series_description_uniform.map(data_dict).fillna("inconnu")
-
-    mixt_phase_mask = df["phase"].str.lower().eq("mixte")
-    acq = pd.to_numeric(df["AcquisitionNumber"], errors="coerce")
-    df.loc[mixt_phase_mask & (acq == 1), "phase"] = "arteriel"
-    df.loc[mixt_phase_mask & (acq == 2), "phase"] = "portal"
 
     unknown_mask = df["phase"].str.lower().eq("inconnu")
     unknown_descriptions = series_description_uniform[unknown_mask]
@@ -1063,11 +1059,18 @@ def map_series_description(
             normalized_predictions = {
                 uniform_string(key): value for key, value in predictions.items()
             }
+            print(f"OpenAI predictions: {normalized_predictions}")
             df.loc[df["phase"].str.lower().eq("inconnu"), "phase"] = (
                 series_description_uniform.map(normalized_predictions)
                 .fillna(df["phase"])
                 .values
             )
+
+    if "AcquisitionNumber" in df.columns:
+        mixt_phase_mask = df["phase"].str.lower().eq("mixte")
+        acq = pd.to_numeric(df["AcquisitionNumber"], errors="coerce")
+        df.loc[mixt_phase_mask & (acq == 1), "phase"] = "arteriel"
+        df.loc[mixt_phase_mask & (acq == 2), "phase"] = "portal"
 
     df = df[df.phase != "inutile"]
 
@@ -1319,6 +1322,13 @@ if __name__ == "__main__":
     manifest = load_manifest(
         args.manifest, base_path=Path(__file__).resolve().parents[1]
     )
+    if args.openai_api_key is None:
+        args.openai_api_key = os.environ.get('IMPERANDI_OPENAI_API_KEY', None)
+        if args.openai_api_key is None:
+            print("Warning: OpenAI API key not provided, phase mapping will be limited to CSV dictionary and may have many 'inconnu' values.")
+        else:
+            print("OpenAI API key obtained from environment variable.")
+
     clean_and_save_data(
         args.csv_path,
         args.csv_path_out,
