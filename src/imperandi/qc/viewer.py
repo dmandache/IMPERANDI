@@ -45,8 +45,10 @@ WINDOW_PRESETS = {
 
 COLORMAPS = ["jet", "autumn", "summer", "winter", "viridis"]
 CONTOUR_COLORS = ["blue", "red", "green", "cyan", "magenta"]
-DISPLAY_CANVAS_PX = 650
+DISPLAY_CANVAS_PX = 700
 FIGURE_DPI = 100
+JUMP_DROPDOWN_WIDTH = "250px"
+JUMP_NAV_BUTTON_WIDTH = "120px"
 
 
 def load_nifti(file_path, orientation="LAS"):
@@ -149,15 +151,16 @@ class CTScanViewer:
             step=1,
             value=0,
             description="Slice",
-            layout=widgets.Layout(width="400px"),
+            layout=widgets.Layout(width="100%", min_width="0px"),
         )
         self.slice_slider.observe(self.on_slice_change, names="value")
 
+        nav_button_layout = widgets.Layout(width="auto", min_width=JUMP_NAV_BUTTON_WIDTH)
         self.prev_slice_button = widgets.Button(
-            description="Prev", layout=widgets.Layout(width="60px")
+            description="< Prev Slice", layout=nav_button_layout
         )
         self.next_slice_button = widgets.Button(
-            description="Next", layout=widgets.Layout(width="60px")
+            description="Next Slice>", layout=nav_button_layout
         )
         self.prev_slice_button.on_click(self.on_prev_slice)
         self.next_slice_button.on_click(self.on_next_slice_manual)
@@ -168,70 +171,107 @@ class CTScanViewer:
             max=1,
             step=0.1,
             description="alpha",
-            orientation="vertical",
-            layout=widgets.Layout(height="200px"),
+            orientation="horizontal",
+            layout=widgets.Layout(width="100%", min_width="0px"),
         )
         self.alpha_slider.observe(self.update_display, names="value")
 
         self.plane_selector = widgets.ToggleButtons(
-            options=["axial", "sagittal", "coronal"], description="Plane"
+            options=["axial", "sagittal", "coronal"],
+            layout=widgets.Layout(width="100%", min_width="0px"),
         )
         self.plane_selector.observe(self.on_plane_change, names="value")
 
         self.window_preset = widgets.Dropdown(
             options=["Custom"] + list(WINDOW_PRESETS.keys()),
             value="Custom",
-            description="Window",
+            description="HU Window",
+            layout=widgets.Layout(width="100%", min_width="0px"),
         )
         self.window_preset.observe(self.on_window_preset_change, names="value")
 
         phase_desc = self.phase_col if self.phase_col else "phase"
-        self.patient_dropdown = widgets.Dropdown(description="Patient")
-        self.date_dropdown = widgets.Dropdown(description="Date")
-        self.phase_dropdown = widgets.Dropdown(description=phase_desc)
+        self.patient_dropdown = widgets.Dropdown(
+            description="Patient", layout=widgets.Layout(width="100%", min_width="0px")
+        )
+        self.date_dropdown = widgets.Dropdown(
+            description="Date", layout=widgets.Layout(width="100%", min_width="0px")
+        )
+        self.phase_dropdown = widgets.Dropdown(
+            description=phase_desc, layout=widgets.Layout(width="100%", min_width="0px")
+        )
+        self.prev_patient_button = widgets.Button(
+            description="< Prev Patient",
+            layout=nav_button_layout,
+        )
+        self.next_patient_button = widgets.Button(
+            description="Next Patient >",
+            layout=nav_button_layout,
+        )
+        self.prev_date_button = widgets.Button(
+            description="< Prev Exam",
+            layout=nav_button_layout,
+        )
+        self.next_date_button = widgets.Button(
+            description="Next Exam >",
+            layout=nav_button_layout,
+        )
         self._refresh_jump_dropdowns()
         self.patient_dropdown.observe(self.on_patient_change, names="value")
         self.date_dropdown.observe(self.on_date_change, names="value")
         self.phase_dropdown.observe(self.on_phase_change, names="value")
+        self.prev_patient_button.on_click(self.on_prev_patient)
+        self.next_patient_button.on_click(self.on_next_patient)
+        self.prev_date_button.on_click(self.on_prev_date)
+        self.next_date_button.on_click(self.on_next_date)
 
-        self.next_button = widgets.Button(description="Next Scan")
+        self.next_button = widgets.Button(
+            description="Next Scan >", layout=nav_button_layout
+        )
         self.next_button.on_click(self.on_next)
-        self.prev_button = widgets.Button(description="Prev Scan")
+        self.prev_button = widgets.Button(
+            description="< Prev Scan", layout=nav_button_layout
+        )
         self.prev_button.on_click(self.on_prev)
 
         self.progress_bar = widgets.FloatProgress(
-            value=0, min=0, max=1, description="Loading:", bar_style="info"
+            value=0,
+            min=0,
+            max=1,
+            description="Loading:",
+            bar_style="info",
+            layout=widgets.Layout(width="100%", min_width="0px"),
         )
 
         self.info_display = widgets.HTML(value="")
 
         if self.segmentation_cols:
             for seg_name in self.segmentation_cols:
-                cb = widgets.Checkbox(value=True, description=seg_name, indent=False)
+                cb = widgets.Checkbox(value=True, description=seg_name, indent=True)
                 cb.observe(self.on_seg_visibility_change, names="value")
                 self.seg_visibility[seg_name] = cb
             self.seg_visibility_box = widgets.VBox(
                 list(self.seg_visibility.values()),
-                layout=widgets.Layout(overflow="visible"),
+                layout=widgets.Layout(width="100%", min_width="100px"),
             )
         else:
             self.seg_visibility_box = widgets.HTML(
                 "<i>No segmentations</i>",
-                layout=widgets.Layout(overflow="visible"),
+                layout=widgets.Layout(width="100%", min_width="100px"),
             )
 
         if self.segmentation_cols:
             self.center_seg_dropdown = widgets.Dropdown(
-                options=self.segmentation_cols, description="Center"
+                options=self.segmentation_cols, description=""
             )
-            self.center_button = widgets.Button(description="Center on lesion")
+            self.center_button = widgets.Button(description="Center on")
             self.center_button.on_click(self.on_center_on_lesion)
         else:
             self.center_seg_dropdown = widgets.Dropdown(
-                options=[], description="Center", disabled=True
+                options=[], description="", disabled=True
             )
             self.center_button = widgets.Button(
-                description="Center on lesion", disabled=True
+                description="Center on", disabled=True
             )
 
         self._try_enable_widget_backend()
@@ -254,8 +294,8 @@ class CTScanViewer:
         canvas = self.fig.canvas
         if isinstance(canvas, widgets.Widget):
             canvas.layout = widgets.Layout(
-                width=f"{self.canvas_size_px}px",
-                height=f"{self.canvas_size_px}px",
+                width="100%",
+                height="100%",
             )
             self.display_widget = canvas
             self._uses_output_fallback = False
@@ -264,8 +304,8 @@ class CTScanViewer:
             self._uses_output_fallback = True
             output = widgets.Output(
                 layout=widgets.Layout(
-                    width=f"{self.canvas_size_px}px",
-                    height=f"{self.canvas_size_px}px",
+                    width="100%",
+                    height="100%",
                 )
             )
             self.display_widget = output
@@ -277,70 +317,148 @@ class CTScanViewer:
             self.fig.canvas.mpl_connect("key_press_event", self.on_key_press)
 
         group_layout = widgets.Layout(
-            border="1px solid #d9d9d9", padding="6px", margin="0 0 6px 0"
+            border="1px solid #d9d9d9",
+            padding="6px",
+            margin="0 0 6px 0",
+            align_items="center",
+            justify_content="center",
+            overflow="hidden",
+        )
+        grid_three = widgets.Layout(
+            grid_template_columns="auto 1fr auto",
+            width="100%",
+            align_items="center",
+            grid_gap="6px",
+        )
+        grid_two = widgets.Layout(
+            grid_template_columns="auto 1fr",
+            width="100%",
+            align_items="center",
+            grid_gap="6px",
+        )
+        view_grid_three = widgets.Layout(
+            grid_template_columns="auto 1fr auto",
+            width="100%",
+            align_items="center",
+            justify_content="center",
+            grid_gap="6px",
+        )
+        view_grid_two = widgets.Layout(
+            grid_template_columns="auto 1fr",
+            width="100%",
+            align_items="center",
+            justify_content="center",
+            grid_gap="6px",
         )
 
         top_left_controls = widgets.VBox(
             [
                 widgets.HTML("<b>View</b>"),
-                self.plane_selector,
-                widgets.HBox(
-                    [self.prev_slice_button, self.slice_slider, self.next_slice_button]
+                widgets.GridBox(
+                    [widgets.HTML("Plane"), self.plane_selector],
+                    layout=view_grid_two,
+                ),
+                widgets.GridBox(
+                    [self.prev_slice_button, self.slice_slider, self.next_slice_button],
+                    layout=view_grid_three,
                 ),
             ],
-            layout=group_layout,
+            layout=widgets.Layout(
+                border=group_layout.border,
+                padding=group_layout.padding,
+                margin=group_layout.margin,
+                align_items=group_layout.align_items,
+                justify_content="center",
+                overflow=group_layout.overflow,
+                height="100%",
+            ),
         )
         top_right_jump = widgets.VBox(
             [
-                widgets.HTML("<b>Jump To</b>"),
-                widgets.HBox(
-                    [self.patient_dropdown, self.date_dropdown, self.phase_dropdown],
-                    layout=widgets.Layout(justify_content="flex-end"),
+                widgets.HTML("<b>Explore</b>"),
+                widgets.GridBox(
+                    [self.prev_patient_button, self.patient_dropdown, self.next_patient_button],
+                    layout=grid_three,
+                ),
+                widgets.GridBox(
+                    [self.prev_date_button, self.date_dropdown, self.next_date_button],
+                    layout=grid_three,
+                ),
+                widgets.GridBox(
+                    [self.prev_button, self.phase_dropdown, self.next_button],
+                    layout=grid_three,
                 ),
             ],
-            layout=group_layout,
+            layout=widgets.Layout(
+                border=group_layout.border,
+                padding=group_layout.padding,
+                margin=group_layout.margin,
+                align_items=group_layout.align_items,
+                justify_content=group_layout.justify_content,
+                overflow=group_layout.overflow,
+                height="100%",
+            ),
         )
-        ui_top = widgets.HBox(
+        ui_top = widgets.GridBox(
             [top_left_controls, top_right_jump],
-            layout=widgets.Layout(justify_content="space-between", align_items="flex-start"),
-        )
-
-        alpha_and_seg = widgets.HBox(
-            [self.alpha_slider, self.seg_visibility_box],
-            layout=widgets.Layout(align_items="flex-start"),
+            layout=widgets.Layout(
+                grid_template_columns="1fr 1fr",
+                width="100%",
+                align_items="stretch",
+                grid_gap="6px",
+            ),
         )
         overlay_group = widgets.VBox(
-            [widgets.HTML("<b>Overlay</b>"), alpha_and_seg],
+            [widgets.HTML("<b>Mask Overlay</b>"), self.alpha_slider, self.seg_visibility_box],
             layout=group_layout,
         )
         window_group = widgets.VBox(
-            [widgets.HTML("<b>Window</b>"), self.window_preset],
+            [widgets.HTML("<b>Rendering</b>"), self.window_preset],
             layout=group_layout,
+        )
+        center_button_and_dropdown = widgets.HBox(
+            [self.center_button, self.center_seg_dropdown],
+            layout=widgets.Layout(width="100%", align_items="stretch"),
         )
         center_group = widgets.VBox(
-            [self.center_seg_dropdown, self.center_button],
-            layout=group_layout,
-        )
-        scan_group = widgets.VBox(
-            [widgets.HTML("<b>Scan</b>"), widgets.HBox([self.prev_button, self.next_button])],
+            [widgets.HTML("<b>Largest Surface Slice</b>"), center_button_and_dropdown],
             layout=group_layout,
         )
         progress_group = widgets.VBox(
             [self.progress_bar],
-            layout=group_layout,
+            layout=widgets.Layout(width="100%", align_items="stretch", overflow="hidden"),
+        )
+
+        self.info_container = widgets.Box(
+            [self.info_display],
+            layout=widgets.Layout(
+                max_height="350px",
+                overflow="auto",
+                overflow_x="hidden",
+            ),
         )
 
         right_items = [
             progress_group,
-            scan_group,
-            window_group,
-            overlay_group,
             center_group,
-            self.info_display,
+            overlay_group,
+            window_group,
+            self.info_container,
         ]
-        right_panel = widgets.VBox(right_items, layout=widgets.Layout(width="400px"))
+        right_panel = widgets.VBox(
+            right_items,
+            layout=widgets.Layout(width="500px"),
+        )
 
-        ui_bot = widgets.HBox([self.display_widget, right_panel])
+        self.display_widget.layout = widgets.Layout(
+            width="100%",
+            flex="1 1 auto",
+            min_width="500px",
+        )
+        ui_bot = widgets.HBox(
+            [self.display_widget, right_panel],
+            layout=widgets.Layout(width="100%", align_items="flex-start"),
+        )
         display(ui_top, ui_bot)
 
     def _option_values(self, options):
@@ -351,6 +469,32 @@ class CTScanViewer:
             else:
                 values.append(option)
         return values
+
+    def _step_dropdown(self, dropdown, direction):
+        options = self._option_values(dropdown.options)
+        values = [opt for opt in options if opt is not None]
+        if not values:
+            return
+        current = dropdown.value
+        if current not in values:
+            dropdown.value = values[0]
+            return
+        idx = values.index(current)
+        next_idx = max(0, min(len(values) - 1, idx + direction))
+        if next_idx != idx:
+            dropdown.value = values[next_idx]
+
+    def _update_jump_nav_buttons(self):
+        patient_values = [
+            opt for opt in self._option_values(self.patient_dropdown.options) if opt is not None
+        ]
+        date_values = [
+            opt for opt in self._option_values(self.date_dropdown.options) if opt is not None
+        ]
+        self.prev_patient_button.disabled = len(patient_values) <= 1
+        self.next_patient_button.disabled = len(patient_values) <= 1
+        self.prev_date_button.disabled = len(date_values) <= 1
+        self.next_date_button.disabled = len(date_values) <= 1
 
     def _build_options_for_column(self, column, formatter, frame=None):
         if column is None:
@@ -460,6 +604,7 @@ class CTScanViewer:
             )
         finally:
             self._suspend_jump = False
+        self._update_jump_nav_buttons()
 
     def _jump_to_selected_filters(self):
         if len(self.df) == 0:
@@ -610,6 +755,18 @@ class CTScanViewer:
         if self._suspend_jump:
             return
         self._jump_to_selected_filters()
+
+    def on_prev_patient(self, button):
+        self._step_dropdown(self.patient_dropdown, -1)
+
+    def on_next_patient(self, button):
+        self._step_dropdown(self.patient_dropdown, 1)
+
+    def on_prev_date(self, button):
+        self._step_dropdown(self.date_dropdown, -1)
+
+    def on_next_date(self, button):
+        self._step_dropdown(self.date_dropdown, 1)
 
     def on_seg_visibility_change(self, change):
         self.update_display()
@@ -791,10 +948,15 @@ class CTScanViewer:
             formatted = self._format_value(value)
             if formatted == "":
                 continue
-            rows.append(f"<tr><td><b>{column}</b></td><td>{formatted}</td></tr>")
+            rows.append(
+                "<tr>"
+                f"<td style='word-wrap: break-word; overflow-wrap: anywhere;'><b>{column}</b></td>"
+                f"<td style='word-wrap: break-word; overflow-wrap: anywhere;'>{formatted}</td>"
+                "</tr>"
+            )
         if rows:
             html = (
-                "<table style='width: 100%; border-collapse: collapse;'>"
+                "<table style='width: 100%; table-layout: fixed; border-collapse: collapse;'>"
                 + "".join(rows)
                 + "</table>"
             )
