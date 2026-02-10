@@ -19,6 +19,7 @@ from imperandi.utils.misc import print_args
 
 logger = logging.getLogger(__name__)
 
+
 def _load_phase_module():
     from imperandi.extract import phase as phase_module
 

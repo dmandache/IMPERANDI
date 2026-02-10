@@ -17,6 +17,7 @@ from imperandi.utils.manifest import load_manifest
 
 logger = logging.getLogger(__name__)
 
+
 # Function to parse command-line arguments
 def add_convert_arguments(
     parser: argparse.ArgumentParser,

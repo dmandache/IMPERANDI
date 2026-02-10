@@ -71,4 +71,3 @@ def setup_logging(
         handlers=handlers,
     )
     root._imperandi_configured = True
-

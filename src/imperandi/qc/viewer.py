@@ -95,7 +95,9 @@ class CTScanViewer:
         if segmentation_cols is None:
             auto_cols = [col for col in df.columns if str(col).startswith("mask_")]
             if not auto_cols:
-                auto_cols = [col for col in ["liver_path", "liver_tumor_path"] if col in df]
+                auto_cols = [
+                    col for col in ["liver_path", "liver_tumor_path"] if col in df
+                ]
             self.segmentation_cols = [
                 col
                 for col in auto_cols
@@ -155,7 +157,9 @@ class CTScanViewer:
         )
         self.slice_slider.observe(self.on_slice_change, names="value")
 
-        nav_button_layout = widgets.Layout(width="auto", min_width=JUMP_NAV_BUTTON_WIDTH)
+        nav_button_layout = widgets.Layout(
+            width="auto", min_width=JUMP_NAV_BUTTON_WIDTH
+        )
         self.prev_slice_button = widgets.Button(
             description="< Prev Slice", layout=nav_button_layout
         )
@@ -178,7 +182,7 @@ class CTScanViewer:
 
         self.plane_selector = widgets.ToggleButtons(
             options=["axial", "sagittal", "coronal"],
-            #layout=widgets.Layout(width="100%", min_width="0px"),
+            # layout=widgets.Layout(width="100%", min_width="0px"),
         )
         self.plane_selector.observe(self.on_plane_change, names="value")
 
@@ -270,9 +274,7 @@ class CTScanViewer:
             self.center_seg_dropdown = widgets.Dropdown(
                 options=[], description="", disabled=True
             )
-            self.center_button = widgets.Button(
-                description="Center on", disabled=True
-            )
+            self.center_button = widgets.Button(description="Center on", disabled=True)
 
         self._try_enable_widget_backend()
         was_interactive = plt.isinteractive()
@@ -330,12 +332,12 @@ class CTScanViewer:
             align_items="center",
             grid_gap="6px",
         )
-        grid_two = widgets.Layout(
-            grid_template_columns="auto 1fr",
-            width="100%",
-            align_items="center",
-            grid_gap="6px",
-        )
+        # grid_two = widgets.Layout(
+        #     grid_template_columns="auto 1fr",
+        #     width="100%",
+        #     align_items="center",
+        #     grid_gap="6px",
+        # )
         view_grid_three = widgets.Layout(
             grid_template_columns="auto 1fr auto",
             width="100%",
@@ -378,7 +380,11 @@ class CTScanViewer:
             [
                 widgets.HTML("<b>Explore</b>"),
                 widgets.GridBox(
-                    [self.prev_patient_button, self.patient_dropdown, self.next_patient_button],
+                    [
+                        self.prev_patient_button,
+                        self.patient_dropdown,
+                        self.next_patient_button,
+                    ],
                     layout=grid_three,
                 ),
                 widgets.GridBox(
@@ -410,7 +416,11 @@ class CTScanViewer:
             ),
         )
         overlay_group = widgets.VBox(
-            [widgets.HTML("<b>Mask Overlay</b>"), self.alpha_slider, self.seg_visibility_box],
+            [
+                widgets.HTML("<b>Mask Overlay</b>"),
+                self.alpha_slider,
+                self.seg_visibility_box,
+            ],
             layout=group_layout,
         )
         window_group = widgets.VBox(
@@ -427,7 +437,9 @@ class CTScanViewer:
         )
         progress_group = widgets.VBox(
             [self.progress_bar],
-            layout=widgets.Layout(width="100%", align_items="stretch", overflow="hidden"),
+            layout=widgets.Layout(
+                width="100%", align_items="stretch", overflow="hidden"
+            ),
         )
 
         self.info_container = widgets.Box(
@@ -487,10 +499,14 @@ class CTScanViewer:
 
     def _update_jump_nav_buttons(self):
         patient_values = [
-            opt for opt in self._option_values(self.patient_dropdown.options) if opt is not None
+            opt
+            for opt in self._option_values(self.patient_dropdown.options)
+            if opt is not None
         ]
         date_values = [
-            opt for opt in self._option_values(self.date_dropdown.options) if opt is not None
+            opt
+            for opt in self._option_values(self.date_dropdown.options)
+            if opt is not None
         ]
         self.prev_patient_button.disabled = len(patient_values) <= 1
         self.next_patient_button.disabled = len(patient_values) <= 1
@@ -519,10 +535,14 @@ class CTScanViewer:
         frame = self.df
         if self.patient_col and patient_value is not None:
             frame = frame[
-                frame[self.patient_col].apply(lambda v: self._format_value(v) == patient_value)
+                frame[self.patient_col].apply(
+                    lambda v: self._format_value(v) == patient_value
+                )
             ]
         if self.date_col and date_value is not None:
-            frame = frame[frame[self.date_col].apply(lambda v: self._format_date(v) == date_value)]
+            frame = frame[
+                frame[self.date_col].apply(lambda v: self._format_date(v) == date_value)
+            ]
         return frame
 
     def _build_patient_options(self):
@@ -532,7 +552,9 @@ class CTScanViewer:
         if self.date_col is None:
             return [("N/A", None)]
         frame = self._filter_frame_for_jump(patient_value=patient_value)
-        return self._build_options_for_column(self.date_col, self._format_date, frame=frame)
+        return self._build_options_for_column(
+            self.date_col, self._format_date, frame=frame
+        )
 
     def _build_phase_options(self, patient_value, date_value):
         if self.phase_col is None:
@@ -541,7 +563,9 @@ class CTScanViewer:
             patient_value=patient_value,
             date_value=date_value,
         )
-        return self._build_options_for_column(self.phase_col, self._format_value, frame=frame)
+        return self._build_options_for_column(
+            self.phase_col, self._format_value, frame=frame
+        )
 
     def _set_dropdown_options(self, dropdown, options, preferred=None, disabled=False):
         values = self._option_values(options)

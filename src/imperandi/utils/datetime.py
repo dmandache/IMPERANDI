@@ -8,6 +8,7 @@ import re
 
 logger = logging.getLogger(__name__)
 
+
 def _get(meta: Any, key: str, default=None):
     """Get attribute or dict key from pydicom.Dataset or dict-like."""
     if meta is None:
