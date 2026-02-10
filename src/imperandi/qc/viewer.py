@@ -178,7 +178,7 @@ class CTScanViewer:
 
         self.plane_selector = widgets.ToggleButtons(
             options=["axial", "sagittal", "coronal"],
-            layout=widgets.Layout(width="100%", min_width="0px"),
+            #layout=widgets.Layout(width="100%", min_width="0px"),
         )
         self.plane_selector.observe(self.on_plane_change, names="value")
 
@@ -348,6 +348,7 @@ class CTScanViewer:
             width="100%",
             align_items="center",
             justify_content="center",
+            justify_items="center",
             grid_gap="6px",
         )
 
