@@ -36,6 +36,11 @@ Install segmentation dependencies (optional):
 python -m pip install -e ".[segment]"
 ```
 
+Install radiomics extraction dependencies (optional):
+```bash
+python -m pip install -e ".[segment]"
+```
+
 Install development/test tooling:
 ```bash
 python -m pip install -e ".[dev]"
@@ -43,32 +48,12 @@ python -m pip install -e ".[dev]"
 
 Install all the dependencies:
 ```bash
-python -m pip install -e ".[segment,dev]"
+python -m pip install -e ".[all]"
 ```
 
-### Installation (PyRadiomics note)
-
-⚠️ **Important**: `pyradiomics` includes compiled extensions and may fail to install via `pip` on some platforms due to build-time dependencies and PEP517 build isolation.
-
-To ensure a reliable installation, install `pyradiomics` **via conda** first, then install this package with `pip` **without dependency resolution**.
-
-**Recommended setup (Python 3.10)**
-
-```bash
-conda create -n imperandi310 python=3.10 -y
-conda activate imperandi310
-
-# Upgrade pip in the conda env
-python -m pip install -U pip setuptools wheel
-
-# Install Numpy before Pyradiomics
-conda install numpy<2.0 -y
-
-# Install PyRadiomics as a precompiled binary
-conda install -c radiomics -c conda-forge pyradiomics -y
-
-# Install this package and extras without re-installing dependencies
-pip install -e .[segment,dev] --no-deps
+### Setup Jupyter kernel env
+```
+python -m ipykernel install --user --name imperandi310 --display-name "IMPERANDI (Python 3.10)"
 ```
 
 ## CLI Overview
