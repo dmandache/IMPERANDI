@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import pandas as pd
+import logging
 from datetime import time
 from typing import Optional, Any
 import re
 
+logger = logging.getLogger(__name__)
 
 def _get(meta: Any, key: str, default=None):
     """Get attribute or dict key from pydicom.Dataset or dict-like."""
@@ -47,7 +49,7 @@ def _parse_dicom_time(s, include_ms=False) -> Optional[time]:
     if not main.isdigit():
         return None
     if main == 0:
-        print("zero detected")
+        logger.debug("zero detected")
         return None
 
     # If odd length (e.g. '93015'), assume missing leading zero -> left pad
@@ -111,7 +113,7 @@ def to_times(df: pd.DataFrame) -> pd.DataFrame:
     """
     time_cols = [c for c in df.columns if "time" in c.lower()]
 
-    print("\nDetected time columns:", time_cols)
+    logger.info("Detected time columns: %s", time_cols)
 
     for c in time_cols:
         df[c] = df[c].apply(earliest_acquisition_datetime)
@@ -166,19 +168,19 @@ def _infer_dayfirst(series, n_samples=50):
 
 def to_dates(df):
     date_cols = [c for c in df.columns if "date" in c.lower()]
-    print("\nDetected date columns:", date_cols)
+    logger.info("Detected date columns: %s", date_cols)
 
     for c in date_cols:
         if _is_iso_like(df[c]):
             # ISO dates: dayfirst irrelevant → silence warnings
             dayfirst = False
-            print(f"{c}: \t ISO format detected → dayfirst=False")
+            logger.info("%s: ISO format detected -> dayfirst=False", c)
             df[c] = pd.to_datetime(
                 df[c], dayfirst=False, format="%Y%m%d", errors="coerce"
             )
         else:
             dayfirst = _infer_dayfirst(df[c])
-            print(f"{c}: \t dayfirst = {dayfirst}")
+            logger.info("%s: dayfirst = %s", c, dayfirst)
             df[c] = pd.to_datetime(
                 df[c], dayfirst=dayfirst, format="%Y%m%d", errors="coerce"
             )

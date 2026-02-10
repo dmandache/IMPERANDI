@@ -1,4 +1,5 @@
 import traceback
+import logging
 from pathlib import Path
 import os
 import argparse
@@ -10,9 +11,11 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import tempfile
 
 from imperandi.utils.files import copy_files_to_temp_dir, check_file, is_valid_nifti
+from imperandi.utils.logging import setup_logging
 from imperandi.utils.misc import report_volumes, report_change, print_args
 from imperandi.utils.manifest import load_manifest
 
+logger = logging.getLogger(__name__)
 
 # Function to parse command-line arguments
 def add_convert_arguments(
@@ -102,7 +105,7 @@ def parse_arguments():
     parser = build_parser()
     args = parser.parse_args()
     args = normalize_convert_args(args)
-    print(f"Running {Path(__file__).name} script with arguments: {args}")
+    logger.info("Running %s script with arguments: %s", Path(__file__).name, args)
     return args
 
 
@@ -183,6 +186,7 @@ def process_single_volume(k, row, output_dir, verbose):
     Returns:
         tuple: A tuple containing the index, export path (if successful), and error row (if unsuccessful).
     """
+    setup_logging(verbose=verbose)
     try:
         dicom_dir_path = row["series_dir"]
         files_in_vol = row["dicom_path"]
@@ -193,7 +197,7 @@ def process_single_volume(k, row, output_dir, verbose):
 
         if row.volume_ordinal_in_series > 1:
             if verbose:
-                print("Multi-volume series")
+                logger.info("Multi-volume series")
             series_id = row.series_id + "_" + str(row.volume_ordinal_in_series)
         else:
             series_id = row.series_id
@@ -216,8 +220,10 @@ def process_single_volume(k, row, output_dir, verbose):
             sz = export_path.stat().st_size
             if sz > 0:
                 if verbose:
-                    print(
-                        f"✅ File {export_path} exists and has size {sz*1e-6:.2f} MB. Skipping..."
+                    logger.info(
+                        "✅ File %s exists and has size %.2f MB. Skipping...",
+                        export_path,
+                        sz * 1e-6,
                     )
                 return k, export_path, None
 
@@ -244,8 +250,10 @@ def process_single_volume(k, row, output_dir, verbose):
 
         if n_files_in_dir != n_files_in_vol:
             if verbose:
-                print(
-                    f"{n_files_in_vol} files in volume vs. {n_files_in_dir} files in series dir"
+                logger.info(
+                    "%s files in volume vs. %s files in series dir",
+                    n_files_in_vol,
+                    n_files_in_dir,
                 )
 
             temp_dir_root = ".tmp"  # "/data/scratch/bdr220003/temp/"
@@ -254,27 +262,27 @@ def process_single_volume(k, row, output_dir, verbose):
                 dir=temp_dir_root, prefix="temp_convert_"
             ) as temp_dir:
                 if verbose:
-                    print(f"Using intermediary temp dir {temp_dir}")
+                    logger.info("Using intermediary temp dir %s", temp_dir)
                 copy_files_to_temp_dir(paths=files_in_vol, temp_dir=temp_dir)
                 read_dicom_write_nifti(temp_dir)
         else:
             if verbose:
-                print(f"🧠 Processing volume {k}")
+                logger.info("🧠 Processing volume %s", k)
             read_dicom_write_nifti(dicom_dir_path)
 
         if is_valid_nifti(export_path):
             return k, export_path, None
         else:
-            print(
-                f"⚠️ Error processing volume {k}: output is not valid nifti file.",
-                flush=True,
+            logger.error(
+                "⚠️ Error processing volume %s: output is not valid nifti file.",
+                k,
             )
             row["error"] = "output not valid nifti"
             return k, None, row
 
     except Exception:
         error_msg = traceback.format_exc()
-        print(f"⚠️ Error processing volume {k}: {error_msg}", flush=True)
+        logger.error("⚠️ Error processing volume %s: %s", k, error_msg)
         row["error"] = error_msg
         return k, None, row
 
@@ -296,7 +304,7 @@ def convert_dicom_to_nifti_parallel(df, output_dir, print_flag, num_workers):
     n_samples = len(df)
     df_err = pd.DataFrame()
 
-    print(f"{n_samples} volumes to convert", flush=True)
+    logger.info("%s volumes to convert", n_samples)
 
     df["volume_ordinal_in_series"] = df.groupby("series_id").cumcount() + 1
 
@@ -326,7 +334,7 @@ def convert_dicom_to_nifti_parallel(df, output_dir, print_flag, num_workers):
                     timeout=600
                 )  # wait 10 mins max
             except Exception as e:
-                print(f"⚠️ Future failed to execute under 10mins: {e}")
+                logger.error("⚠️ Future failed to execute under 10mins: %s", e)
                 k, export_path, error_row = None, None, None
 
             if export_path is not None:
@@ -375,12 +383,12 @@ def main(args):
     # Convert any list-like strings to actual lists
     df = df.map(lambda x: convert_list_str_to_list(x) if isinstance(x, str) else x)
 
-    print("Before conversion:")
+    logger.info("Before conversion:")
     report_volumes(df)
     df_prev = df.copy()
 
     if args.dry_run:
-        print("Dry run: convert")
+        logger.info("Dry run: convert")
         print_args(args)
         return
 
@@ -389,24 +397,27 @@ def main(args):
         df, args.output_dir, args.verbose, args.num_workers
     )
 
-    print("After conversion:")
+    logger.info("After conversion:")
     report_volumes(df)
     report_change(df, df_prev)
 
     # Save results
     df.to_csv(args.csv_path_out, index=False)  # Save the updated CSV with NIfTI paths
     if not df_err.empty:
-        print(
-            f"⚠️ DICOM to Nifti Conversion Errors on patients : {df_err.patient_key.unique()}"
+        logger.warning(
+            "⚠️ DICOM to Nifti Conversion Errors on patients : %s",
+            df_err.patient_key.unique(),
         )
         report_volumes(df_err)
         df_err.to_csv(args.error_csv_path, index=False)
 
 
 if __name__ == "__main__":
+    setup_logging()
     args = parse_arguments()
     if args.dry_run:
-        print("Dry run: convert")
+        logger.info("Dry run: convert")
         print_args(args)
         raise SystemExit(0)
+    setup_logging(verbose=getattr(args, "verbose", False))
     main(args)

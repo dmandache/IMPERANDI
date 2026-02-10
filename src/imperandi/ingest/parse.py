@@ -1,5 +1,6 @@
 ﻿import warnings
 import glob
+import logging
 from functools import partial
 from pathlib import Path
 import argparse
@@ -12,10 +13,12 @@ from pandarallel import pandarallel
 from pydicom import dcmread
 from pydicom.errors import InvalidDicomError
 
+from imperandi.utils.logging import setup_logging
 from imperandi.utils.misc import print_args
 from imperandi.utils.manifest import load_manifest, resolve_hook
 
 warnings.filterwarnings("ignore")
+logger = logging.getLogger(__name__)
 
 
 # -------------------------
@@ -183,7 +186,7 @@ def parse_arguments():
     parser = build_parser()
     args = parser.parse_args()
     args = normalize_parse_args(args)
-    print(f"Running {Path(__file__).name} with args: {args}")
+    logger.info("Running %s with args: %s", Path(__file__).name, args)
     return args
 
 
@@ -212,7 +215,10 @@ def apply_id_standardization(df: pd.DataFrame, manifest: dict) -> pd.DataFrame:
     if failed.any():
         df["patient_key_std_failed"] = failed
         n_keys = int(df.loc[failed, "patient_key_raw"].nunique())
-        print(f"[id_standardization] failed on unique raw keys={n_keys}")
+        logger.warning(
+            "[id_standardization] failed on unique raw keys=%s",
+            n_keys,
+        )
 
     return df
 
@@ -434,13 +440,13 @@ def main(args):
     root_path = Path(args.root_path)
     output_dir = Path(args.output_dir)
     ensure_directory_exists(output_dir)
-    print(f"Output directory: {output_dir}")
+    logger.info("Output directory: %s", output_dir)
     manifest = load_manifest(
         args.manifest, base_path=Path(__file__).resolve().parents[1]
     )
 
     dicom_paths = get_dicom_paths(root_path)
-    print(f"Found {len(dicom_paths)} DICOM files under {root_path}")
+    logger.info("Found %s DICOM files under %s", len(dicom_paths), root_path)
 
     # 1) base df with dicom_path only (no IDs computed yet)
     df = pd.DataFrame({"dicom_path": [str(p) for p in dicom_paths]})
@@ -448,8 +454,9 @@ def main(args):
     # 2) read tags once for all files
     #    - always read all tags recursively (comprehensive extraction)
     user_tags = [t.strip() for t in args.tags.split(",") if t.strip()]
-    print(
-        f"Reading all DICOM tags recursively (user tags to include: {user_tags or 'none'})"
+    logger.info(
+        "Reading all DICOM tags recursively (user tags to include: %s)",
+        user_tags or "none",
     )
 
     read_func = partial(read_dicom_header_with_force, force=args.force_dicom_read)
@@ -462,7 +469,7 @@ def main(args):
         final_name="dicom_paths_with_tags.csv",
     )
 
-    print(f"After tag extraction: {df.shape} columns={len(df.columns)}")
+    logger.info("After tag extraction: %s columns=%s", df.shape, len(df.columns))
 
     # 3) compute IDs from tags/path using already-read tag columns
     df = choose_ids(
@@ -479,15 +486,18 @@ def main(args):
     # 4) output final df
     out_final = output_dir / "dicom_index.csv"
     df.to_csv(out_final, index=False)
-    print(f"Saved final index: {out_final}")
-    print("Done.")
+    logger.info("Saved final index: %s", out_final)
+    logger.info("Done.")
 
 
 if __name__ == "__main__":
+    setup_logging()
     args = parse_arguments()
     if args.dry_run:
-        print("Dry run: parse")
+        setup_logging(verbose=getattr(args, "verbose", False))
+        logger.info("Dry run: parse")
         print_args(args)
         raise SystemExit(0)
+    setup_logging(verbose=getattr(args, "verbose", False))
     pandarallel.initialize(progress_bar=args.verbose, nb_workers=args.num_workers)
     main(args)

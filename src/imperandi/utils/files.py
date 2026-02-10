@@ -1,9 +1,11 @@
 from pathlib import Path
+import logging
 import shutil
 import os
 import nibabel as nib
 import numpy as np
 
+logger = logging.getLogger(__name__)
 
 def make_temp_dir(temp_dir="/data/scratch/bdr220003/temp/"):
     temp_dir = Path(temp_dir)
@@ -27,9 +29,9 @@ def empty_dir(temp_dir):
 
 def copy_files_to_temp_dir(paths, temp_dir="/data/scratch/bdr220003/temp/"):
     if dir_is_empty(temp_dir):
-        print(f"Temp directory {temp_dir} is empty")
+        logger.info("Temp directory %s is empty", temp_dir)
     else:
-        print(f"Temp directory {temp_dir} not empty")
+        logger.info("Temp directory %s not empty", temp_dir)
     check_permissions(temp_dir)
 
     temp_dir = Path(temp_dir)
@@ -45,27 +47,27 @@ def check_file(file_path):
 
     # Check if the file exists
     if file_path.exists():
-        print(f"File {file_path} exists")
+        logger.info("File %s exists", file_path)
 
         # Check if the file is readable
         if file_path.is_file() and file_path.stat().st_mode & 0o400:
-            print("File is readable")
+            logger.info("File is readable")
         else:
-            print("File is not readable")
+            logger.info("File is not readable")
 
         # Check if the file is writable
         if file_path.is_file() and file_path.stat().st_mode & 0o200:
-            print("File is writable")
+            logger.info("File is writable")
         else:
-            print("File is not writable")
+            logger.info("File is not writable")
 
         # Check if the file is executable
         if file_path.is_file() and file_path.stat().st_mode & 0o100:
-            print("File is executable")
+            logger.info("File is executable")
         else:
-            print("File is not executable")
+            logger.info("File is not executable")
     else:
-        print(f"File {file_path} does not exist")
+        logger.info("File %s does not exist", file_path)
 
 
 def check_permissions(directory):
@@ -74,20 +76,20 @@ def check_permissions(directory):
 
     # Check if the directory exists
     if not directory_path.exists():
-        print(f"Directory '{directory}' does not exist.")
+        logger.info("Directory '%s' does not exist.", directory)
         return
 
     # Check read permission
     if os.access(directory, os.R_OK):
-        print(f"Read permission is granted on '{directory}'.")
+        logger.info("Read permission is granted on '%s'.", directory)
     else:
-        print(f"No read permission on '{directory}'.")
+        logger.info("No read permission on '%s'.", directory)
 
     # Check write permission
     if os.access(directory, os.W_OK):
-        print(f"Write permission is granted on '{directory}'.")
+        logger.info("Write permission is granted on '%s'.", directory)
     else:
-        print(f"No write permission on '{directory}'.")
+        logger.info("No write permission on '%s'.", directory)
 
 
 def load_nifti_file(nifti_path):
@@ -117,5 +119,5 @@ def is_valid_nifti(path):
         nib.load(path).get_fdata()
         return True
     except Exception as e:
-        print(f"Error reading nifti {path}: ⚠️ {e} !")
+        logger.error("Error reading nifti %s: ⚠️ %s !", path, e)
         return False

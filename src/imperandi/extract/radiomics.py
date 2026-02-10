@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional, Tuple
 import pandas as pd
 from tqdm import tqdm
 
+from imperandi.utils.logging import setup_logging
 from imperandi.utils.misc import print_args
 
 logger = logging.getLogger(__name__)
@@ -131,7 +132,7 @@ def parse_arguments() -> argparse.Namespace:
     parser = build_parser()
     args = parser.parse_args()
     args = normalize_radiomics_args(args)
-    print(f"Running {Path(__file__).name} with args: {args}")
+    logger.info("Running %s with args: %s", Path(__file__).name, args)
     return args
 
 
@@ -367,8 +368,6 @@ def extract_radiomics_from_dataframe(
 
 
 def main(args: argparse.Namespace) -> None:
-    logger.setLevel(logging.DEBUG if args.verbose else logging.INFO)
-
     sitk_module, featureextractor_module = _load_radiomics_dependencies()
     extractor = _create_radiomics_extractor(featureextractor_module, DEFAULT_SETTINGS)
 
@@ -395,9 +394,11 @@ def main(args: argparse.Namespace) -> None:
 
 
 if __name__ == "__main__":
+    setup_logging()
     args = parse_arguments()
+    setup_logging(verbose=getattr(args, "verbose", False))
     if getattr(args, "dry_run", False):
-        print("Dry run: radiomics")
+        logger.info("Dry run: radiomics")
         print_args(args)
         raise SystemExit(0)
     main(args)

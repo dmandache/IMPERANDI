@@ -1,4 +1,5 @@
 import argparse
+import logging
 import hashlib
 import importlib
 from ast import literal_eval
@@ -14,6 +15,7 @@ from imperandi.utils.geometry import (
     classify_plane_from_iop,
     standardize_iop,
 )
+from imperandi.utils.logging import setup_logging
 from imperandi.utils.misc import print_args, report_volumes, report_change
 from imperandi.utils.datetime import to_dates, to_times
 
@@ -138,6 +140,7 @@ COLUMNS_TO_USE = [
 
 
 pd.options.mode.chained_assignment = None
+logger = logging.getLogger(__name__)
 
 
 def add_clean_arguments(
@@ -234,7 +237,7 @@ def parse_arguments():
     args = parser.parse_args()
     args = normalize_clean_args(args)
 
-    print(f"Running {Path(__file__).name} script with arguments: {args}")
+    logger.info("Running %s script with arguments: %s", Path(__file__).name, args)
     return args
 
 
@@ -301,7 +304,7 @@ def load_data(csv_path):
 
     df = df.loc[:, ~df.columns.str.startswith("Unnamed")]
     df = df.dropna(axis=1, how="all")
-    print(df.shape, df.columns)
+    logger.info("%s %s", df.shape, df.columns)
 
     return df
 
@@ -648,17 +651,20 @@ def correct_volume_ids(df, z_tolerance=1e-3):
         else:
             summary = {}
 
-        print(
-            f"{summary} : {len(volume_ids)} pseudo-volumes, {len(group_df)} total rows"
+        logger.info(
+            "%s : %s pseudo-volumes, %s total rows",
+            summary,
+            len(volume_ids),
+            len(group_df),
         )
 
         if consistent_spacing:
-            print("👫 Merged\n")
+            logger.info("👫 Merged")
             canonical_id = sorted(map(str, volume_ids))[0]
             for vol_id in volume_ids:
                 updated_ids[vol_id] = canonical_id
         else:
-            print("👍 They are different volumes\n")
+            logger.info("👍 They are different volumes")
 
     df["volume_id"] = df["volume_id"].apply(lambda vid: updated_ids.get(vid, vid))
     return df
@@ -857,10 +863,13 @@ def map_series_description(df, csv_tag_dict):
     unique_unknown_descriptions = unknown_descriptions.unique().tolist()
 
     if len(unknown_descriptions) == 0:
-        print("No unknown SeriesDescription in dataset.")
+        logger.info("No unknown SeriesDescription in dataset.")
     else:
-        print(
-            f"{len(unknown_descriptions)} unmapped SeriesDescription, {len(unique_unknown_descriptions)} unique : {unique_unknown_descriptions}",
+        logger.info(
+            "%s unmapped SeriesDescription, %s unique : %s",
+            len(unknown_descriptions),
+            len(unique_unknown_descriptions),
+            unique_unknown_descriptions,
         )
 
     df = df[df.phase != "inutile"]
@@ -884,7 +893,7 @@ def compute_visit_order(df):
         "time_elapsed"
     ].cumsum()
     df_study["visit_order"] = df_study.groupby("patient_key")["date"].cumcount()
-    print(df.shape, df_study.shape)
+    logger.info("%s %s", df.shape, df_study.shape)
 
     df = df.merge(
         df_study[["time_elapsed", "time_since_first_exam", "visit_order"]],
@@ -959,7 +968,7 @@ def drop_irrelevant_dicom_tags(df):
         "SliceLocation",
         "ImagePositionPatient",
     ] + df.columns[df.isna().sum() == 0].to_list()
-    print(important_dicom_tags)
+    logger.info("%s", important_dicom_tags)
     dicom_tags = [
         col
         for col in df.columns
@@ -1085,15 +1094,16 @@ def clean_and_save_data(
 
     if csv_path_out:
         df.to_csv(csv_path_out, index=False)
-        print(f"Cleaned data saved to {csv_path_out}")
-    print("shape : ", df.shape)
-    print("columns : ", df.columns)
+        logger.info("Cleaned data saved to %s", csv_path_out)
+    logger.info("shape : %s", df.shape)
+    logger.info("columns : %s", df.columns)
 
 
 if __name__ == "__main__":
+    setup_logging()
     args = parse_arguments()
     if args.dry_run:
-        print("Dry run: clean")
+        logger.info("Dry run: clean")
         print_args(args)
         raise SystemExit(0)
     manifest = load_manifest(

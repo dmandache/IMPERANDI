@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -12,9 +13,11 @@ except ModuleNotFoundError:
 from imperandi.ingest import clean as clean_module
 from imperandi.ingest import parse as parse_module
 from imperandi.process import convert as convert_module
+from imperandi.utils.logging import setup_logging
 from imperandi.utils.manifest import load_manifest
 from imperandi.utils.misc import print_args
 
+logger = logging.getLogger(__name__)
 
 def _load_phase_module():
     from imperandi.extract import phase as phase_module
@@ -147,6 +150,24 @@ def build_parser() -> argparse.ArgumentParser:
         prog="imperandi",
         description="IMPERANDI CLI for ingest parsing and cleaning.",
     )
+    parser.add_argument(
+        "--log-level",
+        type=str,
+        default=None,
+        help="Set logging level (e.g. DEBUG, INFO, WARNING).",
+    )
+    parser.add_argument(
+        "--log-file",
+        type=str,
+        default=None,
+        help="Optional path to a log file.",
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        default=False,
+        help="Reduce log verbosity (sets WARNING level unless overridden).",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     _add_parse_subcommand(subparsers)
@@ -163,13 +184,13 @@ def build_parser() -> argparse.ArgumentParser:
 def _handle_parse(args: argparse.Namespace) -> int:
     args = parse_module.normalize_parse_args(args)
     if args.dry_run:
-        print("Dry run: parse")
+        logger.info("Dry run: parse")
         print_args(args)
         return 0
     try:
         _ensure_pandarallel()
     except RuntimeError as exc:
-        print(str(exc))
+        logger.error("%s", str(exc))
         return 2
     pandarallel.initialize(progress_bar=args.verbose, nb_workers=args.num_workers)
     parse_module.main(args)
@@ -179,7 +200,7 @@ def _handle_parse(args: argparse.Namespace) -> int:
 def _handle_clean(args: argparse.Namespace) -> int:
     args = clean_module.normalize_clean_args(args)
     if args.dry_run:
-        print("Dry run: clean")
+        logger.info("Dry run: clean")
         print_args(args)
         return 0
     manifest = load_manifest(
@@ -206,13 +227,13 @@ def _handle_ingest(args: argparse.Namespace) -> int:
         else output_dir / "dicom_index_clean.csv"
     )
     if args.dry_run:
-        print("Dry run: ingest (parse -> clean)")
+        logger.info("Dry run: ingest (parse -> clean)")
         print_args(args)
         return 0
     try:
         _ensure_pandarallel()
     except RuntimeError as exc:
-        print(str(exc))
+        logger.error("%s", str(exc))
         return 2
     pandarallel.initialize(progress_bar=args.verbose, nb_workers=args.num_workers)
     parse_module.main(args)
@@ -234,7 +255,7 @@ def _handle_ingest(args: argparse.Namespace) -> int:
 def _handle_convert(args: argparse.Namespace) -> int:
     args = convert_module.normalize_convert_args(args)
     if args.dry_run:
-        print("Dry run: convert")
+        logger.info("Dry run: convert")
         print_args(args)
         return 0
     convert_module.main(args)
@@ -245,7 +266,7 @@ def _handle_phase(args: argparse.Namespace) -> int:
     phase_module = _load_phase_module()
     args = phase_module.normalize_phase_args(args)
     if args.dry_run:
-        print("Dry run: phase")
+        logger.info("Dry run: phase")
         print_args(args)
         return 0
     try:
@@ -253,7 +274,7 @@ def _handle_phase(args: argparse.Namespace) -> int:
     except RuntimeError as exc:
         message = str(exc)
         if "requires optional dependencies" in message:
-            print(message)
+            logger.error("%s", message)
             return 2
         raise
     return 0
@@ -263,7 +284,7 @@ def _handle_radiomics(args: argparse.Namespace) -> int:
     radiomics_module = _load_radiomics_module()
     args = radiomics_module.normalize_radiomics_args(args)
     if args.dry_run:
-        print("Dry run: radiomics")
+        logger.info("Dry run: radiomics")
         print_args(args)
         return 0
     try:
@@ -271,7 +292,7 @@ def _handle_radiomics(args: argparse.Namespace) -> int:
     except RuntimeError as exc:
         message = str(exc)
         if "requires optional dependencies" in message:
-            print(message)
+            logger.error("%s", message)
             return 2
         raise
     return 0
@@ -281,7 +302,7 @@ def _handle_segment(args: argparse.Namespace) -> int:
     segment_module = _load_segment_module()
     args = segment_module.normalize_segment_args(args)
     if args.dry_run:
-        print("Dry run: segment")
+        logger.info("Dry run: segment")
         print_args(args)
         return 0
     segment_module.main(args)
@@ -289,13 +310,21 @@ def _handle_segment(args: argparse.Namespace) -> int:
 
 
 def _handle_segment_unavailable(args: argparse.Namespace) -> int:
-    print(getattr(args, "_segment_unavailable_msg", "Segment command unavailable."))
+    logger.error(
+        "%s", getattr(args, "_segment_unavailable_msg", "Segment command unavailable.")
+    )
     return 2
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    setup_logging(
+        level=args.log_level,
+        verbose=getattr(args, "verbose", False),
+        quiet=args.quiet,
+        log_file=args.log_file,
+    )
     return args._handler(args)
 
 
