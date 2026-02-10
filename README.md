@@ -38,7 +38,7 @@ python -m pip install -e ".[segment]"
 
 Install radiomics extraction dependencies (optional):
 ```bash
-python -m pip install -e ".[segment]"
+python -m pip install -e ".[radiomics]"
 ```
 
 Install development/test tooling:

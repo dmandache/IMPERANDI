@@ -12,7 +12,7 @@ def print_args(args: argparse.Namespace) -> None:
     for arg in sorted(items):
         value = items[arg]
         value_str = "None" if value is None else repr(value)
-        logger.info("%s : %s", f"{arg:<{width}}", value_str)
+        print(f"{arg:<{width}} : {value_str}")
 
 
 def report_volumes(df, step_name=None):
