@@ -46,6 +46,8 @@ dev = [
   "ipywidgets"
 ]
 
+all = ["imperandi[dev,segment,radiomics]"]
+
 [project.scripts]
 imperandi = "imperandi.cli:main"
 
