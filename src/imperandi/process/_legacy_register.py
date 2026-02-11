@@ -106,11 +106,11 @@ def _dice_coeff(A: sitk.Image, B: sitk.Image) -> float:
 
 def _calc_vol_ml(mask_img, ref_img):
     """Calculate vol ml.
-    
+
     Args:
         mask_img (Any): Input value for mask img.
         ref_img (Any): Input value for ref img.
-    
+
     Returns:
         Any: Computed vol ml.
     """
@@ -167,12 +167,12 @@ def _expand_world_bbox(
     min_w: np.ndarray, max_w: np.ndarray, pad_mm: float
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Perform world bounding box.
-    
+
     Args:
         min_w (np.ndarray): Input value for min w.
         max_w (np.ndarray): Input value for max w.
         pad_mm (float): Input value for pad mm.
-    
+
     Returns:
         Tuple[np.ndarray, np.ndarray]: Tuple containing outputs from this step.
     """
@@ -252,10 +252,10 @@ def _apply_crop_spec(
 
 def _iter_subtransforms(tx: sitk.Transform):
     """Iterate over subtransforms.
-    
+
     Args:
         tx (sitk.Transform): Input value for tx.
-    
+
     Returns:
         Any: Iterator over subtransforms.
     """
@@ -268,10 +268,10 @@ def _iter_subtransforms(tx: sitk.Transform):
 
 def _find_affine_in(tx: sitk.Transform):
     """Perform affine in.
-    
+
     Args:
         tx (sitk.Transform): Input value for tx.
-    
+
     Returns:
         Any: Result of `_find_affine_in`.
     """
@@ -283,10 +283,10 @@ def _find_affine_in(tx: sitk.Transform):
 
 def _affine_summary(tx: sitk.Transform) -> Dict[str, Optional[tuple]]:
     """Perform summary.
-    
+
     Args:
         tx (sitk.Transform): Input value for tx.
-    
+
     Returns:
         Dict[str, Optional[tuple]]: Dictionary of computed fields.
     """
@@ -575,13 +575,13 @@ def register_arterial_to_portal(
     # -------------------- small local utils --------------------
     def as_image(x):
         """Convert input to image.
-        
+
         Args:
             x (Any): Input value for x.
-        
+
         Returns:
             Any: Converted image representation.
-        
+
         Raises:
             ValueError: If provided inputs fail validation.
         """
@@ -593,10 +593,10 @@ def register_arterial_to_portal(
 
     def bin_mask(i):
         """Perform mask.
-        
+
         Args:
             i (Any): Input value for i.
-        
+
         Returns:
             Any: Result of `bin_mask`.
         """
@@ -605,11 +605,11 @@ def register_arterial_to_portal(
 
     def match_geom(mask, ref):
         """Match geom.
-        
+
         Args:
             mask (Any): Input value for mask.
             ref (Any): Input value for ref.
-        
+
         Returns:
             Any: Result of `match_geom`.
         """
@@ -924,10 +924,10 @@ def register_arterial_to_portal(
         # Best by liver Dice, tie-break by tumor Dice, then by simplicity rank (lower is simpler)
         def _score_key(item):
             """Score key.
-            
+
             Args:
                 item (Any): Input value for item.
-            
+
             Returns:
                 Any: Result of `_score_key`.
             """

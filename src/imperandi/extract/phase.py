@@ -25,10 +25,10 @@ logger = logging.getLogger(__name__)
 
 def _load_phase_extractor() -> Callable[[Any], Dict[str, Any]]:
     """Load phase extractor.
-    
+
     Returns:
         Callable[[Any], Dict[str, Any]]: Loaded object returned by this routine.
-    
+
     Raises:
         RuntimeError: If runtime prerequisites or optional dependencies are unavailable.
     """
@@ -48,7 +48,7 @@ def add_phase_arguments(
     include_dry_run: bool = True,
 ) -> None:
     """Add command-line arguments for phase.
-    
+
     Args:
         parser (argparse.ArgumentParser): Argument parser instance to configure.
         include_manifest (bool): Boolean flag controlling optional behavior. Defaults to `True`.
@@ -102,10 +102,10 @@ def add_phase_arguments(
 
 def build_parser(add_help: bool = True) -> argparse.ArgumentParser:
     """Build and return the command-line parser.
-    
+
     Args:
         add_help (bool): Boolean flag controlling optional behavior. Defaults to `True`.
-    
+
     Returns:
         argparse.ArgumentParser: Configured argument parser instance.
     """
@@ -119,13 +119,13 @@ def build_parser(add_help: bool = True) -> argparse.ArgumentParser:
 
 def normalize_phase_args(args: argparse.Namespace) -> argparse.Namespace:
     """Normalize parsed command-line arguments and fill derived defaults.
-    
+
     Args:
         args (argparse.Namespace): Parsed command-line arguments namespace.
-    
+
     Returns:
         argparse.Namespace: Parsed and normalized argument namespace.
-    
+
     Raises:
         ValueError: If provided inputs fail validation.
         FileNotFoundError: If an expected input file cannot be found.
@@ -157,7 +157,7 @@ def normalize_phase_args(args: argparse.Namespace) -> argparse.Namespace:
 
 def parse_arguments() -> argparse.Namespace:
     """Parse command-line arguments for this module.
-    
+
     Returns:
         argparse.Namespace: Parsed and normalized argument namespace.
     """
@@ -175,12 +175,12 @@ def process_single_volume(
     phase_extractor: Callable[[Any], Dict[str, Any]],
 ) -> Tuple[int, Dict[str, Any] | None, str | None]:
     """Perform single volume.
-    
+
     Args:
         idx (int): Input value for idx.
         row (Mapping[str, Any]): Input value for row.
         phase_extractor (Callable[[Any], Dict[str, Any]]): Input value for phase extractor.
-    
+
     Returns:
         Tuple[int, Dict[str, Any] | None, str | None]: Tuple containing outputs from this step.
     """
@@ -215,15 +215,15 @@ def extract_phase_volumes(
     phase_extractor: Callable[[Any], Dict[str, Any]],
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """Extract phase volumes.
-    
+
     Args:
         df (pd.DataFrame): Input pandas DataFrame to process.
         verbose (bool): Boolean flag controlling optional behavior.
         phase_extractor (Callable[[Any], Dict[str, Any]]): Input value for phase extractor.
-    
+
     Returns:
         Tuple[pd.DataFrame, pd.DataFrame]: Processed pandas DataFrame.
-    
+
     Raises:
         KeyError: If required keys are missing from a mapping-like input.
     """
@@ -261,7 +261,7 @@ def extract_phase_volumes(
 
 def main(args: argparse.Namespace) -> None:
     """Run this module entry point.
-    
+
     Args:
         args (argparse.Namespace): Parsed command-line arguments namespace.
     """

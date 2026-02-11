@@ -91,10 +91,10 @@ def _parse_dicom_time(s, include_ms=False) -> Optional[time]:
 
 def earliest_acquisition_datetime(tm_or_list) -> Optional[time]:
     """Return earliest acquisition datetime.
-    
+
     Args:
         tm_or_list (Any): Single timestamp or collection of timestamp values.
-    
+
     Returns:
         Optional[time]: Computed result, or `None` when unavailable.
     """
@@ -141,11 +141,11 @@ _ISO_REGEX = re.compile(r"^\d{4}([-/]?\d{2}){2}$")
 
 def _is_iso_like(series, n_samples=20):
     """Return whether iso like.
-    
+
     Args:
         series (Any): Input value for series.
         n_samples (int): Input value for n samples. Defaults to `20`.
-    
+
     Returns:
         Any: Result of `_is_iso_like`.
     """
@@ -192,10 +192,10 @@ def _infer_dayfirst(series, n_samples=50):
 
 def to_dates(df):
     """Convert values to dates.
-    
+
     Args:
         df (Any): Input pandas DataFrame to process.
-    
+
     Returns:
         Any: Converted dates representation.
     """

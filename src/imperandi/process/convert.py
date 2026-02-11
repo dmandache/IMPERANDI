@@ -38,7 +38,7 @@ def add_convert_arguments(
     include_dry_run: bool = True,
 ):
     """Add command-line arguments for convert.
-    
+
     Args:
         parser (argparse.ArgumentParser): Argument parser instance to configure.
         include_manifest (bool): Boolean flag controlling optional behavior. Defaults to `True`.
@@ -136,10 +136,10 @@ def add_convert_arguments(
 
 def build_parser(add_help: bool = True) -> argparse.ArgumentParser:
     """Build and return the command-line parser.
-    
+
     Args:
         add_help (bool): Boolean flag controlling optional behavior. Defaults to `True`.
-    
+
     Returns:
         argparse.ArgumentParser: Configured argument parser instance.
     """
@@ -153,7 +153,7 @@ def build_parser(add_help: bool = True) -> argparse.ArgumentParser:
 
 def parse_arguments():
     """Parse command-line arguments for this module.
-    
+
     Returns:
         Any: Parsed arguments.
     """
@@ -167,13 +167,13 @@ def parse_arguments():
 def normalize_convert_args(args: argparse.Namespace) -> argparse.Namespace:
     # pick optionals over positionals
     """Normalize parsed command-line arguments and fill derived defaults.
-    
+
     Args:
         args (argparse.Namespace): Parsed command-line arguments namespace.
-    
+
     Returns:
         argparse.Namespace: Parsed and normalized argument namespace.
-    
+
     Raises:
         ValueError: If provided inputs fail validation.
         FileNotFoundError: If an expected input file cannot be found.
@@ -247,10 +247,10 @@ def convert_list_str_to_list(cell):
 
 def _flatten_dicom_paths(cell) -> list[str]:
     """Return flatten DICOM paths.
-    
+
     Args:
         cell (Any): Cell value from a DataFrame column.
-    
+
     Returns:
         list[str]: List of computed items.
     """
@@ -263,11 +263,11 @@ def _flatten_dicom_paths(cell) -> list[str]:
 
 def _apply_uri_mapping_to_cell(cell, uri_map: dict[str, str | None]):
     """Perform URI mapping to cell.
-    
+
     Args:
         cell (Any): Input value for cell.
         uri_map (dict[str, str | None]): Input value for URI map.
-    
+
     Returns:
         Any: Result of `_apply_uri_mapping_to_cell`.
     """
@@ -427,7 +427,7 @@ def process_single_volume(k, row, output_dir, verbose):
         # Conversion process
         def read_dicom_write_nifti(dicom_dir_one_volume):
             """Read DICOM write NIfTI.
-            
+
             Args:
                 dicom_dir_one_volume (Any): Input value for DICOM dir one volume.
             """

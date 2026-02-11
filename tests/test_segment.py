@@ -188,7 +188,9 @@ def test_resolve_postprocess_operation_defaults_output_name_from_out_key():
 
 
 def test_resolve_postprocess_operation_defaults_output_name_from_column_when_missing():
-    op_in_key = segment_module.resolve_postprocess_operation({"in_key": "liver"}, op_index=1)
+    op_in_key = segment_module.resolve_postprocess_operation(
+        {"in_key": "liver"}, op_index=1
+    )
     assert op_in_key["output_column"] == "mask_liver"
     assert op_in_key["output_name"] == "liver.nii.gz"
 
@@ -200,7 +202,9 @@ def test_resolve_postprocess_operation_defaults_output_name_from_column_when_mis
     assert op_merge["output_name"] == "merged.nii.gz"
 
 
-def test_segment_volume_executes_postprocess_list_in_order_and_chains(tmp_path, monkeypatch):
+def test_segment_volume_executes_postprocess_list_in_order_and_chains(
+    tmp_path, monkeypatch
+):
     nifti = tmp_path / "vol.nii.gz"
     nifti.write_text("nifti")
 
@@ -240,7 +244,9 @@ def test_segment_volume_executes_postprocess_list_in_order_and_chains(tmp_path, 
     assert calls[1] == (["ab.nii.gz"], "ab_refined.nii.gz")
 
 
-def test_segment_volume_continues_after_warn_only_missing_dependency(tmp_path, monkeypatch):
+def test_segment_volume_continues_after_warn_only_missing_dependency(
+    tmp_path, monkeypatch
+):
     nifti = tmp_path / "vol.nii.gz"
     nifti.write_text("nifti")
 
@@ -250,7 +256,11 @@ def test_segment_volume_continues_after_warn_only_missing_dependency(tmp_path, m
             {"key": "a", "task": "task_a", "output": "a.nii.gz", "extra": {}},
         ],
         "postprocess": [
-            {"merge_keys": ["missing_key"], "out_key": "broken", "on_failure": "warn_only"},
+            {
+                "merge_keys": ["missing_key"],
+                "out_key": "broken",
+                "on_failure": "warn_only",
+            },
             {"merge_keys": ["a"], "out_key": "ok"},
         ],
     }
@@ -784,10 +794,19 @@ def test_main_writes_multiple_postprocess_columns(tmp_path, monkeypatch):
         "backend": "totalsegmentator",
         "tasks": [
             {"key": "liver", "task": "total", "output": "liver.nii.gz", "extra": {}},
-            {"key": "tumor", "task": "liver_vessels", "output": "tumor.nii.gz", "extra": {}},
+            {
+                "key": "tumor",
+                "task": "liver_vessels",
+                "output": "tumor.nii.gz",
+                "extra": {},
+            },
         ],
         "postprocess": [
-            {"merge_keys": ["liver", "tumor"], "out_key": "combined", "output": "combined.nii.gz"},
+            {
+                "merge_keys": ["liver", "tumor"],
+                "out_key": "combined",
+                "output": "combined.nii.gz",
+            },
             {"merge_keys": ["combined"], "out_key": "final", "output": "final.nii.gz"},
         ],
     }
@@ -858,7 +877,9 @@ def test_main_writes_multiple_postprocess_columns(tmp_path, monkeypatch):
     assert out_df.loc[0, "mask_final"].endswith("final.nii.gz")
 
 
-def test_main_warns_on_postprocess_column_and_file_collisions(tmp_path, monkeypatch, caplog):
+def test_main_warns_on_postprocess_column_and_file_collisions(
+    tmp_path, monkeypatch, caplog
+):
     nifti = tmp_path / "vol.nii.gz"
     nifti.write_text("nifti")
 
@@ -934,6 +955,16 @@ def test_main_warns_on_postprocess_column_and_file_collisions(tmp_path, monkeypa
         segment_module.main(args)
 
     messages = [rec.getMessage() for rec in caplog.records]
-    assert any("output column 'mask_liver' matches an existing task mask column" in m for m in messages)
-    assert any("output column 'mask_liver' matches another postprocess operation" in m for m in messages)
-    assert any("output file 'liver.nii.gz' collides with an existing task/postprocess output" in m for m in messages)
+    assert any(
+        "output column 'mask_liver' matches an existing task mask column" in m
+        for m in messages
+    )
+    assert any(
+        "output column 'mask_liver' matches another postprocess operation" in m
+        for m in messages
+    )
+    assert any(
+        "output file 'liver.nii.gz' collides with an existing task/postprocess output"
+        in m
+        for m in messages
+    )

@@ -14,14 +14,14 @@ DEFAULT_MANIFEST_NAME = "generic"
 
 def load_manifest(manifest_arg: Optional[str], *, base_path: Path) -> dict:
     """Load manifest.
-    
+
     Args:
         manifest_arg (Optional[str]): Input value for manifest arg.
         base_path (Path): Filesystem path consumed by this operation.
-    
+
     Returns:
         dict: Dictionary of computed fields.
-    
+
     Raises:
         FileNotFoundError: If an expected input file cannot be found.
     """
@@ -46,10 +46,10 @@ def load_manifest(manifest_arg: Optional[str], *, base_path: Path) -> dict:
 
 def resolve_hook(hook_config: dict):
     """Resolve hook.
-    
+
     Args:
         hook_config (dict): Input value for hook config.
-    
+
     Returns:
         Any: Resolved hook.
     """

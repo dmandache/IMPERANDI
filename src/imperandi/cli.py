@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 def _load_phase_module():
     """Lazily import and return the `phase` module.
-    
+
     Returns:
         Any: Loaded object returned by this routine.
     """
@@ -39,7 +39,7 @@ def _load_phase_module():
 
 def _load_radiomics_module():
     """Lazily import and return the `radiomics` module.
-    
+
     Returns:
         Any: Loaded object returned by this routine.
     """
@@ -50,10 +50,10 @@ def _load_radiomics_module():
 
 def _load_segment_module():
     """Lazily import and return the `segment` module.
-    
+
     Returns:
         Any: Loaded object returned by this routine.
-    
+
     Raises:
         RuntimeError: If runtime prerequisites or optional dependencies are unavailable.
     """
@@ -69,7 +69,7 @@ def _load_segment_module():
 
 def _ensure_pandarallel() -> None:
     """Ensure runtime prerequisites are satisfied.
-    
+
     Raises:
         RuntimeError: If runtime prerequisites or optional dependencies are unavailable.
     """
@@ -82,7 +82,7 @@ def _ensure_pandarallel() -> None:
 
 def _add_parse_subcommand(subparsers: argparse._SubParsersAction) -> None:
     """Register the `parse` subcommand on the root parser.
-    
+
     Args:
         subparsers (argparse._SubParsersAction): Subparser registry used to register command handlers.
     """
@@ -96,7 +96,7 @@ def _add_parse_subcommand(subparsers: argparse._SubParsersAction) -> None:
 
 def _add_clean_subcommand(subparsers: argparse._SubParsersAction) -> None:
     """Register the `clean` subcommand on the root parser.
-    
+
     Args:
         subparsers (argparse._SubParsersAction): Subparser registry used to register command handlers.
     """
@@ -110,7 +110,7 @@ def _add_clean_subcommand(subparsers: argparse._SubParsersAction) -> None:
 
 def _add_ingest_subcommand(subparsers: argparse._SubParsersAction) -> None:
     """Register the `ingest` subcommand on the root parser.
-    
+
     Args:
         subparsers (argparse._SubParsersAction): Subparser registry used to register command handlers.
     """
@@ -142,7 +142,7 @@ def _add_ingest_subcommand(subparsers: argparse._SubParsersAction) -> None:
 
 def _add_convert_subcommand(subparsers: argparse._SubParsersAction) -> None:
     """Register the `convert` subcommand on the root parser.
-    
+
     Args:
         subparsers (argparse._SubParsersAction): Subparser registry used to register command handlers.
     """
@@ -156,7 +156,7 @@ def _add_convert_subcommand(subparsers: argparse._SubParsersAction) -> None:
 
 def _add_phase_subcommand(subparsers: argparse._SubParsersAction) -> None:
     """Register the `phase` subcommand on the root parser.
-    
+
     Args:
         subparsers (argparse._SubParsersAction): Subparser registry used to register command handlers.
     """
@@ -171,7 +171,7 @@ def _add_phase_subcommand(subparsers: argparse._SubParsersAction) -> None:
 
 def _add_radiomics_subcommand(subparsers: argparse._SubParsersAction) -> None:
     """Register the `radiomics` subcommand on the root parser.
-    
+
     Args:
         subparsers (argparse._SubParsersAction): Subparser registry used to register command handlers.
     """
@@ -186,7 +186,7 @@ def _add_radiomics_subcommand(subparsers: argparse._SubParsersAction) -> None:
 
 def _add_segment_subcommand(subparsers: argparse._SubParsersAction) -> None:
     """Register the `segment` subcommand on the root parser.
-    
+
     Args:
         subparsers (argparse._SubParsersAction): Subparser registry used to register command handlers.
     """
@@ -212,7 +212,7 @@ def _add_segment_subcommand(subparsers: argparse._SubParsersAction) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     """Build and return the command-line parser.
-    
+
     Returns:
         argparse.ArgumentParser: Configured argument parser instance.
     """
@@ -253,10 +253,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _handle_parse(args: argparse.Namespace) -> int:
     """Handle execution of the `parse` CLI command.
-    
+
     Args:
         args (argparse.Namespace): Parsed command-line arguments namespace.
-    
+
     Returns:
         int: Process exit status code.
     """
@@ -277,10 +277,10 @@ def _handle_parse(args: argparse.Namespace) -> int:
 
 def _handle_clean(args: argparse.Namespace) -> int:
     """Handle execution of the `clean` CLI command.
-    
+
     Args:
         args (argparse.Namespace): Parsed command-line arguments namespace.
-    
+
     Returns:
         int: Process exit status code.
     """
@@ -305,10 +305,10 @@ def _handle_clean(args: argparse.Namespace) -> int:
 
 def _handle_ingest(args: argparse.Namespace) -> int:
     """Handle execution of the `ingest` CLI command.
-    
+
     Args:
         args (argparse.Namespace): Parsed command-line arguments namespace.
-    
+
     Returns:
         int: Process exit status code.
     """
@@ -348,10 +348,10 @@ def _handle_ingest(args: argparse.Namespace) -> int:
 
 def _handle_convert(args: argparse.Namespace) -> int:
     """Handle execution of the `convert` CLI command.
-    
+
     Args:
         args (argparse.Namespace): Parsed command-line arguments namespace.
-    
+
     Returns:
         int: Process exit status code.
     """
@@ -366,10 +366,10 @@ def _handle_convert(args: argparse.Namespace) -> int:
 
 def _handle_phase(args: argparse.Namespace) -> int:
     """Handle execution of the `phase` CLI command.
-    
+
     Args:
         args (argparse.Namespace): Parsed command-line arguments namespace.
-    
+
     Returns:
         int: Process exit status code.
     """
@@ -392,10 +392,10 @@ def _handle_phase(args: argparse.Namespace) -> int:
 
 def _handle_radiomics(args: argparse.Namespace) -> int:
     """Handle execution of the `radiomics` CLI command.
-    
+
     Args:
         args (argparse.Namespace): Parsed command-line arguments namespace.
-    
+
     Returns:
         int: Process exit status code.
     """
@@ -418,10 +418,10 @@ def _handle_radiomics(args: argparse.Namespace) -> int:
 
 def _handle_segment(args: argparse.Namespace) -> int:
     """Handle execution of the `segment` CLI command.
-    
+
     Args:
         args (argparse.Namespace): Parsed command-line arguments namespace.
-    
+
     Returns:
         int: Process exit status code.
     """
@@ -437,10 +437,10 @@ def _handle_segment(args: argparse.Namespace) -> int:
 
 def _handle_segment_unavailable(args: argparse.Namespace) -> int:
     """Handle execution of the `unavailable` CLI command.
-    
+
     Args:
         args (argparse.Namespace): Parsed command-line arguments namespace.
-    
+
     Returns:
         int: Process exit status code.
     """
@@ -452,10 +452,10 @@ def _handle_segment_unavailable(args: argparse.Namespace) -> int:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Run the module entry point.
-    
+
     Args:
         argv (Optional[Sequence[str]]): Optional argument vector used instead of `sys.argv`. Defaults to `None`.
-    
+
     Returns:
         int: Process exit status code.
     """

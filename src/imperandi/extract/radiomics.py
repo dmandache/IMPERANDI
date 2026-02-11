@@ -29,10 +29,10 @@ DEFAULT_SETTINGS = {
 
 def _load_radiomics_dependencies():
     """Load radiomics dependencies.
-    
+
     Returns:
         Any: Loaded object returned by this routine.
-    
+
     Raises:
         RuntimeError: If runtime prerequisites or optional dependencies are unavailable.
     """
@@ -57,11 +57,11 @@ def _load_radiomics_dependencies():
 
 def _create_radiomics_extractor(featureextractor_module, settings: Dict[str, Any]):
     """Perform radiomics extractor.
-    
+
     Args:
         featureextractor_module (Any): Input value for featureextractor module.
         settings (Dict[str, Any]): Input value for settings.
-    
+
     Returns:
         Any: Result of `_create_radiomics_extractor`.
     """
@@ -74,7 +74,7 @@ def add_radiomics_arguments(
     include_dry_run: bool = True,
 ) -> None:
     """Add command-line arguments for radiomics.
-    
+
     Args:
         parser (argparse.ArgumentParser): Argument parser instance to configure.
         include_manifest (bool): Boolean flag controlling optional behavior. Defaults to `True`.
@@ -136,10 +136,10 @@ def add_radiomics_arguments(
 
 def build_parser(add_help: bool = True) -> argparse.ArgumentParser:
     """Build and return the command-line parser.
-    
+
     Args:
         add_help (bool): Boolean flag controlling optional behavior. Defaults to `True`.
-    
+
     Returns:
         argparse.ArgumentParser: Configured argument parser instance.
     """
@@ -153,13 +153,13 @@ def build_parser(add_help: bool = True) -> argparse.ArgumentParser:
 
 def normalize_radiomics_args(args: argparse.Namespace) -> argparse.Namespace:
     """Normalize parsed command-line arguments and fill derived defaults.
-    
+
     Args:
         args (argparse.Namespace): Parsed command-line arguments namespace.
-    
+
     Returns:
         argparse.Namespace: Parsed and normalized argument namespace.
-    
+
     Raises:
         ValueError: If provided inputs fail validation.
         FileNotFoundError: If an expected input file cannot be found.
@@ -192,7 +192,7 @@ def normalize_radiomics_args(args: argparse.Namespace) -> argparse.Namespace:
 
 def parse_arguments() -> argparse.Namespace:
     """Parse command-line arguments for this module.
-    
+
     Returns:
         argparse.Namespace: Parsed and normalized argument namespace.
     """
@@ -205,10 +205,10 @@ def parse_arguments() -> argparse.Namespace:
 
 def get_patients_with_complete_exams(df: pd.DataFrame):
     """Return patients with complete exams.
-    
+
     Args:
         df (pd.DataFrame): Input pandas DataFrame to process.
-    
+
     Returns:
         Any: Requested patients with complete exams.
     """
@@ -239,10 +239,10 @@ def get_patients_with_complete_exams(df: pd.DataFrame):
 
 def filter_df(df: pd.DataFrame) -> pd.DataFrame:
     """Filter DataFrame.
-    
+
     Args:
         df (pd.DataFrame): Input pandas DataFrame to process.
-    
+
     Returns:
         pd.DataFrame: Processed pandas DataFrame.
     """
@@ -285,11 +285,11 @@ def filter_df(df: pd.DataFrame) -> pd.DataFrame:
 
 def mask_has_voxels(mask, sitk_module) -> bool:
     """Perform has voxels.
-    
+
     Args:
         mask (Any): Input value for mask.
         sitk_module (Any): Input value for sitk module.
-    
+
     Returns:
         bool: True when the condition is satisfied; otherwise False.
     """
@@ -305,14 +305,14 @@ def extract_radiomics_safe(
     sitk_module,
 ) -> Tuple[Dict[str, Any], Optional[str]]:
     """Extract radiomics safe.
-    
+
     Args:
         image_path (str): Filesystem path consumed by this operation.
         mask_path (Optional[str]): Filesystem path consumed by this operation.
         prefix (str): Input value for prefix.
         extractor (Any): Input value for extractor.
         sitk_module (Any): Input value for sitk module.
-    
+
     Returns:
         Tuple[Dict[str, Any], Optional[str]]: Tuple containing outputs from this step.
     """
@@ -346,7 +346,7 @@ def extract_radiomics_liver_minus_tumor(
     prefix: str = "liver",
 ) -> Tuple[Dict[str, Any], Optional[str]]:
     """Extract radiomics liver minus tumor.
-    
+
     Args:
         image_path (str): Filesystem path consumed by this operation.
         liver_mask_path (Optional[str]): Filesystem path consumed by this operation.
@@ -354,7 +354,7 @@ def extract_radiomics_liver_minus_tumor(
         extractor (Any): Input value for extractor.
         sitk_module (Any): Input value for sitk module.
         prefix (str): Input value for prefix. Defaults to `'liver'`.
-    
+
     Returns:
         Tuple[Dict[str, Any], Optional[str]]: Tuple containing outputs from this step.
     """
@@ -422,13 +422,13 @@ def extract_radiomics_from_dataframe(
     verbose: bool = False,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """Extract radiomics from dataframe.
-    
+
     Args:
         df (pd.DataFrame): Input pandas DataFrame to process.
         extractor (Any): Input value for extractor.
         sitk_module (Any): Input value for sitk module.
         verbose (bool): Boolean flag controlling optional behavior. Defaults to `False`.
-    
+
     Returns:
         Tuple[pd.DataFrame, pd.DataFrame]: Processed pandas DataFrame.
     """
@@ -497,10 +497,10 @@ def extract_radiomics_from_dataframe(
 
 def main(args: argparse.Namespace) -> None:
     """Run the module entry point.
-    
+
     Args:
         args (argparse.Namespace): Parsed command-line arguments namespace.
-    
+
     Raises:
         KeyError: If required keys are missing from a mapping-like input.
     """

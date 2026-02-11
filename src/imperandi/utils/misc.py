@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 def print_args(args: argparse.Namespace) -> None:
     """Print arguments.
-    
+
     Args:
         args (argparse.Namespace): Parsed command-line arguments namespace.
     """
@@ -28,7 +28,7 @@ def print_args(args: argparse.Namespace) -> None:
 
 def report_volumes(df, step_name=None):
     """Perform volumes.
-    
+
     Args:
         df (Any): Input pandas DataFrame to process.
         step_name (Optional[Any]): Input value for step name. Defaults to `None`.
@@ -47,7 +47,7 @@ def report_volumes(df, step_name=None):
 
 def report_change(df, previous_df, col=None):
     """Report change.
-    
+
     Args:
         df: Input pandas DataFrame to process.
         previous_df: Input pandas DataFrame to process.

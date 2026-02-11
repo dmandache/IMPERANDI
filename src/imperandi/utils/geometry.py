@@ -12,13 +12,13 @@ import numpy as np
 
 def parse_iop(iop):
     """Parse IOP.
-    
+
     Args:
         iop (Any): Image orientation patient (IOP) vector values.
-    
+
     Returns:
         Any: Parsed IOP.
-    
+
     Raises:
         ValueError: If provided inputs fail validation.
     """
@@ -45,15 +45,15 @@ def parse_iop(iop):
 
 def standardize_iop(iop, decimals=3, zero_tol=1e-6):
     """Standardize IOP.
-    
+
     Args:
         iop (Any): Image orientation patient (IOP) vector values.
         decimals (int): Decimal precision used when rounding normalized vectors. Defaults to `3`.
         zero_tol (Any): Absolute tolerance below which values are set to zero. Defaults to `1e-06`.
-    
+
     Returns:
         Any: Normalized IOP.
-    
+
     Raises:
         ValueError: If provided inputs fail validation.
     """
@@ -86,10 +86,10 @@ def standardize_iop(iop, decimals=3, zero_tol=1e-6):
 
 def as_float_array(x):
     """Convert input to float array.
-    
+
     Args:
         x (Any): Input value for x.
-    
+
     Returns:
         Any: Converted float array representation.
     """
@@ -102,10 +102,10 @@ def as_float_array(x):
 
 def as_tuple(x):
     """Convert input to tuple.
-    
+
     Args:
         x (Any): Input value for x.
-    
+
     Returns:
         Any: Converted tuple representation.
     """
@@ -118,10 +118,10 @@ def as_tuple(x):
 
 def slice_normal_from_iop(iop):
     """Compute the normalized slice normal vector from IOP.
-    
+
     Args:
         iop (Any): Image orientation patient (IOP) vector values.
-    
+
     Returns:
         Any: Result of `slice_normal_from_iop`.
     """
@@ -139,11 +139,11 @@ def slice_normal_from_iop(iop):
 
 def classify_plane_from_iop(iop, angle_thresh_deg=10.0):
     """Classify plane from IOP.
-    
+
     Args:
         iop (Any): Image orientation patient (IOP) vector values.
         angle_thresh_deg (float): Angular tolerance in degrees for plane classification. Defaults to `10.0`.
-    
+
     Returns:
         Any: Classification result for plane from IOP.
     """

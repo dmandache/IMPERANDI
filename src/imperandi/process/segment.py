@@ -155,13 +155,11 @@ class TotalSegmentatorBackend:
     """Thin wrapper for TotalSegmentator to keep dependency optional."""
 
     def __init__(self) -> None:
-        """Initialize `TotalSegmentatorBackend` state.
-        """
+        """Initialize `TotalSegmentatorBackend` state."""
         self._ts = None
 
     def _ensure_imported(self) -> None:
-        """Ensure runtime prerequisites are satisfied.
-        """
+        """Ensure runtime prerequisites are satisfied."""
         if self._ts is None:
             from totalsegmentator.python_api import totalsegmentator
 
@@ -177,7 +175,7 @@ class TotalSegmentatorBackend:
         **kwargs: Any,
     ) -> None:
         """Run `TotalSegmentatorBackend` processing.
-        
+
         Args:
             input_path (Path): Filesystem path consumed by this operation.
             output_dir (Path): Directory path used for input or output data.
@@ -199,7 +197,7 @@ class TotalSegmentatorBackend:
 
 def _default_tasks_config() -> Dict[str, Any]:
     """Compute the default config value.
-    
+
     Returns:
         Dict[str, Any]: Dictionary of computed fields.
     """
@@ -293,7 +291,9 @@ def normalize_postprocess_operations(postprocess: Any) -> List[Dict[str, Any]]:
     )
 
 
-def resolve_postprocess_operation(op: Dict[str, Any], *, op_index: int) -> Dict[str, Any]:
+def resolve_postprocess_operation(
+    op: Dict[str, Any], *, op_index: int
+) -> Dict[str, Any]:
     """Resolve and validate one postprocess operation."""
     legacy_keys = [k for k in ("output_column", "column_name", "output_col") if k in op]
     if legacy_keys:
@@ -387,7 +387,9 @@ def resolve_postprocess_config(postprocess: Any) -> Tuple[List[str], str]:
 
 
 def warn_postprocess_collisions(
-    tasks: List[Dict[str, Any]], ops: List[Dict[str, Any]], warnings: List[str] | None = None
+    tasks: List[Dict[str, Any]],
+    ops: List[Dict[str, Any]],
+    warnings: List[str] | None = None,
 ) -> None:
     """Emit warnings for postprocess column/path collisions and continue."""
     mask_columns = {f"mask_{task['key']}" for task in tasks}
@@ -402,8 +404,7 @@ def warn_postprocess_collisions(
 
         if col in mask_columns:
             msg = (
-                prefix
-                + f"output column '{col}' matches an existing task mask column; "
+                prefix + f"output column '{col}' matches an existing task mask column; "
                 "paths may be overwritten."
             )
             logger.warning(msg)
@@ -433,7 +434,7 @@ def warn_postprocess_collisions(
 
 
 def get_postprocess_columns_and_outputs(
-    tasks_config: Dict[str, Any]
+    tasks_config: Dict[str, Any],
 ) -> Tuple[List[str], List[Tuple[str, str]], List[Dict[str, Any]]]:
     """Return postprocess columns and `(column, output_name)` pairs in op order."""
     tasks = tasks_config.get("tasks", [])
@@ -451,9 +452,8 @@ def _handle_postprocess_missing_inputs(
     op: Dict[str, Any], missing_keys: List[str], warnings: List[str]
 ) -> None:
     """Handle missing input keys for one operation."""
-    message = (
-        f"Postprocess operation {op['index']} missing input key(s): "
-        + ", ".join(sorted(set(missing_keys)))
+    message = f"Postprocess operation {op['index']} missing input key(s): " + ", ".join(
+        sorted(set(missing_keys))
     )
     if op["on_failure"] == "fail":
         raise ValueError(message)
@@ -465,7 +465,9 @@ def _handle_postprocess_output_failure(
     op: Dict[str, Any], dst: Path, warnings: List[str]
 ) -> None:
     """Handle missing postprocess output."""
-    message = f"Postprocess operation {op['index']} did not produce expected output: {dst}"
+    message = (
+        f"Postprocess operation {op['index']} did not produce expected output: {dst}"
+    )
     if op["on_failure"] == "fail":
         raise RuntimeError(message)
     logger.warning(message)
@@ -737,7 +739,7 @@ def add_segment_arguments(
     include_dry_run: bool = True,
 ) -> None:
     """Add command-line arguments for segment.
-    
+
     Args:
         parser (argparse.ArgumentParser): Argument parser instance to configure.
         include_manifest (bool): Boolean flag controlling optional behavior. Defaults to `True`.
@@ -821,10 +823,10 @@ def add_segment_arguments(
 
 def build_parser(add_help: bool = True) -> argparse.ArgumentParser:
     """Build and return the command-line parser.
-    
+
     Args:
         add_help (bool): Boolean flag controlling optional behavior. Defaults to `True`.
-    
+
     Returns:
         argparse.ArgumentParser: Configured argument parser instance.
     """
@@ -838,13 +840,13 @@ def build_parser(add_help: bool = True) -> argparse.ArgumentParser:
 
 def normalize_segment_args(args: argparse.Namespace) -> argparse.Namespace:
     """Normalize parsed command-line arguments and fill derived defaults.
-    
+
     Args:
         args (argparse.Namespace): Parsed command-line arguments namespace.
-    
+
     Returns:
         argparse.Namespace: Parsed and normalized argument namespace.
-    
+
     Raises:
         FileNotFoundError: If an expected input file cannot be found.
     """
@@ -881,10 +883,10 @@ def normalize_segment_args(args: argparse.Namespace) -> argparse.Namespace:
 
 def main(args: argparse.Namespace) -> None:
     """Run the module entry point.
-    
+
     Args:
         args (argparse.Namespace): Parsed command-line arguments namespace.
-    
+
     Raises:
         KeyError: If required keys are missing from a mapping-like input.
     """

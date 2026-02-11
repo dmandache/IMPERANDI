@@ -45,7 +45,7 @@ def add_parse_arguments(
     include_dry_run: bool = True,
 ) -> None:
     """Add command-line arguments for parse.
-    
+
     Args:
         parser (argparse.ArgumentParser): Argument parser instance to configure.
         include_manifest (bool): Boolean flag controlling optional behavior. Defaults to `True`.
@@ -188,12 +188,12 @@ def build_parser(
     include_dry_run: bool = True,
 ) -> argparse.ArgumentParser:
     """Build and return the command-line parser.
-    
+
     Args:
         add_help (bool): Boolean flag controlling optional behavior. Defaults to `True`.
         include_manifest (bool): Boolean flag controlling optional behavior. Defaults to `True`.
         include_dry_run (bool): Boolean flag controlling optional behavior. Defaults to `True`.
-    
+
     Returns:
         argparse.ArgumentParser: Configured argument parser instance.
     """
@@ -213,10 +213,10 @@ def build_parser(
 
 def resolve_root_paths(root_path: Optional[Union[str, Path]]) -> list[Path]:
     """Resolve root paths.
-    
+
     Args:
         root_path (Optional[Union[str, Path]]): Filesystem path consumed by this operation.
-    
+
     Returns:
         list[Path]: Resolved filesystem path.
     """
@@ -239,10 +239,10 @@ def resolve_root_paths(root_path: Optional[Union[str, Path]]) -> list[Path]:
 
 def default_output_dir(root_path: Optional[str]) -> Path:
     """Return default output dir.
-    
+
     Args:
         root_path (Optional[str]): Filesystem path consumed by this operation.
-    
+
     Returns:
         Path: Resolved filesystem path.
     """
@@ -260,10 +260,10 @@ def default_output_dir(root_path: Optional[str]) -> Path:
 
 def normalize_parse_args(args: argparse.Namespace) -> argparse.Namespace:
     """Normalize parsed command-line arguments and fill derived defaults.
-    
+
     Args:
         args (argparse.Namespace): Parsed command-line arguments namespace.
-    
+
     Returns:
         argparse.Namespace: Parsed and normalized argument namespace.
     """
@@ -305,7 +305,7 @@ def normalize_parse_args(args: argparse.Namespace) -> argparse.Namespace:
 
 def parse_arguments():
     """Parse command-line arguments for this module.
-    
+
     Returns:
         Any: Parsed arguments.
     """
@@ -318,11 +318,11 @@ def parse_arguments():
 
 def apply_id_standardization(df: pd.DataFrame, manifest: dict) -> pd.DataFrame:
     """Return apply ID standardization.
-    
+
     Args:
         df (pd.DataFrame): Input pandas DataFrame to process.
         manifest (dict): Loaded dataset manifest configuration.
-    
+
     Returns:
         pd.DataFrame: Processed pandas DataFrame.
     """
@@ -360,11 +360,11 @@ def apply_id_standardization(df: pd.DataFrame, manifest: dict) -> pd.DataFrame:
 
 def apply_derived_columns(df: pd.DataFrame, manifest: dict) -> pd.DataFrame:
     """Return apply derived columns.
-    
+
     Args:
         df (pd.DataFrame): Input pandas DataFrame to process.
         manifest (dict): Loaded dataset manifest configuration.
-    
+
     Returns:
         pd.DataFrame: Processed pandas DataFrame.
     """
@@ -401,7 +401,7 @@ def apply_derived_columns(df: pd.DataFrame, manifest: dict) -> pd.DataFrame:
 # -------------------------
 def ensure_directory_exists(output_dir: Path):
     """Perform ensure directory exists.
-    
+
     Args:
         output_dir (Path): Directory path used for input or output data.
     """
@@ -423,10 +423,10 @@ def get_dicom_path_entries(
 
 def get_dicom_paths(root_path):
     """Return DICOM paths.
-    
+
     Args:
         root_path (Any): Filesystem path consumed by this operation.
-    
+
     Returns:
         Any: Requested DICOM paths.
     """
@@ -446,11 +446,11 @@ def get_dicom_paths(root_path):
 # -------------------------
 def extract_dicom_tags_recursive(ds, parent_key=""):
     """Extract DICOM tags recursive.
-    
+
     Args:
         ds (Any): Input value for ds.
         parent_key (str): Input value for parent key. Defaults to `''`.
-    
+
     Returns:
         Any: Extracted DICOM tags recursive.
     """
@@ -485,11 +485,11 @@ def read_dicom_header(fp, *, force=False):
 
 def read_dicom_header_with_force(fp, force):
     """Read DICOM header with force.
-    
+
     Args:
         fp (Any): Input value for fp.
         force (Any): Input value for force.
-    
+
     Returns:
         Any: Loaded DICOM header with force.
     """
@@ -538,11 +538,11 @@ def choose_ids(
 
         def _relative_to_root(dicom_path: str, scan_root: str) -> Path:
             """Perform to root.
-            
+
             Args:
                 dicom_path (str): Filesystem path consumed by this operation.
                 scan_root (str): Input value for scan root.
-            
+
             Returns:
                 Path: Resolved filesystem path.
             """
@@ -567,10 +567,10 @@ def choose_ids(
     # -------------------------
     def _tagcol(tag: str) -> pd.Series:
         """Perform tagcol.
-        
+
         Args:
             tag (str): Input value for tag.
-        
+
         Returns:
             pd.Series: Processed pandas Series.
         """
@@ -673,7 +673,7 @@ def process_with_checkpoint(
 # -------------------------
 def main(args):
     """Run this module entry point.
-    
+
     Args:
         args: Parsed command-line arguments namespace.
     """

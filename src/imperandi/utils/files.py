@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 def make_temp_dir(temp_dir="/data/scratch/bdr220003/temp/"):
     """Make temp dir.
-    
+
     Args:
         temp_dir: Directory location used for reading or writing artifacts.
     """
@@ -30,10 +30,10 @@ def make_temp_dir(temp_dir="/data/scratch/bdr220003/temp/"):
 
 def dir_is_empty(temp_dir):
     """Perform is empty.
-    
+
     Args:
         temp_dir (Any): Directory path used for input or output data.
-    
+
     Returns:
         Any: Result of `dir_is_empty`.
     """
@@ -44,7 +44,7 @@ def dir_is_empty(temp_dir):
 
 def empty_dir(temp_dir):
     """Empty dir.
-    
+
     Args:
         temp_dir: Directory location used for reading or writing artifacts.
     """
@@ -54,7 +54,7 @@ def empty_dir(temp_dir):
 
 def copy_files_to_temp_dir(paths, temp_dir="/data/scratch/bdr220003/temp/"):
     """Copy files TO temp dir.
-    
+
     Args:
         paths: Filesystem path used by this routine.
         temp_dir: Directory location used for reading or writing artifacts.
@@ -75,7 +75,7 @@ def copy_files_to_temp_dir(paths, temp_dir="/data/scratch/bdr220003/temp/"):
 def check_file(file_path):
     # Specify the file path
     """Check file.
-    
+
     Args:
         file_path: Filesystem path used by this routine.
     """
@@ -109,7 +109,7 @@ def check_file(file_path):
 def check_permissions(directory):
     # Create a Path object
     """Check permissions.
-    
+
     Args:
         directory (Any): Directory path used for input or output data.
     """
@@ -157,10 +157,10 @@ def load_nifti_file(nifti_path):
 
 def is_valid_nifti(path):
     """Return whether valid NIfTI.
-    
+
     Args:
         path (Any): Filesystem path consumed by this operation.
-    
+
     Returns:
         Any: True when the condition is satisfied; otherwise False.
     """

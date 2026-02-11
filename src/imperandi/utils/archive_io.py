@@ -30,10 +30,10 @@ ARCHIVE_EXTENSIONS = (".zip", ".tar", ".tar.gz", ".tgz")
 
 def is_archive_filename(name: str) -> bool:
     """Return whether archive filename.
-    
+
     Args:
         name (str): Input value for name.
-    
+
     Returns:
         bool: True when the condition is satisfied; otherwise False.
     """
@@ -43,10 +43,10 @@ def is_archive_filename(name: str) -> bool:
 
 def is_archive_uri(value: str) -> bool:
     """Return whether archive URI.
-    
+
     Args:
         value (str): Input value to evaluate or transform.
-    
+
     Returns:
         bool: True when the condition is satisfied; otherwise False.
     """
@@ -55,10 +55,10 @@ def is_archive_uri(value: str) -> bool:
 
 def _is_zip_name(name: str) -> bool:
     """Return whether zip name.
-    
+
     Args:
         name (str): Input value for name.
-    
+
     Returns:
         bool: True when the condition is satisfied; otherwise False.
     """
@@ -67,10 +67,10 @@ def _is_zip_name(name: str) -> bool:
 
 def _is_tar_name(name: str) -> bool:
     """Return whether tar name.
-    
+
     Args:
         name (str): Input value for name.
-    
+
     Returns:
         bool: True when the condition is satisfied; otherwise False.
     """
@@ -80,10 +80,10 @@ def _is_tar_name(name: str) -> bool:
 
 def _normalize_member_name(name: str) -> str:
     """Normalize member name.
-    
+
     Args:
         name (str): Input value for name.
-    
+
     Returns:
         str: Normalized member name.
     """
@@ -95,10 +95,10 @@ def _normalize_member_name(name: str) -> str:
 
 def _is_safe_member_name(name: str) -> bool:
     """Return whether safe member name.
-    
+
     Args:
         name (str): Input value for name.
-    
+
     Returns:
         bool: True when the condition is satisfied; otherwise False.
     """
@@ -115,14 +115,14 @@ def _is_safe_member_name(name: str) -> bool:
 
 def encode_archive_uri(outer_archive_path: str | Path, entry_chain: list[str]) -> str:
     """Encode archive URI.
-    
+
     Args:
         outer_archive_path (str | Path): Filesystem path consumed by this operation.
         entry_chain (list[str]): Input value for entry chain.
-    
+
     Returns:
         str: Encoded archive URI.
-    
+
     Raises:
         ValueError: If provided inputs fail validation.
     """
@@ -138,13 +138,13 @@ def encode_archive_uri(outer_archive_path: str | Path, entry_chain: list[str]) -
 
 def decode_archive_uri(uri: str) -> tuple[Path, list[str]]:
     """Decode archive URI.
-    
+
     Args:
         uri (str): Input value for URI.
-    
+
     Returns:
         tuple[Path, list[str]]: Resolved filesystem path.
-    
+
     Raises:
         ValueError: If provided inputs fail validation.
     """
@@ -164,11 +164,11 @@ def decode_archive_uri(uri: str) -> tuple[Path, list[str]]:
 
 def _open_archive(source: Path | bytes, source_name: str):
     """Perform archive.
-    
+
     Args:
         source (Path | bytes): Input value for source.
         source_name (str): Input value for source name.
-    
+
     Returns:
         Any: Result of `_open_archive`.
     """
@@ -197,14 +197,14 @@ def _open_archive(source: Path | bytes, source_name: str):
 
 def _read_zip_member(zf: zipfile.ZipFile, target_name: str) -> bytes:
     """Read zip member.
-    
+
     Args:
         zf (zipfile.ZipFile): Input value for zf.
         target_name (str): Input value for target name.
-    
+
     Returns:
         bytes: Binary payload read from storage.
-    
+
     Raises:
         KeyError: If required keys are missing from a mapping-like input.
     """
@@ -220,14 +220,14 @@ def _read_zip_member(zf: zipfile.ZipFile, target_name: str) -> bytes:
 
 def _read_tar_member(tf: tarfile.TarFile, target_name: str) -> bytes:
     """Read tar member.
-    
+
     Args:
         tf (tarfile.TarFile): Input value for tf.
         target_name (str): Input value for target name.
-    
+
     Returns:
         bytes: Binary payload read from storage.
-    
+
     Raises:
         KeyError: If required keys are missing from a mapping-like input.
     """
@@ -249,12 +249,12 @@ def _read_member_bytes_from_container(
     source: Path | bytes, source_name: str, member_name: str
 ) -> bytes:
     """Read member bytes from container.
-    
+
     Args:
         source (Path | bytes): Archive source path or in-memory bytes payload.
         source_name (str): Display name for the current archive source.
         member_name (str): Archive member name to resolve.
-    
+
     Returns:
         bytes: Binary payload read from storage.
     """
@@ -277,7 +277,7 @@ def _iter_container_members(
     counter: list[int],
 ):
     """Iterate over container members.
-    
+
     Args:
         source (Path | bytes): Input value for source.
         source_name (str): Input value for source name.
@@ -286,10 +286,10 @@ def _iter_container_members(
         max_depth (int): Input value for max depth.
         member_limit (int): Input value for member limit.
         counter (list[int]): Input value for counter.
-    
+
     Returns:
         Any: Iterator over container members.
-    
+
     Raises:
         RuntimeError: If runtime prerequisites or optional dependencies are unavailable.
     """
@@ -372,13 +372,13 @@ def iter_archive_members(
     member_limit: int = DEFAULT_ARCHIVE_MEMBER_LIMIT,
 ):
     """Iterate over archive members.
-    
+
     Args:
         path_or_bytes (Path | bytes): Filesystem path consumed by this operation.
         depth (int): Input value for depth. Defaults to `0`.
         max_depth (int): Input value for max depth. Defaults to `DEFAULT_ARCHIVE_MAX_DEPTH`.
         member_limit (int): Input value for member limit. Defaults to `DEFAULT_ARCHIVE_MEMBER_LIMIT`.
-    
+
     Returns:
         Any: Iterator over archive members.
     """
@@ -400,10 +400,10 @@ def iter_archive_members(
 
 def _record_sort_key(record: dict[str, Any]) -> tuple[str, str]:
     """Return record sort key.
-    
+
     Args:
         record (dict[str, Any]): Record dictionary describing one discovered source item.
-    
+
     Returns:
         tuple[str, str]: Tuple containing outputs from this step.
     """
@@ -412,10 +412,10 @@ def _record_sort_key(record: dict[str, Any]) -> tuple[str, str]:
 
 def _record_is_dcm(record: dict[str, Any]) -> bool:
     """Return record is dcm.
-    
+
     Args:
         record (dict[str, Any]): Record dictionary describing one discovered source item.
-    
+
     Returns:
         bool: True when the condition is satisfied; otherwise False.
     """
@@ -428,11 +428,11 @@ def _validate_record_as_dicom(
     record: dict[str, Any], max_depth: int = DEFAULT_ARCHIVE_MAX_DEPTH
 ) -> bool:
     """Return validate record as DICOM.
-    
+
     Args:
         record (dict[str, Any]): Record dictionary describing one discovered source item.
         max_depth (int): Maximum nested archive depth permitted during traversal. Defaults to `DEFAULT_ARCHIVE_MAX_DEPTH`.
-    
+
     Returns:
         bool: True when the condition is satisfied; otherwise False.
     """
@@ -458,12 +458,12 @@ def discover_dicom_sources(
     member_limit: int = DEFAULT_ARCHIVE_MEMBER_LIMIT,
 ) -> list[dict[str, Any]]:
     """Discover DICOM sources.
-    
+
     Args:
         root_entries (Iterable[Path]): Input value for root entries.
         max_depth (int): Input value for max depth. Defaults to `DEFAULT_ARCHIVE_MAX_DEPTH`.
         member_limit (int): Input value for member limit. Defaults to `DEFAULT_ARCHIVE_MEMBER_LIMIT`.
-    
+
     Returns:
         list[dict[str, Any]]: List of computed items.
     """
@@ -471,7 +471,7 @@ def discover_dicom_sources(
 
     def _add_record(record: dict[str, Any]) -> None:
         """Add record.
-        
+
         Args:
             record (dict[str, Any]): Record dictionary describing one discovered source item.
         """
@@ -591,15 +591,15 @@ def read_archive_member_bytes(
     max_depth: int = DEFAULT_ARCHIVE_MAX_DEPTH,
 ) -> bytes:
     """Read archive member bytes.
-    
+
     Args:
         outer_archive_path (Path): Filesystem path consumed by this operation.
         entry_chain (list[str]): Nested archive/member traversal chain.
         max_depth (int): Maximum nested archive depth permitted during traversal. Defaults to `DEFAULT_ARCHIVE_MAX_DEPTH`.
-    
+
     Returns:
         bytes: Binary payload read from storage.
-    
+
     Raises:
         ValueError: If provided inputs fail validation.
         FileNotFoundError: If an expected input file cannot be found.
@@ -641,9 +641,10 @@ def read_archive_member_bytes(
 
 class ArchiveSession:
     """Class implementing archive session behavior.
-    
+
     This class groups related state and behavior behind a single interface.
     """
+
     def __init__(
         self,
         cache_dir: str | Path | None = None,
@@ -651,7 +652,7 @@ class ArchiveSession:
         max_depth: int = DEFAULT_ARCHIVE_MAX_DEPTH,
     ):
         """Initialize `ArchiveSession` state.
-        
+
         Args:
             cache_dir (str | Path | None): Directory path used for input or output data. Defaults to `None`.
             keep_cache (bool): Boolean flag controlling optional behavior. Defaults to `False`.
@@ -669,7 +670,7 @@ class ArchiveSession:
 
     def __enter__(self):
         """Enter the context manager and return the active session object.
-        
+
         Returns:
             Any: Context manager instance for chained use.
         """
@@ -681,7 +682,7 @@ class ArchiveSession:
 
     def __exit__(self, exc_type, exc, tb):
         """Exit the context manager and release allocated resources.
-        
+
         Args:
             exc_type (Any): Input value for exc type.
             exc (Any): Input value for exc.
@@ -694,13 +695,13 @@ class ArchiveSession:
 
     def materialize(self, uri_or_path: str | Path) -> Path:
         """Materialize the requested operation.
-        
+
         Args:
             uri_or_path (str | Path): Filesystem path consumed by this operation.
-        
+
         Returns:
             Path: Resolved filesystem path.
-        
+
         Raises:
             RuntimeError: If runtime prerequisites or optional dependencies are unavailable.
         """
