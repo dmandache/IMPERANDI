@@ -206,3 +206,8 @@ python -m imperandi clean --csv_path tests/data/dicom_index.csv --csv_path_out t
 ```
 - Note: there is no auto-download due to licensing; datasets must be placed manually.
 
+## Viewer
+
+IMPERANDI comes with a lightweight interactive viewer for CT scans and segmentation masks, running in a Jupyter Notebook. It features cohort exploration functionalities: selecting exams by patient, date, perfusion phase.  
+
+![image](https://raw.githubusercontent.com/dmandache/IMPERANDI/main/static/viewer-demo.png)
