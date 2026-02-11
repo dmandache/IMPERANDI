@@ -17,7 +17,7 @@ IMPERANDI is a Python framework and CLI for building analysis-ready CT imaging c
 - Improves reliability on real hospital exports with archive support, failure tracking, and resumable workflows.
 - Keeps adoption practical in secure environments with a lightweight Python-first toolchain.
 
-## Current framework functionalities (high level)
+## Current framework functionalities
 
 ### 1) Ingest and harmonize imaging metadata (`parse` + `clean` = `ingest`)
 
