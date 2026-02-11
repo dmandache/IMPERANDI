@@ -43,8 +43,7 @@ def test_iter_archive_members_nested_zip_tar(tmp_path):
     members = list(archive_io.iter_archive_members(outer_zip, max_depth=3))
     leaf_members = [m for m in members if not m["is_archive"]]
     assert any(
-        m["entry_chain"][-1] == "patientA/study1/series1/img1.dcm"
-        for m in leaf_members
+        m["entry_chain"][-1] == "patientA/study1/series1/img1.dcm" for m in leaf_members
     )
 
 

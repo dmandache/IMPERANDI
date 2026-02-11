@@ -192,7 +192,7 @@ python -m imperandi --help
 ```
 
 ## Testing (Slow Datasets)
-Slow integration tests for the IRCAD dataset are available and are skipped unless data is present.
+Slow integration tests for the [IRCAD dataset](https://www.ircad.fr/research/data-sets/liver-segmentation-3d-ircadb-01/) are available and are skipped unless data is present.
 - Place the DICOM dataset at `tests/data/IRCAD_DICOM` (gitignored) or set `IRCAD_ROOT` to the dataset path.
 - Optional: place NIfTI outputs at `tests/data/IRCAD_nifti` or set `IRCAD_NIFTI_ROOT`.
 - Run slow tests with:

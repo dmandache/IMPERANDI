@@ -418,9 +418,9 @@ def choose_ids(
     # -------------------------
     if relative_path_col in df.columns:
         rel = df[relative_path_col].map(
-            lambda p: Path(str(p))
-            if (not pd.isna(p) and str(p).strip() != "")
-            else Path("")
+            lambda p: (
+                Path(str(p)) if (not pd.isna(p) and str(p).strip() != "") else Path("")
+            )
         )
     else:
         if scan_root_col in df.columns:

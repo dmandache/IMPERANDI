@@ -64,7 +64,9 @@ def encode_archive_uri(outer_archive_path: str | Path, entry_chain: list[str]) -
         raise ValueError("entry_chain must contain at least one member name.")
     outer_abs = Path(outer_archive_path).resolve()
     encoded_parts = [quote(str(outer_abs), safe="")]
-    encoded_parts.extend(quote(_normalize_member_name(name), safe="") for name in entry_chain)
+    encoded_parts.extend(
+        quote(_normalize_member_name(name), safe="") for name in entry_chain
+    )
     return ARCHIVE_URI_SCHEME + "!".join(encoded_parts)
 
 
@@ -157,12 +159,11 @@ def _iter_container_members(
     kind, container = _open_archive(source, source_name)
     try:
         if kind == "zip":
-            members = [
-                (info.filename, info.is_dir())
-                for info in container.infolist()
-            ]
+            members = [(info.filename, info.is_dir()) for info in container.infolist()]
         else:
-            members = [(member.name, member.isdir()) for member in container.getmembers()]
+            members = [
+                (member.name, member.isdir()) for member in container.getmembers()
+            ]
 
         for raw_name, is_dir in members:
             counter[0] += 1
@@ -389,7 +390,9 @@ def discover_dicom_sources(
         "[archive][discover] no *.dcm sources found; validating all candidates with dcmread."
     )
     validated = [
-        record for record in all_records if _validate_record_as_dicom(record, max_depth=max_depth)
+        record
+        for record in all_records
+        if _validate_record_as_dicom(record, max_depth=max_depth)
     ]
     return sorted(validated, key=_record_sort_key)
 
@@ -415,7 +418,9 @@ def read_archive_member_bytes(
         normalized = _normalize_member_name(member_name)
         if not normalized or not _is_safe_member_name(normalized):
             raise ValueError(f"Unsafe archive member path: {member_name}")
-        payload = _read_member_bytes_from_container(current_source, current_name, normalized)
+        payload = _read_member_bytes_from_container(
+            current_source, current_name, normalized
+        )
         is_last = i == len(entry_chain) - 1
         if is_last:
             return payload
@@ -439,7 +444,11 @@ class ArchiveSession:
         keep_cache: bool = False,
         max_depth: int = DEFAULT_ARCHIVE_MAX_DEPTH,
     ):
-        self.cache_dir = Path(cache_dir) if cache_dir else Path(tempfile.gettempdir()) / "imperandi_archive"
+        self.cache_dir = (
+            Path(cache_dir)
+            if cache_dir
+            else Path(tempfile.gettempdir()) / "imperandi_archive"
+        )
         self.keep_cache = keep_cache
         self.max_depth = max_depth
         self.session_dir: Path | None = None
