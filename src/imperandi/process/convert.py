@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import traceback
 import logging
 from pathlib import Path
@@ -10,6 +12,11 @@ from tqdm import tqdm
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import tempfile
 
+from imperandi.utils.archive_io import (
+    ArchiveSession,
+    DEFAULT_ARCHIVE_MAX_DEPTH,
+    is_archive_uri,
+)
 from imperandi.utils.files import copy_files_to_temp_dir, check_file, is_valid_nifti
 from imperandi.utils.logging import setup_logging
 from imperandi.utils.misc import report_volumes, report_change, print_args
@@ -75,6 +82,24 @@ def add_convert_arguments(
         type=int,
         default=2,
         help="Number of parallel jobs",
+    )
+    parser.add_argument(
+        "--archive_max_depth",
+        type=int,
+        default=DEFAULT_ARCHIVE_MAX_DEPTH,
+        help="Maximum recursion depth for nested archives.",
+    )
+    parser.add_argument(
+        "--archive_cache_dir",
+        type=str,
+        default=None,
+        help="Optional cache directory for materialized archive members.",
+    )
+    parser.add_argument(
+        "--keep_archive_cache",
+        action="store_true",
+        default=False,
+        help="Keep materialized archive cache after the command finishes.",
     )
     if include_manifest:
         parser.add_argument(
@@ -153,6 +178,12 @@ def normalize_convert_args(args: argparse.Namespace) -> argparse.Namespace:
     if not args.error_csv_path:
         args.error_csv_path = str(csv_dir / "conv_errors.csv")
 
+    args.archive_max_depth = int(
+        getattr(args, "archive_max_depth", DEFAULT_ARCHIVE_MAX_DEPTH)
+    )
+    args.archive_cache_dir = getattr(args, "archive_cache_dir", None)
+    args.keep_archive_cache = bool(getattr(args, "keep_archive_cache", False))
+
     return args
 
 
@@ -171,6 +202,99 @@ def convert_list_str_to_list(cell):
         return literal_eval(cell)
     except (ValueError, SyntaxError):
         return cell
+
+
+def _flatten_dicom_paths(cell) -> list[str]:
+    if isinstance(cell, list):
+        return [str(v) for v in cell]
+    if isinstance(cell, str):
+        return [cell]
+    return []
+
+
+def _apply_uri_mapping_to_cell(cell, uri_map: dict[str, str | None]):
+    if isinstance(cell, list):
+        mapped = []
+        for value in cell:
+            s = str(value)
+            if is_archive_uri(s):
+                local = uri_map.get(s)
+                if local:
+                    mapped.append(local)
+            else:
+                mapped.append(s)
+        return mapped
+
+    if isinstance(cell, str):
+        if is_archive_uri(cell):
+            return uri_map.get(cell)
+        return cell
+
+    return cell
+
+
+def materialize_archive_dicom_paths(
+    df: pd.DataFrame,
+    archive_session: ArchiveSession,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Replace archive:// DICOM paths with local materialized paths.
+    Returns updated dataframe and an error dataframe for rows that could not be materialized.
+    """
+    if "dicom_path" not in df.columns:
+        return df, pd.DataFrame()
+
+    unique_uris = sorted(
+        {
+            p
+            for cell in df["dicom_path"]
+            for p in _flatten_dicom_paths(cell)
+            if is_archive_uri(p)
+        }
+    )
+    if not unique_uris:
+        return df, pd.DataFrame()
+
+    uri_map: dict[str, str | None] = {}
+    for uri in unique_uris:
+        try:
+            uri_map[uri] = str(archive_session.materialize(uri))
+        except Exception as exc:
+            logger.warning("[archive][materialize] convert skip %s (%s)", uri, exc)
+            uri_map[uri] = None
+
+    out = df.copy()
+    out["dicom_path"] = out["dicom_path"].apply(
+        lambda cell: _apply_uri_mapping_to_cell(cell, uri_map)
+    )
+
+    error_rows = []
+    keep_mask = []
+    for idx, cell in out["dicom_path"].items():
+        if isinstance(cell, list):
+            clean_list = [p for p in cell if isinstance(p, str) and p.strip()]
+            out.at[idx, "dicom_path"] = clean_list
+            if clean_list:
+                keep_mask.append(True)
+                continue
+            row = out.loc[idx].copy()
+            row["error"] = "all archive members failed to materialize"
+            error_rows.append(row)
+            keep_mask.append(False)
+            continue
+
+        if isinstance(cell, str) and cell.strip():
+            keep_mask.append(True)
+            continue
+
+        row = out.loc[idx].copy()
+        row["error"] = "archive path failed to materialize"
+        error_rows.append(row)
+        keep_mask.append(False)
+
+    out = out.loc[pd.Series(keep_mask, index=out.index)].reset_index(drop=True)
+    df_err = pd.DataFrame(error_rows) if error_rows else pd.DataFrame()
+    return out, df_err
 
 
 # Function to convert a single DICOM volume to NIfTI (parallel task)
@@ -393,10 +517,23 @@ def main(args):
         print_args(args)
         return
 
-    # Convert DICOM to NIfTI in parallel
-    df, df_err = convert_dicom_to_nifti_parallel(
-        df, args.output_dir, args.verbose, args.num_workers
-    )
+    with ArchiveSession(
+        cache_dir=args.archive_cache_dir,
+        keep_cache=args.keep_archive_cache,
+        max_depth=args.archive_max_depth,
+    ) as archive_session:
+        df, df_archive_err = materialize_archive_dicom_paths(df, archive_session)
+
+        # Convert DICOM to NIfTI in parallel
+        df, df_err = convert_dicom_to_nifti_parallel(
+            df, args.output_dir, args.verbose, args.num_workers
+        )
+        if not df_archive_err.empty:
+            df_err = (
+                pd.concat([df_archive_err, df_err], ignore_index=True)
+                if not df_err.empty
+                else df_archive_err
+            )
 
     logger.info("After conversion:")
     report_volumes(df)

@@ -1,4 +1,7 @@
 import sys
+import io
+import tarfile
+import zipfile
 from pathlib import Path
 
 # Ensure src/ is on sys.path for imports
@@ -7,6 +10,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import pandas as pd
 
 from imperandi.ingest import parse
+
+
+def _make_archive_dataset(root: Path) -> Path:
+    inner_tar = root / "inner.tar.gz"
+    with tarfile.open(inner_tar, "w:gz") as tf:
+        payload = b"DICM_FAKE"
+        info = tarfile.TarInfo(name="patientA/study1/series1/img1.dcm")
+        info.size = len(payload)
+        tf.addfile(info, io.BytesIO(payload))
+
+    outer_zip = root / "outer.zip"
+    with zipfile.ZipFile(outer_zip, "w") as zf:
+        zf.write(inner_tar, arcname="nested/inner.tar.gz")
+    return outer_zip
 
 
 def test_normalize_parse_args_prefers_flags(tmp_path):
@@ -45,6 +62,24 @@ def test_normalize_parse_args_defaults_to_cwd():
     expected_root = Path.cwd()
     assert args.root_path == str(expected_root)
     assert args.output_dir == str(expected_root.parent)
+
+
+def test_normalize_parse_args_glob_defaults_output_to_matched_parent(tmp_path):
+    (tmp_path / "site_a").mkdir()
+    (tmp_path / "site_b").mkdir()
+    root_pattern = str(tmp_path / "site_*")
+
+    args = parse.normalize_parse_args(
+        parse.argparse.Namespace(
+            root_path_pos=None,
+            output_dir_pos=None,
+            root_path_opt=root_pattern,
+            output_dir_opt=None,
+        )
+    )
+
+    assert args.root_path == root_pattern
+    assert args.output_dir == str(tmp_path)
 
 
 def test_choose_ids_path_only(tmp_path):
@@ -138,6 +173,94 @@ def test_choose_ids_auto_fallback_to_path(tmp_path):
     assert out.loc[1, "study_id"] == "STUDY2"
     assert out.loc[0, "series_id"] == "seriesX"
     assert out.loc[1, "series_id"] == "0"
+
+
+def test_choose_ids_path_uses_scan_root_col_for_glob_inputs(tmp_path):
+    root_a = tmp_path / "site_a"
+    root_b = tmp_path / "site_b"
+    p1 = root_a / "patientA" / "study1" / "series1" / "img1.dcm"
+    p2 = root_b / "patientB" / "study2" / "series2" / "img2.dcm"
+
+    df = pd.DataFrame(
+        {
+            "dicom_path": [str(p1), str(p2)],
+            "_scan_root": [str(root_a), str(root_b)],
+        }
+    )
+
+    out = parse.choose_ids(
+        df.copy(),
+        tmp_path / "site_*",
+        id_source="path",
+        patient_tag="PatientName",
+        study_tag="StudyInstanceUID",
+        series_tag="SeriesInstanceUID",
+    )
+
+    assert out.loc[0, "patient_key"] == "patientA"
+    assert out.loc[1, "patient_key"] == "patientB"
+    assert out.loc[0, "study_id"] == "study1"
+    assert out.loc[1, "study_id"] == "study2"
+    assert out.loc[0, "series_id"] == "series1"
+    assert out.loc[1, "series_id"] == "series2"
+    assert "_scan_root" not in out.columns
+
+
+def test_get_dicom_paths_supports_glob_root(tmp_path):
+    root_a = tmp_path / "site_a" / "patient1"
+    root_b = tmp_path / "site_b" / "patient2"
+    root_a.mkdir(parents=True)
+    root_b.mkdir(parents=True)
+
+    p1 = root_a / "a.dcm"
+    p2 = root_b / "b.dcm"
+    p1.write_text("")
+    p2.write_text("")
+
+    paths = parse.get_dicom_paths(str(tmp_path / "site_*"))
+    assert set(paths) == {p1, p2}
+
+
+def test_get_dicom_path_entries_supports_archives(tmp_path):
+    archive = _make_archive_dataset(tmp_path)
+    entries = parse.get_dicom_path_entries(str(archive), archive_max_depth=3)
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry["is_archive_member"]
+    assert entry["source_uri_or_path"].startswith("archive://")
+    assert entry["relative_path"] == "patientA/study1/series1/img1.dcm"
+
+
+def test_choose_ids_uses_relative_path_for_archive_sources(tmp_path):
+    archive = _make_archive_dataset(tmp_path)
+    entry = parse.get_dicom_path_entries(str(archive), archive_max_depth=3)[0]
+    df = pd.DataFrame(
+        {
+            "dicom_path": [entry["source_uri_or_path"]],
+            "_scan_root": [entry["scan_root"]],
+            "_relative_path": [entry["relative_path"]],
+        }
+    )
+    out = parse.choose_ids(
+        df.copy(),
+        tmp_path,
+        id_source="path",
+        patient_tag="PatientName",
+        study_tag="StudyInstanceUID",
+        series_tag="SeriesInstanceUID",
+    )
+
+    assert out.loc[0, "patient_key"] == "patientA"
+    assert out.loc[0, "study_id"] == "study1"
+    assert out.loc[0, "series_id"] == "series1"
+
+
+def test_get_dicom_path_entries_skips_corrupt_archive(tmp_path):
+    bad_zip = tmp_path / "bad.zip"
+    bad_zip.write_bytes(b"not-a-valid-archive")
+
+    entries = parse.get_dicom_path_entries(str(bad_zip), archive_max_depth=3)
+    assert entries == []
 
 
 def test_apply_id_standardization_monkeypatched_hook(monkeypatch):

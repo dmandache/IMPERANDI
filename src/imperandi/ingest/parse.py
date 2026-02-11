@@ -5,14 +5,19 @@ from functools import partial
 from pathlib import Path
 import argparse
 from multiprocessing import cpu_count
-from typing import Optional
+from typing import Optional, Union
 
 import pandas as pd
 from tqdm import tqdm
 from pandarallel import pandarallel
 from pydicom import dcmread
-from pydicom.errors import InvalidDicomError
 
+from imperandi.utils.archive_io import (
+    ArchiveSession,
+    DEFAULT_ARCHIVE_MAX_DEPTH,
+    discover_dicom_sources,
+    is_archive_filename,
+)
 from imperandi.utils.logging import setup_logging
 from imperandi.utils.misc import print_args
 from imperandi.utils.manifest import load_manifest, resolve_hook
@@ -34,7 +39,11 @@ def add_parse_arguments(
         type=str,
         nargs="?",
         default=None,
-        help="Root path where the DICOM files are located. Defaults to current working directory.",
+        help=(
+            "Root path where the DICOM files are located. "
+            "Supports glob patterns (e.g. '/data/site_*'). "
+            "Defaults to current working directory."
+        ),
     )
     parser.add_argument(
         "output_dir_pos",
@@ -47,6 +56,10 @@ def add_parse_arguments(
         "--root_path",
         dest="root_path_opt",
         type=str,
+        help=(
+            "Root path where the DICOM files are located. "
+            "Supports glob patterns (e.g. '/data/site_*')."
+        ),
     )
     parser.add_argument(
         "--output_dir",
@@ -121,6 +134,24 @@ def add_parse_arguments(
     parser.add_argument(
         "--verbose", "-v", action="store_true", default=False, help="Verbose mode."
     )
+    parser.add_argument(
+        "--archive_max_depth",
+        type=int,
+        default=DEFAULT_ARCHIVE_MAX_DEPTH,
+        help="Maximum recursion depth for nested archives.",
+    )
+    parser.add_argument(
+        "--archive_cache_dir",
+        type=str,
+        default=None,
+        help="Optional cache directory for materialized archive members.",
+    )
+    parser.add_argument(
+        "--keep_archive_cache",
+        action="store_true",
+        default=False,
+        help="Keep materialized archive cache after the command finishes.",
+    )
     if include_dry_run:
         parser.add_argument(
             "--dry-run",
@@ -150,6 +181,37 @@ def build_parser(
     return parser
 
 
+def resolve_root_paths(root_path: Optional[Union[str, Path]]) -> list[Path]:
+    if root_path is None:
+        return [Path.cwd()]
+
+    root_str = str(root_path)
+    if glob.has_magic(root_str):
+        matches = [Path(p) for p in glob.glob(root_str, recursive=True)]
+        return sorted(
+            {
+                p
+                for p in matches
+                if p.is_dir() or (p.is_file() and is_archive_filename(p.name))
+            }
+        )
+
+    return [Path(root_str)]
+
+
+def default_output_dir(root_path: Optional[str]) -> Path:
+    if root_path is None:
+        return Path.cwd().parent
+
+    if glob.has_magic(str(root_path)):
+        matched_roots = resolve_root_paths(root_path)
+        if matched_roots:
+            return matched_roots[0].parent
+        return Path.cwd()
+
+    return Path(root_path).parent
+
+
 def normalize_parse_args(args: argparse.Namespace) -> argparse.Namespace:
     root_in = (
         args.root_path_opt
@@ -171,9 +233,14 @@ def normalize_parse_args(args: argparse.Namespace) -> argparse.Namespace:
     )
 
     root_path = Path(root_in) if root_in else Path.cwd()
-    output_dir = Path(output_in) if output_in else root_path.parent
+    output_dir = Path(output_in) if output_in else default_output_dir(root_in)
     args.root_path = str(root_path)
     args.output_dir = str(output_dir)
+    args.archive_max_depth = int(
+        getattr(args, "archive_max_depth", DEFAULT_ARCHIVE_MAX_DEPTH)
+    )
+    args.archive_cache_dir = getattr(args, "archive_cache_dir", None)
+    args.keep_archive_cache = bool(getattr(args, "keep_archive_cache", False))
 
     for attr in ("root_path_pos", "root_path_opt", "output_dir_pos", "output_dir_opt"):
         if hasattr(args, attr):
@@ -259,27 +326,29 @@ def ensure_directory_exists(output_dir: Path):
     output_dir.mkdir(parents=True, exist_ok=True)
 
 
-def get_dicom_paths(root_path):
+def get_dicom_path_entries(
+    root_path: Union[str, Path], archive_max_depth: int = DEFAULT_ARCHIVE_MAX_DEPTH
+) -> list[dict]:
     """
     Strategy:
-    1) Try *.dcm
-    2) If none, scan all files and attempt dcmread header
+    1) Resolve root_path as directories and/or archive files.
+    2) Recursively discover DICOM sources, including nested archives.
+    3) Prefer *.dcm and fallback to header validation when needed.
     """
-    root_path = Path(root_path)
-    dicom_paths = [p for p in root_path.rglob("*.dcm") if p.is_file()]
-    if dicom_paths:
-        return dicom_paths
+    resolved_roots = resolve_root_paths(root_path)
+    return discover_dicom_sources(resolved_roots, max_depth=archive_max_depth)
 
-    dicom_paths = []
-    for p in root_path.rglob("*"):
-        if not p.is_file():
-            continue
-        try:
-            dcmread(p, stop_before_pixels=True, force=True)
-            dicom_paths.append(p)
-        except (InvalidDicomError, PermissionError, OSError):
-            continue
-    return dicom_paths
+
+def get_dicom_paths(root_path):
+    entries = get_dicom_path_entries(root_path)
+    paths = []
+    for entry in entries:
+        src = entry["source_uri_or_path"]
+        if entry.get("is_archive_member"):
+            paths.append(src)
+        else:
+            paths.append(Path(src))
+    return paths
 
 
 # -------------------------
@@ -331,6 +400,8 @@ def choose_ids(
     patient_tag: str,
     study_tag: str,
     series_tag: str,
+    scan_root_col: str = "_scan_root",
+    relative_path_col: str = "_relative_path",
 ) -> pd.DataFrame:
     """
     Compute patient_key / study_id / series_id.
@@ -345,7 +416,30 @@ def choose_ids(
     # -------------------------
     # Path-derived patient_key
     # -------------------------
-    rel = df["dicom_path"].map(lambda p: Path(p).relative_to(root_path))
+    if relative_path_col in df.columns:
+        rel = df[relative_path_col].map(
+            lambda p: Path(str(p))
+            if (not pd.isna(p) and str(p).strip() != "")
+            else Path("")
+        )
+    else:
+        if scan_root_col in df.columns:
+            scan_roots = df[scan_root_col].astype(str)
+        else:
+            scan_roots = pd.Series([str(root_path)] * len(df), index=df.index)
+
+        def _relative_to_root(dicom_path: str, scan_root: str) -> Path:
+            p = Path(dicom_path)
+            try:
+                return p.relative_to(Path(scan_root))
+            except ValueError:
+                # Fallback keeps parsing resilient when paths are not nested as expected.
+                return p
+
+        rel = pd.Series(
+            [_relative_to_root(p, r) for p, r in zip(df["dicom_path"], scan_roots)],
+            index=df.index,
+        )
     df["patient_key_path"] = rel.map(lambda p: p.parts[0] if len(p.parts) > 1 else None)
     df["study_path"] = rel.map(lambda p: p.parts[1] if len(p.parts) > 2 else None)
     df["series_path"] = rel.map(lambda p: p.parts[2] if len(p.parts) > 3 else None)
@@ -385,7 +479,17 @@ def choose_ids(
         df["study_id"] = study_id_tags.fillna(df["study_path"]).fillna("0")
         df["series_id"] = series_id_tags.fillna(df["series_path"]).fillna("0")
 
-    df = df.drop(columns=["patient_key_path", "study_path", "series_path"])
+    df = df.drop(
+        columns=[
+            "patient_key_path",
+            "study_path",
+            "series_path",
+            scan_root_col,
+            relative_path_col,
+            "_read_path",
+        ],
+        errors="ignore",
+    )
 
     return df
 
@@ -399,15 +503,20 @@ def process_with_checkpoint(
     checkpoint_frequency: Optional[int],
     output_dir: Path,
     final_name: str,
+    read_path_col: str = "dicom_path",
 ):
     """
     Apply read_func(dicom_path)->Series to df_paths with optional chunked checkpoint.
     """
+    cols_to_drop_for_persist = [read_path_col] if read_path_col != "dicom_path" else []
+
     if checkpoint_frequency is None:
-        tags_df = df_paths["dicom_path"].parallel_apply(read_func)
+        tags_df = df_paths[read_path_col].parallel_apply(read_func)
         tags_df = tags_df.replace("", float("NaN")).dropna(how="all", axis=1)
         out = pd.concat([df_paths, tags_df], axis=1)
-        out.to_csv(output_dir / final_name, index=False)
+        out.drop(columns=cols_to_drop_for_persist, errors="ignore").to_csv(
+            output_dir / final_name, index=False
+        )
         return out
 
     # chunked
@@ -418,10 +527,12 @@ def process_with_checkpoint(
         if ckpt.exists():
             continue
         chunk = df_paths.iloc[i : i + checkpoint_frequency].copy()
-        tags_chunk = chunk["dicom_path"].parallel_apply(read_func)
+        tags_chunk = chunk[read_path_col].parallel_apply(read_func)
         tags_chunk = tags_chunk.replace("", float("NaN")).dropna(how="all", axis=1)
         out_chunk = pd.concat([chunk, tags_chunk], axis=1)
-        out_chunk.to_csv(ckpt, index=False)
+        out_chunk.drop(columns=cols_to_drop_for_persist, errors="ignore").to_csv(
+            ckpt, index=False
+        )
 
     # merge
     csv_files = sorted(glob.glob(str(output_dir / f"{Path(final_name).stem}_0*.csv")))
@@ -437,7 +548,7 @@ def process_with_checkpoint(
 # -------------------------
 def main(args):
     args = normalize_parse_args(args)
-    root_path = Path(args.root_path)
+    root_path = args.root_path
     output_dir = Path(args.output_dir)
     ensure_directory_exists(output_dir)
     logger.info("Output directory: %s", output_dir)
@@ -445,36 +556,70 @@ def main(args):
         args.manifest, base_path=Path(__file__).resolve().parents[1]
     )
 
-    dicom_paths = get_dicom_paths(root_path)
-    logger.info("Found %s DICOM files under %s", len(dicom_paths), root_path)
+    matched_roots = resolve_root_paths(root_path)
+    if glob.has_magic(str(root_path)):
+        logger.info("Root pattern %s matched %s entries", root_path, len(matched_roots))
+
+    dicom_entries = get_dicom_path_entries(
+        root_path, archive_max_depth=args.archive_max_depth
+    )
+    logger.info("Found %s DICOM sources under %s", len(dicom_entries), root_path)
 
     # 1) base df with dicom_path only (no IDs computed yet)
-    df = pd.DataFrame({"dicom_path": [str(p) for p in dicom_paths]})
-
-    # 2) read tags once for all files
-    #    - always read all tags recursively (comprehensive extraction)
-    user_tags = [t.strip() for t in args.tags.split(",") if t.strip()]
-    logger.info(
-        "Reading all DICOM tags recursively (user tags to include: %s)",
-        user_tags or "none",
+    df = pd.DataFrame(
+        {
+            "dicom_path": [entry["source_uri_or_path"] for entry in dicom_entries],
+            "_scan_root": [entry["scan_root"] for entry in dicom_entries],
+            "_relative_path": [entry["relative_path"] for entry in dicom_entries],
+        }
     )
+    with ArchiveSession(
+        cache_dir=args.archive_cache_dir,
+        keep_cache=args.keep_archive_cache,
+        max_depth=args.archive_max_depth,
+    ) as archive_session:
+        read_paths = []
+        for source in df["dicom_path"]:
+            try:
+                read_paths.append(str(archive_session.materialize(source)))
+            except Exception as exc:
+                logger.warning("[archive][materialize] skipping %s (%s)", source, exc)
+                read_paths.append(None)
+        df["_read_path"] = read_paths
 
-    read_func = partial(read_dicom_header_with_force, force=args.force_dicom_read)
+        skipped_materialization = int(df["_read_path"].isna().sum())
+        if skipped_materialization > 0:
+            logger.warning(
+                "[archive][materialize] skipped %s sources due to read errors.",
+                skipped_materialization,
+            )
+            df = df[df["_read_path"].notna()].reset_index(drop=True)
 
-    df = process_with_checkpoint(
-        df_paths=df,
-        read_func=read_func,
-        checkpoint_frequency=args.checkpoint_frequency,
-        output_dir=output_dir,
-        final_name="dicom_paths_with_tags.csv",
-    )
+        # 2) read tags once for all files
+        #    - always read all tags recursively (comprehensive extraction)
+        user_tags = [t.strip() for t in args.tags.split(",") if t.strip()]
+        logger.info(
+            "Reading all DICOM tags recursively (user tags to include: %s)",
+            user_tags or "none",
+        )
+
+        read_func = partial(read_dicom_header_with_force, force=args.force_dicom_read)
+
+        df = process_with_checkpoint(
+            df_paths=df,
+            read_func=read_func,
+            checkpoint_frequency=args.checkpoint_frequency,
+            output_dir=output_dir,
+            final_name="dicom_paths_with_tags.csv",
+            read_path_col="_read_path",
+        )
 
     logger.info("After tag extraction: %s columns=%s", df.shape, len(df.columns))
 
     # 3) compute IDs from tags/path using already-read tag columns
     df = choose_ids(
         df=df,
-        root_path=root_path,
+        root_path=Path(root_path),
         id_source=args.id_source,
         patient_tag=args.patient_key_from,
         study_tag=args.study_id_from,

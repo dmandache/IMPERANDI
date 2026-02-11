@@ -1,4 +1,7 @@
 import sys
+import io
+import tarfile
+import zipfile
 from pathlib import Path
 
 # Ensure src/ is on sys.path for imports
@@ -8,6 +11,7 @@ import pandas as pd
 from unittest.mock import MagicMock
 
 from imperandi.process import convert as convert_module
+from imperandi.utils.archive_io import ArchiveSession, encode_archive_uri
 
 
 def test_convert_list_str_to_list_valid():
@@ -163,3 +167,70 @@ def test_process_single_volume_successful_conversion(tmp_path, monkeypatch):
     assert error is None
     assert export_path is not None
     assert "P1" in str(export_path)
+
+
+def _make_archive_with_dicom(tmp_path: Path) -> tuple[Path, str]:
+    inner_tar = tmp_path / "inner.tar.gz"
+    with tarfile.open(inner_tar, "w:gz") as tf:
+        payload = b"DICM_FAKE"
+        info = tarfile.TarInfo(name="patientA/study1/series1/img1.dcm")
+        info.size = len(payload)
+        tf.addfile(info, io.BytesIO(payload))
+
+    outer_zip = tmp_path / "outer.zip"
+    with zipfile.ZipFile(outer_zip, "w") as zf:
+        zf.write(inner_tar, arcname="nested/inner.tar.gz")
+
+    return outer_zip, "nested/inner.tar.gz"
+
+
+def test_materialize_archive_dicom_paths_replaces_uri(tmp_path):
+    outer_zip, nested_entry = _make_archive_with_dicom(tmp_path)
+    uri = encode_archive_uri(
+        outer_zip, [nested_entry, "patientA/study1/series1/img1.dcm"]
+    )
+    df = pd.DataFrame(
+        [
+            {
+                "dicom_path": [uri],
+                "series_id": "S1",
+                "study_id": "ST1",
+                "patient_key": "P1",
+            }
+        ]
+    )
+
+    with ArchiveSession(cache_dir=tmp_path / ".cache", keep_cache=True) as session:
+        out, df_err = convert_module.materialize_archive_dicom_paths(df, session)
+
+    assert df_err.empty
+    assert len(out) == 1
+    assert isinstance(out.loc[0, "dicom_path"], list)
+    local_path = Path(out.loc[0, "dicom_path"][0])
+    assert local_path.exists()
+    assert local_path.name == "img1.dcm"
+
+
+def test_materialize_archive_dicom_paths_emits_error_for_missing_member(tmp_path):
+    outer_zip = tmp_path / "outer.zip"
+    with zipfile.ZipFile(outer_zip, "w"):
+        pass
+
+    missing_uri = encode_archive_uri(outer_zip, ["missing.dcm"])
+    df = pd.DataFrame(
+        [
+            {
+                "dicom_path": missing_uri,
+                "series_id": "S1",
+                "study_id": "ST1",
+                "patient_key": "P1",
+            }
+        ]
+    )
+
+    with ArchiveSession(cache_dir=tmp_path / ".cache", keep_cache=True) as session:
+        out, df_err = convert_module.materialize_archive_dicom_paths(df, session)
+
+    assert out.empty
+    assert not df_err.empty
+    assert "error" in df_err.columns
