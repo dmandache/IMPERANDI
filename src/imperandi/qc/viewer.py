@@ -516,8 +516,20 @@ class CTScanViewer:
         ]
         self.prev_patient_button.disabled = len(patient_values) <= 1
         self.next_patient_button.disabled = len(patient_values) <= 1
-        self.prev_date_button.disabled = len(date_values) <= 1
-        self.next_date_button.disabled = len(date_values) <= 1
+        if len(date_values) <= 1:
+            self.prev_date_button.disabled = True
+            self.next_date_button.disabled = True
+            return
+
+        current_date = self.date_dropdown.value
+        if current_date not in date_values:
+            self.prev_date_button.disabled = True
+            self.next_date_button.disabled = True
+            return
+
+        current_idx = date_values.index(current_date)
+        self.prev_date_button.disabled = current_idx == 0
+        self.next_date_button.disabled = current_idx == (len(date_values) - 1)
 
     def _build_options_for_column(self, column, formatter, frame=None):
         if column is None:
