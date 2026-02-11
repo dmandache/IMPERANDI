@@ -205,15 +205,11 @@ def _default_tasks_config() -> Dict[str, Any]:
         "backend": "totalsegmentator",
         "tasks": [
             {
-                "key": "liver",
                 "task": "total",
-                "output": "liver.nii.gz",
                 "extra": {"roi_subset_robust": ["liver"]},
             },
             {
-                "key": "liver_tumor",
                 "task": "liver_vessels",
-                "output": "liver_tumor.nii.gz",
                 "extra": {},
             },
         ],
@@ -248,6 +244,117 @@ def load_tasks_config(
 
     with path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
+
+
+def _coerce_bool_flag(value: Any, *, field: str) -> bool:
+    """Coerce a manifest/CLI boolean-like value into ``bool``."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "y", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "n", "off"}:
+            return False
+    raise ValueError(f"{field} must be boolean-like, got {value!r}.")
+
+
+def resolve_manifest_fast_default(
+    tasks_config: Dict[str, Any],
+    cli_fast: bool,
+    *,
+    emit_warning: bool = True,
+) -> bool:
+    """Resolve global default fast value from CLI and optional ``segmentation.fast``."""
+    # CLI `--fast` is the fallback for all tasks unless manifest overrides it.
+    resolved = bool(cli_fast)
+    if "fast" not in tasks_config:
+        return resolved
+
+    manifest_fast = _coerce_bool_flag(
+        tasks_config["fast"],
+        field="segmentation.fast",
+    )
+    if emit_warning:
+        logger.warning(
+            "Manifest fast setting detected at segmentation.fast=%s; "
+            "overriding CLI --fast=%s.",
+            manifest_fast,
+            bool(cli_fast),
+        )
+    return manifest_fast
+
+
+def resolve_task_fast_and_extra(
+    task: Dict[str, Any],
+    *,
+    task_index: int,
+    default_fast: bool,
+    emit_warning: bool = False,
+) -> Tuple[bool, Dict[str, Any]]:
+    """Resolve per-task fast flag and return sanitized ``extra`` kwargs."""
+    task_path = f"segmentation.tasks[{task_index}]"
+    task_name = str(task.get("task", f"task_{task_index}"))
+
+    if "fast" in task:
+        task_fast: bool | None = _coerce_bool_flag(task["fast"], field=f"{task_path}.fast")
+    else:
+        task_fast = None
+
+    extra_raw = task.get("extra", {})
+    if extra_raw is None:
+        extra: Dict[str, Any] = {}
+    elif isinstance(extra_raw, dict):
+        extra = dict(extra_raw)
+    else:
+        raise ValueError(f"{task_path}.extra must be a JSON object when provided.")
+
+    if "fast" in extra:
+        extra_fast: bool | None = _coerce_bool_flag(
+            extra.pop("fast"),
+            field=f"{task_path}.extra.fast",
+        )
+    else:
+        extra_fast = None
+
+    resolved_fast = default_fast
+    resolved_source = "default"
+    if task_fast is not None:
+        resolved_fast = task_fast
+        resolved_source = f"{task_path}.fast"
+    elif extra_fast is not None:
+        resolved_fast = extra_fast
+        resolved_source = f"{task_path}.extra.fast"
+
+    if task_fast is not None and extra_fast is not None and task_fast != extra_fast:
+        # Deterministic precedence: explicit task field wins over extra.fast.
+        if emit_warning:
+            logger.warning(
+                "Conflicting fast settings for task '%s' (%s.fast=%s, %s.extra.fast=%s). "
+                "Using %s.fast.",
+                task_name,
+                task_path,
+                task_fast,
+                task_path,
+                extra_fast,
+                task_path,
+            )
+        resolved_fast = task_fast
+        resolved_source = f"{task_path}.fast"
+
+    if emit_warning and resolved_source != "default":
+        logger.warning(
+            "Per-task fast override for task '%s' from %s=%s "
+            "(default fast=%s).",
+            task_name,
+            resolved_source,
+            resolved_fast,
+            default_fast,
+        )
+
+    return resolved_fast, extra
 
 
 def _mask_column_from_out_key(out_key: str) -> str:
@@ -335,8 +442,8 @@ def resolve_postprocess_operation(
         output_column = f"mask_{in_key}"
         normalized_out_key = in_key
     else:
-        output_column = "mask_merged"
-        normalized_out_key = "merged"
+        output_column = "mask_postproc"
+        normalized_out_key = "postproc"
 
     output_name = str(op.get("output", "")).strip()
     if not output_name:
@@ -387,34 +494,24 @@ def resolve_postprocess_config(postprocess: Any) -> Tuple[List[str], str]:
 
 
 def warn_postprocess_collisions(
-    tasks: List[Dict[str, Any]],
+    existing_columns: set[str],
+    existing_output_names: set[str],
     ops: List[Dict[str, Any]],
     warnings: List[str] | None = None,
 ) -> None:
     """Emit warnings for postprocess column/path collisions and continue."""
-    mask_columns = {f"mask_{task['key']}" for task in tasks}
-    task_outputs = {str(task["output"]) for task in tasks}
-    seen_columns = set()
-    seen_outputs = set(task_outputs)
+    seen_columns = set(existing_columns)
+    seen_outputs = set(existing_output_names)
 
     for op in ops:
         col = str(op["output_column"])
         out_name = str(op["output_name"])
         prefix = f"Postprocess operation {op['index']}: "
 
-        if col in mask_columns:
-            msg = (
-                prefix + f"output column '{col}' matches an existing task mask column; "
-                "paths may be overwritten."
-            )
-            logger.warning(msg)
-            if warnings is not None:
-                warnings.append(msg)
         if col in seen_columns:
             msg = (
-                prefix
-                + f"output column '{col}' matches another postprocess operation; "
-                "last writer wins."
+                prefix + f"output column '{col}' matches an existing mask column; "
+                "paths may be overwritten."
             )
             logger.warning(msg)
             if warnings is not None:
@@ -424,7 +521,7 @@ def warn_postprocess_collisions(
         if out_name in seen_outputs:
             msg = (
                 prefix
-                + f"output file '{out_name}' collides with an existing task/postprocess output; "
+                + f"output file '{out_name}' collides with an existing output; "
                 "last writer wins."
             )
             logger.warning(msg)
@@ -437,12 +534,12 @@ def get_postprocess_columns_and_outputs(
     tasks_config: Dict[str, Any],
 ) -> Tuple[List[str], List[Tuple[str, str]], List[Dict[str, Any]]]:
     """Return postprocess columns and `(column, output_name)` pairs in op order."""
-    tasks = tasks_config.get("tasks", [])
     ops = resolve_postprocess_operations(tasks_config.get("postprocess"))
     if not ops:
         return [], [], []
 
-    warn_postprocess_collisions(tasks, ops)
+    # At this stage we only know collisions within postprocess operations.
+    warn_postprocess_collisions(set(), set(), ops)
     columns = [str(op["output_column"]) for op in ops]
     pairs = [(str(op["output_column"]), str(op["output_name"])) for op in ops]
     return columns, pairs, ops
@@ -488,6 +585,80 @@ def _register_postprocess_out_key(
         logger.warning(message)
         warnings.append(message)
     key_to_output[out_key] = output_name
+
+
+def _mask_key_from_filename(filename: str) -> str:
+    """Return mask key from a NIfTI filename."""
+    if filename.endswith(".nii.gz"):
+        return filename[: -len(".nii.gz")]
+    if filename.endswith(".nii"):
+        return filename[: -len(".nii")]
+    return Path(filename).stem
+
+
+def mask_column_for_output_file(path: Path) -> str:
+    """Map output file path to DataFrame mask column name."""
+    return f"mask_{_mask_key_from_filename(path.name)}"
+
+
+def discover_segmentation_outputs(output_dir: Path, source_nifti: Path) -> List[Path]:
+    """Discover all produced NIfTI masks in output directory, excluding the source volume."""
+    masks: List[Path] = []
+    source_resolved = source_nifti.resolve()
+    for path in output_dir.iterdir():
+        if not path.is_file():
+            continue
+        lower_name = path.name.lower()
+        if not (lower_name.endswith(".nii.gz") or lower_name.endswith(".nii")):
+            continue
+        try:
+            # The input scan lives in the same folder; keep only derived masks.
+            if path.resolve() == source_resolved:
+                continue
+        except Exception:
+            pass
+        masks.append(path)
+    return sorted(masks, key=lambda p: p.name)
+
+
+def snapshot_segmentation_outputs(
+    output_dir: Path, source_nifti: Path
+) -> Dict[str, Tuple[int, int]]:
+    """Snapshot discovered output files as ``{filename: (mtime_ns, size)}``."""
+    snapshot: Dict[str, Tuple[int, int]] = {}
+    for path in discover_segmentation_outputs(output_dir, source_nifti):
+        stat = path.stat()
+        snapshot[path.name] = (int(stat.st_mtime_ns), int(stat.st_size))
+    return snapshot
+
+
+def diff_changed_outputs(
+    before: Dict[str, Tuple[int, int]], after: Dict[str, Tuple[int, int]]
+) -> List[str]:
+    """Return output filenames that are new or modified between snapshots."""
+    changed: List[str] = []
+    for name, after_sig in after.items():
+        # Track creations and in-place rewrites with a cheap (mtime,size) signature.
+        if name not in before or before[name] != after_sig:
+            changed.append(name)
+    return sorted(changed)
+
+
+def register_output_key_map(
+    key_to_output: Dict[str, str], output_files: List[Path], warnings: List[str] | None = None
+) -> None:
+    """Register discovered output files in ``stem -> filename`` map."""
+    for path in output_files:
+        key = _mask_key_from_filename(path.name)
+        if key in key_to_output and key_to_output[key] != path.name:
+            msg = (
+                f"Segmentation output key collision for '{key}': "
+                f"{key_to_output[key]} -> {path.name}. Last writer wins."
+            )
+            logger.warning(msg)
+            if warnings is not None:
+                warnings.append(msg)
+        key_to_output[key] = path.name
 
 
 def prefetch_totalsegmentator_models(
@@ -547,22 +718,36 @@ def prefetch_totalsegmentator_models(
         "coronary_arteries": [507],
     }
 
-    task_names = {task["task"] for task in tasks if "task" in task}
-    if not task_names:
-        return
-
     resolved_tasks: List[str] = []
-    for name in sorted(task_names):
-        if name == "total" and fast:
+    for idx, task in enumerate(tasks):
+        if not isinstance(task, dict):
+            raise ValueError(
+                f"segmentation.tasks[{idx}] must be a JSON object, got {type(task).__name__}."
+            )
+        if "task" not in task:
+            continue
+
+        task_name = str(task["task"])
+        task_fast, _ = resolve_task_fast_and_extra(
+            task,
+            task_index=idx,
+            default_fast=fast,
+            emit_warning=False,
+        )
+        # Prefetch the exact variant (`*_fast` vs regular) selected for this task.
+        if task_name == "total" and task_fast:
             resolved_tasks.append("total_fast")
-        elif name == "total_mr" and fast:
+        elif task_name == "total_mr" and task_fast:
             resolved_tasks.append("total_fast_mr")
-        elif name == "body" and fast:
+        elif task_name == "body" and task_fast:
             resolved_tasks.append("body_fast")
-        elif name == "body_mr" and fast:
+        elif task_name == "body_mr" and task_fast:
             resolved_tasks.append("body_mr_fast")
         else:
-            resolved_tasks.append(name)
+            resolved_tasks.append(task_name)
+
+    if not resolved_tasks:
+        return
 
     missing = [name for name in resolved_tasks if name not in task_to_id]
     if missing:
@@ -602,6 +787,10 @@ def segment_volume(
 ) -> List[str]:
     """Run segmentation tasks and optional post‐processing."""
     warnings: List[str] = []
+    # Resolve one run-level default; each task may still override locally.
+    default_fast = resolve_manifest_fast_default(
+        tasks_config, cli_fast=fast, emit_warning=False
+    )
     tasks = tasks_config.get("tasks", [])
     if not tasks:
         raise ValueError("No tasks provided in config")
@@ -611,24 +800,32 @@ def segment_volume(
         raise ValueError(f"Unsupported backend: {backend_name}")
 
     backend = backend or TotalSegmentatorBackend()
+    key_to_output: Dict[str, str] = {}
+    # Include pre-existing files so downstream postprocess can reuse cached outputs.
+    existing_outputs = discover_segmentation_outputs(output_dir, nifti_path)
+    register_output_key_map(key_to_output, existing_outputs, warnings)
 
-    for task in tasks:
+    for idx, task in enumerate(tasks):
+        if not isinstance(task, dict):
+            raise ValueError(
+                f"segmentation.tasks[{idx}] must be a JSON object, got {type(task).__name__}."
+            )
         task_name = task["task"]
-        task_output = task["output"]
-        extra = task.get("extra", {})
-
-        dst = output_dir / task_output
-        if dst.exists() and not force:
-            if verbose:
-                logger.info("Skip %s – file exists", dst)
-            continue
+        task_fast, extra = resolve_task_fast_and_extra(
+            task,
+            task_index=idx,
+            default_fast=default_fast,
+            emit_warning=False,
+        )
+        # Detect whether this task wrote/updated any output files.
+        before_snapshot = snapshot_segmentation_outputs(output_dir, nifti_path)
 
         try:
             backend.run(
                 input_path=nifti_path,
                 output_dir=output_dir,
                 task=task_name,
-                fast=fast,
+                fast=task_fast,
                 **extra,
             )
         except Exception as exc:
@@ -637,10 +834,30 @@ def segment_volume(
             )
             raise
 
-        if not dst.exists():
-            raise RuntimeError(f"Expected mask not produced: {dst}")
-        else:
-            logger.info("Mask saved at %s", dst)
+        after_files = discover_segmentation_outputs(output_dir, nifti_path)
+        after_snapshot = snapshot_segmentation_outputs(output_dir, nifti_path)
+        changed_outputs = diff_changed_outputs(before_snapshot, after_snapshot)
+        if not changed_outputs:
+            if not after_files:
+                raise RuntimeError(
+                    f"No segmentation masks found after task '{task_name}'."
+                )
+            message = (
+                f"No new or updated segmentation outputs detected for task '{task_name}'."
+            )
+            if force:
+                raise RuntimeError(message)
+            logger.warning(message)
+            warnings.append(message)
+        elif verbose:
+            logger.info(
+                "Task %s produced/updated %d output(s): %s",
+                task_name,
+                len(changed_outputs),
+                ", ".join(changed_outputs),
+            )
+
+        register_output_key_map(key_to_output, after_files, warnings)
 
     postprocess_ops = resolve_postprocess_operations(tasks_config.get("postprocess"))
     if not postprocess_ops:
@@ -648,8 +865,12 @@ def segment_volume(
 
     # Collision warnings are configuration-level and should not be propagated as
     # per-row warning strings.
-    warn_postprocess_collisions(tasks, postprocess_ops)
-    key_to_output = {task["key"]: task["output"] for task in tasks}
+    existing_columns = {
+        mask_column_for_output_file(Path(filename))
+        for filename in key_to_output.values()
+    }
+    existing_output_names = set(key_to_output.values())
+    warn_postprocess_collisions(existing_columns, existing_output_names, postprocess_ops)
 
     for op in postprocess_ops:
         missing_keys = [k for k in op["input_keys"] if k not in key_to_output]
@@ -662,6 +883,7 @@ def segment_volume(
         if dst.exists() and not force:
             if verbose:
                 logger.info("Skip %s - file exists", dst)
+            # Keep chainability: later ops may depend on this out_key even on skip.
             _register_postprocess_out_key(key_to_output, op, warnings)
             continue
 
@@ -898,7 +1120,13 @@ def main(args: argparse.Namespace) -> None:
         Path(args.tasks_config) if args.tasks_config else None,
         manifest=manifest,
     )
-    prefetch_totalsegmentator_models(tasks_config, fast=args.fast)
+    # CLI/manifest default here; per-task overrides are applied in `segment_volume`.
+    effective_fast = resolve_manifest_fast_default(
+        tasks_config,
+        cli_fast=args.fast,
+        emit_warning=True,
+    )
+    prefetch_totalsegmentator_models(tasks_config, fast=effective_fast)
 
     # --- read and pre‑clean CSV ------------------------------------------------
     df = pd.read_csv(args.csv_path).copy()
@@ -909,15 +1137,6 @@ def main(args: argparse.Namespace) -> None:
     if "nifti_path" not in df.columns:
         raise KeyError("column 'nifti_path' missing")
     df = df.drop_duplicates("nifti_path").copy()
-    mask_columns = [f"mask_{task['key']}" for task in tasks_config.get("tasks", [])]
-    for col in mask_columns:
-        df[col] = None
-
-    postprocess_columns, postprocess_outputs, _ = get_postprocess_columns_and_outputs(
-        tasks_config
-    )
-    for col in postprocess_columns:
-        df[col] = None
     df["warning_message"] = None
 
     # --- spawn multiprocessing pool -------------------------------------------
@@ -934,7 +1153,7 @@ def main(args: argparse.Namespace) -> None:
                 idx,
                 row.to_dict(),
                 tasks_config,
-                fast=args.fast,
+                fast=effective_fast,
                 verbose=args.verbose,
                 force=args.force,
             ): idx
@@ -966,19 +1185,22 @@ def main(args: argparse.Namespace) -> None:
     for idx, out_dir, err_msg, warning_msg in results:
         if out_dir:
             base = Path(out_dir)
+            source_nifti = Path(df.at[idx, "nifti_path"])
             row_warnings: List[str] = []
-            for task in tasks_config.get("tasks", []):
-                mask_path = base / task["output"]
-                if mask_path.exists():
-                    df.at[idx, f"mask_{task['key']}"] = str(mask_path)
-                else:
-                    row_warnings.append(f"missing mask: {mask_path}")
-            for column_name, output_name in postprocess_outputs:
-                merged_path = base / output_name
-                if merged_path.exists():
-                    df.at[idx, column_name] = str(merged_path)
-                else:
-                    row_warnings.append(f"missing merged mask: {merged_path}")
+            # Dynamic output discovery: `liver.nii.gz` -> `mask_liver` column.
+            discovered_masks = discover_segmentation_outputs(base, source_nifti)
+            if not discovered_masks:
+                row_warnings.append(f"no segmentation masks found in {base}")
+            for mask_path in discovered_masks:
+                mask_col = mask_column_for_output_file(mask_path)
+                if mask_col not in df.columns:
+                    df[mask_col] = None
+                prev = df.at[idx, mask_col]
+                if pd.notna(prev) and str(prev) != str(mask_path):
+                    row_warnings.append(
+                        f"mask column collision for {mask_col}: {prev} -> {mask_path}"
+                    )
+                df.at[idx, mask_col] = str(mask_path)
             if warning_msg:
                 row_warnings.append(warning_msg)
             if row_warnings:

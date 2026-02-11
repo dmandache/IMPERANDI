@@ -15,23 +15,26 @@
     "backend": "totalsegmentator",
     "tasks": [
       {
-        "key": "liver",
         "task": "total",
-        "output": "liver.nii.gz",
-        "extra": { "roi_subset_robust": ["liver"] }
+        "extra": { "roi_subset": ["liver", "spleen"], "fast": true }
       },
       {
-        "key": "liver_tumor",
         "task": "liver_vessels",
-        "output": "liver_tumor.nii.gz",
-        "extra": {}
+        "extra": {"fast": false }
       }
     ],
     "postprocess": [
       {
         "merge_keys": ["liver", "liver_tumor"],
-        "output": "liver_all.nii.gz",
-        "out_key": "liver_postproc",
+        "output": "liver_proc.nii.gz",
+        "radius_mm": 5.0,
+        "largest_cc": true,
+        "fill_holes": true,
+        "close": true
+      },
+      {
+        "in_key": "spleen",
+        "output": "spleen_proc.nii.gz",
         "radius_mm": 5.0,
         "largest_cc": true,
         "fill_holes": true,
