@@ -222,6 +222,7 @@ def _default_tasks_config() -> Dict[str, Any]:
         "postprocess": {
             "merge_keys": ["liver", "liver_tumor"],
             "output": "liver_all.nii.gz",
+            "out_key": "merged",
             "radius_mm": 5.0,
             "largest_cc": True,
             "fill_holes": True,
@@ -249,6 +250,242 @@ def load_tasks_config(
 
     with path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
+
+
+def _mask_column_from_out_key(out_key: str) -> str:
+    """Build output DataFrame column name from an ``out_key`` value."""
+    key = str(out_key).strip()
+    if not key:
+        raise ValueError("postprocess.out_key cannot be empty")
+    if key.startswith("mask_"):
+        logger.warning(
+            "postprocess.out_key='%s' includes 'mask_' prefix; using as full column "
+            "name for compatibility.",
+            key,
+        )
+        return key
+    return f"mask_{key}"
+
+
+def _normalized_out_key(out_key: str) -> str:
+    """Normalize out_key for file-name derivation."""
+    key = str(out_key).strip()
+    if key.startswith("mask_"):
+        return key[5:]
+    return key
+
+
+def normalize_postprocess_operations(postprocess: Any) -> List[Dict[str, Any]]:
+    """Normalize postprocess config into an ordered list of operation objects."""
+    if postprocess is None:
+        return []
+    if isinstance(postprocess, dict):
+        return [postprocess]
+    if isinstance(postprocess, list):
+        for idx, op in enumerate(postprocess, start=1):
+            if not isinstance(op, dict):
+                raise ValueError(
+                    f"postprocess[{idx}] must be a JSON object, got {type(op).__name__}."
+                )
+        return postprocess
+    raise ValueError(
+        f"postprocess must be a JSON object or list of objects, got {type(postprocess).__name__}."
+    )
+
+
+def resolve_postprocess_operation(op: Dict[str, Any], *, op_index: int) -> Dict[str, Any]:
+    """Resolve and validate one postprocess operation."""
+    legacy_keys = [k for k in ("output_column", "column_name", "output_col") if k in op]
+    if legacy_keys:
+        raise ValueError(
+            "Unsupported postprocess key(s) in operation "
+            f"{op_index}: {', '.join(legacy_keys)}. Use postprocess.out_key."
+        )
+
+    in_key = str(op.get("in_key", "")).strip()
+    raw_merge_keys = op.get("merge_keys")
+    if raw_merge_keys is None:
+        merge_keys: List[str] = []
+    elif isinstance(raw_merge_keys, list):
+        merge_keys = [str(k).strip() for k in raw_merge_keys if str(k).strip()]
+    else:
+        raise ValueError(
+            f"postprocess operation {op_index}: merge_keys must be a list when provided."
+        )
+
+    if in_key and merge_keys:
+        raise ValueError(
+            f"postprocess operation {op_index}: provide either in_key or merge_keys, not both."
+        )
+
+    if in_key:
+        input_keys = [in_key]
+    elif merge_keys:
+        input_keys = merge_keys
+    else:
+        raise ValueError(
+            f"postprocess operation {op_index}: include either in_key or a non-empty merge_keys list."
+        )
+
+    out_key = str(op.get("out_key", "")).strip()
+    if out_key:
+        output_column = _mask_column_from_out_key(out_key)
+        normalized_out_key = _normalized_out_key(out_key)
+    elif in_key:
+        output_column = f"mask_{in_key}"
+        normalized_out_key = in_key
+    else:
+        output_column = "mask_merged"
+        normalized_out_key = "merged"
+
+    output_name = str(op.get("output", "")).strip()
+    if not output_name:
+        base_name = normalized_out_key or output_column.replace("mask_", "", 1)
+        output_name = f"{base_name}.nii.gz"
+
+    on_failure = str(op.get("on_failure", "warn_only")).strip().lower()
+    if on_failure not in {"warn_only", "fail"}:
+        raise ValueError(
+            f"postprocess operation {op_index}: invalid on_failure='{on_failure}'. Use 'warn_only' or 'fail'."
+        )
+
+    if not normalized_out_key:
+        raise ValueError(
+            f"postprocess operation {op_index}: could not resolve a non-empty output key."
+        )
+
+    return {
+        "index": op_index,
+        "input_keys": input_keys,
+        "out_key": normalized_out_key,
+        "output_column": output_column,
+        "output_name": output_name,
+        "radius_mm": float(op.get("radius_mm", 5.0)),
+        "close": bool(op.get("close", True)),
+        "fill_holes": bool(op.get("fill_holes", True)),
+        "largest_cc": bool(op.get("largest_cc", True)),
+        "on_failure": on_failure,
+    }
+
+
+def resolve_postprocess_operations(postprocess: Any) -> List[Dict[str, Any]]:
+    """Resolve postprocess config into a validated ordered operation list."""
+    operations = normalize_postprocess_operations(postprocess)
+    return [
+        resolve_postprocess_operation(op, op_index=i)
+        for i, op in enumerate(operations, start=1)
+    ]
+
+
+def resolve_postprocess_config(postprocess: Any) -> Tuple[List[str], str]:
+    """Backward-compatible resolver for a single postprocess object."""
+    resolved = resolve_postprocess_operations(postprocess)
+    if not resolved:
+        return [], "mask_merged"
+    first = resolved[0]
+    return first["input_keys"], first["output_column"]
+
+
+def warn_postprocess_collisions(
+    tasks: List[Dict[str, Any]], ops: List[Dict[str, Any]], warnings: List[str] | None = None
+) -> None:
+    """Emit warnings for postprocess column/path collisions and continue."""
+    mask_columns = {f"mask_{task['key']}" for task in tasks}
+    task_outputs = {str(task["output"]) for task in tasks}
+    seen_columns = set()
+    seen_outputs = set(task_outputs)
+
+    for op in ops:
+        col = str(op["output_column"])
+        out_name = str(op["output_name"])
+        prefix = f"Postprocess operation {op['index']}: "
+
+        if col in mask_columns:
+            msg = (
+                prefix
+                + f"output column '{col}' matches an existing task mask column; "
+                "paths may be overwritten."
+            )
+            logger.warning(msg)
+            if warnings is not None:
+                warnings.append(msg)
+        if col in seen_columns:
+            msg = (
+                prefix
+                + f"output column '{col}' matches another postprocess operation; "
+                "last writer wins."
+            )
+            logger.warning(msg)
+            if warnings is not None:
+                warnings.append(msg)
+        seen_columns.add(col)
+
+        if out_name in seen_outputs:
+            msg = (
+                prefix
+                + f"output file '{out_name}' collides with an existing task/postprocess output; "
+                "last writer wins."
+            )
+            logger.warning(msg)
+            if warnings is not None:
+                warnings.append(msg)
+        seen_outputs.add(out_name)
+
+
+def get_postprocess_columns_and_outputs(
+    tasks_config: Dict[str, Any]
+) -> Tuple[List[str], List[Tuple[str, str]], List[Dict[str, Any]]]:
+    """Return postprocess columns and `(column, output_name)` pairs in op order."""
+    tasks = tasks_config.get("tasks", [])
+    ops = resolve_postprocess_operations(tasks_config.get("postprocess"))
+    if not ops:
+        return [], [], []
+
+    warn_postprocess_collisions(tasks, ops)
+    columns = [str(op["output_column"]) for op in ops]
+    pairs = [(str(op["output_column"]), str(op["output_name"])) for op in ops]
+    return columns, pairs, ops
+
+
+def _handle_postprocess_missing_inputs(
+    op: Dict[str, Any], missing_keys: List[str], warnings: List[str]
+) -> None:
+    """Handle missing input keys for one operation."""
+    message = (
+        f"Postprocess operation {op['index']} missing input key(s): "
+        + ", ".join(sorted(set(missing_keys)))
+    )
+    if op["on_failure"] == "fail":
+        raise ValueError(message)
+    logger.warning(message)
+    warnings.append(message)
+
+
+def _handle_postprocess_output_failure(
+    op: Dict[str, Any], dst: Path, warnings: List[str]
+) -> None:
+    """Handle missing postprocess output."""
+    message = f"Postprocess operation {op['index']} did not produce expected output: {dst}"
+    if op["on_failure"] == "fail":
+        raise RuntimeError(message)
+    logger.warning(message)
+    warnings.append(message)
+
+
+def _register_postprocess_out_key(
+    key_to_output: Dict[str, str], op: Dict[str, Any], warnings: List[str]
+) -> None:
+    """Register postprocess out_key for downstream chained operations."""
+    out_key = str(op["out_key"])
+    output_name = str(op["output_name"])
+    if out_key in key_to_output and key_to_output[out_key] != output_name:
+        message = (
+            f"Postprocess operation {op['index']} out_key '{out_key}' overrides an existing "
+            "key mapping; downstream operations will use the latest mapping."
+        )
+        logger.warning(message)
+        warnings.append(message)
+    key_to_output[out_key] = output_name
 
 
 def prefetch_totalsegmentator_models(
@@ -403,48 +640,43 @@ def segment_volume(
         else:
             logger.info("Mask saved at %s", dst)
 
-    postprocess = tasks_config.get("postprocess")
-    if not postprocess:
+    postprocess_ops = resolve_postprocess_operations(tasks_config.get("postprocess"))
+    if not postprocess_ops:
         return warnings
 
-    merge_keys = postprocess.get("merge_keys", [])
-    if not merge_keys:
-        return warnings
-
+    # Collision warnings are configuration-level and should not be propagated as
+    # per-row warning strings.
+    warn_postprocess_collisions(tasks, postprocess_ops)
     key_to_output = {task["key"]: task["output"] for task in tasks}
-    merge_files = [key_to_output[k] for k in merge_keys if k in key_to_output]
-    if not merge_files:
-        return warnings
 
-    merged_name = postprocess.get("output", "mask_merged.nii.gz")
-    dst = output_dir / merged_name
-    if dst.exists() and not force:
-        if verbose:
-            logger.info("Skip %s – file exists", dst)
-        return warnings
+    for op in postprocess_ops:
+        missing_keys = [k for k in op["input_keys"] if k not in key_to_output]
+        if missing_keys:
+            _handle_postprocess_missing_inputs(op, missing_keys, warnings)
+            continue
 
-    on_failure = str(postprocess.get("on_failure", "warn_only")).strip().lower()
-    if on_failure not in {"warn_only", "fail"}:
-        raise ValueError(
-            f"Invalid postprocess.on_failure='{on_failure}'. Use 'warn_only' or 'fail'."
+        merge_files = [key_to_output[k] for k in op["input_keys"]]
+        dst = output_dir / str(op["output_name"])
+        if dst.exists() and not force:
+            if verbose:
+                logger.info("Skip %s - file exists", dst)
+            _register_postprocess_out_key(key_to_output, op, warnings)
+            continue
+
+        merged_ok = clean_and_merge_masks(
+            output_dir,
+            merge_files,
+            output_name=str(op["output_name"]),
+            radius_mm=float(op["radius_mm"]),
+            verbose=verbose,
+            close=bool(op["close"]),
+            fill_holes=bool(op["fill_holes"]),
+            largest_cc=bool(op["largest_cc"]),
         )
-
-    merged_ok = clean_and_merge_masks(
-        output_dir,
-        merge_files,
-        output_name=merged_name,
-        radius_mm=float(postprocess.get("radius_mm", 5.0)),
-        verbose=verbose,
-        close=bool(postprocess.get("close", True)),
-        fill_holes=bool(postprocess.get("fill_holes", True)),
-        largest_cc=bool(postprocess.get("largest_cc", True)),
-    )
-    if not merged_ok or not dst.exists():
-        message = f"Postprocess merge did not produce expected output: {dst}"
-        if on_failure == "fail":
-            raise RuntimeError(message)
-        logger.warning(message)
-        warnings.append(message)
+        if not merged_ok or not dst.exists():
+            _handle_postprocess_output_failure(op, dst, warnings)
+            continue
+        _register_postprocess_out_key(key_to_output, op, warnings)
 
     return warnings
 
@@ -675,10 +907,15 @@ def main(args: argparse.Namespace) -> None:
     if "nifti_path" not in df.columns:
         raise KeyError("column 'nifti_path' missing")
     df = df.drop_duplicates("nifti_path").copy()
-    for task in tasks_config.get("tasks", []):
-        df[f"mask_{task['key']}"] = None
-    if tasks_config.get("postprocess"):
-        df["mask_merged"] = None
+    mask_columns = [f"mask_{task['key']}" for task in tasks_config.get("tasks", [])]
+    for col in mask_columns:
+        df[col] = None
+
+    postprocess_columns, postprocess_outputs, _ = get_postprocess_columns_and_outputs(
+        tasks_config
+    )
+    for col in postprocess_columns:
+        df[col] = None
     df["warning_message"] = None
 
     # --- spawn multiprocessing pool -------------------------------------------
@@ -734,13 +971,10 @@ def main(args: argparse.Namespace) -> None:
                     df.at[idx, f"mask_{task['key']}"] = str(mask_path)
                 else:
                     row_warnings.append(f"missing mask: {mask_path}")
-            if tasks_config.get("postprocess"):
-                merged_name = tasks_config["postprocess"].get(
-                    "output", "mask_merged.nii.gz"
-                )
-                merged_path = base / merged_name
+            for column_name, output_name in postprocess_outputs:
+                merged_path = base / output_name
                 if merged_path.exists():
-                    df.at[idx, "mask_merged"] = str(merged_path)
+                    df.at[idx, column_name] = str(merged_path)
                 else:
                     row_warnings.append(f"missing merged mask: {merged_path}")
             if warning_msg:
