@@ -1,3 +1,9 @@
+"""Radiomics feature extraction pipeline and command-line entry points.
+
+The definitions in this module are part of the Imperandi codebase and are
+intended to be reused by higher-level workflows and CLI entry points.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -22,6 +28,14 @@ DEFAULT_SETTINGS = {
 
 
 def _load_radiomics_dependencies():
+    """Load radiomics dependencies.
+    
+    Returns:
+        Any: Loaded object returned by this routine.
+    
+    Raises:
+        RuntimeError: If runtime prerequisites or optional dependencies are unavailable.
+    """
     try:
         import SimpleITK as sitk
     except ModuleNotFoundError as exc:
@@ -42,6 +56,15 @@ def _load_radiomics_dependencies():
 
 
 def _create_radiomics_extractor(featureextractor_module, settings: Dict[str, Any]):
+    """Perform radiomics extractor.
+    
+    Args:
+        featureextractor_module (Any): Input value for featureextractor module.
+        settings (Dict[str, Any]): Input value for settings.
+    
+    Returns:
+        Any: Result of `_create_radiomics_extractor`.
+    """
     return featureextractor_module.RadiomicsFeatureExtractor(**settings)
 
 
@@ -50,6 +73,13 @@ def add_radiomics_arguments(
     include_manifest: bool = True,
     include_dry_run: bool = True,
 ) -> None:
+    """Add command-line arguments for radiomics.
+    
+    Args:
+        parser (argparse.ArgumentParser): Argument parser instance to configure.
+        include_manifest (bool): Boolean flag controlling optional behavior. Defaults to `True`.
+        include_dry_run (bool): Boolean flag controlling optional behavior. Defaults to `True`.
+    """
     parser.add_argument(
         "csv_path_pos",
         nargs="?",
@@ -105,6 +135,14 @@ def add_radiomics_arguments(
 
 
 def build_parser(add_help: bool = True) -> argparse.ArgumentParser:
+    """Build and return the command-line parser.
+    
+    Args:
+        add_help (bool): Boolean flag controlling optional behavior. Defaults to `True`.
+    
+    Returns:
+        argparse.ArgumentParser: Configured argument parser instance.
+    """
     parser = argparse.ArgumentParser(
         description="Extract PyRadiomics features from CT volumes and masks.",
         add_help=add_help,
@@ -114,6 +152,18 @@ def build_parser(add_help: bool = True) -> argparse.ArgumentParser:
 
 
 def normalize_radiomics_args(args: argparse.Namespace) -> argparse.Namespace:
+    """Normalize parsed command-line arguments and fill derived defaults.
+    
+    Args:
+        args (argparse.Namespace): Parsed command-line arguments namespace.
+    
+    Returns:
+        argparse.Namespace: Parsed and normalized argument namespace.
+    
+    Raises:
+        ValueError: If provided inputs fail validation.
+        FileNotFoundError: If an expected input file cannot be found.
+    """
     csv_in = args.csv_path_opt if args.csv_path_opt is not None else args.csv_path_pos
     csv_path = Path(csv_in) if csv_in else (Path.cwd() / "nifti_index.csv")
 
@@ -141,6 +191,11 @@ def normalize_radiomics_args(args: argparse.Namespace) -> argparse.Namespace:
 
 
 def parse_arguments() -> argparse.Namespace:
+    """Parse command-line arguments for this module.
+    
+    Returns:
+        argparse.Namespace: Parsed and normalized argument namespace.
+    """
     parser = build_parser()
     args = parser.parse_args()
     args = normalize_radiomics_args(args)
@@ -149,6 +204,14 @@ def parse_arguments() -> argparse.Namespace:
 
 
 def get_patients_with_complete_exams(df: pd.DataFrame):
+    """Return patients with complete exams.
+    
+    Args:
+        df (pd.DataFrame): Input pandas DataFrame to process.
+    
+    Returns:
+        Any: Requested patients with complete exams.
+    """
     unique_combos = (
         df[["patient_key", "followup_months", "phase"]].dropna().drop_duplicates()
     )
@@ -175,6 +238,14 @@ def get_patients_with_complete_exams(df: pd.DataFrame):
 
 
 def filter_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Filter DataFrame.
+    
+    Args:
+        df (pd.DataFrame): Input pandas DataFrame to process.
+    
+    Returns:
+        pd.DataFrame: Processed pandas DataFrame.
+    """
     df = df.copy()
 
     if "followup_months" in df.columns:
@@ -213,6 +284,15 @@ def filter_df(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def mask_has_voxels(mask, sitk_module) -> bool:
+    """Perform has voxels.
+    
+    Args:
+        mask (Any): Input value for mask.
+        sitk_module (Any): Input value for sitk module.
+    
+    Returns:
+        bool: True when the condition is satisfied; otherwise False.
+    """
     return bool(sitk_module.GetArrayViewFromImage(mask).sum() > 0)
 
 
@@ -224,6 +304,18 @@ def extract_radiomics_safe(
     extractor,
     sitk_module,
 ) -> Tuple[Dict[str, Any], Optional[str]]:
+    """Extract radiomics safe.
+    
+    Args:
+        image_path (str): Filesystem path consumed by this operation.
+        mask_path (Optional[str]): Filesystem path consumed by this operation.
+        prefix (str): Input value for prefix.
+        extractor (Any): Input value for extractor.
+        sitk_module (Any): Input value for sitk module.
+    
+    Returns:
+        Tuple[Dict[str, Any], Optional[str]]: Tuple containing outputs from this step.
+    """
     if not mask_path or not Path(mask_path).exists():
         return {}, f"{prefix} mask path is missing: {mask_path}"
 
@@ -253,6 +345,19 @@ def extract_radiomics_liver_minus_tumor(
     sitk_module,
     prefix: str = "liver",
 ) -> Tuple[Dict[str, Any], Optional[str]]:
+    """Extract radiomics liver minus tumor.
+    
+    Args:
+        image_path (str): Filesystem path consumed by this operation.
+        liver_mask_path (Optional[str]): Filesystem path consumed by this operation.
+        tumor_mask_path (Optional[str]): Filesystem path consumed by this operation.
+        extractor (Any): Input value for extractor.
+        sitk_module (Any): Input value for sitk module.
+        prefix (str): Input value for prefix. Defaults to `'liver'`.
+    
+    Returns:
+        Tuple[Dict[str, Any], Optional[str]]: Tuple containing outputs from this step.
+    """
     if not liver_mask_path or not Path(liver_mask_path).exists():
         return {}, "missing liver mask"
 
@@ -316,6 +421,17 @@ def extract_radiomics_from_dataframe(
     sitk_module,
     verbose: bool = False,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Extract radiomics from dataframe.
+    
+    Args:
+        df (pd.DataFrame): Input pandas DataFrame to process.
+        extractor (Any): Input value for extractor.
+        sitk_module (Any): Input value for sitk module.
+        verbose (bool): Boolean flag controlling optional behavior. Defaults to `False`.
+    
+    Returns:
+        Tuple[pd.DataFrame, pd.DataFrame]: Processed pandas DataFrame.
+    """
     all_features = []
     errors = []
 
@@ -380,6 +496,14 @@ def extract_radiomics_from_dataframe(
 
 
 def main(args: argparse.Namespace) -> None:
+    """Run the module entry point.
+    
+    Args:
+        args (argparse.Namespace): Parsed command-line arguments namespace.
+    
+    Raises:
+        KeyError: If required keys are missing from a mapping-like input.
+    """
     load_manifest(
         getattr(args, "manifest", None), base_path=Path(__file__).resolve().parents[1]
     )

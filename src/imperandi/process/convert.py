@@ -1,3 +1,9 @@
+"""Volume conversion pipeline helpers for transforming source imaging data.
+
+The definitions in this module are part of the Imperandi codebase and are
+intended to be reused by higher-level workflows and CLI entry points.
+"""
+
 from __future__ import annotations
 
 import traceback
@@ -31,6 +37,13 @@ def add_convert_arguments(
     include_manifest: bool = True,
     include_dry_run: bool = True,
 ):
+    """Add command-line arguments for convert.
+    
+    Args:
+        parser (argparse.ArgumentParser): Argument parser instance to configure.
+        include_manifest (bool): Boolean flag controlling optional behavior. Defaults to `True`.
+        include_dry_run (bool): Boolean flag controlling optional behavior. Defaults to `True`.
+    """
     parser.add_argument(
         "csv_path_pos",
         nargs="?",
@@ -122,6 +135,14 @@ def add_convert_arguments(
 
 
 def build_parser(add_help: bool = True) -> argparse.ArgumentParser:
+    """Build and return the command-line parser.
+    
+    Args:
+        add_help (bool): Boolean flag controlling optional behavior. Defaults to `True`.
+    
+    Returns:
+        argparse.ArgumentParser: Configured argument parser instance.
+    """
     parser = argparse.ArgumentParser(
         description="Convert DICOM Series to NIFTI file",
         add_help=add_help,
@@ -131,6 +152,11 @@ def build_parser(add_help: bool = True) -> argparse.ArgumentParser:
 
 
 def parse_arguments():
+    """Parse command-line arguments for this module.
+    
+    Returns:
+        Any: Parsed arguments.
+    """
     parser = build_parser()
     args = parser.parse_args()
     args = normalize_convert_args(args)
@@ -140,6 +166,18 @@ def parse_arguments():
 
 def normalize_convert_args(args: argparse.Namespace) -> argparse.Namespace:
     # pick optionals over positionals
+    """Normalize parsed command-line arguments and fill derived defaults.
+    
+    Args:
+        args (argparse.Namespace): Parsed command-line arguments namespace.
+    
+    Returns:
+        argparse.Namespace: Parsed and normalized argument namespace.
+    
+    Raises:
+        ValueError: If provided inputs fail validation.
+        FileNotFoundError: If an expected input file cannot be found.
+    """
     csv_in = args.csv_path_opt if args.csv_path_opt is not None else args.csv_path_pos
     out_in = (
         args.output_dir_opt if args.output_dir_opt is not None else args.output_dir_pos
@@ -208,6 +246,14 @@ def convert_list_str_to_list(cell):
 
 
 def _flatten_dicom_paths(cell) -> list[str]:
+    """Return flatten DICOM paths.
+    
+    Args:
+        cell (Any): Cell value from a DataFrame column.
+    
+    Returns:
+        list[str]: List of computed items.
+    """
     if isinstance(cell, list):
         return [str(v) for v in cell]
     if isinstance(cell, str):
@@ -216,6 +262,15 @@ def _flatten_dicom_paths(cell) -> list[str]:
 
 
 def _apply_uri_mapping_to_cell(cell, uri_map: dict[str, str | None]):
+    """Perform URI mapping to cell.
+    
+    Args:
+        cell (Any): Input value for cell.
+        uri_map (dict[str, str | None]): Input value for URI map.
+    
+    Returns:
+        Any: Result of `_apply_uri_mapping_to_cell`.
+    """
     if isinstance(cell, list):
         mapped = []
         for value in cell:
@@ -371,6 +426,11 @@ def process_single_volume(k, row, output_dir, verbose):
 
         # Conversion process
         def read_dicom_write_nifti(dicom_dir_one_volume):
+            """Read DICOM write NIfTI.
+            
+            Args:
+                dicom_dir_one_volume (Any): Input value for DICOM dir one volume.
+            """
             dicom_input = dicom2nifti.common.read_dicom_directory(dicom_dir_one_volume)
             dicom2nifti.convert_dicom.dicom_array_to_nifti(
                 dicom_input, export_path, reorient_nifti=False

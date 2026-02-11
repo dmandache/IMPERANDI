@@ -1,4 +1,10 @@
-﻿import warnings
+﻿"""DICOM metadata parsing logic used to build ingest-ready tabular datasets.
+
+The definitions in this module are part of the Imperandi codebase and are
+intended to be reused by higher-level workflows and CLI entry points.
+"""
+
+import warnings
 import glob
 import logging
 from functools import partial
@@ -38,6 +44,13 @@ def add_parse_arguments(
     include_manifest: bool = True,
     include_dry_run: bool = True,
 ) -> None:
+    """Add command-line arguments for parse.
+    
+    Args:
+        parser (argparse.ArgumentParser): Argument parser instance to configure.
+        include_manifest (bool): Boolean flag controlling optional behavior. Defaults to `True`.
+        include_dry_run (bool): Boolean flag controlling optional behavior. Defaults to `True`.
+    """
     parser.add_argument(
         "root_path_pos",
         type=str,
@@ -174,6 +187,16 @@ def build_parser(
     include_manifest: bool = True,
     include_dry_run: bool = True,
 ) -> argparse.ArgumentParser:
+    """Build and return the command-line parser.
+    
+    Args:
+        add_help (bool): Boolean flag controlling optional behavior. Defaults to `True`.
+        include_manifest (bool): Boolean flag controlling optional behavior. Defaults to `True`.
+        include_dry_run (bool): Boolean flag controlling optional behavior. Defaults to `True`.
+    
+    Returns:
+        argparse.ArgumentParser: Configured argument parser instance.
+    """
     parser = argparse.ArgumentParser(
         description=(
             "Process DICOM files: read header tags once, then compute patient/study/series IDs from tags or path."
@@ -189,6 +212,14 @@ def build_parser(
 
 
 def resolve_root_paths(root_path: Optional[Union[str, Path]]) -> list[Path]:
+    """Resolve root paths.
+    
+    Args:
+        root_path (Optional[Union[str, Path]]): Filesystem path consumed by this operation.
+    
+    Returns:
+        list[Path]: Resolved filesystem path.
+    """
     if root_path is None:
         return [Path.cwd()]
 
@@ -207,6 +238,14 @@ def resolve_root_paths(root_path: Optional[Union[str, Path]]) -> list[Path]:
 
 
 def default_output_dir(root_path: Optional[str]) -> Path:
+    """Return default output dir.
+    
+    Args:
+        root_path (Optional[str]): Filesystem path consumed by this operation.
+    
+    Returns:
+        Path: Resolved filesystem path.
+    """
     if root_path is None:
         return Path.cwd().parent
 
@@ -220,6 +259,14 @@ def default_output_dir(root_path: Optional[str]) -> Path:
 
 
 def normalize_parse_args(args: argparse.Namespace) -> argparse.Namespace:
+    """Normalize parsed command-line arguments and fill derived defaults.
+    
+    Args:
+        args (argparse.Namespace): Parsed command-line arguments namespace.
+    
+    Returns:
+        argparse.Namespace: Parsed and normalized argument namespace.
+    """
     root_in = (
         args.root_path_opt
         if getattr(args, "root_path_opt", None) is not None
@@ -257,6 +304,11 @@ def normalize_parse_args(args: argparse.Namespace) -> argparse.Namespace:
 
 
 def parse_arguments():
+    """Parse command-line arguments for this module.
+    
+    Returns:
+        Any: Parsed arguments.
+    """
     parser = build_parser()
     args = parser.parse_args()
     args = normalize_parse_args(args)
@@ -265,6 +317,15 @@ def parse_arguments():
 
 
 def apply_id_standardization(df: pd.DataFrame, manifest: dict) -> pd.DataFrame:
+    """Return apply ID standardization.
+    
+    Args:
+        df (pd.DataFrame): Input pandas DataFrame to process.
+        manifest (dict): Loaded dataset manifest configuration.
+    
+    Returns:
+        pd.DataFrame: Processed pandas DataFrame.
+    """
     hook = resolve_hook(manifest.get("id_standardization") or {})
     if "patient_key" not in df.columns:
         return df
@@ -298,6 +359,15 @@ def apply_id_standardization(df: pd.DataFrame, manifest: dict) -> pd.DataFrame:
 
 
 def apply_derived_columns(df: pd.DataFrame, manifest: dict) -> pd.DataFrame:
+    """Return apply derived columns.
+    
+    Args:
+        df (pd.DataFrame): Input pandas DataFrame to process.
+        manifest (dict): Loaded dataset manifest configuration.
+    
+    Returns:
+        pd.DataFrame: Processed pandas DataFrame.
+    """
     derived_columns = manifest.get("derived_columns", [])
     if not derived_columns:
         return df
@@ -330,6 +400,11 @@ def apply_derived_columns(df: pd.DataFrame, manifest: dict) -> pd.DataFrame:
 # IO helpers
 # -------------------------
 def ensure_directory_exists(output_dir: Path):
+    """Perform ensure directory exists.
+    
+    Args:
+        output_dir (Path): Directory path used for input or output data.
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
 
 
@@ -347,6 +422,14 @@ def get_dicom_path_entries(
 
 
 def get_dicom_paths(root_path):
+    """Return DICOM paths.
+    
+    Args:
+        root_path (Any): Filesystem path consumed by this operation.
+    
+    Returns:
+        Any: Requested DICOM paths.
+    """
     entries = get_dicom_path_entries(root_path)
     paths = []
     for entry in entries:
@@ -362,6 +445,15 @@ def get_dicom_paths(root_path):
 # DICOM tag extraction
 # -------------------------
 def extract_dicom_tags_recursive(ds, parent_key=""):
+    """Extract DICOM tags recursive.
+    
+    Args:
+        ds (Any): Input value for ds.
+        parent_key (str): Input value for parent key. Defaults to `''`.
+    
+    Returns:
+        Any: Extracted DICOM tags recursive.
+    """
     tags = {}
     for elem in ds:
         key = f"{parent_key}_{elem.keyword}" if parent_key else elem.keyword
@@ -392,6 +484,15 @@ def read_dicom_header(fp, *, force=False):
 
 
 def read_dicom_header_with_force(fp, force):
+    """Read DICOM header with force.
+    
+    Args:
+        fp (Any): Input value for fp.
+        force (Any): Input value for force.
+    
+    Returns:
+        Any: Loaded DICOM header with force.
+    """
     return read_dicom_header(fp, force=force)
 
 
@@ -436,6 +537,15 @@ def choose_ids(
             scan_roots = pd.Series([str(root_path)] * len(df), index=df.index)
 
         def _relative_to_root(dicom_path: str, scan_root: str) -> Path:
+            """Perform to root.
+            
+            Args:
+                dicom_path (str): Filesystem path consumed by this operation.
+                scan_root (str): Input value for scan root.
+            
+            Returns:
+                Path: Resolved filesystem path.
+            """
             p = Path(dicom_path)
             try:
                 return p.relative_to(Path(scan_root))
@@ -456,6 +566,14 @@ def choose_ids(
     # Tag-derived IDs
     # -------------------------
     def _tagcol(tag: str) -> pd.Series:
+        """Perform tagcol.
+        
+        Args:
+            tag (str): Input value for tag.
+        
+        Returns:
+            pd.Series: Processed pandas Series.
+        """
         if tag in df.columns:
             return df[tag].map(
                 lambda v: None if pd.isna(v) or str(v).strip() == "" else str(v).strip()
@@ -554,6 +672,11 @@ def process_with_checkpoint(
 # Main
 # -------------------------
 def main(args):
+    """Run this module entry point.
+    
+    Args:
+        args: Parsed command-line arguments namespace.
+    """
     args = normalize_parse_args(args)
     root_path = args.root_path
     output_dir = Path(args.output_dir)

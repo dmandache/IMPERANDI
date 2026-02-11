@@ -155,9 +155,13 @@ class TotalSegmentatorBackend:
     """Thin wrapper for TotalSegmentator to keep dependency optional."""
 
     def __init__(self) -> None:
+        """Initialize `TotalSegmentatorBackend` state.
+        """
         self._ts = None
 
     def _ensure_imported(self) -> None:
+        """Ensure runtime prerequisites are satisfied.
+        """
         if self._ts is None:
             from totalsegmentator.python_api import totalsegmentator
 
@@ -172,6 +176,15 @@ class TotalSegmentatorBackend:
         fast: bool,
         **kwargs: Any,
     ) -> None:
+        """Run `TotalSegmentatorBackend` processing.
+        
+        Args:
+            input_path (Path): Filesystem path consumed by this operation.
+            output_dir (Path): Directory path used for input or output data.
+            task (str): Task identifier passed to backend operations.
+            fast (bool): Boolean flag controlling optional behavior.
+            **kwargs (Any): Additional keyword arguments forwarded to downstream calls.
+        """
         self._ensure_imported()
         self._ts(
             input=input_path,
@@ -185,6 +198,11 @@ class TotalSegmentatorBackend:
 
 
 def _default_tasks_config() -> Dict[str, Any]:
+    """Compute the default config value.
+    
+    Returns:
+        Dict[str, Any]: Dictionary of computed fields.
+    """
     return {
         "backend": "totalsegmentator",
         "tasks": [
@@ -486,6 +504,13 @@ def add_segment_arguments(
     include_manifest: bool = True,
     include_dry_run: bool = True,
 ) -> None:
+    """Add command-line arguments for segment.
+    
+    Args:
+        parser (argparse.ArgumentParser): Argument parser instance to configure.
+        include_manifest (bool): Boolean flag controlling optional behavior. Defaults to `True`.
+        include_dry_run (bool): Boolean flag controlling optional behavior. Defaults to `True`.
+    """
     parser.add_argument(
         "csv_path_pos",
         nargs="?",
@@ -563,6 +588,14 @@ def add_segment_arguments(
 
 
 def build_parser(add_help: bool = True) -> argparse.ArgumentParser:
+    """Build and return the command-line parser.
+    
+    Args:
+        add_help (bool): Boolean flag controlling optional behavior. Defaults to `True`.
+    
+    Returns:
+        argparse.ArgumentParser: Configured argument parser instance.
+    """
     parser = argparse.ArgumentParser(
         description="Batch segmentation with TotalSegmentator v2",
         add_help=add_help,
@@ -572,6 +605,17 @@ def build_parser(add_help: bool = True) -> argparse.ArgumentParser:
 
 
 def normalize_segment_args(args: argparse.Namespace) -> argparse.Namespace:
+    """Normalize parsed command-line arguments and fill derived defaults.
+    
+    Args:
+        args (argparse.Namespace): Parsed command-line arguments namespace.
+    
+    Returns:
+        argparse.Namespace: Parsed and normalized argument namespace.
+    
+    Raises:
+        FileNotFoundError: If an expected input file cannot be found.
+    """
     csv_in = args.csv_path_opt if args.csv_path_opt is not None else args.csv_path_pos
 
     if csv_in is None:
@@ -604,6 +648,14 @@ def normalize_segment_args(args: argparse.Namespace) -> argparse.Namespace:
 
 
 def main(args: argparse.Namespace) -> None:
+    """Run the module entry point.
+    
+    Args:
+        args (argparse.Namespace): Parsed command-line arguments namespace.
+    
+    Raises:
+        KeyError: If required keys are missing from a mapping-like input.
+    """
     setup_logging(verbose=getattr(args, "verbose", False))
     manifest = load_manifest(
         getattr(args, "manifest", None), base_path=Path(__file__).resolve().parents[1]

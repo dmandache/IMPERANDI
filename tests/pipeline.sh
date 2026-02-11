@@ -9,4 +9,4 @@ imperandi segment "${DIR_PATH}/nifti_index.csv"
 imperandi phase "${DIR_PATH}/nifti_index.csv"
 imperandi radiomics "${DIR_PATH}/nifti_index.csv"
 
-echo "Pipeline executed successfully!"
+echo "Pipeline completed successfully."

@@ -1,3 +1,9 @@
+"""Interactive quality-control viewer for browsing scans and segmentation overlays.
+
+The definitions in this module are part of the Imperandi codebase and are
+intended to be reused by higher-level workflows and CLI entry points.
+"""
+
 # %matplotlib widget
 
 from pathlib import Path
@@ -71,6 +77,10 @@ def clip_hu_values(ct_scan, min_hu, max_hu):
 
 
 class CTScanViewer:
+    """Interactive viewer for browsing volumes and segmentation overlays.
+    
+    This class groups related state and behavior behind a single interface.
+    """
     def __init__(
         self,
         df,
@@ -80,6 +90,16 @@ class CTScanViewer:
         HU_max=400,
         exploration_mode="ordered",
     ):
+        """Initialize `CTScanViewer` state.
+        
+        Args:
+            df (Any): Input pandas DataFrame to process.
+            ct_scan_col (Any): Column name containing CT volume file paths.
+            segmentation_cols (Optional[Any]): Column name or list of columns containing segmentation masks. Defaults to `None`.
+            HU_min (int): Lower HU bound used for display windowing. Defaults to `-100`.
+            HU_max (int): Upper HU bound used for display windowing. Defaults to `400`.
+            exploration_mode (str): Navigation mode (`ordered` or `random`). Defaults to `'ordered'`.
+        """
         self.df = df
         self.ct_scan_col = ct_scan_col
         self.patient_col = "patient_key" if "patient_key" in df.columns else None
@@ -147,6 +167,8 @@ class CTScanViewer:
         self.load_data()
 
     def init_widgets(self):
+        """Initialize widgets.
+        """
         self.slice_slider = widgets.IntSlider(
             min=0,
             max=100,
@@ -475,6 +497,14 @@ class CTScanViewer:
         display(ui_top, ui_bot)
 
     def _option_values(self, options):
+        """Perform values.
+        
+        Args:
+            options (Any): Collection of selectable options.
+        
+        Returns:
+            Any: Result of `_option_values`.
+        """
         values = []
         for option in options:
             if isinstance(option, tuple) and len(option) == 2:
@@ -484,6 +514,13 @@ class CTScanViewer:
         return values
 
     def _step_dropdown(self, dropdown, direction, wrap=False):
+        """Advance dropdown.
+        
+        Args:
+            dropdown (Any): Widget dropdown control to update.
+            direction (Any): Step direction used for navigation.
+            wrap (bool): Whether navigation should wrap around at boundaries. Defaults to `False`.
+        """
         options = self._option_values(dropdown.options)
         values = [opt for opt in options if opt is not None]
         if not values:
@@ -504,6 +541,8 @@ class CTScanViewer:
             dropdown.value = values[next_idx]
 
     def _update_jump_nav_buttons(self):
+        """Update jump nav buttons.
+        """
         patient_values = [
             opt
             for opt in self._option_values(self.patient_dropdown.options)
@@ -532,6 +571,16 @@ class CTScanViewer:
         self.next_date_button.disabled = current_idx == (len(date_values) - 1)
 
     def _build_options_for_column(self, column, formatter, frame=None):
+        """Perform options for column.
+        
+        Args:
+            column (Any): Input value for column.
+            formatter (Any): Input value for formatter.
+            frame (Optional[Any]): Input value for frame. Defaults to `None`.
+        
+        Returns:
+            Any: Built options for column.
+        """
         if column is None:
             return [("N/A", None)]
         source = self.df if frame is None else frame
@@ -550,6 +599,15 @@ class CTScanViewer:
         return options
 
     def _filter_frame_for_jump(self, patient_value=None, date_value=None):
+        """Filter frame for jump.
+        
+        Args:
+            patient_value (Optional[Any]): Selected patient value. Defaults to `None`.
+            date_value (Optional[Any]): Selected date value. Defaults to `None`.
+        
+        Returns:
+            Any: Filtered result collection.
+        """
         frame = self.df
         if self.patient_col and patient_value is not None:
             frame = frame[
@@ -564,9 +622,22 @@ class CTScanViewer:
         return frame
 
     def _build_patient_options(self):
+        """Build patient options.
+        
+        Returns:
+            Any: Options list suitable for selection widgets.
+        """
         return self._build_options_for_column(self.patient_col, self._format_value)
 
     def _build_date_options(self, patient_value):
+        """Build date options.
+        
+        Args:
+            patient_value (Any): Selected patient value.
+        
+        Returns:
+            Any: Options list suitable for selection widgets.
+        """
         if self.date_col is None:
             return [("N/A", None)]
         frame = self._filter_frame_for_jump(patient_value=patient_value)
@@ -575,6 +646,15 @@ class CTScanViewer:
         )
 
     def _build_phase_options(self, patient_value, date_value):
+        """Build phase options.
+        
+        Args:
+            patient_value (Any): Selected patient value.
+            date_value (Any): Selected date value.
+        
+        Returns:
+            Any: Options list suitable for selection widgets.
+        """
         if self.phase_col is None:
             return [("N/A", None)]
         frame = self._filter_frame_for_jump(
@@ -586,6 +666,14 @@ class CTScanViewer:
         )
 
     def _set_dropdown_options(self, dropdown, options, preferred=None, disabled=False):
+        """Set dropdown options.
+        
+        Args:
+            dropdown (Any): Widget dropdown control to update.
+            options (Any): Collection of selectable options.
+            preferred (Optional[Any]): Input value for preferred. Defaults to `None`.
+            disabled (bool): Input value for disabled. Defaults to `False`.
+        """
         values = self._option_values(options)
         dropdown.options = options
         if preferred in values:
@@ -597,6 +685,11 @@ class CTScanViewer:
         dropdown.disabled = disabled or (len(values) == 1 and values[0] is None)
 
     def _refresh_jump_dropdowns(self, *, use_current_row=False):
+        """Perform jump dropdowns.
+        
+        Args:
+            use_current_row (bool): Input value for use current row. Defaults to `False`.
+        """
         if not hasattr(self, "patient_dropdown"):
             return
 
@@ -650,6 +743,8 @@ class CTScanViewer:
         self._update_jump_nav_buttons()
 
     def _jump_to_selected_filters(self):
+        """Jump to to selected filters.
+        """
         if len(self.df) == 0:
             return
         patient_value = self.patient_dropdown.value if self.patient_col else None
@@ -674,6 +769,14 @@ class CTScanViewer:
             return
 
     def _format_date(self, value):
+        """Format date.
+        
+        Args:
+            value (Any): Input value to evaluate or transform.
+        
+        Returns:
+            Any: Formatted representation of the input value.
+        """
         if value is None:
             return "?"
         try:
@@ -692,6 +795,14 @@ class CTScanViewer:
             return str(value)
 
     def _format_value(self, value):
+        """Format value.
+        
+        Args:
+            value (Any): Input value to evaluate or transform.
+        
+        Returns:
+            Any: Formatted representation of the input value.
+        """
         if value is None:
             return ""
         try:
@@ -708,6 +819,14 @@ class CTScanViewer:
         return str(value)
 
     def _is_empty_value(self, value):
+        """Return whether empty value.
+        
+        Args:
+            value (Any): Input value to evaluate or transform.
+        
+        Returns:
+            Any: True when the condition is satisfied; otherwise False.
+        """
         if value is None:
             return True
         try:
@@ -720,6 +839,11 @@ class CTScanViewer:
         return False
 
     def _get_selected_segmentation(self):
+        """Return selected segmentation.
+        
+        Returns:
+            Any: Requested selected segmentation.
+        """
         if not self.segmentation_cols:
             return None
         seg_name = self.center_seg_dropdown.value
@@ -728,6 +852,14 @@ class CTScanViewer:
         return None
 
     def _compute_center_slice(self, seg):
+        """Compute center slice.
+        
+        Args:
+            seg (Any): Input value for seg.
+        
+        Returns:
+            Any: Computed center slice.
+        """
         if seg is None:
             return None
         if self.view_plane == "axial":
@@ -741,6 +873,8 @@ class CTScanViewer:
         return int(np.argmax(sums))
 
     def _set_jump_value(self):
+        """Set jump value.
+        """
         self._refresh_jump_dropdowns(use_current_row=True)
 
     def _try_enable_widget_backend(self):
@@ -757,6 +891,8 @@ class CTScanViewer:
             return
 
     def _render_output_figure(self):
+        """Perform render output figure.
+        """
         if not self._uses_output_fallback:
             return
         if not isinstance(self.display_widget, widgets.Output):
@@ -766,6 +902,8 @@ class CTScanViewer:
             display(self.fig)
 
     def _pin_axes_to_canvas(self):
+        """Pin axes to canvas.
+        """
         if self.fig is None or self.ax is None:
             return
         self.fig.subplots_adjust(left=0.0, right=1.0, bottom=0.0, top=1.0)
@@ -774,6 +912,11 @@ class CTScanViewer:
         self.ax.margins(0)
 
     def on_window_preset_change(self, change):
+        """Handle the window preset change callback.
+        
+        Args:
+            change (Any): Widget change event payload.
+        """
         preset = change["new"]
         if preset == "Custom":
             return
@@ -783,38 +926,83 @@ class CTScanViewer:
         self.update_display()
 
     def on_patient_change(self, change):
+        """Handle the patient change callback.
+        
+        Args:
+            change (Any): Widget change event payload.
+        """
         if self._suspend_jump:
             return
         self._refresh_jump_dropdowns(use_current_row=False)
         self._jump_to_selected_filters()
 
     def on_date_change(self, change):
+        """Handle the date change callback.
+        
+        Args:
+            change (Any): Widget change event payload.
+        """
         if self._suspend_jump:
             return
         self._refresh_jump_dropdowns(use_current_row=False)
         self._jump_to_selected_filters()
 
     def on_phase_change(self, change):
+        """Handle the phase change callback.
+        
+        Args:
+            change (Any): Widget change event payload.
+        """
         if self._suspend_jump:
             return
         self._jump_to_selected_filters()
 
     def on_prev_patient(self, button):
+        """Handle the prev patient callback.
+        
+        Args:
+            button (Any): Widget button event payload.
+        """
         self._step_dropdown(self.patient_dropdown, -1, wrap=True)
 
     def on_next_patient(self, button):
+        """Handle the next patient callback.
+        
+        Args:
+            button (Any): Widget button event payload.
+        """
         self._step_dropdown(self.patient_dropdown, 1, wrap=True)
 
     def on_prev_date(self, button):
+        """Handle the prev date callback.
+        
+        Args:
+            button (Any): Widget button event payload.
+        """
         self._step_dropdown(self.date_dropdown, -1)
 
     def on_next_date(self, button):
+        """Handle the next date callback.
+        
+        Args:
+            button (Any): Widget button event payload.
+        """
         self._step_dropdown(self.date_dropdown, 1)
 
     def on_seg_visibility_change(self, change):
+        """Handle the seg visibility change callback.
+        
+        Args:
+            change (Any): Widget change event payload.
+        """
         self.update_display()
 
     def on_center_on_lesion(self, button):
+        """Handle the center on lesion callback.
+        
+        Args:
+            button (Any): Widget button event payload.
+        """
         seg = self._get_selected_segmentation()
         if seg is None:
             return
@@ -823,6 +1011,11 @@ class CTScanViewer:
             self.slice_slider.value = int(center_idx)
 
     def on_key_press(self, event):
+        """Handle the key press callback.
+        
+        Args:
+            event (Any): Keyboard or UI event payload.
+        """
         key = (event.key or "").lower()
         if "shift+" in key:
             if "left" in key or "up" in key:
@@ -837,6 +1030,8 @@ class CTScanViewer:
             self.on_next_slice_manual(None)
 
     def load_data(self):
+        """Load data.
+        """
         self.progress_bar.layout.visibility = "visible"
         self.progress_bar.value = 0
         self.progress_bar.bar_style = "info"
@@ -873,6 +1068,8 @@ class CTScanViewer:
         self.progress_bar.layout.visibility = "hidden"
 
     def update_slice_slider(self):
+        """Update slice slider.
+        """
         self.view_plane = self.plane_selector.value
         if self.view_plane == "axial":
             self.num_slices = self.ct_scan_raw.shape[2]
@@ -897,6 +1094,11 @@ class CTScanViewer:
         self.update_display()
 
     def update_display(self, *_):
+        """Update display.
+        
+        Args:
+            *_: Additional positional arguments forwarded to downstream calls.
+        """
         if self.ct_scan_raw is None or self.ax is None:
             return
 
@@ -980,6 +1182,8 @@ class CTScanViewer:
             self.fig.canvas.draw_idle()
 
     def update_info_display(self):
+        """Update info display.
+        """
         row = self.df.iloc[self.current_index]
         rows = []
         for column in DICOM_TAGS_TO_DISPLAY:
@@ -1008,22 +1212,47 @@ class CTScanViewer:
         self.info_display.value = html
 
     def on_slice_change(self, change):
+        """Handle the slice change callback.
+        
+        Args:
+            change (Any): Widget change event payload.
+        """
         self.slice_idx = self.slice_slider.value
         self.update_display()
 
     def on_plane_change(self, change):
+        """Handle the plane change callback.
+        
+        Args:
+            change (Any): Widget change event payload.
+        """
         self.view_plane = self.plane_selector.value
         self.update_slice_slider()
 
     def on_prev_slice(self, button):
+        """Handle the prev slice callback.
+        
+        Args:
+            button (Any): Widget button event payload.
+        """
         new_val = max(0, self.slice_slider.value - SLICE_NAV_STEP)
         self.slice_slider.value = new_val
 
     def on_next_slice_manual(self, button):
+        """Handle the next slice manual callback.
+        
+        Args:
+            button (Any): Widget button event payload.
+        """
         new_val = min(self.slice_slider.max, self.slice_slider.value + SLICE_NAV_STEP)
         self.slice_slider.value = new_val
 
     def on_next(self, button):
+        """Handle the next callback.
+        
+        Args:
+            button (Any): Widget button event payload.
+        """
         if self.exploration_mode == "ordered":
             self.current_index = (self.current_index + 1) % len(self.df)
         else:
@@ -1042,6 +1271,11 @@ class CTScanViewer:
         self.load_data()
 
     def on_prev(self, button):
+        """Handle the prev callback.
+        
+        Args:
+            button (Any): Widget button event payload.
+        """
         if self.exploration_mode == "ordered":
             self.current_index = (self.current_index - 1) % len(self.df)
             self.load_data()

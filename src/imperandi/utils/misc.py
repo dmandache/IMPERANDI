@@ -1,3 +1,9 @@
+"""Miscellaneous helper routines for reporting and diagnostics.
+
+The definitions in this module are part of the Imperandi codebase and are
+intended to be reused by higher-level workflows and CLI entry points.
+"""
+
 import argparse
 import logging
 import pandas as pd
@@ -6,6 +12,11 @@ logger = logging.getLogger(__name__)
 
 
 def print_args(args: argparse.Namespace) -> None:
+    """Print arguments.
+    
+    Args:
+        args (argparse.Namespace): Parsed command-line arguments namespace.
+    """
     items = vars(args)
     width = max(len(k) for k in items)
 
@@ -16,6 +27,12 @@ def print_args(args: argparse.Namespace) -> None:
 
 
 def report_volumes(df, step_name=None):
+    """Perform volumes.
+    
+    Args:
+        df (Any): Input pandas DataFrame to process.
+        step_name (Optional[Any]): Input value for step name. Defaults to `None`.
+    """
     unique_counts = df[["patient_key", "study_id", "series_id"]].nunique()
     if step_name:
         logger.info("After %s:", step_name)
@@ -29,6 +46,13 @@ def report_volumes(df, step_name=None):
 
 
 def report_change(df, previous_df, col=None):
+    """Report change.
+    
+    Args:
+        df: Input pandas DataFrame to process.
+        previous_df: Input pandas DataFrame to process.
+        col: Column name(s) used during tabular transformations.
+    """
     prev_patients = set(previous_df["patient_key"].unique())
     curr_patients = set(df["patient_key"].unique())
     missing_patients = sorted(prev_patients - curr_patients)

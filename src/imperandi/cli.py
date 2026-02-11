@@ -1,3 +1,9 @@
+"""Command-line interface wiring for Imperandi ingestion, extraction, and processing tasks.
+
+The definitions in this module are part of the Imperandi codebase and are
+intended to be reused by higher-level workflows and CLI entry points.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -21,18 +27,36 @@ logger = logging.getLogger(__name__)
 
 
 def _load_phase_module():
+    """Lazily import and return the `phase` module.
+    
+    Returns:
+        Any: Loaded object returned by this routine.
+    """
     from imperandi.extract import phase as phase_module
 
     return phase_module
 
 
 def _load_radiomics_module():
+    """Lazily import and return the `radiomics` module.
+    
+    Returns:
+        Any: Loaded object returned by this routine.
+    """
     from imperandi.extract import radiomics as radiomics_module
 
     return radiomics_module
 
 
 def _load_segment_module():
+    """Lazily import and return the `segment` module.
+    
+    Returns:
+        Any: Loaded object returned by this routine.
+    
+    Raises:
+        RuntimeError: If runtime prerequisites or optional dependencies are unavailable.
+    """
     try:
         from imperandi.process import segment as segment_module
     except ModuleNotFoundError as exc:
@@ -44,6 +68,11 @@ def _load_segment_module():
 
 
 def _ensure_pandarallel() -> None:
+    """Ensure runtime prerequisites are satisfied.
+    
+    Raises:
+        RuntimeError: If runtime prerequisites or optional dependencies are unavailable.
+    """
     if pandarallel is None:
         raise RuntimeError(
             "The 'parse' and 'ingest' commands require optional dependencies. "
@@ -52,6 +81,11 @@ def _ensure_pandarallel() -> None:
 
 
 def _add_parse_subcommand(subparsers: argparse._SubParsersAction) -> None:
+    """Register the `parse` subcommand on the root parser.
+    
+    Args:
+        subparsers (argparse._SubParsersAction): Subparser registry used to register command handlers.
+    """
     parser = subparsers.add_parser(
         "parse",
         help="Parse DICOM headers into an index CSV.",
@@ -61,6 +95,11 @@ def _add_parse_subcommand(subparsers: argparse._SubParsersAction) -> None:
 
 
 def _add_clean_subcommand(subparsers: argparse._SubParsersAction) -> None:
+    """Register the `clean` subcommand on the root parser.
+    
+    Args:
+        subparsers (argparse._SubParsersAction): Subparser registry used to register command handlers.
+    """
     parser = subparsers.add_parser(
         "clean",
         help="Clean DICOM metadata CSVs.",
@@ -70,6 +109,11 @@ def _add_clean_subcommand(subparsers: argparse._SubParsersAction) -> None:
 
 
 def _add_ingest_subcommand(subparsers: argparse._SubParsersAction) -> None:
+    """Register the `ingest` subcommand on the root parser.
+    
+    Args:
+        subparsers (argparse._SubParsersAction): Subparser registry used to register command handlers.
+    """
     parser = subparsers.add_parser(
         "ingest",
         help="Run parse then clean in a single step.",
@@ -97,6 +141,11 @@ def _add_ingest_subcommand(subparsers: argparse._SubParsersAction) -> None:
 
 
 def _add_convert_subcommand(subparsers: argparse._SubParsersAction) -> None:
+    """Register the `convert` subcommand on the root parser.
+    
+    Args:
+        subparsers (argparse._SubParsersAction): Subparser registry used to register command handlers.
+    """
     parser = subparsers.add_parser(
         "convert",
         help="Convert DICOM series to NIfTI files.",
@@ -106,6 +155,11 @@ def _add_convert_subcommand(subparsers: argparse._SubParsersAction) -> None:
 
 
 def _add_phase_subcommand(subparsers: argparse._SubParsersAction) -> None:
+    """Register the `phase` subcommand on the root parser.
+    
+    Args:
+        subparsers (argparse._SubParsersAction): Subparser registry used to register command handlers.
+    """
     parser = subparsers.add_parser(
         "phase",
         help="Extract contrast phase metadata from NIfTI volumes.",
@@ -116,6 +170,11 @@ def _add_phase_subcommand(subparsers: argparse._SubParsersAction) -> None:
 
 
 def _add_radiomics_subcommand(subparsers: argparse._SubParsersAction) -> None:
+    """Register the `radiomics` subcommand on the root parser.
+    
+    Args:
+        subparsers (argparse._SubParsersAction): Subparser registry used to register command handlers.
+    """
     parser = subparsers.add_parser(
         "radiomics",
         help="Extract radiomics features from NIfTI volumes and masks.",
@@ -126,6 +185,11 @@ def _add_radiomics_subcommand(subparsers: argparse._SubParsersAction) -> None:
 
 
 def _add_segment_subcommand(subparsers: argparse._SubParsersAction) -> None:
+    """Register the `segment` subcommand on the root parser.
+    
+    Args:
+        subparsers (argparse._SubParsersAction): Subparser registry used to register command handlers.
+    """
     parser = subparsers.add_parser(
         "segment",
         help="Segment NIfTI volumes with configurable tasks.",
@@ -147,6 +211,11 @@ def _add_segment_subcommand(subparsers: argparse._SubParsersAction) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build and return the command-line parser.
+    
+    Returns:
+        argparse.ArgumentParser: Configured argument parser instance.
+    """
     parser = argparse.ArgumentParser(
         prog="imperandi",
         description="IMPERANDI CLI for ingest parsing and cleaning.",
@@ -183,6 +252,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _handle_parse(args: argparse.Namespace) -> int:
+    """Handle execution of the `parse` CLI command.
+    
+    Args:
+        args (argparse.Namespace): Parsed command-line arguments namespace.
+    
+    Returns:
+        int: Process exit status code.
+    """
     args = parse_module.normalize_parse_args(args)
     if args.dry_run:
         logger.info("Dry run: parse")
@@ -199,6 +276,14 @@ def _handle_parse(args: argparse.Namespace) -> int:
 
 
 def _handle_clean(args: argparse.Namespace) -> int:
+    """Handle execution of the `clean` CLI command.
+    
+    Args:
+        args (argparse.Namespace): Parsed command-line arguments namespace.
+    
+    Returns:
+        int: Process exit status code.
+    """
     args = clean_module.normalize_clean_args(args)
     if args.dry_run:
         logger.info("Dry run: clean")
@@ -219,6 +304,14 @@ def _handle_clean(args: argparse.Namespace) -> int:
 
 
 def _handle_ingest(args: argparse.Namespace) -> int:
+    """Handle execution of the `ingest` CLI command.
+    
+    Args:
+        args (argparse.Namespace): Parsed command-line arguments namespace.
+    
+    Returns:
+        int: Process exit status code.
+    """
     args = parse_module.normalize_parse_args(args)
     output_dir = Path(args.output_dir)
     parsed_csv = output_dir / "dicom_index.csv"
@@ -254,6 +347,14 @@ def _handle_ingest(args: argparse.Namespace) -> int:
 
 
 def _handle_convert(args: argparse.Namespace) -> int:
+    """Handle execution of the `convert` CLI command.
+    
+    Args:
+        args (argparse.Namespace): Parsed command-line arguments namespace.
+    
+    Returns:
+        int: Process exit status code.
+    """
     args = convert_module.normalize_convert_args(args)
     if args.dry_run:
         logger.info("Dry run: convert")
@@ -264,6 +365,14 @@ def _handle_convert(args: argparse.Namespace) -> int:
 
 
 def _handle_phase(args: argparse.Namespace) -> int:
+    """Handle execution of the `phase` CLI command.
+    
+    Args:
+        args (argparse.Namespace): Parsed command-line arguments namespace.
+    
+    Returns:
+        int: Process exit status code.
+    """
     phase_module = _load_phase_module()
     args = phase_module.normalize_phase_args(args)
     if args.dry_run:
@@ -282,6 +391,14 @@ def _handle_phase(args: argparse.Namespace) -> int:
 
 
 def _handle_radiomics(args: argparse.Namespace) -> int:
+    """Handle execution of the `radiomics` CLI command.
+    
+    Args:
+        args (argparse.Namespace): Parsed command-line arguments namespace.
+    
+    Returns:
+        int: Process exit status code.
+    """
     radiomics_module = _load_radiomics_module()
     args = radiomics_module.normalize_radiomics_args(args)
     if args.dry_run:
@@ -300,6 +417,14 @@ def _handle_radiomics(args: argparse.Namespace) -> int:
 
 
 def _handle_segment(args: argparse.Namespace) -> int:
+    """Handle execution of the `segment` CLI command.
+    
+    Args:
+        args (argparse.Namespace): Parsed command-line arguments namespace.
+    
+    Returns:
+        int: Process exit status code.
+    """
     segment_module = _load_segment_module()
     args = segment_module.normalize_segment_args(args)
     if args.dry_run:
@@ -311,6 +436,14 @@ def _handle_segment(args: argparse.Namespace) -> int:
 
 
 def _handle_segment_unavailable(args: argparse.Namespace) -> int:
+    """Handle execution of the `unavailable` CLI command.
+    
+    Args:
+        args (argparse.Namespace): Parsed command-line arguments namespace.
+    
+    Returns:
+        int: Process exit status code.
+    """
     logger.error(
         "%s", getattr(args, "_segment_unavailable_msg", "Segment command unavailable.")
     )
@@ -318,6 +451,14 @@ def _handle_segment_unavailable(args: argparse.Namespace) -> int:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    """Run the module entry point.
+    
+    Args:
+        argv (Optional[Sequence[str]]): Optional argument vector used instead of `sys.argv`. Defaults to `None`.
+    
+    Returns:
+        int: Process exit status code.
+    """
     parser = build_parser()
     args = parser.parse_args(argv)
     setup_logging(

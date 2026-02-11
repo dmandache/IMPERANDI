@@ -1,3 +1,9 @@
+"""Dataset hook implementations specialized for the Operandi dataset.
+
+The definitions in this module are part of the Imperandi codebase and are
+intended to be reused by higher-level workflows and CLI entry points.
+"""
+
 import re
 import pandas as pd
 
@@ -30,6 +36,14 @@ tumor_type_dict = {
 
 def check_operandi_patient_key(patient_key):
     # remove prefix if string starts with 3 digits + underscore
+    """Check operandi patient key.
+    
+    Args:
+        patient_key (Any): Input value for patient key.
+    
+    Returns:
+        Any: Result of `check_operandi_patient_key`.
+    """
     patient_key = re.sub(r"^\d{3}_", "", patient_key)
     # patient_key = center_id - source_id - patient_id - tumor_type
     tokens = patient_key.split("-")
@@ -43,6 +57,14 @@ def check_operandi_patient_key(patient_key):
 
 def standardize_operandi_patient_key(patient_key):
     # remove prefix if string starts with 3 digits + underscore
+    """Standardize operandi patient key.
+    
+    Args:
+        patient_key (Any): Input value for patient key.
+    
+    Returns:
+        Any: Normalized operandi patient key.
+    """
     patient_key = re.sub(r"^\d{3}_", "", patient_key)
     # patient_key = center_id - source_id - patient_id - tumor_type
     try:
@@ -62,6 +84,14 @@ def standardize_operandi_patient_key(patient_key):
 
 def transform_operandi_patient_key(patient_key):
     # patient_key = center_id - source_id - patient_id - tumor_type
+    """Transform operandi patient key.
+    
+    Args:
+        patient_key (Any): Input value for patient key.
+    
+    Returns:
+        Any: Result of `transform_operandi_patient_key`.
+    """
     try:
         tokens = patient_key.split()
         center_id = int(tokens[-2])
@@ -72,6 +102,14 @@ def transform_operandi_patient_key(patient_key):
 
 
 def extract_from_patient_key(patient_key):
+    """Extract from patient key.
+    
+    Args:
+        patient_key (Any): Input value for patient key.
+    
+    Returns:
+        Any: Extracted from patient key.
+    """
     patient_key = standardize_operandi_patient_key(patient_key)
     tokens = patient_key.split("-")
     tokens = [int(item) for item in tokens]

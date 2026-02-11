@@ -1,3 +1,9 @@
+"""Data cleaning and normalization routines for parsed DICOM metadata tables.
+
+The definitions in this module are part of the Imperandi codebase and are
+intended to be reused by higher-level workflows and CLI entry points.
+"""
+
 import argparse
 import logging
 import hashlib
@@ -154,6 +160,15 @@ def add_clean_arguments(
     include_csv_path_out: bool = True,
     include_dry_run: bool = True,
 ) -> None:
+    """Add command-line arguments for clean.
+    
+    Args:
+        parser (argparse.ArgumentParser): Argument parser instance to configure.
+        include_manifest (bool): Boolean flag controlling optional behavior. Defaults to `True`.
+        include_csv_path (bool): Filesystem path consumed by this operation. Defaults to `True`.
+        include_csv_path_out (bool): Filesystem path consumed by this operation. Defaults to `True`.
+        include_dry_run (bool): Boolean flag controlling optional behavior. Defaults to `True`.
+    """
     if include_csv_path:
         parser.add_argument(
             "csv_path_pos",
@@ -225,6 +240,15 @@ def build_parser(
     add_help: bool = True,
     include_manifest: bool = True,
 ) -> argparse.ArgumentParser:
+    """Build and return the command-line parser.
+    
+    Args:
+        add_help (bool): Boolean flag controlling optional behavior. Defaults to `True`.
+        include_manifest (bool): Boolean flag controlling optional behavior. Defaults to `True`.
+    
+    Returns:
+        argparse.ArgumentParser: Configured argument parser instance.
+    """
     parser = argparse.ArgumentParser(
         description="Clean and process DICOM metadata CSV.",
         add_help=add_help,
@@ -240,6 +264,11 @@ def build_parser(
 
 
 def parse_arguments():
+    """Parse command-line arguments for this module.
+    
+    Returns:
+        Any: Parsed arguments.
+    """
     parser = build_parser()
     args = parser.parse_args()
     args = normalize_clean_args(args)
@@ -249,6 +278,14 @@ def parse_arguments():
 
 
 def _default_clean_output_path(csv_path: Path) -> Path:
+    """Compute the default output path value.
+    
+    Args:
+        csv_path (Path): Filesystem path consumed by this operation.
+    
+    Returns:
+        Path: Resolved filesystem path.
+    """
     stem = csv_path.stem
     if stem.endswith("_clean"):
         return csv_path.parent / f"{stem}_out.csv"
@@ -256,6 +293,14 @@ def _default_clean_output_path(csv_path: Path) -> Path:
 
 
 def normalize_clean_args(args: argparse.Namespace) -> argparse.Namespace:
+    """Normalize parsed command-line arguments and fill derived defaults.
+    
+    Args:
+        args (argparse.Namespace): Parsed command-line arguments namespace.
+    
+    Returns:
+        argparse.Namespace: Parsed and normalized argument namespace.
+    """
     csv_in = (
         args.csv_path_opt
         if getattr(args, "csv_path_opt", None) is not None
@@ -280,6 +325,15 @@ def normalize_clean_args(args: argparse.Namespace) -> argparse.Namespace:
 
 
 def resolve_standardization_hook(manifest: dict, hook_key: str):
+    """Resolve standardization hook.
+    
+    Args:
+        manifest (dict): Loaded dataset manifest configuration.
+        hook_key (str): Input value for hook key.
+    
+    Returns:
+        Any: Resolved standardization hook.
+    """
     hook_config = manifest.get("id_standardization", {})
     normalized_config = {
         "hook_module": hook_config.get("hook_module"),
@@ -289,6 +343,14 @@ def resolve_standardization_hook(manifest: dict, hook_key: str):
 
 
 def resolve_hook_module(manifest: dict):
+    """Resolve hook module.
+    
+    Args:
+        manifest (dict): Loaded dataset manifest configuration.
+    
+    Returns:
+        Any: Resolved hook module.
+    """
     hook_config = manifest.get("id_standardization", {})
     module_name = hook_config.get("hook_module")
     if not module_name:
@@ -297,12 +359,28 @@ def resolve_hook_module(manifest: dict):
 
 
 def read_csv_with_valid_columns(file):
+    """Read CSV with valid columns.
+    
+    Args:
+        file (Any): File path used by this routine.
+    
+    Returns:
+        Any: Loaded object returned by this routine.
+    """
     available_columns = pd.read_csv(file, nrows=0).columns
     valid_columns = [col for col in COLUMNS_TO_USE if col in available_columns]
     return pd.read_csv(file, usecols=valid_columns)
 
 
 def load_data(csv_path):
+    """Load data.
+    
+    Args:
+        csv_path (Any): Filesystem path consumed by this operation.
+    
+    Returns:
+        Any: Loaded object returned by this routine.
+    """
     if len(csv_path) == 1:
         df = read_csv_with_valid_columns(csv_path[0])
     else:
@@ -317,6 +395,15 @@ def load_data(csv_path):
 
 
 def standardize_patient_keys(df, manifest: dict):
+    """Standardize patient keys.
+    
+    Args:
+        df (Any): Input pandas DataFrame to process.
+        manifest (dict): Loaded dataset manifest configuration.
+    
+    Returns:
+        Any: Standardized patient keys.
+    """
     hook = resolve_standardization_hook(manifest, "patient_key")
     if not hook:
         return df
@@ -325,6 +412,15 @@ def standardize_patient_keys(df, manifest: dict):
 
 
 def unravel_patient_key(df, manifest: dict):
+    """Expand patient key.
+    
+    Args:
+        df (Any): Input pandas DataFrame to process.
+        manifest (dict): Loaded dataset manifest configuration.
+    
+    Returns:
+        Any: Expanded patient key.
+    """
     module = resolve_hook_module(manifest)
     if not module or not hasattr(module, "extract_from_patient_key"):
         return df
@@ -335,6 +431,14 @@ def unravel_patient_key(df, manifest: dict):
 
 
 def filter_ct_modality(df):
+    """Filter CT modality.
+    
+    Args:
+        df (Any): Input pandas DataFrame to process.
+    
+    Returns:
+        Any: Filtered result collection.
+    """
     if "Modality" not in df.columns or "SOPClassUID" not in df.columns:
         return df
     df = df[df.Modality == "CT"]
@@ -344,6 +448,14 @@ def filter_ct_modality(df):
 
 
 def remove_pet_ct(df):
+    """Remove pet CT.
+    
+    Args:
+        df (Any): Input pandas DataFrame to process.
+    
+    Returns:
+        Any: Data with pet CT removed.
+    """
     if "ModalitiesInStudy" not in df.columns:
         return df
     unwanted_modalities = ["PT", "NM"]
@@ -356,6 +468,14 @@ def remove_pet_ct(df):
 
 
 def add_date(df):
+    """Perform date.
+    
+    Args:
+        df (Any): Input pandas DataFrame to process.
+    
+    Returns:
+        Any: Data with date added.
+    """
     if "StudyDate" not in df.columns:
         return df
     df["date"] = df["StudyDate"].apply(
@@ -367,6 +487,14 @@ def add_date(df):
 
 
 def filter_image_type(df):
+    """Filter image type.
+    
+    Args:
+        df (Any): Input pandas DataFrame to process.
+    
+    Returns:
+        Any: Filtered result collection.
+    """
     if "ImageType" not in df.columns:
         return df
     df = df.dropna(subset=["ImageType"])
@@ -388,6 +516,14 @@ def filter_image_type(df):
 
 
 def remove_scouts_localizers(df):
+    """Remove scouts localizers.
+    
+    Args:
+        df (Any): Input pandas DataFrame to process.
+    
+    Returns:
+        Any: Data with scouts localizers removed.
+    """
     if "ImageType" not in df.columns or "SeriesDescription" not in df.columns:
         return df
     df = df.dropna(subset=["ImageType", "SeriesDescription"])
@@ -397,6 +533,14 @@ def remove_scouts_localizers(df):
 
 
 def remove_mpr(df):
+    """Remove mpr.
+    
+    Args:
+        df (Any): Input pandas DataFrame to process.
+    
+    Returns:
+        Any: Data with mpr removed.
+    """
     if "ImageType" not in df.columns or "SeriesDescription" not in df.columns:
         return df
     df = df[
@@ -409,12 +553,28 @@ def remove_mpr(df):
 
 
 def uniform_string(s):
+    """Normalize string.
+    
+    Args:
+        s (Any): Input value for s.
+    
+    Returns:
+        Any: Normalized string.
+    """
     s = str(s).rstrip(".0")
     s = " ".join(s.split())
     return unidecode(s.lower())
 
 
 def remove_other_organs_description(df):
+    """Remove other organs description.
+    
+    Args:
+        df (Any): Input pandas DataFrame to process.
+    
+    Returns:
+        Any: Data with other organs description removed.
+    """
     if "SeriesDescription" not in df.columns:
         return df
     excluded_substrings = [
@@ -439,6 +599,14 @@ def remove_other_organs_description(df):
 
 
 def clean_scan_size(df):
+    """Clean scan size.
+    
+    Args:
+        df (Any): Input pandas DataFrame to process.
+    
+    Returns:
+        Any: Cleaned scan size.
+    """
     df = df.dropna(axis=1, how="all")
     if "Rows" in df.columns and "Columns" in df.columns:
         df = df.dropna(subset=["Rows", "Columns"])
@@ -451,6 +619,14 @@ def clean_scan_size(df):
 
 
 def clean_pixel_spacing(df):
+    """Clean pixel spacing.
+    
+    Args:
+        df (Any): Input pandas DataFrame to process.
+    
+    Returns:
+        Any: Cleaned pixel spacing.
+    """
     if "PixelSpacing" not in df.columns:
         return df
     df["PixelSpacingXY"] = df["PixelSpacing"].apply(
@@ -466,6 +642,14 @@ def clean_pixel_spacing(df):
 
 def generate_volume_id(df):
 
+    """Perform volume ID.
+    
+    Args:
+        df (Any): Input pandas DataFrame to process.
+    
+    Returns:
+        Any: Generated volume ID.
+    """
     preferred_cols = [
         "patient_key",
         "study_id",
@@ -505,6 +689,14 @@ def generate_volume_id(df):
 
     def _to_stable_str(x):
         # None/NaN -> empty
+        """Convert values to stable str.
+        
+        Args:
+            x (Any): Input value for x.
+        
+        Returns:
+            Any: Converted stable str representation.
+        """
         if x is None:
             return ""
         try:
@@ -528,6 +720,15 @@ def generate_volume_id(df):
 
 
 def filter_by_acquisition_plane(df, angle_thresh_deg=10.0):
+    """Filter by acquisition plane.
+    
+    Args:
+        df (Any): Input pandas DataFrame to process.
+        angle_thresh_deg (float): Angular tolerance in degrees for plane classification. Defaults to `10.0`.
+    
+    Returns:
+        Any: Filtered result collection.
+    """
     if "ImageOrientationPatient" not in df.columns:
         return df
     (
@@ -678,6 +879,14 @@ def correct_volume_ids(df, z_tolerance=1e-3):
 
 
 def _is_nan(value):
+    """Return whether nan.
+    
+    Args:
+        value (Any): Input value to evaluate or transform.
+    
+    Returns:
+        Any: True when the condition is satisfied; otherwise False.
+    """
     try:
         return bool(value != value)
     except Exception:
@@ -685,12 +894,28 @@ def _is_nan(value):
 
 
 def _as_python_scalar(value):
+    """Convert input to python scalar.
+    
+    Args:
+        value (Any): Input value to evaluate or transform.
+    
+    Returns:
+        Any: Converted python scalar representation.
+    """
     if isinstance(value, np.generic):
         return value.item()
     return value
 
 
 def _hashable_key(value):
+    """Build key.
+    
+    Args:
+        value (Any): Input value to evaluate or transform.
+    
+    Returns:
+        Any: Hashable representation of the input value.
+    """
     value = _as_python_scalar(value)
     if value is None:
         return ("none",)
@@ -719,6 +944,14 @@ def _hashable_key(value):
 
 
 def _string_sort_key(value):
+    """Perform sort key.
+    
+    Args:
+        value (Any): Input value to evaluate or transform.
+    
+    Returns:
+        Any: Result of `_string_sort_key`.
+    """
     value = _as_python_scalar(value)
     if isinstance(value, bytes):
         return value.decode(errors="ignore")
@@ -726,6 +959,14 @@ def _string_sort_key(value):
 
 
 def _parse_float(value):
+    """Parse float.
+    
+    Args:
+        value (Any): Input value to evaluate or transform.
+    
+    Returns:
+        Any: Parsed float.
+    """
     value = _as_python_scalar(value)
     if value is None or _is_nan(value):
         return None
@@ -740,6 +981,14 @@ def _parse_float(value):
 
 
 def _parse_ipp(value):
+    """Parse IPP.
+    
+    Args:
+        value (Any): Input value to evaluate or transform.
+    
+    Returns:
+        Any: Parsed IPP.
+    """
     value = _as_python_scalar(value)
     if value is None or _is_nan(value):
         return None
@@ -766,9 +1015,25 @@ def _parse_ipp(value):
 
 
 def _sort_key_for_column(col_name):
+    """Perform key for column.
+    
+    Args:
+        col_name (Any): Input value for col name.
+    
+    Returns:
+        Any: Result of `_sort_key_for_column`.
+    """
     if col_name == "ImagePositionPatient":
 
         def key(v):
+            """Perform key.
+            
+            Args:
+                v (Any): Input value for v.
+            
+            Returns:
+                Any: Key value used for sorting or grouping.
+            """
             ipp = _parse_ipp(v)
             if ipp is None:
                 return (1, _string_sort_key(v))
@@ -779,6 +1044,14 @@ def _sort_key_for_column(col_name):
     if col_name in {"SliceLocation", "InstanceNumber", "AcquisitionNumber"}:
 
         def key(v):
+            """Perform key.
+            
+            Args:
+                v (Any): Input value for v.
+            
+            Returns:
+                Any: Key value used for sorting or grouping.
+            """
             num = _parse_float(v)
             if num is None:
                 return (1, _string_sort_key(v))
@@ -790,6 +1063,15 @@ def _sort_key_for_column(col_name):
 
 
 def _sorted_unique(values, col_name):
+    """Perform unique.
+    
+    Args:
+        values (Any): Input value for values.
+        col_name (Any): Input value for col name.
+    
+    Returns:
+        Any: Result of `_sorted_unique`.
+    """
     seen = {}
     for v in values:
         key = _hashable_key(v)
@@ -804,7 +1086,23 @@ def _sorted_unique(values, col_name):
 
 def group_volumes(df):
 
+    """Group volumes.
+    
+    Args:
+        df (Any): Input pandas DataFrame to process.
+    
+    Returns:
+        Any: Grouped volumes.
+    """
     def agg_fun(col):
+        """Perform fun.
+        
+        Args:
+            col (Any): Input value for col.
+        
+        Returns:
+            Any: Aggregated value.
+        """
         vals = list(col.dropna())
         if len(vals) == 0:
             return float("NaN")
@@ -820,7 +1118,23 @@ def group_volumes(df):
 
 
 def calculate_volume_length(df):
+    """Calculate volume length.
+    
+    Args:
+        df (Any): Input pandas DataFrame to process.
+    
+    Returns:
+        Any: Computed volume length.
+    """
     def calculate_total_volume_length(row):
+        """Calculate total volume length.
+        
+        Args:
+            row (Any): Input value for row.
+        
+        Returns:
+            Any: Computed total volume length.
+        """
         try:
             n_files = row["n_files"]
             thickness = abs(row["SliceThickness"])
@@ -839,6 +1153,16 @@ def calculate_volume_length(df):
 
 
 def filter_volumes_by_size(df, t_min, t_max):
+    """Filter volumes by size.
+    
+    Args:
+        df (Any): Input pandas DataFrame to process.
+        t_min (Any): Input value for t min.
+        t_max (Any): Input value for t max.
+    
+    Returns:
+        Any: Filtered volumes by size.
+    """
     df = df[
         (df["volume_length"].isna())
         | ((df["volume_length"] >= t_min) & (df["volume_length"] <= t_max))
@@ -847,6 +1171,15 @@ def filter_volumes_by_size(df, t_min, t_max):
 
 
 def map_series_description(df, csv_tag_dict):
+    """Map series description.
+    
+    Args:
+        df (Any): Input pandas DataFrame to process.
+        csv_tag_dict (Any): Input value for CSV tag dict.
+    
+    Returns:
+        Any: Mapped series description.
+    """
     if not csv_tag_dict or "SeriesDescription" not in df.columns:
         return df
 
@@ -885,6 +1218,14 @@ def map_series_description(df, csv_tag_dict):
 
 
 def compute_visit_order(df):
+    """Compute visit order.
+    
+    Args:
+        df (Any): Input pandas DataFrame to process.
+    
+    Returns:
+        Any: Computed visit order.
+    """
     if "date" not in df.columns:
         return df
     df_study = (
@@ -913,6 +1254,14 @@ def compute_visit_order(df):
 
 
 def compute_acquisition_order(df):
+    """Compute acquisition order.
+    
+    Args:
+        df (Any): Input pandas DataFrame to process.
+    
+    Returns:
+        Any: Computed acquisition order.
+    """
     if "InstanceCreationTime" not in df.columns:
         return df
 
@@ -963,6 +1312,14 @@ def compute_acquisition_order(df):
 
 
 def drop_irrelevant_dicom_tags(df):
+    """Drop irrelevant DICOM tags.
+    
+    Args:
+        df (Any): Input pandas DataFrame to process.
+    
+    Returns:
+        Any: Object with irrelevant DICOM tags dropped.
+    """
     important_dicom_tags = [
         "SeriesDescription",
         "PixelSpacingXY",
@@ -988,6 +1345,14 @@ def drop_irrelevant_dicom_tags(df):
 
 
 def reorder_columns(df):
+    """Reorder columns.
+    
+    Args:
+        df (Any): Input pandas DataFrame to process.
+    
+    Returns:
+        Any: Reordered columns.
+    """
     PRIORITY_COLS = [
         "patient_key",
         "volume_id",
@@ -1008,6 +1373,16 @@ def reorder_columns(df):
 def clean_and_save_data(
     csv_path, csv_path_out, csv_dict_path, manifest, volume_min, volume_max
 ):
+    """Clean and save data.
+    
+    Args:
+        csv_path (Any): Filesystem path consumed by this operation.
+        csv_path_out (Any): Filesystem path consumed by this operation.
+        csv_dict_path (Any): Filesystem path consumed by this operation.
+        manifest (Any): Loaded dataset manifest configuration.
+        volume_min (Any): Input value for volume min.
+        volume_max (Any): Input value for volume max.
+    """
     df = load_data(csv_path)
     report_volumes(df, "initial load")
 

@@ -1,3 +1,9 @@
+"""Datetime parsing and normalization helpers shared across workflows.
+
+The definitions in this module are part of the Imperandi codebase and are
+intended to be reused by higher-level workflows and CLI entry points.
+"""
+
 from __future__ import annotations
 
 import pandas as pd
@@ -84,6 +90,14 @@ def _parse_dicom_time(s, include_ms=False) -> Optional[time]:
 
 
 def earliest_acquisition_datetime(tm_or_list) -> Optional[time]:
+    """Return earliest acquisition datetime.
+    
+    Args:
+        tm_or_list (Any): Single timestamp or collection of timestamp values.
+    
+    Returns:
+        Optional[time]: Computed result, or `None` when unavailable.
+    """
     import ast
 
     if tm_or_list is None or (isinstance(tm_or_list, float) and pd.isna(tm_or_list)):
@@ -126,6 +140,15 @@ _ISO_REGEX = re.compile(r"^\d{4}([-/]?\d{2}){2}$")
 
 
 def _is_iso_like(series, n_samples=20):
+    """Return whether iso like.
+    
+    Args:
+        series (Any): Input value for series.
+        n_samples (int): Input value for n samples. Defaults to `20`.
+    
+    Returns:
+        Any: Result of `_is_iso_like`.
+    """
     s = series.dropna().astype(str).head(n_samples)
     if s.empty:
         return False
@@ -168,6 +191,14 @@ def _infer_dayfirst(series, n_samples=50):
 
 
 def to_dates(df):
+    """Convert values to dates.
+    
+    Args:
+        df (Any): Input pandas DataFrame to process.
+    
+    Returns:
+        Any: Converted dates representation.
+    """
     date_cols = [c for c in df.columns if "date" in c.lower()]
     logger.info("Detected date columns: %s", date_cols)
 

@@ -1,3 +1,9 @@
+"""Archive traversal and extraction helpers for zipped or tarred imaging data.
+
+The definitions in this module are part of the Imperandi codebase and are
+intended to be reused by higher-level workflows and CLI entry points.
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -23,24 +29,64 @@ ARCHIVE_EXTENSIONS = (".zip", ".tar", ".tar.gz", ".tgz")
 
 
 def is_archive_filename(name: str) -> bool:
+    """Return whether archive filename.
+    
+    Args:
+        name (str): Input value for name.
+    
+    Returns:
+        bool: True when the condition is satisfied; otherwise False.
+    """
     lower = str(name).lower()
     return lower.endswith(ARCHIVE_EXTENSIONS)
 
 
 def is_archive_uri(value: str) -> bool:
+    """Return whether archive URI.
+    
+    Args:
+        value (str): Input value to evaluate or transform.
+    
+    Returns:
+        bool: True when the condition is satisfied; otherwise False.
+    """
     return isinstance(value, str) and value.startswith(ARCHIVE_URI_SCHEME)
 
 
 def _is_zip_name(name: str) -> bool:
+    """Return whether zip name.
+    
+    Args:
+        name (str): Input value for name.
+    
+    Returns:
+        bool: True when the condition is satisfied; otherwise False.
+    """
     return str(name).lower().endswith(".zip")
 
 
 def _is_tar_name(name: str) -> bool:
+    """Return whether tar name.
+    
+    Args:
+        name (str): Input value for name.
+    
+    Returns:
+        bool: True when the condition is satisfied; otherwise False.
+    """
     lower = str(name).lower()
     return lower.endswith(".tar") or lower.endswith(".tar.gz") or lower.endswith(".tgz")
 
 
 def _normalize_member_name(name: str) -> str:
+    """Normalize member name.
+    
+    Args:
+        name (str): Input value for name.
+    
+    Returns:
+        str: Normalized member name.
+    """
     normalized = str(name).replace("\\", "/")
     while normalized.startswith("./"):
         normalized = normalized[2:]
@@ -48,6 +94,14 @@ def _normalize_member_name(name: str) -> str:
 
 
 def _is_safe_member_name(name: str) -> bool:
+    """Return whether safe member name.
+    
+    Args:
+        name (str): Input value for name.
+    
+    Returns:
+        bool: True when the condition is satisfied; otherwise False.
+    """
     normalized = str(name).replace("\\", "/")
     if not normalized:
         return False
@@ -60,6 +114,18 @@ def _is_safe_member_name(name: str) -> bool:
 
 
 def encode_archive_uri(outer_archive_path: str | Path, entry_chain: list[str]) -> str:
+    """Encode archive URI.
+    
+    Args:
+        outer_archive_path (str | Path): Filesystem path consumed by this operation.
+        entry_chain (list[str]): Input value for entry chain.
+    
+    Returns:
+        str: Encoded archive URI.
+    
+    Raises:
+        ValueError: If provided inputs fail validation.
+    """
     if not entry_chain:
         raise ValueError("entry_chain must contain at least one member name.")
     outer_abs = Path(outer_archive_path).resolve()
@@ -71,6 +137,17 @@ def encode_archive_uri(outer_archive_path: str | Path, entry_chain: list[str]) -
 
 
 def decode_archive_uri(uri: str) -> tuple[Path, list[str]]:
+    """Decode archive URI.
+    
+    Args:
+        uri (str): Input value for URI.
+    
+    Returns:
+        tuple[Path, list[str]]: Resolved filesystem path.
+    
+    Raises:
+        ValueError: If provided inputs fail validation.
+    """
     if not is_archive_uri(uri):
         raise ValueError(f"Not an archive URI: {uri}")
     body = uri[len(ARCHIVE_URI_SCHEME) :]
@@ -86,6 +163,15 @@ def decode_archive_uri(uri: str) -> tuple[Path, list[str]]:
 
 
 def _open_archive(source: Path | bytes, source_name: str):
+    """Perform archive.
+    
+    Args:
+        source (Path | bytes): Input value for source.
+        source_name (str): Input value for source name.
+    
+    Returns:
+        Any: Result of `_open_archive`.
+    """
     if isinstance(source, Path):
         if _is_zip_name(source_name):
             return "zip", zipfile.ZipFile(source)
@@ -110,6 +196,18 @@ def _open_archive(source: Path | bytes, source_name: str):
 
 
 def _read_zip_member(zf: zipfile.ZipFile, target_name: str) -> bytes:
+    """Read zip member.
+    
+    Args:
+        zf (zipfile.ZipFile): Input value for zf.
+        target_name (str): Input value for target name.
+    
+    Returns:
+        bytes: Binary payload read from storage.
+    
+    Raises:
+        KeyError: If required keys are missing from a mapping-like input.
+    """
     target = _normalize_member_name(target_name)
     for info in zf.infolist():
         if info.is_dir():
@@ -121,6 +219,18 @@ def _read_zip_member(zf: zipfile.ZipFile, target_name: str) -> bytes:
 
 
 def _read_tar_member(tf: tarfile.TarFile, target_name: str) -> bytes:
+    """Read tar member.
+    
+    Args:
+        tf (tarfile.TarFile): Input value for tf.
+        target_name (str): Input value for target name.
+    
+    Returns:
+        bytes: Binary payload read from storage.
+    
+    Raises:
+        KeyError: If required keys are missing from a mapping-like input.
+    """
     target = _normalize_member_name(target_name)
     for member in tf.getmembers():
         if not member.isfile():
@@ -138,6 +248,16 @@ def _read_tar_member(tf: tarfile.TarFile, target_name: str) -> bytes:
 def _read_member_bytes_from_container(
     source: Path | bytes, source_name: str, member_name: str
 ) -> bytes:
+    """Read member bytes from container.
+    
+    Args:
+        source (Path | bytes): Archive source path or in-memory bytes payload.
+        source_name (str): Display name for the current archive source.
+        member_name (str): Archive member name to resolve.
+    
+    Returns:
+        bytes: Binary payload read from storage.
+    """
     kind, container = _open_archive(source, source_name)
     try:
         if kind == "zip":
@@ -156,6 +276,23 @@ def _iter_container_members(
     member_limit: int,
     counter: list[int],
 ):
+    """Iterate over container members.
+    
+    Args:
+        source (Path | bytes): Input value for source.
+        source_name (str): Input value for source name.
+        entry_chain (list[str]): Input value for entry chain.
+        depth (int): Input value for depth.
+        max_depth (int): Input value for max depth.
+        member_limit (int): Input value for member limit.
+        counter (list[int]): Input value for counter.
+    
+    Returns:
+        Any: Iterator over container members.
+    
+    Raises:
+        RuntimeError: If runtime prerequisites or optional dependencies are unavailable.
+    """
     kind, container = _open_archive(source, source_name)
     try:
         if kind == "zip":
@@ -234,6 +371,17 @@ def iter_archive_members(
     max_depth: int = DEFAULT_ARCHIVE_MAX_DEPTH,
     member_limit: int = DEFAULT_ARCHIVE_MEMBER_LIMIT,
 ):
+    """Iterate over archive members.
+    
+    Args:
+        path_or_bytes (Path | bytes): Filesystem path consumed by this operation.
+        depth (int): Input value for depth. Defaults to `0`.
+        max_depth (int): Input value for max depth. Defaults to `DEFAULT_ARCHIVE_MAX_DEPTH`.
+        member_limit (int): Input value for member limit. Defaults to `DEFAULT_ARCHIVE_MEMBER_LIMIT`.
+    
+    Returns:
+        Any: Iterator over archive members.
+    """
     if isinstance(path_or_bytes, Path):
         source_name = path_or_bytes.name
     else:
@@ -251,10 +399,26 @@ def iter_archive_members(
 
 
 def _record_sort_key(record: dict[str, Any]) -> tuple[str, str]:
+    """Return record sort key.
+    
+    Args:
+        record (dict[str, Any]): Record dictionary describing one discovered source item.
+    
+    Returns:
+        tuple[str, str]: Tuple containing outputs from this step.
+    """
     return str(record["source_uri_or_path"]), str(record.get("relative_path") or "")
 
 
 def _record_is_dcm(record: dict[str, Any]) -> bool:
+    """Return record is dcm.
+    
+    Args:
+        record (dict[str, Any]): Record dictionary describing one discovered source item.
+    
+    Returns:
+        bool: True when the condition is satisfied; otherwise False.
+    """
     rel = str(record.get("relative_path", ""))
     src = str(record.get("source_uri_or_path", ""))
     return rel.lower().endswith(".dcm") or src.lower().endswith(".dcm")
@@ -263,6 +427,15 @@ def _record_is_dcm(record: dict[str, Any]) -> bool:
 def _validate_record_as_dicom(
     record: dict[str, Any], max_depth: int = DEFAULT_ARCHIVE_MAX_DEPTH
 ) -> bool:
+    """Return validate record as DICOM.
+    
+    Args:
+        record (dict[str, Any]): Record dictionary describing one discovered source item.
+        max_depth (int): Maximum nested archive depth permitted during traversal. Defaults to `DEFAULT_ARCHIVE_MAX_DEPTH`.
+    
+    Returns:
+        bool: True when the condition is satisfied; otherwise False.
+    """
     source = record["source_uri_or_path"]
     try:
         if is_archive_uri(source):
@@ -284,9 +457,24 @@ def discover_dicom_sources(
     max_depth: int = DEFAULT_ARCHIVE_MAX_DEPTH,
     member_limit: int = DEFAULT_ARCHIVE_MEMBER_LIMIT,
 ) -> list[dict[str, Any]]:
+    """Discover DICOM sources.
+    
+    Args:
+        root_entries (Iterable[Path]): Input value for root entries.
+        max_depth (int): Input value for max depth. Defaults to `DEFAULT_ARCHIVE_MAX_DEPTH`.
+        member_limit (int): Input value for member limit. Defaults to `DEFAULT_ARCHIVE_MEMBER_LIMIT`.
+    
+    Returns:
+        list[dict[str, Any]]: List of computed items.
+    """
     dedup: dict[str, dict[str, Any]] = {}
 
     def _add_record(record: dict[str, Any]) -> None:
+        """Add record.
+        
+        Args:
+            record (dict[str, Any]): Record dictionary describing one discovered source item.
+        """
         dedup.setdefault(str(record["source_uri_or_path"]), record)
 
     for root in sorted({Path(p) for p in root_entries}, key=lambda p: str(p)):
@@ -402,6 +590,20 @@ def read_archive_member_bytes(
     entry_chain: list[str],
     max_depth: int = DEFAULT_ARCHIVE_MAX_DEPTH,
 ) -> bytes:
+    """Read archive member bytes.
+    
+    Args:
+        outer_archive_path (Path): Filesystem path consumed by this operation.
+        entry_chain (list[str]): Nested archive/member traversal chain.
+        max_depth (int): Maximum nested archive depth permitted during traversal. Defaults to `DEFAULT_ARCHIVE_MAX_DEPTH`.
+    
+    Returns:
+        bytes: Binary payload read from storage.
+    
+    Raises:
+        ValueError: If provided inputs fail validation.
+        FileNotFoundError: If an expected input file cannot be found.
+    """
     if not entry_chain:
         raise ValueError("entry_chain cannot be empty.")
     if not outer_archive_path.exists():
@@ -438,12 +640,23 @@ def read_archive_member_bytes(
 
 
 class ArchiveSession:
+    """Class implementing archive session behavior.
+    
+    This class groups related state and behavior behind a single interface.
+    """
     def __init__(
         self,
         cache_dir: str | Path | None = None,
         keep_cache: bool = False,
         max_depth: int = DEFAULT_ARCHIVE_MAX_DEPTH,
     ):
+        """Initialize `ArchiveSession` state.
+        
+        Args:
+            cache_dir (str | Path | None): Directory path used for input or output data. Defaults to `None`.
+            keep_cache (bool): Boolean flag controlling optional behavior. Defaults to `False`.
+            max_depth (int): Maximum nested archive depth permitted during traversal. Defaults to `DEFAULT_ARCHIVE_MAX_DEPTH`.
+        """
         self.cache_dir = (
             Path(cache_dir)
             if cache_dir
@@ -455,6 +668,11 @@ class ArchiveSession:
         self._materialized: dict[str, Path] = {}
 
     def __enter__(self):
+        """Enter the context manager and return the active session object.
+        
+        Returns:
+            Any: Context manager instance for chained use.
+        """
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         session_id = hashlib.sha1(str(id(self)).encode("utf-8")).hexdigest()[:12]
         self.session_dir = self.cache_dir / f"session_{session_id}"
@@ -462,12 +680,30 @@ class ArchiveSession:
         return self
 
     def __exit__(self, exc_type, exc, tb):
+        """Exit the context manager and release allocated resources.
+        
+        Args:
+            exc_type (Any): Input value for exc type.
+            exc (Any): Input value for exc.
+            tb (Any): Input value for tb.
+        """
         if self.keep_cache:
             return
         if self.session_dir and self.session_dir.exists():
             shutil.rmtree(self.session_dir, ignore_errors=True)
 
     def materialize(self, uri_or_path: str | Path) -> Path:
+        """Materialize the requested operation.
+        
+        Args:
+            uri_or_path (str | Path): Filesystem path consumed by this operation.
+        
+        Returns:
+            Path: Resolved filesystem path.
+        
+        Raises:
+            RuntimeError: If runtime prerequisites or optional dependencies are unavailable.
+        """
         if not is_archive_uri(str(uri_or_path)):
             return Path(uri_or_path)
 

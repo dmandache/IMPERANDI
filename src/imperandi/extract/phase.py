@@ -1,3 +1,9 @@
+"""Phase extraction routines and CLI plumbing for CT exam workflows.
+
+The definitions in this module are part of the Imperandi codebase and are
+intended to be reused by higher-level workflows and CLI entry points.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -18,6 +24,14 @@ logger = logging.getLogger(__name__)
 
 
 def _load_phase_extractor() -> Callable[[Any], Dict[str, Any]]:
+    """Load phase extractor.
+    
+    Returns:
+        Callable[[Any], Dict[str, Any]]: Loaded object returned by this routine.
+    
+    Raises:
+        RuntimeError: If runtime prerequisites or optional dependencies are unavailable.
+    """
     try:
         from totalsegmentator.bin.totalseg_get_phase import get_ct_contrast_phase
     except ModuleNotFoundError as exc:
@@ -33,6 +47,13 @@ def add_phase_arguments(
     include_manifest: bool = True,
     include_dry_run: bool = True,
 ) -> None:
+    """Add command-line arguments for phase.
+    
+    Args:
+        parser (argparse.ArgumentParser): Argument parser instance to configure.
+        include_manifest (bool): Boolean flag controlling optional behavior. Defaults to `True`.
+        include_dry_run (bool): Boolean flag controlling optional behavior. Defaults to `True`.
+    """
     parser.add_argument(
         "csv_path_pos",
         nargs="?",
@@ -80,6 +101,14 @@ def add_phase_arguments(
 
 
 def build_parser(add_help: bool = True) -> argparse.ArgumentParser:
+    """Build and return the command-line parser.
+    
+    Args:
+        add_help (bool): Boolean flag controlling optional behavior. Defaults to `True`.
+    
+    Returns:
+        argparse.ArgumentParser: Configured argument parser instance.
+    """
     parser = argparse.ArgumentParser(
         description="Extract CT contrast phase metadata from NIfTI volumes.",
         add_help=add_help,
@@ -89,6 +118,18 @@ def build_parser(add_help: bool = True) -> argparse.ArgumentParser:
 
 
 def normalize_phase_args(args: argparse.Namespace) -> argparse.Namespace:
+    """Normalize parsed command-line arguments and fill derived defaults.
+    
+    Args:
+        args (argparse.Namespace): Parsed command-line arguments namespace.
+    
+    Returns:
+        argparse.Namespace: Parsed and normalized argument namespace.
+    
+    Raises:
+        ValueError: If provided inputs fail validation.
+        FileNotFoundError: If an expected input file cannot be found.
+    """
     csv_in = args.csv_path_opt if args.csv_path_opt is not None else args.csv_path_pos
     csv_path = Path(csv_in) if csv_in else (Path.cwd() / "nifti_index.csv")
 
@@ -115,6 +156,11 @@ def normalize_phase_args(args: argparse.Namespace) -> argparse.Namespace:
 
 
 def parse_arguments() -> argparse.Namespace:
+    """Parse command-line arguments for this module.
+    
+    Returns:
+        argparse.Namespace: Parsed and normalized argument namespace.
+    """
     parser = build_parser()
     args = parser.parse_args()
     args = normalize_phase_args(args)
@@ -128,6 +174,16 @@ def process_single_volume(
     *,
     phase_extractor: Callable[[Any], Dict[str, Any]],
 ) -> Tuple[int, Dict[str, Any] | None, str | None]:
+    """Perform single volume.
+    
+    Args:
+        idx (int): Input value for idx.
+        row (Mapping[str, Any]): Input value for row.
+        phase_extractor (Callable[[Any], Dict[str, Any]]): Input value for phase extractor.
+    
+    Returns:
+        Tuple[int, Dict[str, Any] | None, str | None]: Tuple containing outputs from this step.
+    """
     nifti_path_value = row.get("nifti_path")
     if not isinstance(nifti_path_value, str) or not nifti_path_value.strip():
         return idx, None, "column 'nifti_path' missing or invalid"
@@ -158,6 +214,19 @@ def extract_phase_volumes(
     verbose: bool,
     phase_extractor: Callable[[Any], Dict[str, Any]],
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Extract phase volumes.
+    
+    Args:
+        df (pd.DataFrame): Input pandas DataFrame to process.
+        verbose (bool): Boolean flag controlling optional behavior.
+        phase_extractor (Callable[[Any], Dict[str, Any]]): Input value for phase extractor.
+    
+    Returns:
+        Tuple[pd.DataFrame, pd.DataFrame]: Processed pandas DataFrame.
+    
+    Raises:
+        KeyError: If required keys are missing from a mapping-like input.
+    """
     if "nifti_path" not in df.columns:
         unnamed = [c for c in df.columns if c.startswith("Unnamed:")]
         if unnamed:
@@ -191,6 +260,11 @@ def extract_phase_volumes(
 
 
 def main(args: argparse.Namespace) -> None:
+    """Run this module entry point.
+    
+    Args:
+        args (argparse.Namespace): Parsed command-line arguments namespace.
+    """
     load_manifest(
         getattr(args, "manifest", None), base_path=Path(__file__).resolve().parents[1]
     )

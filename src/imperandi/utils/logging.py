@@ -13,6 +13,14 @@ DEFAULT_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
 def _coerce_level(level: Optional[str | int]) -> int:
+    """Perform level.
+    
+    Args:
+        level (Optional[str | int]): Input value for level.
+    
+    Returns:
+        int: Result of `_coerce_level`.
+    """
     if level is None:
         return logging.INFO
     if isinstance(level, int):

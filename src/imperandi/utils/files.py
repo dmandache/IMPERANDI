@@ -1,3 +1,9 @@
+"""Filesystem and validation utilities for temporary files and imaging assets.
+
+The definitions in this module are part of the Imperandi codebase and are
+intended to be reused by higher-level workflows and CLI entry points.
+"""
+
 from pathlib import Path
 import logging
 import shutil
@@ -9,6 +15,11 @@ logger = logging.getLogger(__name__)
 
 
 def make_temp_dir(temp_dir="/data/scratch/bdr220003/temp/"):
+    """Make temp dir.
+    
+    Args:
+        temp_dir: Directory location used for reading or writing artifacts.
+    """
     temp_dir = Path(temp_dir)
     temp_dir.mkdir(parents=True, exist_ok=True)
     is_empty = not any(temp_dir.iterdir())
@@ -18,17 +29,36 @@ def make_temp_dir(temp_dir="/data/scratch/bdr220003/temp/"):
 
 
 def dir_is_empty(temp_dir):
+    """Perform is empty.
+    
+    Args:
+        temp_dir (Any): Directory path used for input or output data.
+    
+    Returns:
+        Any: Result of `dir_is_empty`.
+    """
     temp_dir = Path(temp_dir)
     is_empty = not any(temp_dir.iterdir())
     return is_empty
 
 
 def empty_dir(temp_dir):
+    """Empty dir.
+    
+    Args:
+        temp_dir: Directory location used for reading or writing artifacts.
+    """
     if not dir_is_empty(temp_dir):
         shutil.rmtree(temp_dir)
 
 
 def copy_files_to_temp_dir(paths, temp_dir="/data/scratch/bdr220003/temp/"):
+    """Copy files TO temp dir.
+    
+    Args:
+        paths: Filesystem path used by this routine.
+        temp_dir: Directory location used for reading or writing artifacts.
+    """
     if dir_is_empty(temp_dir):
         logger.info("Temp directory %s is empty", temp_dir)
     else:
@@ -44,6 +74,11 @@ def copy_files_to_temp_dir(paths, temp_dir="/data/scratch/bdr220003/temp/"):
 
 def check_file(file_path):
     # Specify the file path
+    """Check file.
+    
+    Args:
+        file_path: Filesystem path used by this routine.
+    """
     file_path = Path(file_path)
 
     # Check if the file exists
@@ -73,6 +108,11 @@ def check_file(file_path):
 
 def check_permissions(directory):
     # Create a Path object
+    """Check permissions.
+    
+    Args:
+        directory (Any): Directory path used for input or output data.
+    """
     directory_path = Path(directory)
 
     # Check if the directory exists
@@ -116,6 +156,14 @@ def load_nifti_file(nifti_path):
 
 
 def is_valid_nifti(path):
+    """Return whether valid NIfTI.
+    
+    Args:
+        path (Any): Filesystem path consumed by this operation.
+    
+    Returns:
+        Any: True when the condition is satisfied; otherwise False.
+    """
     try:
         nib.load(path).get_fdata()
         return True

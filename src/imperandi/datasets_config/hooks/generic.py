@@ -1,4 +1,10 @@
-﻿import re
+﻿"""Dataset hook implementations used by generic dataset manifests.
+
+The definitions in this module are part of the Imperandi codebase and are
+intended to be reused by higher-level workflows and CLI entry points.
+"""
+
+import re
 from typing import Optional
 
 

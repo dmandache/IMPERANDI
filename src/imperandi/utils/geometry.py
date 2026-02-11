@@ -1,3 +1,9 @@
+"""Geometry helpers for orientation vectors and acquisition-plane classification.
+
+The definitions in this module are part of the Imperandi codebase and are
+intended to be reused by higher-level workflows and CLI entry points.
+"""
+
 import re
 from ast import literal_eval
 
@@ -5,6 +11,17 @@ import numpy as np
 
 
 def parse_iop(iop):
+    """Parse IOP.
+    
+    Args:
+        iop (Any): Image orientation patient (IOP) vector values.
+    
+    Returns:
+        Any: Parsed IOP.
+    
+    Raises:
+        ValueError: If provided inputs fail validation.
+    """
     if iop is None:
         raise ValueError("IOP is None")
 
@@ -27,6 +44,19 @@ def parse_iop(iop):
 
 
 def standardize_iop(iop, decimals=3, zero_tol=1e-6):
+    """Standardize IOP.
+    
+    Args:
+        iop (Any): Image orientation patient (IOP) vector values.
+        decimals (int): Decimal precision used when rounding normalized vectors. Defaults to `3`.
+        zero_tol (Any): Absolute tolerance below which values are set to zero. Defaults to `1e-06`.
+    
+    Returns:
+        Any: Normalized IOP.
+    
+    Raises:
+        ValueError: If provided inputs fail validation.
+    """
     try:
         iop = parse_iop(iop)
     except (ValueError, TypeError):
@@ -55,6 +85,14 @@ def standardize_iop(iop, decimals=3, zero_tol=1e-6):
 
 
 def as_float_array(x):
+    """Convert input to float array.
+    
+    Args:
+        x (Any): Input value for x.
+    
+    Returns:
+        Any: Converted float array representation.
+    """
     if x is None:
         return None
     if isinstance(x, (list, tuple, np.ndarray)):
@@ -63,6 +101,14 @@ def as_float_array(x):
 
 
 def as_tuple(x):
+    """Convert input to tuple.
+    
+    Args:
+        x (Any): Input value for x.
+    
+    Returns:
+        Any: Converted tuple representation.
+    """
     if x is None:
         return None
     if isinstance(x, (list, tuple)):
@@ -71,6 +117,14 @@ def as_tuple(x):
 
 
 def slice_normal_from_iop(iop):
+    """Compute the normalized slice normal vector from IOP.
+    
+    Args:
+        iop (Any): Image orientation patient (IOP) vector values.
+    
+    Returns:
+        Any: Result of `slice_normal_from_iop`.
+    """
     iop = as_float_array(iop)
     if iop is None or iop.size != 6:
         return None
@@ -84,6 +138,15 @@ def slice_normal_from_iop(iop):
 
 
 def classify_plane_from_iop(iop, angle_thresh_deg=10.0):
+    """Classify plane from IOP.
+    
+    Args:
+        iop (Any): Image orientation patient (IOP) vector values.
+        angle_thresh_deg (float): Angular tolerance in degrees for plane classification. Defaults to `10.0`.
+    
+    Returns:
+        Any: Classification result for plane from IOP.
+    """
     n = slice_normal_from_iop(iop)
     if n is None:
         return None, np.nan, None
