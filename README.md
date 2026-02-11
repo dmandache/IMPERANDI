@@ -1,213 +1,234 @@
-# ﻿**IM**aging **PRE**processing **A**nd **N**ormalization for **D**iagnostic **I**nteroperability
+# **IM**aging **PRE**processing **A**nd **N**ormalization for **D**iagnostic **I**nteroperability
 
 ![image](https://raw.githubusercontent.com/dmandache/IMPERANDI/main/static/imperandi-logo.png)
 
-<!-- ![Python](https://img.shields.io/pypi/pyversions/YOUR_PACKAGE_NAME) -->
-![Python](https://img.shields.io/badge/python-3.10%20|%203.11%20|%203.12-blue)
+![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue)
 [![Code style](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 ![Linting](https://img.shields.io/badge/lint-ruff-red)
 ![Tests](https://github.com/dmandache/IMPERANDI/actions/workflows/tests.yml/badge.svg?branch=main)
 [![codecov](https://codecov.io/gh/dmandache/IMPERANDI/branch/main/graph/badge.svg)](https://codecov.io/gh/dmandache/IMPERANDI)
 
-IMPERANDI is a Python toolkit and CLI for building clean, analysis-ready indexes from DICOM datasets. It scans DICOM files, extracts header tags, standardizes IDs, and applies dataset-specific cleaning rules so downstream pipelines can rely on consistent metadata.
+IMPERANDI is a Python framework and CLI for building analysis-ready CT imaging cohorts from heterogeneous DICOM sources. It standardizes identifiers, curates volume-level metadata, converts volumes to NIfTI, and supports downstream segmentation, perfusion phase detection, radiomics extraction, and quality control in one coherent pipeline.
 
-This project is a 🚧work in progress. A fuller data pipeline is coming soon, including ingestion, filtering, processing (conversion to NIfTI, segmentation with TotalSegmentator, registration), feature exctraction with PyRadiomics, quality control, and descriptive dashboards.
+## Why IMPERANDI matters
 
-IMPERANDI targets multi-phasic, longitudinal CT imaging data and addresses the challenges of cleaning and harmonizing heterogeneous hospital datasets. Its dependency footprint is intentionally minimal, reflecting its intended use within closed, secure hospital data-warehouse environments.
+- Reduces manual data wrangling by turning raw DICOM trees into structured cohort tables.
+- Improves reproducibility with explicit CSV outputs at every stage and deterministic ID logic.
+- Improves reliability on real hospital exports with archive support, failure tracking, and resumable workflows.
+- Keeps adoption practical in secure environments with a lightweight Python-first toolchain.
 
-**Highlights**
+## Current framework functionalities (high level)
 
-- Fast DICOM header parsing with optional parallelism and checkpointing.
-- Flexible ID selection from tags or folder structure.
-- Dataset manifests and hook functions for standardization and derived columns.
-- Cleaning pipeline tailored to CT volumes and acquisition metadata.
+### 1) Ingest and harmonize imaging metadata (`parse` + `clean` = `ingest`)
 
-**Philosophy**
+- Scans DICOM files from folders, globbed roots, and nested archives (`.zip`, `.tar`, `.tar.gz`, `.tgz`).
+- Extracts DICOM headers recursively into a raw metadata table (`dicom_paths_with_tags.csv`).
+- Builds stable patient/study/series identifiers from tags, folder structure, or hybrid fallback rules.
+- Applies manifest-driven hooks for patient-key standardization and derived columns.
+- Cleans and curates CT cohorts by filtering modality/noise patterns, localizers, non-target anatomy, non-axial acquisitions, and implausible scan geometry.
+- Aggregates slices into robust volume-level records and computes exam/acquisition ordering.
 
-IMPERANDI is designed to work end‑to‑end out of the box, while still being easy to personalize. You can run the full pipeline in one go or tailor behavior through dataset manifests and user‑defined hooks. At the same time, each stage is modular, so you can intervene between steps to edit or enrich CSVs before moving on. The choice of CSV as the interchange format is intentional: it is generic, lightweight, and easy to inspect, edit, and share.
+Impact: turns fragmented acquisition data into a consistent cohort backbone that downstream models and analytics can trust.
 
-## Install
-```bash
-python -m pip install -e .
-```
+### 2) Convert DICOM volumes to NIfTI (`convert`)
 
-Install segmentation dependencies (optional):
-```bash
-python -m pip install -e ".[segment]"
-```
+- Converts curated DICOM volume rows to NIfTI in parallel using `dicom2nifti`.
+- Preserves source-to-output traceability in a CSV (`nifti_path` per row).
+- Handles archive-backed DICOM paths transparently via on-demand materialization.
+- Writes explicit conversion error tables without aborting the whole run.
 
-Install radiomics extraction dependencies (optional):
-```bash
-python -m pip install -e ".[radiomics]"
-```
+Impact: creates a standardized imaging representation for model training, segmentation, and feature extraction at scale.
 
-Install development/test tooling:
-```bash
-python -m pip install -e ".[dev]"
-```
+### 3) Configurable segmentation (`segment`)
 
-Install all the dependencies:
-```bash
-python -m pip install -e ".[all]"
-```
+- Runs configurable task pipelines (default backend: TotalSegmentator).
+- Supports multi-task mask generation per volume through a JSON task config.
+- Adds optional post-processing (mask merge, closing, hole filling, largest connected component).
+- Uses multiprocessing with timeout controls and produces warning/error tracking CSVs.
 
-### Setup Jupyter kernel env
-```
-python -m ipykernel install --user --name imperandi310 --display-name "IMPERANDI (Python 3.10)"
-```
+Impact: converts raw CT volumes into ready-to-use anatomical/tumor masks with operational safeguards for large cohort processing.
 
-## CLI Overview
-IMPERANDI ships a single CLI with several subcommands:
-- `parse`: scan DICOMs and build a metadata index.
-- `clean`: filter and normalize the index.
-- `ingest`: run `parse` then `clean` in one step.
-- `convert`: converts DICOMs from index to NIfTI.
+### 4) Contrast phase extraction (`phase`)
+
+- Extracts CT contrast phase metadata from NIfTI volumes using TotalSegmentator phase utilities.
+- Appends normalized phase outputs to cohort CSVs (`totalseg_*` columns).
+- Captures per-row failures into dedicated error outputs.
+
+Impact: enables phase-aware stratification and analysis without manual review of every study.
+
+### 5) Radiomics feature extraction (`radiomics`)
+
+- Extracts PyRadiomics features for liver and tumor regions from CT + masks.
+- Includes a liver-minus-tumor extraction path for cleaner parenchyma characterization.
+- Supports optional cohort filtering controls and error-aware output generation.
+
+Impact: accelerates feature engineering for prognostic and response modeling pipelines.
+
+### 6) Interactive quality control viewer (Jupyter)
+
+- Provides an interactive CT + mask viewer for cohort navigation and quick visual QA.
+- Supports patient/date/phase exploration, mask overlays, window presets, and keyboard navigation.
+
+Impact: shortens the feedback loop between pipeline outputs and clinical/imaging validation.
+
+![image](https://raw.githubusercontent.com/dmandache/IMPERANDI/main/static/viewer-demo.png)
+
+## CLI overview
+
+IMPERANDI ships a single CLI with these subcommands:
+
+- `parse`: scan DICOMs and build metadata index tables.
+- `clean`: filter and normalize parsed metadata.
+- `ingest`: run `parse` then `clean`.
+- `convert`: convert indexed DICOM volumes to NIfTI.
 - `segment`: run configurable segmentation on NIfTI volumes (requires `.[segment]`).
-- `phase`: extract CT contrast phase metadata from NIfTI volumes (requires `.[segment]`).
-- `radiomics`: extract PyRadiomics features from NIfTI volumes and masks (requires `pyradiomics`).
-- `register`: register NIfTI volumes from masks (requires `SimpleITK`) : rigid registration for inter-patient, elastic registration for intra-patient (multi-phasic, longitudinal). 🚧work in progress🚧
+- `phase`: extract contrast phase metadata from NIfTI volumes (requires `.[segment]`).
+- `radiomics`: extract radiomics features from NIfTI volumes and masks (requires radiomics dependencies).
 
 Get help:
+
 ```bash
 imperandi --help
 imperandi parse --help
 imperandi clean --help
 imperandi ingest --help
 imperandi convert --help
+imperandi segment --help
 imperandi phase --help
 imperandi radiomics --help
-imperandi segment --help
+```
+
+## Install
+
+Base install:
+
+```bash
+python -m pip install -e .
+```
+
+Segmentation dependencies:
+
+```bash
+python -m pip install -e ".[segment]"
+```
+
+Radiomics dependencies:
+
+```bash
+python -m pip install -e ".[radiomics]"
+```
+
+Development and test tooling:
+
+```bash
+python -m pip install -e ".[dev]"
+```
+
+Install everything:
+
+```bash
+python -m pip install -e ".[all]"
+```
+
+Optional Jupyter kernel setup:
+
+```bash
+python -m ipykernel install --user --name imperandi310 --display-name "IMPERANDI (Python 3.10)"
 ```
 
 ## Quickstart
 
-Parse a dataset:
-```bash
-imperandi parse \
-  --root_path /path/to/dicom \
-  --output_dir /path/to/output \
-  --manifest generic
-```
+Run ingest (parse + clean):
 
-Clean the parsed CSV:
-```bash
-imperandi clean \
-  --csv_path /path/to/output/dicom_index.csv \
-  --csv_path_out /path/to/output/dicom_index_clean.csv \
-  --manifest generic
-```
-
-Run both steps together:
 ```bash
 imperandi ingest \
   --root_path /path/to/dicom \
   --output_dir /path/to/output \
-  --manifest operandi
+  --manifest generic
 ```
 
-Segment NIfTI volumes (default liver config):
+Convert to NIfTI:
+
+```bash
+imperandi convert \
+  --csv_path /path/to/output/dicom_index_clean.csv \
+  --output_dir /path/to/nifti_root \
+  --csv_path_out /path/to/output/nifti_index.csv
+```
+
+Run segmentation:
+
 ```bash
 imperandi segment \
   --csv_path /path/to/output/nifti_index.csv \
   --csv_path_out /path/to/output/nifti_index_segmented.csv
 ```
 
-Extract CT contrast phase metadata:
+Extract contrast phase:
+
 ```bash
 imperandi phase \
-  --csv_path /path/to/output/nifti_index.csv \
+  --csv_path /path/to/output/nifti_index_segmented.csv \
   --csv_path_out /path/to/output/nifti_index_phased.csv
 ```
 
-Extract radiomics features:
+Extract radiomics:
+
 ```bash
 imperandi radiomics \
   --csv_path /path/to/output/nifti_index_segmented.csv \
   --csv_path_out /path/to/output/nifti_index_radiomics.csv
 ```
 
-Example segmentation config (JSON):
-```json
-{
-  "backend": "totalsegmentator",
-  "tasks": [
-    {
-      "key": "liver",
-      "task": "total",
-      "output": "liver.nii.gz",
-      "extra": { "roi_subset_robust": ["liver"] }
-    },
-    {
-      "key": "tumor",
-      "task": "liver_vessels",
-      "output": "liver_tumor.nii.gz",
-      "extra": {}
-    }
-  ],
-  "postprocess": {
-    "merge_keys": ["liver", "tumor"],
-    "output": "liver_all.nii.gz",
-    "on_failure": "warn_only",
-    "radius_mm": 5.0,
-    "largest_cc": true,
-    "fill_holes": true,
-    "close": true
-  }
-}
-```
+## Core outputs
 
-**Outputs**
+- `parse`:
+  - `dicom_paths_with_tags.csv` (raw extracted tags)
+  - `dicom_index.csv` (resolved IDs and normalized metadata)
+- `clean`:
+  - cleaned cohort table (default `<input>_clean.csv`)
+- `convert`:
+  - NIfTI-enriched cohort table (`nifti_index.csv` by default)
+  - conversion failures (`conv_errors.csv` by default)
+- `segment`, `phase`, `radiomics`:
+  - enriched cohort table + command-specific error CSV
 
-`parse` writes two CSVs into `--output_dir`:
-- `dicom_paths_with_tags.csv`: raw paths plus extracted tags.
-- `dicom_index.csv`: finalized index with patient/study/series IDs.
-
-`clean` writes the cleaned CSV to `--csv_path_out` (or `dicom_index_clean.csv` when using `ingest`).
-
-
-**Manifests And Hooks**
+## Manifests and hooks
 
 Manifests define dataset-specific behavior and live in:
+
 - `src/imperandi/datasets_config/manifests/*.json`
 
-You can pass a manifest by name (`generic`, `operandi`) or a path. Manifests can specify:
-- `id_standardization`: a hook to normalize patient keys.
-- `derived_columns`: hook-driven columns derived from existing metadata.
+Hook implementations live in:
 
-Hook implementations live under:
 - `src/imperandi/datasets_config/hooks/`
 
-**Performance Notes**
-- Use `--num_workers` to control parallelism.
-- Use `--checkpoint_frequency` to write intermediate CSV chunks for very large datasets.
-- All DICOM tags are read recursively and flattened into columns by default, which can result in large output CSVs.
+You can pass either a manifest name (`generic`, `operandi`) or a custom manifest path.
 
-**Data Expectations**
-- By default, IMPERANDI looks for `*.dcm` files. If none are found, it scans all files and attempts a header read.
-- ID selection can come from tags, path structure, or a hybrid (`--id_source auto`).
+## Performance and reliability notes
 
-**Running From Source**
-```bash
-python -m imperandi --help
-```
+- Parallel execution controls are available for heavy stages (`parse`, `convert`, `segment`).
+- `parse` supports checkpointing for large datasets (`--checkpoint_frequency`).
+- Archive workflows are bounded by depth and include path-safety protections.
+- Most commands support `--dry-run` for pipeline planning and CI smoke checks.
 
-## Testing (Slow Datasets)
-Slow integration tests for the [IRCAD dataset](https://www.ircad.fr/research/data-sets/liver-segmentation-3d-ircadb-01/) are available and are skipped unless data is present.
-- Place the DICOM dataset at `tests/data/IRCAD_DICOM` (gitignored) or set `IRCAD_ROOT` to the dataset path.
+## Testing (slow datasets)
+
+Slow integration tests for the [IRCAD dataset](https://www.ircad.fr/research/data-sets/liver-segmentation-3d-ircadb-01/) are available and skipped unless data is present.
+
+- Place DICOM data at `tests/data/IRCAD_DICOM` (gitignored) or set `IRCAD_ROOT`.
 - Optional: place NIfTI outputs at `tests/data/IRCAD_nifti` or set `IRCAD_NIFTI_ROOT`.
-- Run slow tests with:
+- Run slow tests:
+
 ```bash
 python -m pytest -m slow
 ```
-- Regenerate golden CSVs locally (from repo root):
+
+- Regenerate reference CSVs:
+
 ```bash
 python -m imperandi parse --root_path tests/data/IRCAD_DICOM --output_dir tests/data
 python -m imperandi clean --csv_path tests/data/dicom_index.csv --csv_path_out tests/data/dicom_index_clean.csv
 ```
-- Note: there is no auto-download due to licensing; datasets must be placed manually.
 
-## Viewer
-
-IMPERANDI comes with a lightweight interactive viewer for CT scans and segmentation masks, running in a Jupyter Notebook. It features cohort exploration functionalities: selecting exams by patient, date, perfusion phase.  
-
-![image](https://raw.githubusercontent.com/dmandache/IMPERANDI/main/static/viewer-demo.png)
+Data is not auto-downloaded due to dataset licensing constraints.
