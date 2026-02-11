@@ -17,3 +17,11 @@ def test_load_generic_manifest_and_hook_resolution():
     hook = resolve_hook(manifest["id_standardization"])
     assert hook is not None
     assert hook("patient_0012_030") == "12-30"
+
+
+def test_load_manifest_defaults_to_generic():
+    base_path = Path(__file__).resolve().parents[1] / "src" / "imperandi"
+    manifest = load_manifest(None, base_path=base_path)
+
+    assert manifest["dataset_name"] == "generic"
+    assert "segmentation" in manifest

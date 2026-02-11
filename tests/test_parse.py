@@ -12,6 +12,12 @@ import pandas as pd
 from imperandi.ingest import parse
 
 
+def test_parse_parser_defaults_manifest_to_generic():
+    parser = parse.build_parser()
+    args = parser.parse_args([])
+    assert args.manifest == "generic"
+
+
 def _make_archive_dataset(root: Path) -> Path:
     inner_tar = root / "inner.tar.gz"
     with tarfile.open(inner_tar, "w:gz") as tf:

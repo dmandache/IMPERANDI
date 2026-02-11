@@ -11,6 +11,7 @@ import pandas as pd
 from tqdm import tqdm
 
 from imperandi.utils.logging import setup_logging
+from imperandi.utils.manifest import DEFAULT_MANIFEST_NAME, load_manifest
 from imperandi.utils.misc import print_args
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,7 @@ def _load_phase_extractor() -> Callable[[Any], Dict[str, Any]]:
 
 def add_phase_arguments(
     parser: argparse.ArgumentParser,
+    include_manifest: bool = True,
     include_dry_run: bool = True,
 ) -> None:
     parser.add_argument(
@@ -56,6 +58,16 @@ def add_phase_arguments(
         default=None,
         help="CSV path for failed rows only (default: <csv_dir>/phase_errors.csv).",
     )
+    if include_manifest:
+        parser.add_argument(
+            "--manifest",
+            type=str,
+            default=DEFAULT_MANIFEST_NAME,
+            help=(
+                "Dataset manifest name or path to manifest JSON "
+                f"(default: {DEFAULT_MANIFEST_NAME})."
+            ),
+        )
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose logging")
     if include_dry_run:
         parser.add_argument(
@@ -179,6 +191,9 @@ def extract_phase_volumes(
 
 
 def main(args: argparse.Namespace) -> None:
+    load_manifest(
+        getattr(args, "manifest", None), base_path=Path(__file__).resolve().parents[1]
+    )
     phase_extractor = _load_phase_extractor()
 
     df = pd.read_csv(args.csv_path).copy()

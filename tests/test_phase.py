@@ -11,6 +11,12 @@ import pandas as pd
 from imperandi.extract import phase as phase_module
 
 
+def test_phase_parser_defaults_manifest_to_generic():
+    parser = phase_module.build_parser()
+    args = parser.parse_args([])
+    assert args.manifest == "generic"
+
+
 def test_normalize_phase_args_defaults(tmp_path):
     csv_path = tmp_path / "nifti_index.csv"
     csv_path.write_text("nifti_path\n")

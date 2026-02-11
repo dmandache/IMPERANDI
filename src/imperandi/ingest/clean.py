@@ -10,7 +10,11 @@ import pandas as pd
 from pydicom.uid import UID
 from unidecode import unidecode
 
-from imperandi.utils.manifest import load_manifest, resolve_hook
+from imperandi.utils.manifest import (
+    DEFAULT_MANIFEST_NAME,
+    load_manifest,
+    resolve_hook,
+)
 from imperandi.utils.geometry import (
     classify_plane_from_iop,
     standardize_iop,
@@ -189,8 +193,11 @@ def add_clean_arguments(
         parser.add_argument(
             "--manifest",
             type=str,
-            default=None,
-            help="Dataset manifest name or path to manifest JSON.",
+            default=DEFAULT_MANIFEST_NAME,
+            help=(
+                "Dataset manifest name or path to manifest JSON "
+                f"(default: {DEFAULT_MANIFEST_NAME})."
+            ),
         )
     parser.add_argument(
         "--volume_min",

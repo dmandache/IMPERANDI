@@ -10,6 +10,12 @@ import numpy as np
 from imperandi.ingest import clean
 
 
+def test_clean_parser_defaults_manifest_to_generic():
+    parser = clean.build_parser()
+    args = parser.parse_args([])
+    assert args.manifest == "generic"
+
+
 def test_normalize_clean_args_prefers_optional_csv_path(tmp_path):
     csv_pos = tmp_path / "pos.csv"
     csv_opt = tmp_path / "opt.csv"

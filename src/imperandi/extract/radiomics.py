@@ -9,6 +9,7 @@ import pandas as pd
 from tqdm import tqdm
 
 from imperandi.utils.logging import setup_logging
+from imperandi.utils.manifest import DEFAULT_MANIFEST_NAME, load_manifest
 from imperandi.utils.misc import print_args
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,7 @@ def _create_radiomics_extractor(featureextractor_module, settings: Dict[str, Any
 
 def add_radiomics_arguments(
     parser: argparse.ArgumentParser,
+    include_manifest: bool = True,
     include_dry_run: bool = True,
 ) -> None:
     parser.add_argument(
@@ -81,6 +83,16 @@ def add_radiomics_arguments(
         default=False,
         help="Skip legacy cohort filtering and process all rows.",
     )
+    if include_manifest:
+        parser.add_argument(
+            "--manifest",
+            type=str,
+            default=DEFAULT_MANIFEST_NAME,
+            help=(
+                "Dataset manifest name or path to manifest JSON "
+                f"(default: {DEFAULT_MANIFEST_NAME})."
+            ),
+        )
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose logging.")
     if include_dry_run:
         parser.add_argument(
@@ -368,6 +380,9 @@ def extract_radiomics_from_dataframe(
 
 
 def main(args: argparse.Namespace) -> None:
+    load_manifest(
+        getattr(args, "manifest", None), base_path=Path(__file__).resolve().parents[1]
+    )
     sitk_module, featureextractor_module = _load_radiomics_dependencies()
     extractor = _create_radiomics_extractor(featureextractor_module, DEFAULT_SETTINGS)
 

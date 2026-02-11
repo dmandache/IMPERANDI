@@ -42,7 +42,8 @@ Impact: creates a standardized imaging representation for model training, segmen
 ### 3) Configurable segmentation (`segment`)
 
 - Runs configurable task pipelines (default backend: TotalSegmentator).
-- Supports multi-task mask generation per volume through a JSON task config.
+- Reads task configuration from the selected manifest (`segmentation` section) by default.
+- Supports optional per-run override through `--tasks_config`.
 - Adds optional post-processing (mask merge, closing, hole filling, largest connected component).
 - Uses multiprocessing with timeout controls and produces warning/error tracking CSVs.
 
@@ -143,8 +144,7 @@ Run ingest (parse + clean):
 ```bash
 imperandi ingest \
   --root_path /path/to/dicom \
-  --output_dir /path/to/output \
-  --manifest generic
+  --output_dir /path/to/output
 ```
 
 Convert to NIfTI:
@@ -203,7 +203,14 @@ Hook implementations live in:
 
 - `src/imperandi/datasets_config/hooks/`
 
-You can pass either a manifest name (`generic`, `operandi`) or a custom manifest path.
+Manifest capabilities include:
+
+- ID standardization hooks (`id_standardization`)
+- Optional derived-column hooks (`derived_columns`)
+- Segmentation task config (`segmentation`)
+
+All actions that consume manifests default to `generic` when `--manifest` is omitted.
+You can still pass either a manifest name (`generic`, `operandi`) or a custom manifest path.
 
 ## Performance and reliability notes
 

@@ -20,7 +20,7 @@ from imperandi.utils.archive_io import (
 from imperandi.utils.files import copy_files_to_temp_dir, check_file, is_valid_nifti
 from imperandi.utils.logging import setup_logging
 from imperandi.utils.misc import report_volumes, report_change, print_args
-from imperandi.utils.manifest import load_manifest
+from imperandi.utils.manifest import DEFAULT_MANIFEST_NAME, load_manifest
 
 logger = logging.getLogger(__name__)
 
@@ -105,8 +105,11 @@ def add_convert_arguments(
         parser.add_argument(
             "--manifest",
             type=str,
-            default=None,
-            help="Dataset manifest name or path to manifest JSON.",
+            default=DEFAULT_MANIFEST_NAME,
+            help=(
+                "Dataset manifest name or path to manifest JSON "
+                f"(default: {DEFAULT_MANIFEST_NAME})."
+            ),
         )
     if include_dry_run:
         parser.add_argument(
@@ -494,9 +497,10 @@ def main(args):
         for p in args.csv_path:
             check_file(p)
 
-    # Load manifest if provided
-    if hasattr(args, "manifest") and args.manifest:
-        load_manifest(args.manifest, base_path=Path(__file__).resolve().parents[1])
+    # Validate/load manifest (defaults to generic when omitted)
+    load_manifest(
+        getattr(args, "manifest", None), base_path=Path(__file__).resolve().parents[1]
+    )
 
     # Load data (support multiple CSV paths)
     df_list = [pd.read_csv(p) for p in args.csv_path]

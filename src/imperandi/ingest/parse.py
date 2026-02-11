@@ -20,7 +20,11 @@ from imperandi.utils.archive_io import (
 )
 from imperandi.utils.logging import setup_logging
 from imperandi.utils.misc import print_args
-from imperandi.utils.manifest import load_manifest, resolve_hook
+from imperandi.utils.manifest import (
+    DEFAULT_MANIFEST_NAME,
+    load_manifest,
+    resolve_hook,
+)
 
 warnings.filterwarnings("ignore")
 logger = logging.getLogger(__name__)
@@ -70,8 +74,11 @@ def add_parse_arguments(
         parser.add_argument(
             "--manifest",
             type=str,
-            default=None,
-            help="Dataset manifest name or path to manifest JSON.",
+            default=DEFAULT_MANIFEST_NAME,
+            help=(
+                "Dataset manifest name or path to manifest JSON "
+                f"(default: {DEFAULT_MANIFEST_NAME})."
+            ),
         )
 
     # Tag reading

@@ -14,6 +14,12 @@ from imperandi.process import convert as convert_module
 from imperandi.utils.archive_io import ArchiveSession, encode_archive_uri
 
 
+def test_convert_parser_defaults_manifest_to_generic():
+    parser = convert_module.build_parser()
+    args = parser.parse_args([])
+    assert args.manifest == "generic"
+
+
 def test_convert_list_str_to_list_valid():
     s = "['a', 'b', 'c']"
     out = convert_module.convert_list_str_to_list(s)

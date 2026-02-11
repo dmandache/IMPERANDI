@@ -10,6 +10,12 @@ import pandas as pd
 from imperandi.extract import radiomics as radiomics_module
 
 
+def test_radiomics_parser_defaults_manifest_to_generic():
+    parser = radiomics_module.build_parser()
+    args = parser.parse_args([])
+    assert args.manifest == "generic"
+
+
 def test_normalize_radiomics_args_defaults(tmp_path):
     csv_path = tmp_path / "nifti_index.csv"
     csv_path.write_text("nifti_path\n")

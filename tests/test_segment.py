@@ -27,10 +27,30 @@ def test_load_tasks_config_default():
     assert cfg["backend"] == "totalsegmentator"
 
 
+def test_load_tasks_config_from_manifest():
+    manifest = {
+        "segmentation": {
+            "backend": "totalsegmentator",
+            "tasks": [
+                {"key": "x", "task": "total", "output": "x.nii.gz", "extra": {}},
+            ],
+        }
+    }
+    cfg = segment_module.load_tasks_config(None, manifest=manifest)
+    assert cfg["tasks"][0]["key"] == "x"
+
+
 def test_load_tasks_config_missing(tmp_path):
     missing = tmp_path / "nope.json"
     with pytest.raises(FileNotFoundError):
         segment_module.load_tasks_config(missing)
+
+
+def test_segment_parser_defaults_manifest_to_generic():
+    parser = argparse.ArgumentParser()
+    segment_module.add_segment_arguments(parser)
+    args = parser.parse_args([])
+    assert args.manifest == "generic"
 
 
 def test_segment_volume_calls_postprocess(tmp_path, monkeypatch):

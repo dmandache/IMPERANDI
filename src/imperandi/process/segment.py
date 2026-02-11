@@ -16,6 +16,7 @@ The module supports both CLI and library usage:
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import logging
 import multiprocessing as mp
@@ -32,8 +33,9 @@ from skimage.measure import label, regionprops
 from skimage.morphology import ball
 from tqdm import tqdm
 
-from imperandi.utils.misc import report_volumes  # type: ignore
 from imperandi.utils.logging import setup_logging
+from imperandi.utils.manifest import DEFAULT_MANIFEST_NAME, load_manifest
+from imperandi.utils.misc import report_volumes  # type: ignore
 
 # -----------------------------------------------------------------------------
 # Configuration & logging
@@ -210,9 +212,18 @@ def _default_tasks_config() -> Dict[str, Any]:
     }
 
 
-def load_tasks_config(path: Path | None) -> Dict[str, Any]:
-    """Load segmentation task configuration from JSON or use defaults."""
+def load_tasks_config(
+    path: Path | None,
+    *,
+    manifest: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    """Load segmentation tasks from JSON, then manifest, then builtin defaults."""
     if path is None:
+        manifest_segmentation = (manifest or {}).get("segmentation")
+        if manifest_segmentation is not None:
+            if not isinstance(manifest_segmentation, dict):
+                raise ValueError("Manifest key 'segmentation' must be a JSON object.")
+            return copy.deepcopy(manifest_segmentation)
         return _default_tasks_config()
 
     if not path.exists():
@@ -472,7 +483,7 @@ def process_single_volume(
 
 def add_segment_arguments(
     parser: argparse.ArgumentParser,
-    include_manifest: bool = False,
+    include_manifest: bool = True,
     include_dry_run: bool = True,
 ) -> None:
     parser.add_argument(
@@ -504,7 +515,10 @@ def add_segment_arguments(
         "--tasks_config",
         type=str,
         default=None,
-        help="JSON config for segmentation tasks.",
+        help=(
+            "JSON config for segmentation tasks. "
+            "If omitted, use the manifest's segmentation section."
+        ),
     )
     parser.add_argument("--num_workers", type=int, default=4, help="Pool size")
     parser.add_argument(
@@ -532,8 +546,11 @@ def add_segment_arguments(
         parser.add_argument(
             "--manifest",
             type=str,
-            default=None,
-            help="Dataset manifest name or path to manifest JSON.",
+            default=DEFAULT_MANIFEST_NAME,
+            help=(
+                "Dataset manifest name or path to manifest JSON "
+                f"(default: {DEFAULT_MANIFEST_NAME})."
+            ),
         )
     if include_dry_run:
         parser.add_argument(
@@ -588,8 +605,12 @@ def normalize_segment_args(args: argparse.Namespace) -> argparse.Namespace:
 
 def main(args: argparse.Namespace) -> None:
     setup_logging(verbose=getattr(args, "verbose", False))
+    manifest = load_manifest(
+        getattr(args, "manifest", None), base_path=Path(__file__).resolve().parents[1]
+    )
     tasks_config = load_tasks_config(
-        Path(args.tasks_config) if args.tasks_config else None
+        Path(args.tasks_config) if args.tasks_config else None,
+        manifest=manifest,
     )
     prefetch_totalsegmentator_models(tasks_config, fast=args.fast)
 
