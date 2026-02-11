@@ -483,17 +483,23 @@ class CTScanViewer:
                 values.append(option)
         return values
 
-    def _step_dropdown(self, dropdown, direction):
+    def _step_dropdown(self, dropdown, direction, wrap=False):
         options = self._option_values(dropdown.options)
         values = [opt for opt in options if opt is not None]
         if not values:
             return
         current = dropdown.value
         if current not in values:
-            dropdown.value = values[0]
+            if wrap and direction < 0:
+                dropdown.value = values[-1]
+            else:
+                dropdown.value = values[0]
             return
         idx = values.index(current)
-        next_idx = max(0, min(len(values) - 1, idx + direction))
+        if wrap:
+            next_idx = (idx + direction) % len(values)
+        else:
+            next_idx = max(0, min(len(values) - 1, idx + direction))
         if next_idx != idx:
             dropdown.value = values[next_idx]
 
@@ -782,10 +788,10 @@ class CTScanViewer:
         self._jump_to_selected_filters()
 
     def on_prev_patient(self, button):
-        self._step_dropdown(self.patient_dropdown, -1)
+        self._step_dropdown(self.patient_dropdown, -1, wrap=True)
 
     def on_next_patient(self, button):
-        self._step_dropdown(self.patient_dropdown, 1)
+        self._step_dropdown(self.patient_dropdown, 1, wrap=True)
 
     def on_prev_date(self, button):
         self._step_dropdown(self.date_dropdown, -1)
