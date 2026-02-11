@@ -1,3 +1,18 @@
+# Generic temp directories
+.tmp/
+.temp/
+tmp/
+temp/
+
+# Generic temp files
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*.orig
+*~
+
 # Big test data
 tests/data/
 
