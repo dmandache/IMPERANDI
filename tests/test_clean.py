@@ -109,7 +109,9 @@ def test_unravel_patient_key_requires_explicit_derived_columns(monkeypatch):
     df = pd.DataFrame({"patient_key": ["alice"]})
 
     def resolver(_cfg):
-        raise AssertionError("resolve_hook should not be called without derived_columns")
+        raise AssertionError(
+            "resolve_hook should not be called without derived_columns"
+        )
 
     monkeypatch.setattr(clean, "resolve_hook", resolver)
     out = clean.unravel_patient_key(

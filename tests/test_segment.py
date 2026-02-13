@@ -180,11 +180,15 @@ def test_resolve_manifest_fast_default_from_segmentation_fast_overrides_cli(capl
     }
 
     with caplog.at_level("WARNING"):
-        resolved = segment_config_module.resolve_manifest_fast_default(cfg, cli_fast=False)
+        resolved = segment_config_module.resolve_manifest_fast_default(
+            cfg, cli_fast=False
+        )
 
     assert resolved is True
     assert cfg["fast"] is True
-    assert any("Manifest fast setting detected" in rec.getMessage() for rec in caplog.records)
+    assert any(
+        "Manifest fast setting detected" in rec.getMessage() for rec in caplog.records
+    )
 
 
 def test_resolve_task_fast_and_extra_from_extra_fast_overrides_default():
@@ -417,10 +421,14 @@ def test_resolve_postprocess_operation_defaults_output_name_from_out_key():
 
 def test_resolve_postprocess_operation_requires_out_key():
     with pytest.raises(ValueError, match="out_key is required"):
-        segment_config_module.resolve_postprocess_operation({"in_key": "liver"}, op_index=1)
+        segment_config_module.resolve_postprocess_operation(
+            {"in_key": "liver"}, op_index=1
+        )
 
 
-def test_segment_volume_executes_postprocess_list_in_order_and_chains(tmp_path, monkeypatch):
+def test_segment_volume_executes_postprocess_list_in_order_and_chains(
+    tmp_path, monkeypatch
+):
     nifti = tmp_path / "vol.nii.gz"
     nifti.write_text("nifti")
 
@@ -460,7 +468,9 @@ def test_segment_volume_executes_postprocess_list_in_order_and_chains(tmp_path, 
     assert calls[1] == (["ab.nii.gz"], "ab_refined.nii.gz")
 
 
-def test_segment_volume_continues_after_warn_only_missing_dependency(tmp_path, monkeypatch):
+def test_segment_volume_continues_after_warn_only_missing_dependency(
+    tmp_path, monkeypatch
+):
     nifti = tmp_path / "vol.nii.gz"
     nifti.write_text("nifti")
 
@@ -713,7 +723,9 @@ def test_main_writes_mask_columns(tmp_path, monkeypatch):
             "fake_outputs": "liver.nii.gz|vessels.nii.gz|postproc.nii.gz",
         }
     ]
-    out_df, _, _ = _run_main_with_worker(tmp_path, monkeypatch, config=config, rows=rows)
+    out_df, _, _ = _run_main_with_worker(
+        tmp_path, monkeypatch, config=config, rows=rows
+    )
 
     assert "mask_liver" in out_df.columns
     assert "mask_vessels" in out_df.columns
@@ -737,7 +749,9 @@ def test_main_writes_custom_merged_mask_column(tmp_path, monkeypatch):
             "fake_outputs": "liver.nii.gz|vessels.nii.gz|combined.nii.gz",
         }
     ]
-    out_df, _, _ = _run_main_with_worker(tmp_path, monkeypatch, config=config, rows=rows)
+    out_df, _, _ = _run_main_with_worker(
+        tmp_path, monkeypatch, config=config, rows=rows
+    )
 
     assert "mask_liver" in out_df.columns
     assert "mask_vessels" in out_df.columns
@@ -763,7 +777,9 @@ def test_main_warns_and_overwrites_when_postprocess_semantic_column_collides(
             "fake_outputs": "liver.nii.gz|mask_liver.nii.gz",
         }
     ]
-    out_df, _, _ = _run_main_with_worker(tmp_path, monkeypatch, config=config, rows=rows)
+    out_df, _, _ = _run_main_with_worker(
+        tmp_path, monkeypatch, config=config, rows=rows
+    )
 
     assert "mask_liver" in out_df.columns
     assert out_df.loc[0, "mask_liver"].endswith("mask_liver.nii.gz")
@@ -781,7 +797,9 @@ def test_main_records_warning_when_merged_mask_missing(tmp_path, monkeypatch):
         "postprocess": {"merge_keys": ["liver"], "out_key": "postproc"},
     }
     rows = [{"nifti_path": str(nifti), "fake_outputs": "liver.nii.gz"}]
-    out_df, _, _ = _run_main_with_worker(tmp_path, monkeypatch, config=config, rows=rows)
+    out_df, _, _ = _run_main_with_worker(
+        tmp_path, monkeypatch, config=config, rows=rows
+    )
 
     assert "warning_message" in out_df.columns
     assert pd.isna(out_df.loc[0, "warning_message"])
@@ -807,7 +825,9 @@ def test_main_writes_multiple_postprocess_columns(tmp_path, monkeypatch):
             "fake_outputs": "liver.nii.gz|tumor.nii.gz|combined.nii.gz|final.nii.gz",
         }
     ]
-    out_df, _, _ = _run_main_with_worker(tmp_path, monkeypatch, config=config, rows=rows)
+    out_df, _, _ = _run_main_with_worker(
+        tmp_path, monkeypatch, config=config, rows=rows
+    )
 
     assert "combined" in out_df.columns
     assert "final" in out_df.columns
@@ -815,7 +835,9 @@ def test_main_writes_multiple_postprocess_columns(tmp_path, monkeypatch):
     assert out_df.loc[0, "final"].endswith("final.nii.gz")
 
 
-def test_main_discovers_all_generated_masks_and_excludes_source_nifti(tmp_path, monkeypatch):
+def test_main_discovers_all_generated_masks_and_excludes_source_nifti(
+    tmp_path, monkeypatch
+):
     nifti = tmp_path / "scan.nii.gz"
     nifti.write_text("nifti")
     config = {
@@ -824,7 +846,9 @@ def test_main_discovers_all_generated_masks_and_excludes_source_nifti(tmp_path, 
         "postprocess": {"merge_keys": ["liver"], "out_key": "postproc"},
     }
     rows = [{"nifti_path": str(nifti), "fake_outputs": "liver.nii.gz|spleen.nii.gz"}]
-    out_df, _, _ = _run_main_with_worker(tmp_path, monkeypatch, config=config, rows=rows)
+    out_df, _, _ = _run_main_with_worker(
+        tmp_path, monkeypatch, config=config, rows=rows
+    )
 
     assert "mask_liver" in out_df.columns
     assert "mask_spleen" in out_df.columns
@@ -838,8 +862,16 @@ def test_main_hard_timeout_marks_row_and_keeps_other_success(tmp_path, monkeypat
     nifti_slow.write_text("nifti")
     config = {"backend": "totalsegmentator", "tasks": [{"task": "total", "extra": {}}]}
     rows = [
-        {"nifti_path": str(nifti_fast), "fake_outputs": "liver.nii.gz", "fake_sleep_sec": 0},
-        {"nifti_path": str(nifti_slow), "fake_outputs": "liver.nii.gz", "fake_sleep_sec": 10.0},
+        {
+            "nifti_path": str(nifti_fast),
+            "fake_outputs": "liver.nii.gz",
+            "fake_sleep_sec": 0,
+        },
+        {
+            "nifti_path": str(nifti_slow),
+            "fake_outputs": "liver.nii.gz",
+            "fake_sleep_sec": 10.0,
+        },
     ]
     out_df, err_df, _ = _run_main_with_worker(
         tmp_path,

@@ -40,7 +40,9 @@ logger = logging.getLogger(__name__)
 WorkerResult = Tuple[int, Optional[str], Optional[str], Optional[str]]
 
 
-def _build_postprocess_output_column_map(tasks_config: Dict[str, Any]) -> Dict[str, str]:
+def _build_postprocess_output_column_map(
+    tasks_config: Dict[str, Any],
+) -> Dict[str, str]:
     """Build ``{output_filename_lower: output_column}`` for postprocess operations."""
     mapping: Dict[str, str] = {}
     for op in resolve_postprocess_operations(tasks_config.get("postprocess")):
@@ -177,9 +179,13 @@ def prefetch_totalsegmentator_models(
     if not resolved_tasks:
         return
 
-    missing = [name for name in resolved_tasks if name not in TOTALSEG_TASK_TO_MODEL_IDS]
+    missing = [
+        name for name in resolved_tasks if name not in TOTALSEG_TASK_TO_MODEL_IDS
+    ]
     if missing:
-        logger.warning("Skipping model prefetch for unknown tasks: %s", ", ".join(missing))
+        logger.warning(
+            "Skipping model prefetch for unknown tasks: %s", ", ".join(missing)
+        )
 
     task_ids: List[int] = []
     for name in resolved_tasks:
@@ -208,9 +214,7 @@ def _default_process_single_volume(*args: Any, **kwargs: Any) -> WorkerResult:
     return segment_module.process_single_volume(*args, **kwargs)
 
 
-def _validate_and_get_task(
-    task: Any, *, task_index: int
-) -> Tuple[Dict[str, Any], str]:
+def _validate_and_get_task(task: Any, *, task_index: int) -> Tuple[Dict[str, Any], str]:
     """Validate one task object and return ``(task_dict, task_name)``."""
     task_path = f"segmentation.tasks[{task_index}]"
     if not isinstance(task, dict):
@@ -309,7 +313,9 @@ def run_segment_volume_workflow(
                 **extra,
             )
         except Exception as exc:
-            logger_obj.error("Segmentation failed on %s (%s): %s", nifti_path, task_name, exc)
+            logger_obj.error(
+                "Segmentation failed on %s (%s): %s", nifti_path, task_name, exc
+            )
             raise
 
         after_files = discover_segmentation_outputs(output_dir, nifti_path)
@@ -319,10 +325,10 @@ def run_segment_volume_workflow(
         )
         if not changed_outputs:
             if not after_files:
-                raise RuntimeError(f"No segmentation masks found after task '{task_name}'.")
-            message = (
-                f"No new or updated segmentation outputs detected for task '{task_name}'."
-            )
+                raise RuntimeError(
+                    f"No segmentation masks found after task '{task_name}'."
+                )
+            message = f"No new or updated segmentation outputs detected for task '{task_name}'."
             if force:
                 raise RuntimeError(message)
             logger_obj.warning(message)
@@ -341,7 +347,10 @@ def run_segment_volume_workflow(
         return warnings
 
     warn_postprocess_collisions(
-        {mask_column_for_output_file(Path(filename)) for filename in key_to_output.values()},
+        {
+            mask_column_for_output_file(Path(filename))
+            for filename in key_to_output.values()
+        },
         set(key_to_output.values()),
         postprocess_ops,
         warnings=warnings,
@@ -383,8 +392,12 @@ def run_segment_batch_workflow(
     *,
     args: Any,
     manifest_base_path: Path,
-    process_single_volume_fn: Callable[..., WorkerResult] = _default_process_single_volume,
-    prefetch_totalsegmentator_models_fn: Callable[..., None] = prefetch_totalsegmentator_models,
+    process_single_volume_fn: Callable[
+        ..., WorkerResult
+    ] = _default_process_single_volume,
+    prefetch_totalsegmentator_models_fn: Callable[
+        ..., None
+    ] = prefetch_totalsegmentator_models,
     process_pool_executor_cls: Callable[..., Any] = ProcessPoolExecutor,
     as_completed_fn: Callable[..., Any] = as_completed,
     tqdm_fn: Callable[..., Any] = tqdm,
@@ -510,7 +523,9 @@ def run_segment_batch_workflow(
 
             elapsed = now - float(state["started_at"])
             if proc.is_alive() and elapsed > float(args.timeout_sec):
-                logger_obj.warning("Row %d exceeded %ss - killed", row_idx, args.timeout_sec)
+                logger_obj.warning(
+                    "Row %d exceeded %ss - killed", row_idx, args.timeout_sec
+                )
                 proc.terminate()
                 proc.join(timeout=1.0)
                 if proc.is_alive():

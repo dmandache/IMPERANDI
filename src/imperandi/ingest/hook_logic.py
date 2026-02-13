@@ -108,7 +108,9 @@ def apply_id_standardization(
     if not mark_failures:
         return df
 
-    raw_ok = df[source_column].notna() & (df[source_column].astype(str).str.strip() != "")
+    raw_ok = df[source_column].notna() & (
+        df[source_column].astype(str).str.strip() != ""
+    )
     std_bad = df[column].isna() | (df[column].astype(str).str.strip() == "")
     failed = raw_ok & std_bad
 

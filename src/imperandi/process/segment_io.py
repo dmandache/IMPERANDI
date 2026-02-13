@@ -160,7 +160,9 @@ def diff_changed_outputs(
 
 
 def register_output_key_map(
-    key_to_output: Dict[str, str], output_files: List[Path], warnings: List[str] | None = None
+    key_to_output: Dict[str, str],
+    output_files: List[Path],
+    warnings: List[str] | None = None,
 ) -> None:
     """Register discovered output files in ``stem -> filename`` map."""
     for path in output_files:

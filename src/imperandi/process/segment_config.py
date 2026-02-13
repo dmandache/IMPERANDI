@@ -109,7 +109,9 @@ def resolve_task_fast_and_extra(
     task_name = str(task.get("task", f"task_{task_index}"))
 
     if "fast" in task:
-        task_fast: bool | None = _coerce_bool_flag(task["fast"], field=f"{task_path}.fast")
+        task_fast: bool | None = _coerce_bool_flag(
+            task["fast"], field=f"{task_path}.fast"
+        )
     else:
         task_fast = None
 
@@ -155,8 +157,7 @@ def resolve_task_fast_and_extra(
 
     if emit_warning and resolved_source != "default":
         logger.warning(
-            "Per-task fast override for task '%s' from %s=%s "
-            "(default fast=%s).",
+            "Per-task fast override for task '%s' from %s=%s " "(default fast=%s).",
             task_name,
             resolved_source,
             resolved_fast,
@@ -203,7 +204,9 @@ def resolve_postprocess_operation(
     op: Dict[str, Any], *, op_index: int
 ) -> Dict[str, Any]:
     """Resolve and validate one postprocess operation."""
-    legacy_keys = [k for k in ("output", "output_column", "column_name", "output_col") if k in op]
+    legacy_keys = [
+        k for k in ("output", "output_column", "column_name", "output_col") if k in op
+    ]
     if legacy_keys:
         raise ValueError(
             "Unsupported postprocess key(s) in operation "
@@ -237,9 +240,7 @@ def resolve_postprocess_operation(
 
     out_key = str(op.get("out_key", "")).strip()
     if not out_key:
-        raise ValueError(
-            f"postprocess operation {op_index}: out_key is required."
-        )
+        raise ValueError(f"postprocess operation {op_index}: out_key is required.")
 
     if out_key.lower().endswith(".nii.gz") or out_key.lower().endswith(".nii"):
         raise ValueError(
@@ -325,8 +326,7 @@ def warn_postprocess_collisions(
 
         if out_name in seen_outputs:
             msg = (
-                prefix
-                + f"output file '{out_name}' collides with an existing output; "
+                prefix + f"output file '{out_name}' collides with an existing output; "
                 "last writer wins."
             )
             logger.warning(msg)
