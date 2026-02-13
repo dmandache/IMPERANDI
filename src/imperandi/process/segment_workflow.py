@@ -229,6 +229,36 @@ def _validate_and_get_task(task: Any, *, task_index: int) -> Tuple[Dict[str, Any
     return task, task_name
 
 
+def _resolve_declared_task_outputs(task: Dict[str, Any]) -> List[str]:
+    """Return declared output filenames for one task, when provided."""
+    declared: List[str] = []
+
+    output = task.get("output")
+    if isinstance(output, str) and output.strip():
+        declared.append(Path(output.strip()).name)
+
+    outputs = task.get("outputs")
+    if isinstance(outputs, list):
+        for item in outputs:
+            if isinstance(item, str) and item.strip():
+                declared.append(Path(item.strip()).name)
+
+    key = task.get("key")
+    if isinstance(key, str) and key.strip():
+        candidate = f"{key.strip()}.nii.gz"
+        declared.append(candidate)
+
+    unique: List[str] = []
+    seen: set[str] = set()
+    for name in declared:
+        lower = name.lower()
+        if lower in seen:
+            continue
+        seen.add(lower)
+        unique.append(name)
+    return unique
+
+
 def _process_single_volume_subprocess(
     send_conn: Any,
     process_single_volume_fn: Callable[..., WorkerResult],
@@ -302,6 +332,19 @@ def run_segment_volume_workflow(
             default_fast=default_fast,
             emit_warning=False,
         )
+
+        declared_outputs = _resolve_declared_task_outputs(valid_task)
+        if not force and declared_outputs:
+            declared_paths = [output_dir / name for name in declared_outputs]
+            if all(path.exists() for path in declared_paths):
+                if verbose:
+                    logger_obj.info(
+                        "Skip task %s - declared outputs already exist: %s",
+                        task_name,
+                        ", ".join(declared_outputs),
+                    )
+                register_output_key_map(key_to_output, declared_paths, warnings)
+                continue
 
         before_snapshot = snapshot_segmentation_outputs(output_dir, nifti_path)
         try:

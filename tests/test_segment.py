@@ -336,6 +336,131 @@ def test_segment_volume_supports_postprocess_in_key(tmp_path, monkeypatch):
     assert calls["mask_files"] == ["a.nii.gz"]
 
 
+def test_segment_volume_force_false_skips_existing_segmentation_and_postprocess(
+    tmp_path, monkeypatch
+):
+    nifti = tmp_path / "vol.nii.gz"
+    nifti.write_text("nifti")
+    (tmp_path / "a.nii.gz").write_text("existing")
+    (tmp_path / "postproc.nii.gz").write_text("existing")
+
+    tasks_config = {
+        "backend": "totalsegmentator",
+        "tasks": [
+            {"key": "a", "task": "task_a", "output": "a.nii.gz", "extra": {}},
+        ],
+        "postprocess": {"merge_keys": ["a"], "out_key": "postproc"},
+    }
+
+    class ShouldNotRunBackend:
+        def run(self, *, input_path, output_dir, task, fast, **kwargs):
+            raise AssertionError("segmentation task should be skipped when outputs exist")
+
+    def fail_clean(*args, **kwargs):
+        raise AssertionError("postprocess should be skipped when output exists")
+
+    monkeypatch.setattr(segment_module, "clean_and_merge_masks", fail_clean)
+
+    segment_module.segment_volume(
+        nifti,
+        tmp_path,
+        tasks_config,
+        fast=False,
+        verbose=False,
+        force=False,
+        backend=ShouldNotRunBackend(),
+    )
+
+
+def test_segment_volume_force_false_skips_existing_segmentation_but_runs_missing_postprocess(
+    tmp_path, monkeypatch
+):
+    nifti = tmp_path / "vol.nii.gz"
+    nifti.write_text("nifti")
+    (tmp_path / "a.nii.gz").write_text("existing")
+
+    tasks_config = {
+        "backend": "totalsegmentator",
+        "tasks": [
+            {"key": "a", "task": "task_a", "output": "a.nii.gz", "extra": {}},
+        ],
+        "postprocess": {"merge_keys": ["a"], "out_key": "postproc"},
+    }
+
+    class ShouldNotRunBackend:
+        def run(self, *, input_path, output_dir, task, fast, **kwargs):
+            raise AssertionError("segmentation task should be skipped when outputs exist")
+
+    calls = {"n": 0}
+
+    def fake_clean(dir_path, mask_files, *, output_name, **kwargs):
+        del mask_files, kwargs
+        calls["n"] += 1
+        (Path(dir_path) / output_name).write_text("mask")
+        return True
+
+    monkeypatch.setattr(segment_module, "clean_and_merge_masks", fake_clean)
+
+    segment_module.segment_volume(
+        nifti,
+        tmp_path,
+        tasks_config,
+        fast=False,
+        verbose=False,
+        force=False,
+        backend=ShouldNotRunBackend(),
+    )
+
+    assert calls["n"] == 1
+    assert (tmp_path / "postproc.nii.gz").exists()
+
+
+def test_segment_volume_force_true_reruns_existing_segmentation_and_postprocess(
+    tmp_path, monkeypatch
+):
+    nifti = tmp_path / "vol.nii.gz"
+    nifti.write_text("nifti")
+    (tmp_path / "a.nii.gz").write_text("existing")
+    (tmp_path / "postproc.nii.gz").write_text("existing")
+
+    tasks_config = {
+        "backend": "totalsegmentator",
+        "tasks": [
+            {"key": "a", "task": "task_a", "output": "a.nii.gz", "extra": {}},
+        ],
+        "postprocess": {"merge_keys": ["a"], "out_key": "postproc"},
+    }
+
+    calls = {"seg": 0, "post": 0}
+
+    class RecordingBackend:
+        def run(self, *, input_path, output_dir, task, fast, **kwargs):
+            del input_path, task, fast, kwargs
+            calls["seg"] += 1
+            (Path(output_dir) / "a.nii.gz").write_text("fresh")
+
+    def fake_clean(dir_path, mask_files, *, output_name, **kwargs):
+        del mask_files, kwargs
+        calls["post"] += 1
+        (Path(dir_path) / output_name).write_text("mask")
+        return True
+
+    monkeypatch.setattr(segment_module, "clean_and_merge_masks", fake_clean)
+
+    segment_module.segment_volume(
+        nifti,
+        tmp_path,
+        tasks_config,
+        fast=False,
+        verbose=False,
+        force=True,
+        backend=RecordingBackend(),
+    )
+
+    assert calls["seg"] == 1
+    assert calls["post"] == 1
+
+
 def test_segment_volume_uses_manifest_fast_and_strips_extra_fast(tmp_path):
     nifti = tmp_path / "vol.nii.gz"
     nifti.write_text("nifti")
