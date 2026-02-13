@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import logging
 import multiprocessing as mp
-from concurrent.futures import ProcessPoolExecutor, TimeoutError, as_completed
+import time
+from collections import deque
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -146,16 +148,9 @@ def _resolve_prefetch_tasks(tasks: List[Any], *, fast: bool) -> List[str]:
     """Resolve concrete task names whose weights should be prefetched."""
     resolved_tasks: List[str] = []
     for idx, task in enumerate(tasks):
-        if not isinstance(task, dict):
-            raise ValueError(
-                f"segmentation.tasks[{idx}] must be a JSON object, got {type(task).__name__}."
-            )
-        if "task" not in task:
-            continue
-
-        task_name = str(task["task"])
+        valid_task, task_name = _validate_and_get_task(task, task_index=idx)
         task_fast, _ = resolve_task_fast_and_extra(
-            task,
+            valid_task,
             task_index=idx,
             default_fast=fast,
             emit_warning=False,
@@ -213,6 +208,57 @@ def _default_process_single_volume(*args: Any, **kwargs: Any) -> WorkerResult:
     return segment_module.process_single_volume(*args, **kwargs)
 
 
+def _validate_and_get_task(
+    task: Any, *, task_index: int
+) -> Tuple[Dict[str, Any], str]:
+    """Validate one task object and return ``(task_dict, task_name)``."""
+    task_path = f"segmentation.tasks[{task_index}]"
+    if not isinstance(task, dict):
+        raise ValueError(
+            f"{task_path} must be a JSON object, got {type(task).__name__}."
+        )
+    if "task" not in task:
+        raise ValueError(f"{task_path}.task is required.")
+    task_name = str(task["task"]).strip()
+    if not task_name:
+        raise ValueError(f"{task_path}.task cannot be empty.")
+    return task, task_name
+
+
+def _process_single_volume_subprocess(
+    send_conn: Any,
+    process_single_volume_fn: Callable[..., WorkerResult],
+    idx: int,
+    row: Dict[str, Any],
+    tasks_config: Dict[str, Any],
+    fast: bool,
+    verbose: bool,
+    force: bool,
+) -> None:
+    """Run one worker task in a child process and send one ``WorkerResult``."""
+    try:
+        result = process_single_volume_fn(
+            idx,
+            row,
+            tasks_config,
+            fast=fast,
+            verbose=verbose,
+            force=force,
+        )
+    except Exception as exc:
+        result = (idx, None, f"worker crash: {exc}", None)
+
+    try:
+        send_conn.send(result)
+    except Exception:
+        pass
+    finally:
+        try:
+            send_conn.close()
+        except Exception:
+            pass
+
+
 def run_segment_volume_workflow(
     *,
     nifti_path: Path,
@@ -245,13 +291,9 @@ def run_segment_volume_workflow(
     register_output_key_map(key_to_output, existing_outputs, warnings)
 
     for idx, task in enumerate(tasks):
-        if not isinstance(task, dict):
-            raise ValueError(
-                f"segmentation.tasks[{idx}] must be a JSON object, got {type(task).__name__}."
-            )
-        task_name = task["task"]
+        valid_task, task_name = _validate_and_get_task(task, task_index=idx)
         task_fast, extra = resolve_task_fast_and_extra(
-            task,
+            valid_task,
             task_index=idx,
             default_fast=default_fast,
             emit_warning=False,
@@ -302,6 +344,7 @@ def run_segment_volume_workflow(
         {mask_column_for_output_file(Path(filename)) for filename in key_to_output.values()},
         set(key_to_output.values()),
         postprocess_ops,
+        warnings=warnings,
     )
 
     for op in postprocess_ops:
@@ -349,6 +392,9 @@ def run_segment_batch_workflow(
     logger_obj: logging.Logger = logger,
 ) -> None:
     """Run CSV-level multiprocessing segmentation workflow."""
+    # Kept for backward-compatible seams; scheduler no longer depends on futures.
+    _ = process_pool_executor_cls, as_completed_fn
+
     manifest = load_manifest(
         getattr(args, "manifest", None),
         base_path=manifest_base_path,
@@ -374,44 +420,142 @@ def run_segment_batch_workflow(
         raise KeyError("column 'nifti_path' missing")
     df = df.drop_duplicates("nifti_path").copy()
     df["warning_message"] = None
+    if args.num_workers < 1:
+        raise ValueError("num_workers must be >= 1")
 
     ctx = mp.get_context(args.start_method)
+    pending = deque((idx, row.to_dict()) for idx, row in df.iterrows())
+    total_jobs = len(pending)
+    progress_iter = iter(tqdm_fn(range(total_jobs), total=total_jobs, desc="Segment"))
     results: List[WorkerResult] = []
-    with process_pool_executor_cls(
-        max_workers=args.num_workers,
-        mp_context=ctx,
-    ) as pool:
-        futures = {
-            pool.submit(
-                process_single_volume_fn,
-                idx,
-                row.to_dict(),
-                tasks_config,
-                fast=effective_fast,
-                verbose=args.verbose,
-                force=args.force,
-            ): idx
-            for idx, row in df.iterrows()
-        }
+    completed_rows: set[int] = set()
+    active: Dict[int, Dict[str, Any]] = {}
 
-        for fut in tqdm_fn(as_completed_fn(futures), total=len(futures), desc="Segment"):
-            i = futures[fut]
+    def _mark_completed(result: WorkerResult) -> None:
+        row_idx = int(result[0])
+        if row_idx in completed_rows:
+            return
+        completed_rows.add(row_idx)
+        results.append(result)
+        try:
+            next(progress_iter)
+        except StopIteration:
+            pass
+
+    while pending or active:
+        while pending and len(active) < int(args.num_workers):
+            row_idx, row_dict = pending.popleft()
+            recv_conn, send_conn = ctx.Pipe(duplex=False)
+            proc = ctx.Process(
+                target=_process_single_volume_subprocess,
+                args=(
+                    send_conn,
+                    process_single_volume_fn,
+                    int(row_idx),
+                    row_dict,
+                    tasks_config,
+                    effective_fast,
+                    bool(args.verbose),
+                    bool(args.force),
+                ),
+            )
             try:
-                res = fut.result(timeout=args.timeout_sec)
-            except TimeoutError:
-                logger_obj.warning("Row %d exceeded %ds - killed", i, args.timeout_sec)
-                fut.cancel()
-                res = (i, None, "timeout", None)
+                proc.start()
             except Exception as exc:
-                res = (i, None, f"worker crash: {exc}", None)
-            results.append(res)
+                try:
+                    recv_conn.close()
+                except Exception:
+                    pass
+                try:
+                    send_conn.close()
+                except Exception:
+                    pass
+                _mark_completed((int(row_idx), None, f"worker crash: {exc}", None))
+                continue
 
-        pool.shutdown(wait=False, cancel_futures=True)
-        processes = getattr(pool, "_processes", None)
-        if processes:
-            for proc in processes.values():
+            send_conn.close()
+            active[int(row_idx)] = {
+                "process": proc,
+                "conn": recv_conn,
+                "started_at": time.monotonic(),
+            }
+
+        loop_made_progress = False
+        now = time.monotonic()
+        for row_idx, state in list(active.items()):
+            proc = state["process"]
+            conn = state["conn"]
+            conn_broken = False
+
+            try:
+                has_message = conn.poll()
+            except (BrokenPipeError, OSError):
+                has_message = False
+                conn_broken = True
+
+            if has_message:
+                try:
+                    result = conn.recv()
+                except (EOFError, BrokenPipeError, OSError):
+                    result = (row_idx, None, "worker crash: no result returned", None)
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                proc.join(timeout=0)
+                active.pop(row_idx, None)
+                _mark_completed(result)
+                loop_made_progress = True
+                continue
+
+            elapsed = now - float(state["started_at"])
+            if proc.is_alive() and elapsed > float(args.timeout_sec):
+                logger_obj.warning("Row %d exceeded %ss - killed", row_idx, args.timeout_sec)
+                proc.terminate()
+                proc.join(timeout=1.0)
                 if proc.is_alive():
                     proc.kill()
+                    proc.join(timeout=1.0)
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                active.pop(row_idx, None)
+                _mark_completed((row_idx, None, "timeout", None))
+                loop_made_progress = True
+                continue
+
+            if not proc.is_alive():
+                proc.join(timeout=0)
+                try:
+                    if conn_broken:
+                        result = (
+                            row_idx,
+                            None,
+                            "worker crash: no result returned",
+                            None,
+                        )
+                    elif conn.poll(0.05):
+                        result = conn.recv()
+                    else:
+                        result = (
+                            row_idx,
+                            None,
+                            "worker crash: no result returned",
+                            None,
+                        )
+                except (EOFError, BrokenPipeError, OSError):
+                    result = (row_idx, None, "worker crash: no result returned", None)
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                active.pop(row_idx, None)
+                _mark_completed(result)
+                loop_made_progress = True
+
+        if active and not loop_made_progress:
+            time.sleep(0.05)
 
     errors: List[Dict[str, Any]] = []
     for idx, out_dir, err_msg, warning_msg in results:

@@ -52,6 +52,77 @@ def test_normalize_clean_args_accepts_positional_only(tmp_path):
     assert args.csv_path_out.endswith("input_clean.csv")
 
 
+def test_standardize_patient_keys_supports_keyed_function_name(monkeypatch):
+    df = pd.DataFrame({"patient_key": [" Alice "]})
+
+    def resolver(cfg):
+        assert cfg.get("function") == "normalize_patient_key"
+        return lambda v: str(v).strip().upper()
+
+    monkeypatch.setattr(clean, "resolve_hook", resolver)
+    out = clean.standardize_patient_keys(
+        df.copy(),
+        manifest={
+            "id_standardization": {
+                "hook_module": "datasets_config.hooks.generic",
+                "patient_key": "normalize_patient_key",
+            }
+        },
+    )
+    assert out.loc[0, "patient_key"] == "ALICE"
+
+
+def test_unravel_patient_key_supports_multiple_operations(monkeypatch):
+    df = pd.DataFrame({"patient_key": ["alice"], "value": [2]})
+
+    def resolver(cfg):
+        fn = cfg.get("function")
+        if fn == "from_patient_key":
+            return lambda x: {"patient_upper": str(x).upper()}
+        if fn == "from_value":
+            return lambda x: {"double": x * 2}
+        return None
+
+    monkeypatch.setattr(clean, "resolve_hook", resolver)
+    out = clean.unravel_patient_key(
+        df.copy(),
+        manifest={
+            "derived_columns": [
+                {
+                    "hook_module": "datasets_config.hooks.generic",
+                    "function": "from_patient_key",
+                    "from_column": "patient_key",
+                },
+                {
+                    "hook_module": "datasets_config.hooks.generic",
+                    "function": "from_value",
+                    "from_column": "value",
+                },
+            ]
+        },
+    )
+    assert out["patient_upper"].tolist() == ["ALICE"]
+    assert out["double"].tolist() == [4]
+
+
+def test_unravel_patient_key_requires_explicit_derived_columns(monkeypatch):
+    df = pd.DataFrame({"patient_key": ["alice"]})
+
+    def resolver(_cfg):
+        raise AssertionError("resolve_hook should not be called without derived_columns")
+
+    monkeypatch.setattr(clean, "resolve_hook", resolver)
+    out = clean.unravel_patient_key(
+        df.copy(),
+        manifest={
+            "id_standardization": {
+                "hook_module": "datasets_config.hooks.operandi",
+            }
+        },
+    )
+    assert out.equals(df)
+
+
 def test_uniform_string_and_remove_other_organs_description():
     assert clean.uniform_string("  Abc  .0") == "abc"
     assert clean.uniform_string("RévoluTion") == "revolution"

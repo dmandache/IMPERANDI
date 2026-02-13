@@ -1,15 +1,18 @@
+import argparse
+import json
+import os
 import sys
+import time
 from pathlib import Path
+
+import pandas as pd
+import pytest
 
 # Ensure src/ is on sys.path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-import json
-import argparse
-import pandas as pd
-import pytest
-
 from imperandi.process import segment as segment_module
+from imperandi.process import segment_config as segment_config_module
 
 
 class DummyBackend:
@@ -40,8 +43,118 @@ class MultiTaskRecordingBackend:
         (Path(output_dir) / f"{task}.nii.gz").write_text("mask")
 
 
+def fake_process_single_volume(
+    idx,
+    row,
+    tasks_config,
+    *,
+    fast,
+    verbose,
+    force,
+    backend=None,
+):
+    del tasks_config, fast, verbose, force, backend
+    nifti_path = Path(row["nifti_path"])
+    out_dir = nifti_path.parent
+
+    outputs_raw = str(row.get("fake_outputs", "")).strip()
+    if outputs_raw:
+        for name in outputs_raw.split("|"):
+            if name:
+                (out_dir / name).write_text("mask")
+
+    warning_msg = row.get("fake_warning")
+    error_msg = row.get("fake_error")
+    if error_msg:
+        return idx, None, str(error_msg), warning_msg
+    return idx, str(out_dir), None, warning_msg
+
+
+def fake_process_single_volume_with_sleep(
+    idx,
+    row,
+    tasks_config,
+    *,
+    fast,
+    verbose,
+    force,
+    backend=None,
+):
+    sleep_sec = float(row.get("fake_sleep_sec", 0) or 0)
+    if sleep_sec > 0:
+        time.sleep(sleep_sec)
+    return fake_process_single_volume(
+        idx,
+        row,
+        tasks_config,
+        fast=fast,
+        verbose=verbose,
+        force=force,
+        backend=backend,
+    )
+
+
+def fake_process_single_volume_no_result(
+    idx,
+    row,
+    tasks_config,
+    *,
+    fast,
+    verbose,
+    force,
+    backend=None,
+):
+    del idx, row, tasks_config, fast, verbose, force, backend
+    os._exit(0)
+
+
+def _run_main_with_worker(
+    tmp_path,
+    monkeypatch,
+    *,
+    config,
+    rows,
+    worker_fn=fake_process_single_volume,
+    timeout_sec=10,
+    num_workers=1,
+    start_method="spawn",
+):
+    csv_path = tmp_path / "nifti_index.csv"
+    pd.DataFrame(rows).to_csv(csv_path, index=False)
+
+    config_path = tmp_path / "tasks.json"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    monkeypatch.setattr(segment_module, "process_single_volume", worker_fn)
+    monkeypatch.setattr(
+        segment_module,
+        "prefetch_totalsegmentator_models",
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(segment_module, "tqdm", lambda it, **kwargs: it)
+
+    args = argparse.Namespace(
+        csv_path=str(csv_path),
+        csv_path_out=str(tmp_path / "segmented.csv"),
+        error_csv_path=str(tmp_path / "errors.csv"),
+        tasks_config=str(config_path),
+        num_workers=num_workers,
+        fast=False,
+        verbose=False,
+        force=False,
+        start_method=start_method,
+        timeout_sec=timeout_sec,
+    )
+    segment_module.main(args)
+
+    out_df = pd.read_csv(args.csv_path_out)
+    err_path = Path(args.error_csv_path)
+    err_df = pd.read_csv(err_path) if err_path.exists() else pd.DataFrame()
+    return out_df, err_df, args
+
+
 def test_load_tasks_config_default():
-    cfg = segment_module.load_tasks_config(None)
+    cfg = segment_config_module.load_tasks_config(None)
     assert "tasks" in cfg
     assert cfg["backend"] == "totalsegmentator"
 
@@ -55,7 +168,7 @@ def test_load_tasks_config_from_manifest():
             ],
         }
     }
-    cfg = segment_module.load_tasks_config(None, manifest=manifest)
+    cfg = segment_config_module.load_tasks_config(None, manifest=manifest)
     assert cfg["tasks"][0]["key"] == "x"
 
 
@@ -67,7 +180,7 @@ def test_resolve_manifest_fast_default_from_segmentation_fast_overrides_cli(capl
     }
 
     with caplog.at_level("WARNING"):
-        resolved = segment_module.resolve_manifest_fast_default(cfg, cli_fast=False)
+        resolved = segment_config_module.resolve_manifest_fast_default(cfg, cli_fast=False)
 
     assert resolved is True
     assert cfg["fast"] is True
@@ -77,7 +190,7 @@ def test_resolve_manifest_fast_default_from_segmentation_fast_overrides_cli(capl
 def test_resolve_task_fast_and_extra_from_extra_fast_overrides_default():
     task = {"task": "total", "extra": {"roi_subset": ["liver"], "fast": True}}
 
-    resolved, extra = segment_module.resolve_task_fast_and_extra(
+    resolved, extra = segment_config_module.resolve_task_fast_and_extra(
         task, task_index=0, default_fast=False
     )
 
@@ -89,7 +202,7 @@ def test_resolve_task_fast_and_extra_from_extra_fast_overrides_default():
 def test_load_tasks_config_missing(tmp_path):
     missing = tmp_path / "nope.json"
     with pytest.raises(FileNotFoundError):
-        segment_module.load_tasks_config(missing)
+        segment_config_module.load_tasks_config(missing)
 
 
 def test_segment_parser_defaults_manifest_to_generic():
@@ -100,7 +213,7 @@ def test_segment_parser_defaults_manifest_to_generic():
 
 
 def test_resolve_postprocess_config_in_key_uses_out_key_column():
-    keys, out_col = segment_module.resolve_postprocess_config(
+    keys, out_col = segment_config_module.resolve_postprocess_config(
         {"in_key": "liver", "out_key": "liver_clean"}
     )
     assert keys == ["liver"]
@@ -108,7 +221,7 @@ def test_resolve_postprocess_config_in_key_uses_out_key_column():
 
 
 def test_resolve_postprocess_config_merge_keys_uses_out_key_column():
-    keys, out_col = segment_module.resolve_postprocess_config(
+    keys, out_col = segment_config_module.resolve_postprocess_config(
         {"merge_keys": ["liver", "vessels"], "out_key": "combined"}
     )
     assert keys == ["liver", "vessels"]
@@ -117,7 +230,7 @@ def test_resolve_postprocess_config_merge_keys_uses_out_key_column():
 
 def test_resolve_postprocess_config_rejects_in_key_and_merge_keys():
     with pytest.raises(ValueError, match="either in_key or merge_keys"):
-        segment_module.resolve_postprocess_config(
+        segment_config_module.resolve_postprocess_config(
             {"in_key": "liver", "merge_keys": ["liver"]}
         )
 
@@ -125,14 +238,14 @@ def test_resolve_postprocess_config_rejects_in_key_and_merge_keys():
 @pytest.mark.parametrize("legacy_key", ["output_column", "column_name", "output_col"])
 def test_resolve_postprocess_config_rejects_legacy_output_column_keys(legacy_key):
     with pytest.raises(ValueError, match="Unsupported postprocess key"):
-        segment_module.resolve_postprocess_config(
+        segment_config_module.resolve_postprocess_config(
             {"merge_keys": ["liver"], legacy_key: "mask_custom"}
         )
 
 
 def test_resolve_postprocess_config_requires_out_key():
     with pytest.raises(ValueError, match="out_key is required"):
-        segment_module.resolve_postprocess_config({"merge_keys": ["liver"]})
+        segment_config_module.resolve_postprocess_config({"merge_keys": ["liver"]})
 
 
 def test_segment_volume_calls_postprocess(tmp_path, monkeypatch):
@@ -156,7 +269,6 @@ def test_segment_volume_calls_postprocess(tmp_path, monkeypatch):
     }
 
     backend = DummyBackend({"task_a": "a.nii.gz", "task_b": "b.nii.gz"})
-
     calls = {}
 
     def fake_clean(dir_path, mask_files, *, output_name, **kwargs):
@@ -280,12 +392,12 @@ def test_segment_volume_respects_per_task_fast_overrides(tmp_path):
 
 
 def test_resolve_postprocess_operations_accepts_dict_or_list():
-    ops_from_dict = segment_module.resolve_postprocess_operations(
+    ops_from_dict = segment_config_module.resolve_postprocess_operations(
         {"in_key": "liver", "out_key": "liver_clean"}
     )
     assert len(ops_from_dict) == 1
 
-    ops_from_list = segment_module.resolve_postprocess_operations(
+    ops_from_list = segment_config_module.resolve_postprocess_operations(
         [
             {"in_key": "liver", "out_key": "liver_clean"},
             {"merge_keys": ["liver"], "out_key": "liver_combined"},
@@ -295,7 +407,7 @@ def test_resolve_postprocess_operations_accepts_dict_or_list():
 
 
 def test_resolve_postprocess_operation_defaults_output_name_from_out_key():
-    op = segment_module.resolve_postprocess_operation(
+    op = segment_config_module.resolve_postprocess_operation(
         {"merge_keys": ["liver", "tumor"], "out_key": "combined"},
         op_index=1,
     )
@@ -305,12 +417,10 @@ def test_resolve_postprocess_operation_defaults_output_name_from_out_key():
 
 def test_resolve_postprocess_operation_requires_out_key():
     with pytest.raises(ValueError, match="out_key is required"):
-        segment_module.resolve_postprocess_operation({"in_key": "liver"}, op_index=1)
+        segment_config_module.resolve_postprocess_operation({"in_key": "liver"}, op_index=1)
 
 
-def test_segment_volume_executes_postprocess_list_in_order_and_chains(
-    tmp_path, monkeypatch
-):
+def test_segment_volume_executes_postprocess_list_in_order_and_chains(tmp_path, monkeypatch):
     nifti = tmp_path / "vol.nii.gz"
     nifti.write_text("nifti")
 
@@ -350,9 +460,7 @@ def test_segment_volume_executes_postprocess_list_in_order_and_chains(
     assert calls[1] == (["ab.nii.gz"], "ab_refined.nii.gz")
 
 
-def test_segment_volume_continues_after_warn_only_missing_dependency(
-    tmp_path, monkeypatch
-):
+def test_segment_volume_continues_after_warn_only_missing_dependency(tmp_path, monkeypatch):
     nifti = tmp_path / "vol.nii.gz"
     nifti.write_text("nifti")
 
@@ -485,6 +593,55 @@ def test_segment_volume_fail_policy_when_merge_missing(tmp_path, monkeypatch):
         )
 
 
+def test_segment_volume_missing_task_key_fails_fast(tmp_path):
+    nifti = tmp_path / "vol.nii.gz"
+    nifti.write_text("nifti")
+    tasks_config = {"backend": "totalsegmentator", "tasks": [{"extra": {}}]}
+
+    with pytest.raises(ValueError, match=r"segmentation\.tasks\[0\]\.task is required"):
+        segment_module.segment_volume(
+            nifti,
+            tmp_path,
+            tasks_config,
+            fast=False,
+            verbose=False,
+            force=True,
+            backend=DummyBackend({}),
+        )
+
+
+def test_prefetch_missing_task_key_fails_with_same_validation():
+    tasks_config = {"backend": "totalsegmentator", "tasks": [{"extra": {}}]}
+    with pytest.raises(ValueError, match=r"segmentation\.tasks\[0\]\.task is required"):
+        segment_module.prefetch_totalsegmentator_models(tasks_config, fast=False)
+
+
+def test_segment_volume_collects_postprocess_collision_warning(tmp_path):
+    nifti = tmp_path / "vol.nii.gz"
+    nifti.write_text("nifti")
+
+    tasks_config = {
+        "backend": "totalsegmentator",
+        "tasks": [
+            {"task": "task_a", "extra": {}},
+        ],
+        "postprocess": {"merge_keys": ["liver"], "out_key": "liver"},
+    }
+    backend = DummyBackend({"task_a": "liver.nii.gz"})
+
+    warnings = segment_module.segment_volume(
+        nifti,
+        tmp_path,
+        tasks_config,
+        fast=False,
+        verbose=False,
+        force=False,
+        backend=backend,
+    )
+
+    assert any("collides with an existing output" in warning for warning in warnings)
+
+
 def test_process_single_volume_success(tmp_path):
     nifti = tmp_path / "vol.nii.gz"
     nifti.write_text("nifti")
@@ -497,7 +654,6 @@ def test_process_single_volume_success(tmp_path):
     }
 
     backend = DummyBackend({"task_a": "a.nii.gz"})
-
     idx, out_dir, err, warning = segment_module.process_single_volume(
         0,
         {"nifti_path": str(nifti)},
@@ -546,84 +702,19 @@ def test_process_single_volume_missing_output(tmp_path):
 def test_main_writes_mask_columns(tmp_path, monkeypatch):
     nifti = tmp_path / "vol.nii.gz"
     nifti.write_text("nifti")
-
-    csv_path = tmp_path / "nifti_index.csv"
-    df = pd.DataFrame([{"nifti_path": str(nifti)}])
-    df.to_csv(csv_path, index=False)
-
     config = {
         "backend": "totalsegmentator",
-        "tasks": [
-            {"key": "liver", "task": "total", "output": "liver.nii.gz", "extra": {}},
-            {
-                "key": "vessels",
-                "task": "liver_vessels",
-                "output": "vessels.nii.gz",
-                "extra": {},
-            },
-        ],
+        "tasks": [{"task": "total", "extra": {}}],
         "postprocess": {"merge_keys": ["liver", "vessels"], "out_key": "postproc"},
     }
+    rows = [
+        {
+            "nifti_path": str(nifti),
+            "fake_outputs": "liver.nii.gz|vessels.nii.gz|postproc.nii.gz",
+        }
+    ]
+    out_df, _, _ = _run_main_with_worker(tmp_path, monkeypatch, config=config, rows=rows)
 
-    config_path = tmp_path / "tasks.json"
-    config_path.write_text(json.dumps(config))
-
-    class DummyFuture:
-        def __init__(self, result):
-            self._result = result
-
-        def result(self, timeout=None):
-            return self._result
-
-        def cancel(self):
-            return None
-
-    class DummyPool:
-        def __init__(self, max_workers=None, mp_context=None):
-            self._processes = None
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return None
-
-        def submit(self, fn, *args, **kwargs):
-            idx = args[0]
-            row = args[1]
-            out_dir = str(Path(row["nifti_path"]).parent)
-            out_path = Path(out_dir)
-            (out_path / "liver.nii.gz").write_text("mask")
-            (out_path / "vessels.nii.gz").write_text("mask")
-            (out_path / "postproc.nii.gz").write_text("mask")
-            return DummyFuture((idx, out_dir, None, None))
-
-        def shutdown(self, wait=False, cancel_futures=True):
-            return None
-
-    monkeypatch.setattr(segment_module, "ProcessPoolExecutor", DummyPool)
-    monkeypatch.setattr(segment_module, "as_completed", lambda futures: list(futures))
-    monkeypatch.setattr(segment_module, "tqdm", lambda it, **kwargs: it)
-    monkeypatch.setattr(
-        segment_module, "prefetch_totalsegmentator_models", lambda *a, **k: None
-    )
-
-    args = argparse.Namespace(
-        csv_path=str(csv_path),
-        csv_path_out=str(tmp_path / "segmented.csv"),
-        error_csv_path=str(tmp_path / "errors.csv"),
-        tasks_config=str(config_path),
-        num_workers=1,
-        fast=False,
-        verbose=False,
-        force=False,
-        start_method="spawn",
-        timeout_sec=10,
-    )
-
-    segment_module.main(args)
-
-    out_df = pd.read_csv(args.csv_path_out)
     assert "mask_liver" in out_df.columns
     assert "mask_vessels" in out_df.columns
     assert "postproc" in out_df.columns
@@ -635,184 +726,23 @@ def test_main_writes_mask_columns(tmp_path, monkeypatch):
 def test_main_writes_custom_merged_mask_column(tmp_path, monkeypatch):
     nifti = tmp_path / "vol.nii.gz"
     nifti.write_text("nifti")
-
-    csv_path = tmp_path / "nifti_index.csv"
-    pd.DataFrame([{"nifti_path": str(nifti)}]).to_csv(csv_path, index=False)
-
     config = {
         "backend": "totalsegmentator",
-        "tasks": [
-            {"key": "liver", "task": "total", "output": "liver.nii.gz", "extra": {}},
-            {
-                "key": "vessels",
-                "task": "liver_vessels",
-                "output": "vessels.nii.gz",
-                "extra": {},
-            },
-        ],
-        "postprocess": {
-            "merge_keys": ["liver", "vessels"],
-            "out_key": "combined",
-        },
+        "tasks": [{"task": "total", "extra": {}}],
+        "postprocess": {"merge_keys": ["liver", "vessels"], "out_key": "combined"},
     }
+    rows = [
+        {
+            "nifti_path": str(nifti),
+            "fake_outputs": "liver.nii.gz|vessels.nii.gz|combined.nii.gz",
+        }
+    ]
+    out_df, _, _ = _run_main_with_worker(tmp_path, monkeypatch, config=config, rows=rows)
 
-    config_path = tmp_path / "tasks.json"
-    config_path.write_text(json.dumps(config))
-
-    class DummyFuture:
-        def __init__(self, result):
-            self._result = result
-
-        def result(self, timeout=None):
-            return self._result
-
-        def cancel(self):
-            return None
-
-    class DummyPool:
-        def __init__(self, max_workers=None, mp_context=None):
-            self._processes = None
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return None
-
-        def submit(self, fn, *args, **kwargs):
-            idx = args[0]
-            row = args[1]
-            out_dir = str(Path(row["nifti_path"]).parent)
-            out_path = Path(out_dir)
-            (out_path / "liver.nii.gz").write_text("mask")
-            (out_path / "vessels.nii.gz").write_text("mask")
-            (out_path / "combined.nii.gz").write_text("mask")
-            return DummyFuture((idx, out_dir, None, None))
-
-        def shutdown(self, wait=False, cancel_futures=True):
-            return None
-
-    monkeypatch.setattr(segment_module, "ProcessPoolExecutor", DummyPool)
-    monkeypatch.setattr(segment_module, "as_completed", lambda futures: list(futures))
-    monkeypatch.setattr(segment_module, "tqdm", lambda it, **kwargs: it)
-    monkeypatch.setattr(
-        segment_module, "prefetch_totalsegmentator_models", lambda *a, **k: None
-    )
-
-    args = argparse.Namespace(
-        csv_path=str(csv_path),
-        csv_path_out=str(tmp_path / "segmented.csv"),
-        error_csv_path=str(tmp_path / "errors.csv"),
-        tasks_config=str(config_path),
-        num_workers=1,
-        fast=False,
-        verbose=False,
-        force=False,
-        start_method="spawn",
-        timeout_sec=10,
-    )
-
-    segment_module.main(args)
-
-    out_df = pd.read_csv(args.csv_path_out)
     assert "mask_liver" in out_df.columns
     assert "mask_vessels" in out_df.columns
     assert "combined" in out_df.columns
     assert "mask_merged" not in out_df.columns
-    assert "postproc" not in out_df.columns
-    assert out_df.loc[0, "mask_liver"].endswith("liver.nii.gz")
-    assert out_df.loc[0, "mask_vessels"].endswith("vessels.nii.gz")
-    assert out_df.loc[0, "combined"].endswith("combined.nii.gz")
-
-
-def test_main_uses_semantic_postprocess_column_not_filename_column(
-    tmp_path, monkeypatch, caplog
-):
-    nifti = tmp_path / "vol.nii.gz"
-    nifti.write_text("nifti")
-
-    csv_path = tmp_path / "nifti_index.csv"
-    pd.DataFrame([{"nifti_path": str(nifti)}]).to_csv(csv_path, index=False)
-
-    config = {
-        "backend": "totalsegmentator",
-        "tasks": [
-            {"key": "liver", "task": "total", "output": "liver.nii.gz", "extra": {}},
-        ],
-        "postprocess": {
-            "merge_keys": ["liver"],
-            "out_key": "liver_proc",
-        },
-    }
-
-    config_path = tmp_path / "tasks.json"
-    config_path.write_text(json.dumps(config))
-
-    class DummyFuture:
-        def __init__(self, result):
-            self._result = result
-
-        def result(self, timeout=None):
-            return self._result
-
-        def cancel(self):
-            return None
-
-    class DummyPool:
-        def __init__(self, max_workers=None, mp_context=None):
-            self._processes = None
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return None
-
-        def submit(self, fn, *args, **kwargs):
-            idx = args[0]
-            row = args[1]
-            out_dir = str(Path(row["nifti_path"]).parent)
-            out_path = Path(out_dir)
-            (out_path / "liver.nii.gz").write_text("mask")
-            (out_path / "liver_proc.nii.gz").write_text("mask")
-            return DummyFuture((idx, out_dir, None, None))
-
-        def shutdown(self, wait=False, cancel_futures=True):
-            return None
-
-    monkeypatch.setattr(segment_module, "ProcessPoolExecutor", DummyPool)
-    monkeypatch.setattr(segment_module, "as_completed", lambda futures: list(futures))
-    monkeypatch.setattr(segment_module, "tqdm", lambda it, **kwargs: it)
-    monkeypatch.setattr(
-        segment_module, "prefetch_totalsegmentator_models", lambda *a, **k: None
-    )
-
-    args = argparse.Namespace(
-        csv_path=str(csv_path),
-        csv_path_out=str(tmp_path / "segmented.csv"),
-        error_csv_path=str(tmp_path / "errors.csv"),
-        tasks_config=str(config_path),
-        num_workers=1,
-        fast=False,
-        verbose=False,
-        force=False,
-        start_method="spawn",
-        timeout_sec=10,
-    )
-
-    with caplog.at_level("WARNING"):
-        segment_module.main(args)
-
-    assert not any(
-        "matches an existing task mask column" in rec.getMessage()
-        for rec in caplog.records
-    )
-
-    out_df = pd.read_csv(args.csv_path_out)
-    assert "mask_liver" in out_df.columns
-    assert out_df.loc[0, "mask_liver"].endswith("liver.nii.gz")
-    assert "liver_proc" in out_df.columns
-    assert out_df.loc[0, "liver_proc"].endswith("liver_proc.nii.gz")
     assert "postproc" not in out_df.columns
 
 
@@ -821,81 +751,20 @@ def test_main_warns_and_overwrites_when_postprocess_semantic_column_collides(
 ):
     nifti = tmp_path / "vol.nii.gz"
     nifti.write_text("nifti")
-
-    csv_path = tmp_path / "nifti_index.csv"
-    pd.DataFrame([{"nifti_path": str(nifti), "mask_liver": "old_liver.nii.gz"}]).to_csv(
-        csv_path, index=False
-    )
-
     config = {
         "backend": "totalsegmentator",
-        "tasks": [
-            {"key": "liver", "task": "total", "output": "liver.nii.gz", "extra": {}},
-        ],
-        "postprocess": {
-            "merge_keys": ["liver"],
-            "out_key": "mask_liver",
-        },
+        "tasks": [{"task": "total", "extra": {}}],
+        "postprocess": {"merge_keys": ["liver"], "out_key": "mask_liver"},
     }
+    rows = [
+        {
+            "nifti_path": str(nifti),
+            "mask_liver": "old_liver.nii.gz",
+            "fake_outputs": "liver.nii.gz|mask_liver.nii.gz",
+        }
+    ]
+    out_df, _, _ = _run_main_with_worker(tmp_path, monkeypatch, config=config, rows=rows)
 
-    config_path = tmp_path / "tasks.json"
-    config_path.write_text(json.dumps(config))
-
-    class DummyFuture:
-        def __init__(self, result):
-            self._result = result
-
-        def result(self, timeout=None):
-            return self._result
-
-        def cancel(self):
-            return None
-
-    class DummyPool:
-        def __init__(self, max_workers=None, mp_context=None):
-            self._processes = None
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return None
-
-        def submit(self, fn, *args, **kwargs):
-            idx = args[0]
-            row = args[1]
-            out_dir = str(Path(row["nifti_path"]).parent)
-            out_path = Path(out_dir)
-            (out_path / "liver.nii.gz").write_text("mask")
-            (out_path / "mask_liver.nii.gz").write_text("mask")
-            return DummyFuture((idx, out_dir, None, None))
-
-        def shutdown(self, wait=False, cancel_futures=True):
-            return None
-
-    monkeypatch.setattr(segment_module, "ProcessPoolExecutor", DummyPool)
-    monkeypatch.setattr(segment_module, "as_completed", lambda futures: list(futures))
-    monkeypatch.setattr(segment_module, "tqdm", lambda it, **kwargs: it)
-    monkeypatch.setattr(
-        segment_module, "prefetch_totalsegmentator_models", lambda *a, **k: None
-    )
-
-    args = argparse.Namespace(
-        csv_path=str(csv_path),
-        csv_path_out=str(tmp_path / "segmented.csv"),
-        error_csv_path=str(tmp_path / "errors.csv"),
-        tasks_config=str(config_path),
-        num_workers=1,
-        fast=False,
-        verbose=False,
-        force=False,
-        start_method="spawn",
-        timeout_sec=10,
-    )
-
-    segment_module.main(args)
-
-    out_df = pd.read_csv(args.csv_path_out)
     assert "mask_liver" in out_df.columns
     assert out_df.loc[0, "mask_liver"].endswith("mask_liver.nii.gz")
     warning = out_df.loc[0, "warning_message"]
@@ -906,74 +775,14 @@ def test_main_warns_and_overwrites_when_postprocess_semantic_column_collides(
 def test_main_records_warning_when_merged_mask_missing(tmp_path, monkeypatch):
     nifti = tmp_path / "vol.nii.gz"
     nifti.write_text("nifti")
-
-    csv_path = tmp_path / "nifti_index.csv"
-    pd.DataFrame([{"nifti_path": str(nifti)}]).to_csv(csv_path, index=False)
-
     config = {
         "backend": "totalsegmentator",
-        "tasks": [
-            {"key": "liver", "task": "total", "output": "liver.nii.gz", "extra": {}},
-        ],
+        "tasks": [{"task": "total", "extra": {}}],
         "postprocess": {"merge_keys": ["liver"], "out_key": "postproc"},
     }
+    rows = [{"nifti_path": str(nifti), "fake_outputs": "liver.nii.gz"}]
+    out_df, _, _ = _run_main_with_worker(tmp_path, monkeypatch, config=config, rows=rows)
 
-    config_path = tmp_path / "tasks.json"
-    config_path.write_text(json.dumps(config))
-
-    class DummyFuture:
-        def __init__(self, result):
-            self._result = result
-
-        def result(self, timeout=None):
-            return self._result
-
-        def cancel(self):
-            return None
-
-    class DummyPool:
-        def __init__(self, max_workers=None, mp_context=None):
-            self._processes = None
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return None
-
-        def submit(self, fn, *args, **kwargs):
-            idx = args[0]
-            row = args[1]
-            out_dir = Path(row["nifti_path"]).parent
-            (out_dir / "liver.nii.gz").write_text("mask")
-            return DummyFuture((idx, str(out_dir), None, None))
-
-        def shutdown(self, wait=False, cancel_futures=True):
-            return None
-
-    monkeypatch.setattr(segment_module, "ProcessPoolExecutor", DummyPool)
-    monkeypatch.setattr(segment_module, "as_completed", lambda futures: list(futures))
-    monkeypatch.setattr(segment_module, "tqdm", lambda it, **kwargs: it)
-    monkeypatch.setattr(
-        segment_module, "prefetch_totalsegmentator_models", lambda *a, **k: None
-    )
-
-    args = argparse.Namespace(
-        csv_path=str(csv_path),
-        csv_path_out=str(tmp_path / "segmented.csv"),
-        error_csv_path=str(tmp_path / "errors.csv"),
-        tasks_config=str(config_path),
-        num_workers=1,
-        fast=False,
-        verbose=False,
-        force=False,
-        start_method="spawn",
-        timeout_sec=10,
-    )
-
-    segment_module.main(args)
-
-    out_df = pd.read_csv(args.csv_path_out)
     assert "warning_message" in out_df.columns
     assert pd.isna(out_df.loc[0, "warning_message"])
     assert "mask_liver" in out_df.columns
@@ -984,173 +793,84 @@ def test_main_records_warning_when_merged_mask_missing(tmp_path, monkeypatch):
 def test_main_writes_multiple_postprocess_columns(tmp_path, monkeypatch):
     nifti = tmp_path / "vol.nii.gz"
     nifti.write_text("nifti")
-
-    csv_path = tmp_path / "nifti_index.csv"
-    pd.DataFrame([{"nifti_path": str(nifti)}]).to_csv(csv_path, index=False)
-
     config = {
         "backend": "totalsegmentator",
-        "tasks": [
-            {"key": "liver", "task": "total", "output": "liver.nii.gz", "extra": {}},
-            {
-                "key": "tumor",
-                "task": "liver_vessels",
-                "output": "tumor.nii.gz",
-                "extra": {},
-            },
-        ],
+        "tasks": [{"task": "total", "extra": {}}],
         "postprocess": [
-            {
-                "merge_keys": ["liver", "tumor"],
-                "out_key": "combined",
-            },
+            {"merge_keys": ["liver", "tumor"], "out_key": "combined"},
             {"merge_keys": ["combined"], "out_key": "final"},
         ],
     }
+    rows = [
+        {
+            "nifti_path": str(nifti),
+            "fake_outputs": "liver.nii.gz|tumor.nii.gz|combined.nii.gz|final.nii.gz",
+        }
+    ]
+    out_df, _, _ = _run_main_with_worker(tmp_path, monkeypatch, config=config, rows=rows)
 
-    config_path = tmp_path / "tasks.json"
-    config_path.write_text(json.dumps(config))
-
-    class DummyFuture:
-        def __init__(self, result):
-            self._result = result
-
-        def result(self, timeout=None):
-            return self._result
-
-        def cancel(self):
-            return None
-
-    class DummyPool:
-        def __init__(self, max_workers=None, mp_context=None):
-            self._processes = None
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return None
-
-        def submit(self, fn, *args, **kwargs):
-            idx = args[0]
-            row = args[1]
-            out_dir = str(Path(row["nifti_path"]).parent)
-            out_path = Path(out_dir)
-            (out_path / "liver.nii.gz").write_text("mask")
-            (out_path / "tumor.nii.gz").write_text("mask")
-            (out_path / "combined.nii.gz").write_text("mask")
-            (out_path / "final.nii.gz").write_text("mask")
-            return DummyFuture((idx, out_dir, None, None))
-
-        def shutdown(self, wait=False, cancel_futures=True):
-            return None
-
-    monkeypatch.setattr(segment_module, "ProcessPoolExecutor", DummyPool)
-    monkeypatch.setattr(segment_module, "as_completed", lambda futures: list(futures))
-    monkeypatch.setattr(segment_module, "tqdm", lambda it, **kwargs: it)
-    monkeypatch.setattr(
-        segment_module, "prefetch_totalsegmentator_models", lambda *a, **k: None
-    )
-
-    args = argparse.Namespace(
-        csv_path=str(csv_path),
-        csv_path_out=str(tmp_path / "segmented.csv"),
-        error_csv_path=str(tmp_path / "errors.csv"),
-        tasks_config=str(config_path),
-        num_workers=1,
-        fast=False,
-        verbose=False,
-        force=False,
-        start_method="spawn",
-        timeout_sec=10,
-    )
-
-    segment_module.main(args)
-
-    out_df = pd.read_csv(args.csv_path_out)
     assert "combined" in out_df.columns
     assert "final" in out_df.columns
     assert out_df.loc[0, "combined"].endswith("combined.nii.gz")
     assert out_df.loc[0, "final"].endswith("final.nii.gz")
 
 
-def test_main_discovers_all_generated_masks_and_excludes_source_nifti(
-    tmp_path, monkeypatch
-):
+def test_main_discovers_all_generated_masks_and_excludes_source_nifti(tmp_path, monkeypatch):
     nifti = tmp_path / "scan.nii.gz"
     nifti.write_text("nifti")
-
-    csv_path = tmp_path / "nifti_index.csv"
-    pd.DataFrame([{"nifti_path": str(nifti)}]).to_csv(csv_path, index=False)
-
     config = {
         "backend": "totalsegmentator",
-        "tasks": [
-            {"key": "liver", "task": "total", "output": "liver.nii.gz", "extra": {}},
-        ],
+        "tasks": [{"task": "total", "extra": {}}],
         "postprocess": {"merge_keys": ["liver"], "out_key": "postproc"},
     }
+    rows = [{"nifti_path": str(nifti), "fake_outputs": "liver.nii.gz|spleen.nii.gz"}]
+    out_df, _, _ = _run_main_with_worker(tmp_path, monkeypatch, config=config, rows=rows)
 
-    config_path = tmp_path / "tasks.json"
-    config_path.write_text(json.dumps(config))
-
-    class DummyFuture:
-        def __init__(self, result):
-            self._result = result
-
-        def result(self, timeout=None):
-            return self._result
-
-        def cancel(self):
-            return None
-
-    class DummyPool:
-        def __init__(self, max_workers=None, mp_context=None):
-            self._processes = None
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return None
-
-        def submit(self, fn, *args, **kwargs):
-            idx = args[0]
-            row = args[1]
-            out_dir = str(Path(row["nifti_path"]).parent)
-            out_path = Path(out_dir)
-            (out_path / "liver.nii.gz").write_text("mask")
-            (out_path / "spleen.nii.gz").write_text("mask")
-            return DummyFuture((idx, out_dir, None, None))
-
-        def shutdown(self, wait=False, cancel_futures=True):
-            return None
-
-    monkeypatch.setattr(segment_module, "ProcessPoolExecutor", DummyPool)
-    monkeypatch.setattr(segment_module, "as_completed", lambda futures: list(futures))
-    monkeypatch.setattr(segment_module, "tqdm", lambda it, **kwargs: it)
-    monkeypatch.setattr(
-        segment_module, "prefetch_totalsegmentator_models", lambda *a, **k: None
-    )
-
-    args = argparse.Namespace(
-        csv_path=str(csv_path),
-        csv_path_out=str(tmp_path / "segmented.csv"),
-        error_csv_path=str(tmp_path / "errors.csv"),
-        tasks_config=str(config_path),
-        num_workers=1,
-        fast=False,
-        verbose=False,
-        force=False,
-        start_method="spawn",
-        timeout_sec=10,
-    )
-
-    segment_module.main(args)
-
-    out_df = pd.read_csv(args.csv_path_out)
     assert "mask_liver" in out_df.columns
     assert "mask_spleen" in out_df.columns
     assert "mask_scan" not in out_df.columns
-    assert out_df.loc[0, "mask_liver"].endswith("liver.nii.gz")
-    assert out_df.loc[0, "mask_spleen"].endswith("spleen.nii.gz")
+
+
+def test_main_hard_timeout_marks_row_and_keeps_other_success(tmp_path, monkeypatch):
+    nifti_fast = tmp_path / "fast.nii.gz"
+    nifti_slow = tmp_path / "slow.nii.gz"
+    nifti_fast.write_text("nifti")
+    nifti_slow.write_text("nifti")
+    config = {"backend": "totalsegmentator", "tasks": [{"task": "total", "extra": {}}]}
+    rows = [
+        {"nifti_path": str(nifti_fast), "fake_outputs": "liver.nii.gz", "fake_sleep_sec": 0},
+        {"nifti_path": str(nifti_slow), "fake_outputs": "liver.nii.gz", "fake_sleep_sec": 10.0},
+    ]
+    out_df, err_df, _ = _run_main_with_worker(
+        tmp_path,
+        monkeypatch,
+        config=config,
+        rows=rows,
+        worker_fn=fake_process_single_volume_with_sleep,
+        timeout_sec=5.0,
+        num_workers=1,
+    )
+
+    fast_row = out_df[out_df["nifti_path"] == str(nifti_fast)].iloc[0]
+    assert str(fast_row["mask_liver"]).endswith("liver.nii.gz")
+    assert not err_df.empty
+    assert any(err_df["error_message"].astype(str).str.contains("timeout"))
+
+
+def test_main_records_worker_crash_when_no_result_returned(tmp_path, monkeypatch):
+    nifti = tmp_path / "vol.nii.gz"
+    nifti.write_text("nifti")
+    config = {"backend": "totalsegmentator", "tasks": [{"task": "total", "extra": {}}]}
+    rows = [{"nifti_path": str(nifti)}]
+    _, err_df, _ = _run_main_with_worker(
+        tmp_path,
+        monkeypatch,
+        config=config,
+        rows=rows,
+        worker_fn=fake_process_single_volume_no_result,
+        timeout_sec=10,
+        num_workers=1,
+    )
+
+    assert not err_df.empty
+    assert "worker crash: no result returned" in str(err_df.loc[0, "error_message"])

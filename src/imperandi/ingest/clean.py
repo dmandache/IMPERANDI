@@ -7,7 +7,6 @@ intended to be reused by higher-level workflows and CLI entry points.
 import argparse
 import logging
 import hashlib
-import importlib
 from ast import literal_eval
 from pathlib import Path
 
@@ -16,6 +15,10 @@ import pandas as pd
 from pydicom.uid import UID
 from unidecode import unidecode
 
+from imperandi.ingest.hook_logic import (
+    apply_derived_columns as apply_derived_columns_common,
+    apply_id_standardization as apply_id_standardization_common,
+)
 from imperandi.utils.manifest import (
     DEFAULT_MANIFEST_NAME,
     load_manifest,
@@ -324,40 +327,6 @@ def normalize_clean_args(args: argparse.Namespace) -> argparse.Namespace:
     return args
 
 
-def resolve_standardization_hook(manifest: dict, hook_key: str):
-    """Resolve standardization hook.
-
-    Args:
-        manifest (dict): Loaded dataset manifest configuration.
-        hook_key (str): Input value for hook key.
-
-    Returns:
-        Any: Resolved standardization hook.
-    """
-    hook_config = manifest.get("id_standardization", {})
-    normalized_config = {
-        "hook_module": hook_config.get("hook_module"),
-        "function": hook_config.get(hook_key),
-    }
-    return resolve_hook(normalized_config)
-
-
-def resolve_hook_module(manifest: dict):
-    """Resolve hook module.
-
-    Args:
-        manifest (dict): Loaded dataset manifest configuration.
-
-    Returns:
-        Any: Resolved hook module.
-    """
-    hook_config = manifest.get("id_standardization", {})
-    module_name = hook_config.get("hook_module")
-    if not module_name:
-        return None
-    return importlib.import_module(f"imperandi.{module_name}")
-
-
 def read_csv_with_valid_columns(file):
     """Read CSV with valid columns.
 
@@ -404,11 +373,15 @@ def standardize_patient_keys(df, manifest: dict):
     Returns:
         Any: Standardized patient keys.
     """
-    hook = resolve_standardization_hook(manifest, "patient_key")
-    if not hook:
-        return df
-    df["patient_key"] = df["patient_key"].apply(hook)
-    return df
+    return apply_id_standardization_common(
+        df,
+        manifest,
+        column="patient_key",
+        keep_raw=False,
+        mark_failures=False,
+        resolve_hook_fn=resolve_hook,
+        logger_obj=logger,
+    )
 
 
 def unravel_patient_key(df, manifest: dict):
@@ -421,13 +394,12 @@ def unravel_patient_key(df, manifest: dict):
     Returns:
         Any: Expanded patient key.
     """
-    module = resolve_hook_module(manifest)
-    if not module or not hasattr(module, "extract_from_patient_key"):
-        return df
-    newcols = df.patient_key.apply(module.extract_from_patient_key)
-    newcols_to_add = newcols.loc[:, ~newcols.columns.isin(df.columns)]
-    df = df.join(newcols_to_add)
-    return df
+    return apply_derived_columns_common(
+        df,
+        manifest,
+        resolve_hook_fn=resolve_hook,
+        logger_obj=logger,
+    )
 
 
 def filter_ct_modality(df):
@@ -1395,7 +1367,7 @@ def clean_and_save_data(
 
     df_prev = df.copy()
     df = unravel_patient_key(df, manifest)
-    report_volumes(df, "add new columns based on patient key")
+    report_volumes(df, "apply derived columns hooks")
     report_change(df, df_prev)
 
     df_prev = df.copy()

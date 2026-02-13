@@ -303,6 +303,27 @@ def test_apply_id_standardization_monkeypatched_hook(monkeypatch):
     assert "patient_key_std_failed" in out.columns
 
 
+def test_apply_id_standardization_supports_keyed_function_name(monkeypatch):
+    df = pd.DataFrame({"patient_key": [" Alice "]})
+
+    def resolver(cfg):
+        assert cfg.get("function") == "normalize_patient_key"
+        return lambda v: str(v).strip().upper()
+
+    monkeypatch.setattr(parse, "resolve_hook", resolver)
+
+    out = parse.apply_id_standardization(
+        df.copy(),
+        manifest={
+            "id_standardization": {
+                "hook_module": "datasets_config.hooks.generic",
+                "patient_key": "normalize_patient_key",
+            }
+        },
+    )
+    assert out.loc[0, "patient_key"] == "ALICE"
+
+
 def test_adds_new_columns(monkeypatch):
     df = pd.DataFrame({"value": [1, 2]})
     monkeypatch.setattr(
@@ -338,3 +359,28 @@ def test_noop_when_no_derived_columns():
     df = pd.DataFrame({"a": [1]})
     out = parse.apply_derived_columns(df.copy(), {})
     assert out.equals(df)
+
+
+def test_derived_columns_supports_nested_operations(monkeypatch):
+    df = pd.DataFrame({"value": [1, 2]})
+
+    def resolver(cfg):
+        fn = cfg.get("function")
+        if fn == "double":
+            return lambda x: {"double": x * 2}
+        if fn == "triple":
+            return lambda x: {"triple": x * 3}
+        return None
+
+    monkeypatch.setattr(parse, "resolve_hook", resolver)
+
+    manifest = {
+        "derived_columns": {
+            "hook_module": "datasets_config.hooks.generic",
+            "from_column": "value",
+            "operations": [{"function": "double"}, {"function": "triple"}],
+        }
+    }
+    out = parse.apply_derived_columns(df.copy(), manifest)
+    assert out["double"].tolist() == [2, 4]
+    assert out["triple"].tolist() == [3, 6]

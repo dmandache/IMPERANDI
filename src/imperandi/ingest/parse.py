@@ -18,6 +18,10 @@ from tqdm import tqdm
 from pandarallel import pandarallel
 from pydicom import dcmread
 
+from imperandi.ingest.hook_logic import (
+    apply_derived_columns as apply_derived_columns_common,
+    apply_id_standardization as apply_id_standardization_common,
+)
 from imperandi.utils.archive_io import (
     ArchiveSession,
     DEFAULT_ARCHIVE_MAX_DEPTH,
@@ -326,36 +330,15 @@ def apply_id_standardization(df: pd.DataFrame, manifest: dict) -> pd.DataFrame:
     Returns:
         pd.DataFrame: Processed pandas DataFrame.
     """
-    hook = resolve_hook(manifest.get("id_standardization") or {})
-    if "patient_key" not in df.columns:
-        return df
-
-    # save raw once
-    if "patient_key_raw" not in df.columns:
-        df["patient_key_raw"] = df["patient_key"]
-
-    if not hook:
-        return df
-
-    df["patient_key"] = df["patient_key_raw"].apply(hook)
-
-    raw_ok = df["patient_key_raw"].notna() & (
-        df["patient_key_raw"].astype(str).str.strip() != ""
+    return apply_id_standardization_common(
+        df,
+        manifest,
+        column="patient_key",
+        keep_raw=True,
+        mark_failures=True,
+        resolve_hook_fn=resolve_hook,
+        logger_obj=logger,
     )
-    std_bad = df["patient_key"].isna() | (
-        df["patient_key"].astype(str).str.strip() == ""
-    )
-    failed = raw_ok & std_bad
-
-    if failed.any():
-        df["patient_key_std_failed"] = failed
-        n_keys = int(df.loc[failed, "patient_key_raw"].nunique())
-        logger.warning(
-            "[id_standardization] failed on unique raw keys=%s",
-            n_keys,
-        )
-
-    return df
 
 
 def apply_derived_columns(df: pd.DataFrame, manifest: dict) -> pd.DataFrame:
@@ -368,32 +351,12 @@ def apply_derived_columns(df: pd.DataFrame, manifest: dict) -> pd.DataFrame:
     Returns:
         pd.DataFrame: Processed pandas DataFrame.
     """
-    derived_columns = manifest.get("derived_columns", [])
-    if not derived_columns:
-        return df
-
-    for derived in derived_columns:
-        from_column = derived.get("from_column")
-        if not from_column or from_column not in df.columns:
-            continue
-        hook = resolve_hook(derived)
-        if not hook:
-            continue
-        derived_values = df[from_column].apply(hook)
-        derived_df = derived_values.apply(pd.Series)
-        if derived_df.empty:
-            continue
-        join_mode = derived.get("join_mode", "missing_only")
-        if join_mode == "overwrite":
-            df = df.drop(
-                columns=[col for col in derived_df.columns if col in df.columns]
-            )
-            df = df.join(derived_df)
-        else:
-            derived_df = derived_df.loc[:, ~derived_df.columns.isin(df.columns)]
-            if not derived_df.empty:
-                df = df.join(derived_df)
-    return df
+    return apply_derived_columns_common(
+        df,
+        manifest,
+        resolve_hook_fn=resolve_hook,
+        logger_obj=logger,
+    )
 
 
 # -------------------------
