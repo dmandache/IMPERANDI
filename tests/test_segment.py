@@ -216,40 +216,39 @@ def test_segment_parser_defaults_manifest_to_generic():
     assert args.manifest == "generic"
 
 
-def test_resolve_postprocess_config_in_key_uses_out_key_column():
-    keys, out_col = segment_config_module.resolve_postprocess_config(
-        {"in_key": "liver", "out_key": "liver_clean"}
+def test_resolve_postprocess_operation_in_key_uses_mask_out_key_column():
+    op = segment_config_module.resolve_postprocess_operation(
+        {"in_key": "liver", "out_key": "liver_clean"},
+        op_index=1,
     )
-    assert keys == ["liver"]
-    assert out_col == "liver_clean"
+    assert op["input_keys"] == ["liver"]
+    assert op["output_column"] == "mask_liver_clean"
 
 
-def test_resolve_postprocess_config_merge_keys_uses_out_key_column():
-    keys, out_col = segment_config_module.resolve_postprocess_config(
-        {"merge_keys": ["liver", "vessels"], "out_key": "combined"}
+def test_resolve_postprocess_operation_merge_keys_uses_mask_out_key_column():
+    op = segment_config_module.resolve_postprocess_operation(
+        {"merge_keys": ["liver", "vessels"], "out_key": "combined"},
+        op_index=1,
     )
-    assert keys == ["liver", "vessels"]
-    assert out_col == "combined"
+    assert op["input_keys"] == ["liver", "vessels"]
+    assert op["output_column"] == "mask_combined"
 
 
-def test_resolve_postprocess_config_rejects_in_key_and_merge_keys():
+def test_resolve_postprocess_operation_rejects_in_key_and_merge_keys():
     with pytest.raises(ValueError, match="either in_key or merge_keys"):
-        segment_config_module.resolve_postprocess_config(
-            {"in_key": "liver", "merge_keys": ["liver"]}
+        segment_config_module.resolve_postprocess_operation(
+            {"in_key": "liver", "merge_keys": ["liver"]},
+            op_index=1,
         )
 
 
 @pytest.mark.parametrize("legacy_key", ["output_column", "column_name", "output_col"])
-def test_resolve_postprocess_config_rejects_legacy_output_column_keys(legacy_key):
+def test_resolve_postprocess_operation_rejects_legacy_output_column_keys(legacy_key):
     with pytest.raises(ValueError, match="Unsupported postprocess key"):
-        segment_config_module.resolve_postprocess_config(
-            {"merge_keys": ["liver"], legacy_key: "mask_custom"}
+        segment_config_module.resolve_postprocess_operation(
+            {"merge_keys": ["liver"], legacy_key: "mask_custom"},
+            op_index=1,
         )
-
-
-def test_resolve_postprocess_config_requires_out_key():
-    with pytest.raises(ValueError, match="out_key is required"):
-        segment_config_module.resolve_postprocess_config({"merge_keys": ["liver"]})
 
 
 def test_segment_volume_calls_postprocess(tmp_path, monkeypatch):
@@ -416,7 +415,7 @@ def test_resolve_postprocess_operation_defaults_output_name_from_out_key():
         op_index=1,
     )
     assert op["output_name"] == "combined.nii.gz"
-    assert op["output_column"] == "combined"
+    assert op["output_column"] == "mask_combined"
 
 
 def test_resolve_postprocess_operation_requires_out_key():
@@ -603,6 +602,130 @@ def test_segment_volume_fail_policy_when_merge_missing(tmp_path, monkeypatch):
         )
 
 
+def test_segment_volume_continues_independent_steps_before_fail_policy_raise(
+    tmp_path, monkeypatch
+):
+    nifti = tmp_path / "vol.nii.gz"
+    nifti.write_text("nifti")
+
+    tasks_config = {
+        "backend": "totalsegmentator",
+        "tasks": [
+            {"key": "a", "task": "task_a", "output": "a.nii.gz", "extra": {}},
+        ],
+        "postprocess": [
+            {"merge_keys": ["missing_key"], "out_key": "broken", "on_failure": "fail"},
+            {"merge_keys": ["a"], "out_key": "ok"},
+        ],
+    }
+
+    backend = DummyBackend({"task_a": "a.nii.gz"})
+
+    def fake_clean(dir_path, mask_files, *, output_name, **kwargs):
+        del mask_files, kwargs
+        (Path(dir_path) / output_name).write_text("mask")
+        return True
+
+    monkeypatch.setattr(segment_module, "clean_and_merge_masks", fake_clean)
+
+    with pytest.raises(ValueError, match="missing input key"):
+        segment_module.segment_volume(
+            nifti,
+            tmp_path,
+            tasks_config,
+            fast=False,
+            verbose=False,
+            force=True,
+            backend=backend,
+        )
+
+    assert (tmp_path / "ok.nii.gz").exists()
+
+
+def test_segment_volume_warn_only_exception_does_not_skip_later_operations(
+    tmp_path, monkeypatch
+):
+    nifti = tmp_path / "vol.nii.gz"
+    nifti.write_text("nifti")
+
+    tasks_config = {
+        "backend": "totalsegmentator",
+        "tasks": [
+            {"key": "a", "task": "task_a", "output": "a.nii.gz", "extra": {}},
+        ],
+        "postprocess": [
+            {"merge_keys": ["a"], "out_key": "broken", "on_failure": "warn_only"},
+            {"merge_keys": ["a"], "out_key": "ok"},
+        ],
+    }
+
+    backend = DummyBackend({"task_a": "a.nii.gz"})
+
+    def fake_clean(dir_path, mask_files, *, output_name, **kwargs):
+        del mask_files, kwargs
+        if output_name == "broken.nii.gz":
+            raise RuntimeError("merge exploded")
+        (Path(dir_path) / output_name).write_text("mask")
+        return True
+
+    monkeypatch.setattr(segment_module, "clean_and_merge_masks", fake_clean)
+
+    warnings = segment_module.segment_volume(
+        nifti,
+        tmp_path,
+        tasks_config,
+        fast=False,
+        verbose=False,
+        force=True,
+        backend=backend,
+    )
+
+    assert any("failed with error: merge exploded" in w for w in warnings)
+    assert (tmp_path / "ok.nii.gz").exists()
+
+
+def test_segment_volume_fail_policy_exception_still_runs_later_operations(
+    tmp_path, monkeypatch
+):
+    nifti = tmp_path / "vol.nii.gz"
+    nifti.write_text("nifti")
+
+    tasks_config = {
+        "backend": "totalsegmentator",
+        "tasks": [
+            {"key": "a", "task": "task_a", "output": "a.nii.gz", "extra": {}},
+        ],
+        "postprocess": [
+            {"merge_keys": ["a"], "out_key": "broken", "on_failure": "fail"},
+            {"merge_keys": ["a"], "out_key": "ok"},
+        ],
+    }
+
+    backend = DummyBackend({"task_a": "a.nii.gz"})
+
+    def fake_clean(dir_path, mask_files, *, output_name, **kwargs):
+        del mask_files, kwargs
+        if output_name == "broken.nii.gz":
+            raise RuntimeError("merge exploded")
+        (Path(dir_path) / output_name).write_text("mask")
+        return True
+
+    monkeypatch.setattr(segment_module, "clean_and_merge_masks", fake_clean)
+
+    with pytest.raises(RuntimeError, match="merge exploded"):
+        segment_module.segment_volume(
+            nifti,
+            tmp_path,
+            tasks_config,
+            fast=False,
+            verbose=False,
+            force=True,
+            backend=backend,
+        )
+
+    assert (tmp_path / "ok.nii.gz").exists()
+
+
 def test_segment_volume_missing_task_key_fails_fast(tmp_path):
     nifti = tmp_path / "vol.nii.gz"
     nifti.write_text("nifti")
@@ -729,10 +852,10 @@ def test_main_writes_mask_columns(tmp_path, monkeypatch):
 
     assert "mask_liver" in out_df.columns
     assert "mask_vessels" in out_df.columns
-    assert "postproc" in out_df.columns
+    assert "mask_postproc" in out_df.columns
     assert out_df.loc[0, "mask_liver"].endswith("liver.nii.gz")
     assert out_df.loc[0, "mask_vessels"].endswith("vessels.nii.gz")
-    assert out_df.loc[0, "postproc"].endswith("postproc.nii.gz")
+    assert out_df.loc[0, "mask_postproc"].endswith("postproc.nii.gz")
 
 
 def test_main_writes_custom_merged_mask_column(tmp_path, monkeypatch):
@@ -755,9 +878,9 @@ def test_main_writes_custom_merged_mask_column(tmp_path, monkeypatch):
 
     assert "mask_liver" in out_df.columns
     assert "mask_vessels" in out_df.columns
-    assert "combined" in out_df.columns
+    assert "mask_combined" in out_df.columns
     assert "mask_merged" not in out_df.columns
-    assert "postproc" not in out_df.columns
+    assert "mask_postproc" not in out_df.columns
 
 
 def test_main_warns_and_overwrites_when_postprocess_semantic_column_collides(
@@ -773,7 +896,7 @@ def test_main_warns_and_overwrites_when_postprocess_semantic_column_collides(
     rows = [
         {
             "nifti_path": str(nifti),
-            "mask_liver": "old_liver.nii.gz",
+            "mask_mask_liver": "old_liver.nii.gz",
             "fake_outputs": "liver.nii.gz|mask_liver.nii.gz",
         }
     ]
@@ -781,11 +904,11 @@ def test_main_warns_and_overwrites_when_postprocess_semantic_column_collides(
         tmp_path, monkeypatch, config=config, rows=rows
     )
 
-    assert "mask_liver" in out_df.columns
-    assert out_df.loc[0, "mask_liver"].endswith("mask_liver.nii.gz")
+    assert "mask_mask_liver" in out_df.columns
+    assert out_df.loc[0, "mask_mask_liver"].endswith("mask_liver.nii.gz")
     warning = out_df.loc[0, "warning_message"]
     assert isinstance(warning, str)
-    assert "mask column collision for mask_liver" in warning
+    assert "mask column collision for mask_mask_liver" in warning
 
 
 def test_main_records_warning_when_merged_mask_missing(tmp_path, monkeypatch):
@@ -805,7 +928,7 @@ def test_main_records_warning_when_merged_mask_missing(tmp_path, monkeypatch):
     assert pd.isna(out_df.loc[0, "warning_message"])
     assert "mask_liver" in out_df.columns
     assert out_df.loc[0, "mask_liver"].endswith("liver.nii.gz")
-    assert "postproc" not in out_df.columns
+    assert "mask_postproc" not in out_df.columns
 
 
 def test_main_writes_multiple_postprocess_columns(tmp_path, monkeypatch):
@@ -829,10 +952,10 @@ def test_main_writes_multiple_postprocess_columns(tmp_path, monkeypatch):
         tmp_path, monkeypatch, config=config, rows=rows
     )
 
-    assert "combined" in out_df.columns
-    assert "final" in out_df.columns
-    assert out_df.loc[0, "combined"].endswith("combined.nii.gz")
-    assert out_df.loc[0, "final"].endswith("final.nii.gz")
+    assert "mask_combined" in out_df.columns
+    assert "mask_final" in out_df.columns
+    assert out_df.loc[0, "mask_combined"].endswith("combined.nii.gz")
+    assert out_df.loc[0, "mask_final"].endswith("final.nii.gz")
 
 
 def test_main_discovers_all_generated_masks_and_excludes_source_nifti(

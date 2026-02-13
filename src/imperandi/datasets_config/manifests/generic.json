@@ -16,7 +16,7 @@
     "tasks": [
       {
         "task": "total",
-        "extra": { "roi_subset": ["liver", "spleen"], "fast": true }
+        "extra": { "roi_subset": ["liver", "pancreas"], "fast": true }
       },
       {
         "task": "liver_vessels",
@@ -35,7 +35,7 @@
       {
         "in_key": "spleen",
         "out_key": "spleen_proc",
-        "radius_mm": 15.0,
+        "radius_mm": 5.0,
         "largest_cc": true,
         "fill_holes": true,
         "close": true

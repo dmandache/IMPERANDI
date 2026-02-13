@@ -172,7 +172,7 @@ def _mask_column_from_out_key(out_key: str) -> str:
     key = str(out_key).strip()
     if not key:
         raise ValueError("postprocess.out_key cannot be empty")
-    return key
+    return f"mask_{key}"
 
 
 def _normalized_out_key(out_key: str) -> str:
@@ -288,15 +288,6 @@ def resolve_postprocess_operations(postprocess: Any) -> List[Dict[str, Any]]:
         resolve_postprocess_operation(op, op_index=i)
         for i, op in enumerate(operations, start=1)
     ]
-
-
-def resolve_postprocess_config(postprocess: Any) -> Tuple[List[str], str]:
-    """Backward-compatible resolver for a single postprocess object."""
-    resolved = resolve_postprocess_operations(postprocess)
-    if not resolved:
-        return [], "merged"
-    first = resolved[0]
-    return first["input_keys"], first["output_column"]
 
 
 def warn_postprocess_collisions(

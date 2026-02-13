@@ -35,7 +35,7 @@ from imperandi.utils.datetime import to_dates, to_times
 DEFAULT_VOLUME_LOWERBOUND = 30.0
 DEFAULT_VOLUME_UPPERBOUND = 500.0
 
-DEFAULT_MAX_PIXEL_SPACING_MM = 1.25
+DEFAULT_MAX_PIXEL_SPACING_MM = 1.5
 DEFAULT_MAX_SLICE_THICKNESS_MM = 3.0
 
 COLUMNS_TO_USE = [
@@ -384,7 +384,7 @@ def standardize_patient_keys(df, manifest: dict):
     )
 
 
-def unravel_patient_key(df, manifest: dict):
+def apply_derived_columns(df, manifest: dict):
     """Expand patient key.
 
     Args:
@@ -1366,7 +1366,7 @@ def clean_and_save_data(
     df = add_date(df)  # generic date column
 
     df_prev = df.copy()
-    df = unravel_patient_key(df, manifest)
+    df = apply_derived_columns(df, manifest)
     report_volumes(df, "apply derived columns hooks")
     report_change(df, df_prev)
 

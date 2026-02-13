@@ -356,34 +356,53 @@ def run_segment_volume_workflow(
         warnings=warnings,
     )
 
+    fail_policy_errors: List[Exception] = []
     for op in postprocess_ops:
-        missing_keys = [k for k in op["input_keys"] if k not in key_to_output]
-        if missing_keys:
-            _handle_postprocess_missing_inputs(op, missing_keys, warnings)
-            continue
+        try:
+            missing_keys = [k for k in op["input_keys"] if k not in key_to_output]
+            if missing_keys:
+                _handle_postprocess_missing_inputs(op, missing_keys, warnings)
+                continue
 
-        merge_files = [key_to_output[k] for k in op["input_keys"]]
-        dst = output_dir / str(op["output_name"])
-        if dst.exists() and not force:
-            if verbose:
-                logger_obj.info("Skip %s - file exists", dst)
+            merge_files = [key_to_output[k] for k in op["input_keys"]]
+            dst = output_dir / str(op["output_name"])
+            if dst.exists() and not force:
+                if verbose:
+                    logger_obj.info("Skip %s - file exists", dst)
+                _register_postprocess_out_key(key_to_output, op, warnings)
+                continue
+
+            merged_ok = clean_and_merge_masks_fn(
+                output_dir,
+                merge_files,
+                output_name=str(op["output_name"]),
+                radius_mm=float(op["radius_mm"]),
+                verbose=verbose,
+                close=bool(op["close"]),
+                fill_holes=bool(op["fill_holes"]),
+                largest_cc=bool(op["largest_cc"]),
+            )
+            if not merged_ok or not dst.exists():
+                _handle_postprocess_output_failure(op, dst, warnings)
+                continue
             _register_postprocess_out_key(key_to_output, op, warnings)
+        except Exception as exc:
+            if str(op.get("on_failure", "warn_only")).strip().lower() == "fail":
+                fail_policy_errors.append(exc)
+                logger_obj.error("%s", exc)
+            else:
+                message = f"Postprocess operation {op['index']} failed with error: {exc}"
+                logger_obj.warning(message)
+                warnings.append(message)
             continue
 
-        merged_ok = clean_and_merge_masks_fn(
-            output_dir,
-            merge_files,
-            output_name=str(op["output_name"]),
-            radius_mm=float(op["radius_mm"]),
-            verbose=verbose,
-            close=bool(op["close"]),
-            fill_holes=bool(op["fill_holes"]),
-            largest_cc=bool(op["largest_cc"]),
-        )
-        if not merged_ok or not dst.exists():
-            _handle_postprocess_output_failure(op, dst, warnings)
-            continue
-        _register_postprocess_out_key(key_to_output, op, warnings)
+    if fail_policy_errors:
+        if len(fail_policy_errors) > 1:
+            logger_obj.error(
+                "Postprocess encountered %d fail-policy errors; raising first.",
+                len(fail_policy_errors),
+            )
+        raise fail_policy_errors[0]
 
     return warnings
 
