@@ -26,7 +26,7 @@
     "postprocess": [
       {
         "merge_keys": ["liver", "liver_tumor"],
-        "output": "liver_proc.nii.gz",
+        "out_key": "liver_proc",
         "radius_mm": 5.0,
         "largest_cc": true,
         "fill_holes": true,
@@ -34,8 +34,8 @@
       },
       {
         "in_key": "spleen",
-        "output": "spleen_proc.nii.gz",
-        "radius_mm": 5.0,
+        "out_key": "spleen_proc",
+        "radius_mm": 15.0,
         "largest_cc": true,
         "fill_holes": true,
         "close": true

@@ -33,7 +33,7 @@
     ],
     "postprocess": {
       "merge_keys": ["liver", "liver_tumor"],
-      "output": "liver_all.nii.gz",
+      "out_key": "liver_proc",
       "radius_mm": 5.0,
       "largest_cc": true,
       "fill_holes": true,

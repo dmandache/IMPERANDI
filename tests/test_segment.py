@@ -99,18 +99,20 @@ def test_segment_parser_defaults_manifest_to_generic():
     assert args.manifest == "generic"
 
 
-def test_resolve_postprocess_config_in_key_defaults_to_mask_key_column():
-    keys, out_col = segment_module.resolve_postprocess_config({"in_key": "liver"})
-    assert keys == ["liver"]
-    assert out_col == "mask_liver"
-
-
-def test_resolve_postprocess_config_merge_keys_defaults_to_mask_postproc():
+def test_resolve_postprocess_config_in_key_uses_out_key_column():
     keys, out_col = segment_module.resolve_postprocess_config(
-        {"merge_keys": ["liver", "vessels"]}
+        {"in_key": "liver", "out_key": "liver_clean"}
+    )
+    assert keys == ["liver"]
+    assert out_col == "liver_clean"
+
+
+def test_resolve_postprocess_config_merge_keys_uses_out_key_column():
+    keys, out_col = segment_module.resolve_postprocess_config(
+        {"merge_keys": ["liver", "vessels"], "out_key": "combined"}
     )
     assert keys == ["liver", "vessels"]
-    assert out_col == "mask_postproc"
+    assert out_col == "combined"
 
 
 def test_resolve_postprocess_config_rejects_in_key_and_merge_keys():
@@ -128,6 +130,11 @@ def test_resolve_postprocess_config_rejects_legacy_output_column_keys(legacy_key
         )
 
 
+def test_resolve_postprocess_config_requires_out_key():
+    with pytest.raises(ValueError, match="out_key is required"):
+        segment_module.resolve_postprocess_config({"merge_keys": ["liver"]})
+
+
 def test_segment_volume_calls_postprocess(tmp_path, monkeypatch):
     nifti = tmp_path / "vol.nii.gz"
     nifti.write_text("nifti")
@@ -140,7 +147,7 @@ def test_segment_volume_calls_postprocess(tmp_path, monkeypatch):
         ],
         "postprocess": {
             "merge_keys": ["a", "b"],
-            "output": "postproc.nii.gz",
+            "out_key": "postproc",
             "radius_mm": 2.0,
             "largest_cc": True,
             "fill_holes": True,
@@ -186,7 +193,7 @@ def test_segment_volume_supports_postprocess_in_key(tmp_path, monkeypatch):
         ],
         "postprocess": {
             "in_key": "a",
-            "output": "a_clean.nii.gz",
+            "out_key": "a_clean",
         },
     }
 
@@ -273,11 +280,16 @@ def test_segment_volume_respects_per_task_fast_overrides(tmp_path):
 
 
 def test_resolve_postprocess_operations_accepts_dict_or_list():
-    ops_from_dict = segment_module.resolve_postprocess_operations({"in_key": "liver"})
+    ops_from_dict = segment_module.resolve_postprocess_operations(
+        {"in_key": "liver", "out_key": "liver_clean"}
+    )
     assert len(ops_from_dict) == 1
 
     ops_from_list = segment_module.resolve_postprocess_operations(
-        [{"in_key": "liver"}, {"merge_keys": ["liver"]}]
+        [
+            {"in_key": "liver", "out_key": "liver_clean"},
+            {"merge_keys": ["liver"], "out_key": "liver_combined"},
+        ]
     )
     assert len(ops_from_list) == 2
 
@@ -288,22 +300,12 @@ def test_resolve_postprocess_operation_defaults_output_name_from_out_key():
         op_index=1,
     )
     assert op["output_name"] == "combined.nii.gz"
-    assert op["output_column"] == "mask_combined"
+    assert op["output_column"] == "combined"
 
 
-def test_resolve_postprocess_operation_defaults_output_name_from_column_when_missing():
-    op_in_key = segment_module.resolve_postprocess_operation(
-        {"in_key": "liver"}, op_index=1
-    )
-    assert op_in_key["output_column"] == "mask_liver"
-    assert op_in_key["output_name"] == "liver.nii.gz"
-
-    op_merge = segment_module.resolve_postprocess_operation(
-        {"merge_keys": ["liver", "tumor"]},
-        op_index=2,
-    )
-    assert op_merge["output_column"] == "mask_postproc"
-    assert op_merge["output_name"] == "postproc.nii.gz"
+def test_resolve_postprocess_operation_requires_out_key():
+    with pytest.raises(ValueError, match="out_key is required"):
+        segment_module.resolve_postprocess_operation({"in_key": "liver"}, op_index=1)
 
 
 def test_segment_volume_executes_postprocess_list_in_order_and_chains(
@@ -430,7 +432,7 @@ def test_segment_volume_warn_only_when_merge_missing(tmp_path, monkeypatch):
         ],
         "postprocess": {
             "merge_keys": ["a"],
-            "output": "postproc.nii.gz",
+            "out_key": "postproc",
             "on_failure": "warn_only",
         },
     }
@@ -463,7 +465,7 @@ def test_segment_volume_fail_policy_when_merge_missing(tmp_path, monkeypatch):
         ],
         "postprocess": {
             "merge_keys": ["a"],
-            "output": "postproc.nii.gz",
+            "out_key": "postproc",
             "on_failure": "fail",
         },
     }
@@ -560,7 +562,7 @@ def test_main_writes_mask_columns(tmp_path, monkeypatch):
                 "extra": {},
             },
         ],
-        "postprocess": {"merge_keys": ["liver", "vessels"], "output": "postproc.nii.gz"},
+        "postprocess": {"merge_keys": ["liver", "vessels"], "out_key": "postproc"},
     }
 
     config_path = tmp_path / "tasks.json"
@@ -624,10 +626,10 @@ def test_main_writes_mask_columns(tmp_path, monkeypatch):
     out_df = pd.read_csv(args.csv_path_out)
     assert "mask_liver" in out_df.columns
     assert "mask_vessels" in out_df.columns
-    assert "mask_postproc" in out_df.columns
+    assert "postproc" in out_df.columns
     assert out_df.loc[0, "mask_liver"].endswith("liver.nii.gz")
     assert out_df.loc[0, "mask_vessels"].endswith("vessels.nii.gz")
-    assert out_df.loc[0, "mask_postproc"].endswith("postproc.nii.gz")
+    assert out_df.loc[0, "postproc"].endswith("postproc.nii.gz")
 
 
 def test_main_writes_custom_merged_mask_column(tmp_path, monkeypatch):
@@ -650,7 +652,6 @@ def test_main_writes_custom_merged_mask_column(tmp_path, monkeypatch):
         ],
         "postprocess": {
             "merge_keys": ["liver", "vessels"],
-            "output": "merged.nii.gz",
             "out_key": "combined",
         },
     }
@@ -685,7 +686,7 @@ def test_main_writes_custom_merged_mask_column(tmp_path, monkeypatch):
             out_path = Path(out_dir)
             (out_path / "liver.nii.gz").write_text("mask")
             (out_path / "vessels.nii.gz").write_text("mask")
-            (out_path / "merged.nii.gz").write_text("mask")
+            (out_path / "combined.nii.gz").write_text("mask")
             return DummyFuture((idx, out_dir, None, None))
 
         def shutdown(self, wait=False, cancel_futures=True):
@@ -716,14 +717,15 @@ def test_main_writes_custom_merged_mask_column(tmp_path, monkeypatch):
     out_df = pd.read_csv(args.csv_path_out)
     assert "mask_liver" in out_df.columns
     assert "mask_vessels" in out_df.columns
-    assert "mask_postproc" in out_df.columns
-    assert "mask_combined" not in out_df.columns
+    assert "combined" in out_df.columns
+    assert "mask_merged" not in out_df.columns
+    assert "postproc" not in out_df.columns
     assert out_df.loc[0, "mask_liver"].endswith("liver.nii.gz")
     assert out_df.loc[0, "mask_vessels"].endswith("vessels.nii.gz")
-    assert out_df.loc[0, "mask_postproc"].endswith("postproc.nii.gz")
+    assert out_df.loc[0, "combined"].endswith("combined.nii.gz")
 
 
-def test_main_uses_filename_based_columns_not_out_key_columns(
+def test_main_uses_semantic_postprocess_column_not_filename_column(
     tmp_path, monkeypatch, caplog
 ):
     nifti = tmp_path / "vol.nii.gz"
@@ -739,8 +741,7 @@ def test_main_uses_filename_based_columns_not_out_key_columns(
         ],
         "postprocess": {
             "merge_keys": ["liver"],
-            "output": "postproc.nii.gz",
-            "out_key": "liver",
+            "out_key": "liver_proc",
         },
     }
 
@@ -773,7 +774,7 @@ def test_main_uses_filename_based_columns_not_out_key_columns(
             out_dir = str(Path(row["nifti_path"]).parent)
             out_path = Path(out_dir)
             (out_path / "liver.nii.gz").write_text("mask")
-            (out_path / "postproc.nii.gz").write_text("mask")
+            (out_path / "liver_proc.nii.gz").write_text("mask")
             return DummyFuture((idx, out_dir, None, None))
 
         def shutdown(self, wait=False, cancel_futures=True):
@@ -810,7 +811,96 @@ def test_main_uses_filename_based_columns_not_out_key_columns(
     out_df = pd.read_csv(args.csv_path_out)
     assert "mask_liver" in out_df.columns
     assert out_df.loc[0, "mask_liver"].endswith("liver.nii.gz")
-    assert "mask_postproc" in out_df.columns
+    assert "liver_proc" in out_df.columns
+    assert out_df.loc[0, "liver_proc"].endswith("liver_proc.nii.gz")
+    assert "postproc" not in out_df.columns
+
+
+def test_main_warns_and_overwrites_when_postprocess_semantic_column_collides(
+    tmp_path, monkeypatch
+):
+    nifti = tmp_path / "vol.nii.gz"
+    nifti.write_text("nifti")
+
+    csv_path = tmp_path / "nifti_index.csv"
+    pd.DataFrame([{"nifti_path": str(nifti), "mask_liver": "old_liver.nii.gz"}]).to_csv(
+        csv_path, index=False
+    )
+
+    config = {
+        "backend": "totalsegmentator",
+        "tasks": [
+            {"key": "liver", "task": "total", "output": "liver.nii.gz", "extra": {}},
+        ],
+        "postprocess": {
+            "merge_keys": ["liver"],
+            "out_key": "mask_liver",
+        },
+    }
+
+    config_path = tmp_path / "tasks.json"
+    config_path.write_text(json.dumps(config))
+
+    class DummyFuture:
+        def __init__(self, result):
+            self._result = result
+
+        def result(self, timeout=None):
+            return self._result
+
+        def cancel(self):
+            return None
+
+    class DummyPool:
+        def __init__(self, max_workers=None, mp_context=None):
+            self._processes = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+        def submit(self, fn, *args, **kwargs):
+            idx = args[0]
+            row = args[1]
+            out_dir = str(Path(row["nifti_path"]).parent)
+            out_path = Path(out_dir)
+            (out_path / "liver.nii.gz").write_text("mask")
+            (out_path / "mask_liver.nii.gz").write_text("mask")
+            return DummyFuture((idx, out_dir, None, None))
+
+        def shutdown(self, wait=False, cancel_futures=True):
+            return None
+
+    monkeypatch.setattr(segment_module, "ProcessPoolExecutor", DummyPool)
+    monkeypatch.setattr(segment_module, "as_completed", lambda futures: list(futures))
+    monkeypatch.setattr(segment_module, "tqdm", lambda it, **kwargs: it)
+    monkeypatch.setattr(
+        segment_module, "prefetch_totalsegmentator_models", lambda *a, **k: None
+    )
+
+    args = argparse.Namespace(
+        csv_path=str(csv_path),
+        csv_path_out=str(tmp_path / "segmented.csv"),
+        error_csv_path=str(tmp_path / "errors.csv"),
+        tasks_config=str(config_path),
+        num_workers=1,
+        fast=False,
+        verbose=False,
+        force=False,
+        start_method="spawn",
+        timeout_sec=10,
+    )
+
+    segment_module.main(args)
+
+    out_df = pd.read_csv(args.csv_path_out)
+    assert "mask_liver" in out_df.columns
+    assert out_df.loc[0, "mask_liver"].endswith("mask_liver.nii.gz")
+    warning = out_df.loc[0, "warning_message"]
+    assert isinstance(warning, str)
+    assert "mask column collision for mask_liver" in warning
 
 
 def test_main_records_warning_when_merged_mask_missing(tmp_path, monkeypatch):
@@ -825,7 +915,7 @@ def test_main_records_warning_when_merged_mask_missing(tmp_path, monkeypatch):
         "tasks": [
             {"key": "liver", "task": "total", "output": "liver.nii.gz", "extra": {}},
         ],
-        "postprocess": {"merge_keys": ["liver"], "output": "postproc.nii.gz"},
+        "postprocess": {"merge_keys": ["liver"], "out_key": "postproc"},
     }
 
     config_path = tmp_path / "tasks.json"
@@ -888,7 +978,7 @@ def test_main_records_warning_when_merged_mask_missing(tmp_path, monkeypatch):
     assert pd.isna(out_df.loc[0, "warning_message"])
     assert "mask_liver" in out_df.columns
     assert out_df.loc[0, "mask_liver"].endswith("liver.nii.gz")
-    assert "mask_postproc" not in out_df.columns
+    assert "postproc" not in out_df.columns
 
 
 def test_main_writes_multiple_postprocess_columns(tmp_path, monkeypatch):
@@ -913,9 +1003,8 @@ def test_main_writes_multiple_postprocess_columns(tmp_path, monkeypatch):
             {
                 "merge_keys": ["liver", "tumor"],
                 "out_key": "combined",
-                "output": "combined.nii.gz",
             },
-            {"merge_keys": ["combined"], "out_key": "final", "output": "final.nii.gz"},
+            {"merge_keys": ["combined"], "out_key": "final"},
         ],
     }
 
@@ -979,10 +1068,10 @@ def test_main_writes_multiple_postprocess_columns(tmp_path, monkeypatch):
     segment_module.main(args)
 
     out_df = pd.read_csv(args.csv_path_out)
-    assert "mask_combined" in out_df.columns
-    assert "mask_final" in out_df.columns
-    assert out_df.loc[0, "mask_combined"].endswith("combined.nii.gz")
-    assert out_df.loc[0, "mask_final"].endswith("final.nii.gz")
+    assert "combined" in out_df.columns
+    assert "final" in out_df.columns
+    assert out_df.loc[0, "combined"].endswith("combined.nii.gz")
+    assert out_df.loc[0, "final"].endswith("final.nii.gz")
 
 
 def test_main_discovers_all_generated_masks_and_excludes_source_nifti(
@@ -999,7 +1088,7 @@ def test_main_discovers_all_generated_masks_and_excludes_source_nifti(
         "tasks": [
             {"key": "liver", "task": "total", "output": "liver.nii.gz", "extra": {}},
         ],
-        "postprocess": {"merge_keys": ["liver"], "output": "postproc.nii.gz"},
+        "postprocess": {"merge_keys": ["liver"], "out_key": "postproc"},
     }
 
     config_path = tmp_path / "tasks.json"
