@@ -16,7 +16,7 @@
     "tasks": [
       {
         "task": "total",
-        "extra": { "roi_subset": ["liver", "pancreas"], "fast": true }
+        "extra": { "roi_subset": ["liver"], "fast": true }
       },
       {
         "task": "liver_vessels",
@@ -30,12 +30,6 @@
         "radius_mm": 5.0,
         "largest_cc": true,
         "fill_holes": true,
-        "close": true
-      },
-      {
-        "in_key": "pancreas",
-        "out_key": "pancreas",
-        "radius_mm": 5.0,
         "close": true
       }
     ]

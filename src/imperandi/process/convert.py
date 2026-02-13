@@ -396,6 +396,85 @@ def _find_existing_nifti_output(
     return None
 
 
+def _resolve_series_id_for_convert(row: pd.Series) -> str:
+    """Resolve effective series identifier for one conversion row."""
+    base_series_id = str(row["series_id"])
+    try:
+        ordinal = int(row.get("volume_ordinal_in_series", 1))
+    except Exception:
+        ordinal = 1
+    if ordinal > 1:
+        return f"{base_series_id}_{ordinal}"
+    return base_series_id
+
+
+def _resolve_export_path_for_convert(row: pd.Series, output_dir: str | Path) -> Path:
+    """Resolve expected output NIfTI path for one conversion row."""
+    series_id = _resolve_series_id_for_convert(row)
+    export_dir = (
+        Path(output_dir) / str(row["patient_key"]) / str(row["study_id"]) / series_id
+    )
+    return export_dir / "scan.nii.gz"
+
+
+def _count_unique_patient_keys(
+    df: pd.DataFrame,
+    *,
+    mask: pd.Series | None = None,
+) -> int | None:
+    """Return unique patient count when `patient_key` is available."""
+    if "patient_key" not in df.columns:
+        return None
+    series = df.loc[mask, "patient_key"] if mask is not None else df["patient_key"]
+    valid = series[series.notna()].astype(str)
+    return int(valid.nunique())
+
+
+def _estimate_convert_workload(
+    df: pd.DataFrame,
+    *,
+    output_dir: str | Path,
+    force: bool,
+) -> dict[str, int | None]:
+    """Estimate how many rows/patients are already converted versus pending."""
+    total_volumes = int(len(df))
+    if total_volumes == 0:
+        return {
+            "already_volumes": 0,
+            "pending_volumes": 0,
+            "already_patients": 0 if "patient_key" in df.columns else None,
+            "pending_patients": 0 if "patient_key" in df.columns else None,
+        }
+
+    if force:
+        total_patients = _count_unique_patient_keys(df)
+        return {
+            "already_volumes": 0,
+            "pending_volumes": total_volumes,
+            "already_patients": 0 if total_patients is not None else None,
+            "pending_patients": total_patients,
+        }
+
+    already_mask: list[bool] = []
+    for _, row in df.iterrows():
+        try:
+            export_path = _resolve_export_path_for_convert(row, output_dir)
+            already_mask.append(
+                _find_existing_nifti_output(row, export_path) is not None
+            )
+        except Exception:
+            already_mask.append(False)
+
+    already_series = pd.Series(already_mask, index=df.index, dtype=bool)
+    pending_series = ~already_series
+    return {
+        "already_volumes": int(already_series.sum()),
+        "pending_volumes": int(pending_series.sum()),
+        "already_patients": _count_unique_patient_keys(df, mask=already_series),
+        "pending_patients": _count_unique_patient_keys(df, mask=pending_series),
+    }
+
+
 # Function to convert a single DICOM volume to NIfTI (parallel task)
 def process_single_volume(k, row, output_dir, verbose, force=False):
     """
@@ -413,19 +492,11 @@ def process_single_volume(k, row, output_dir, verbose, force=False):
     """
     setup_logging(verbose=verbose)
     try:
-        if row.volume_ordinal_in_series > 1:
-            if verbose:
-                logger.info("Multi-volume series")
-            series_id = row.series_id + "_" + str(row.volume_ordinal_in_series)
-        else:
-            series_id = row.series_id
+        series_id = _resolve_series_id_for_convert(row)
+        if str(series_id) != str(row["series_id"]) and verbose:
+            logger.info("Multi-volume series")
 
-        export_dir = (
-            Path(output_dir)
-            / str(row.patient_key)
-            / str(row.study_id)
-            / str(series_id)
-        )
+        export_dir = Path(_resolve_export_path_for_convert(row, output_dir)).parent
         export_path = export_dir / "scan.nii.gz"
 
         # Check for any reusable output before touching source DICOM paths.
@@ -622,6 +693,32 @@ def main(args):
     ) as archive_session:
         df, df_archive_err = materialize_archive_dicom_paths(df, archive_session)
 
+        if "volume_ordinal_in_series" not in df.columns and "series_id" in df.columns:
+            df["volume_ordinal_in_series"] = df.groupby("series_id").cumcount() + 1
+        workload = _estimate_convert_workload(
+            df,
+            output_dir=args.output_dir,
+            force=bool(getattr(args, "force", False)),
+        )
+        already_patients = workload["already_patients"]
+        pending_patients = workload["pending_patients"]
+        if already_patients is not None and pending_patients is not None:
+            logger.info(
+                "Convert workload: %d patient(s) already processed (%d volume(s)); "
+                "%d patient(s) will be processed now (%d volume(s)).",
+                int(already_patients),
+                int(workload["already_volumes"]),
+                int(pending_patients),
+                int(workload["pending_volumes"]),
+            )
+        else:
+            logger.info(
+                "Convert workload: %d volume(s) already processed; "
+                "%d volume(s) will be processed now.",
+                int(workload["already_volumes"]),
+                int(workload["pending_volumes"]),
+            )
+
         # Convert DICOM to NIfTI in parallel
         df, df_err = convert_dicom_to_nifti_parallel(
             df,
@@ -661,4 +758,3 @@ if __name__ == "__main__":
         raise SystemExit(0)
     setup_logging(verbose=getattr(args, "verbose", False))
     main(args)
-

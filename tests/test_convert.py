@@ -106,7 +106,9 @@ def test_process_single_volume_skips_existing(tmp_path, monkeypatch):
     assert export_path == nifti_file
 
 
-def test_process_single_volume_skips_existing_before_reading_source(tmp_path, monkeypatch):
+def test_process_single_volume_skips_existing_before_reading_source(
+    tmp_path, monkeypatch
+):
     out_root = tmp_path / "out"
     out_root.mkdir()
 

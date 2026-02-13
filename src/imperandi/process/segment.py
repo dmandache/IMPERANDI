@@ -35,7 +35,7 @@ from .segment_workflow import (
     run_segment_volume_workflow,
 )
 
-DEFAULT_TIMEOUT = 10 * 60  # in seconds
+DEFAULT_TIMEOUT = 15 * 60  # in seconds
 
 logger = logging.getLogger(__name__)
 

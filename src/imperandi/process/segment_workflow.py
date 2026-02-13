@@ -325,6 +325,147 @@ def _infer_task_outputs_from_extra(extra: Dict[str, Any]) -> List[str]:
     return inferred
 
 
+def _coerce_nifti_path(value: Any) -> Path | None:
+    """Coerce one table value into a valid path-like value, when possible."""
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+    text = str(value).strip()
+    if not text or text.lower() == "nan":
+        return None
+    return Path(text)
+
+
+def _count_unique_segment_patients(
+    df: pd.DataFrame,
+    *,
+    mask: pd.Series | None = None,
+) -> int | None:
+    """Return unique patient count when `patient_key` exists."""
+    if "patient_key" not in df.columns:
+        return None
+    series = df.loc[mask, "patient_key"] if mask is not None else df["patient_key"]
+    valid = series[series.notna()].astype(str)
+    return int(valid.nunique())
+
+
+def _is_segment_volume_already_processed(
+    *,
+    nifti_path: Path,
+    tasks_config: Dict[str, Any],
+    fast: bool,
+) -> bool:
+    """Return whether a volume would be fully skipped under `force=False`."""
+    tasks = tasks_config.get("tasks", [])
+    if not tasks:
+        return False
+
+    output_dir = nifti_path.parent
+    key_to_output: Dict[str, str] = {}
+    register_output_key_map(
+        key_to_output,
+        discover_segmentation_outputs(output_dir, nifti_path),
+        warnings=None,
+    )
+    default_fast = resolve_manifest_fast_default(
+        tasks_config,
+        cli_fast=fast,
+        emit_warning=False,
+    )
+
+    for idx, task in enumerate(tasks):
+        valid_task, task_name = _validate_and_get_task(task, task_index=idx)
+        _, extra = resolve_task_fast_and_extra(
+            valid_task,
+            task_index=idx,
+            default_fast=default_fast,
+            emit_warning=False,
+        )
+
+        declared_outputs = _resolve_declared_task_outputs(valid_task)
+        skip_outputs = declared_outputs or _infer_task_outputs_from_extra(extra)
+        if skip_outputs:
+            skip_paths = _resolve_existing_output_paths(output_dir, skip_outputs)
+            if skip_paths:
+                register_output_key_map(key_to_output, skip_paths, warnings=None)
+                continue
+
+        if key_to_output.get(task_name):
+            continue
+        return False
+
+    for op in resolve_postprocess_operations(tasks_config.get("postprocess")):
+        missing_keys = [k for k in op["input_keys"] if k not in key_to_output]
+        if missing_keys:
+            if str(op.get("on_failure", "warn_only")).strip().lower() == "fail":
+                return False
+            continue
+
+        dst = output_dir / str(op["output_name"])
+        if not dst.exists():
+            return False
+        key_to_output[str(op["out_key"])] = str(op["output_name"])
+
+    return True
+
+
+def _estimate_segment_workload(
+    df: pd.DataFrame,
+    *,
+    tasks_config: Dict[str, Any],
+    fast: bool,
+    force: bool,
+) -> Dict[str, int | None]:
+    """Estimate already-processed vs pending segment volumes/patients."""
+    total_volumes = int(len(df))
+    if total_volumes == 0:
+        return {
+            "already_volumes": 0,
+            "pending_volumes": 0,
+            "already_patients": 0 if "patient_key" in df.columns else None,
+            "pending_patients": 0 if "patient_key" in df.columns else None,
+        }
+
+    if force:
+        total_patients = _count_unique_segment_patients(df)
+        return {
+            "already_volumes": 0,
+            "pending_volumes": total_volumes,
+            "already_patients": 0 if total_patients is not None else None,
+            "pending_patients": total_patients,
+        }
+
+    already_mask: List[bool] = []
+    for _, row in df.iterrows():
+        nifti_path = _coerce_nifti_path(row.get("nifti_path"))
+        if nifti_path is None or not nifti_path.exists():
+            already_mask.append(False)
+            continue
+        try:
+            already_mask.append(
+                _is_segment_volume_already_processed(
+                    nifti_path=nifti_path,
+                    tasks_config=tasks_config,
+                    fast=fast,
+                )
+            )
+        except Exception:
+            already_mask.append(False)
+
+    already_series = pd.Series(already_mask, index=df.index, dtype=bool)
+    pending_series = ~already_series
+    return {
+        "already_volumes": int(already_series.sum()),
+        "pending_volumes": int(pending_series.sum()),
+        "already_patients": _count_unique_segment_patients(df, mask=already_series),
+        "pending_patients": _count_unique_segment_patients(df, mask=pending_series),
+    }
+
+
 def _process_single_volume_subprocess(
     send_conn: Any,
     process_single_volume_fn: Callable[..., WorkerResult],
@@ -588,6 +729,31 @@ def run_segment_batch_workflow(
     df["warning_message"] = None
     if args.num_workers < 1:
         raise ValueError("num_workers must be >= 1")
+
+    workload = _estimate_segment_workload(
+        df,
+        tasks_config=tasks_config,
+        fast=effective_fast,
+        force=bool(args.force),
+    )
+    already_patients = workload["already_patients"]
+    pending_patients = workload["pending_patients"]
+    if already_patients is not None and pending_patients is not None:
+        logger_obj.info(
+            "Segment workload: %d patient(s) already processed (%d volume(s)); "
+            "%d patient(s) will be processed now (%d volume(s)).",
+            int(already_patients),
+            int(workload["already_volumes"]),
+            int(pending_patients),
+            int(workload["pending_volumes"]),
+        )
+    else:
+        logger_obj.info(
+            "Segment workload: %d volume(s) already processed; "
+            "%d volume(s) will be processed now.",
+            int(workload["already_volumes"]),
+            int(workload["pending_volumes"]),
+        )
 
     ctx = mp.get_context(args.start_method)
     pending = deque((idx, row.to_dict()) for idx, row in df.iterrows())
