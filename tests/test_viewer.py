@@ -3,6 +3,8 @@ from pathlib import Path
 
 import pytest
 import ipywidgets as widgets
+import numpy as np
+import pandas as pd
 
 # Ensure src/ is on sys.path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -67,3 +69,48 @@ def test_exam_nav_buttons_disabled_when_single_exam():
     assert viewer.next_date_button.disabled is True
     assert viewer.prev_patient_button.disabled is True
     assert viewer.next_patient_button.disabled is True
+
+
+def test_display_to_voxel_and_ct_coordinates_axial():
+    viewer = CTScanViewer.__new__(CTScanViewer)
+    viewer.view_plane = "axial"
+    viewer.ct_scan_raw = np.zeros((8, 9, 10))
+    viewer.slice_slider = widgets.IntSlider(value=4)
+    viewer.ct_affine = np.array(
+        [
+            [2.0, 0.0, 0.0, 10.0],
+            [0.0, 3.0, 0.0, 20.0],
+            [0.0, 0.0, 4.0, 30.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ]
+    )
+
+    voxel = viewer._display_to_voxel(6.0, 5.0)
+    assert voxel.tolist() == [5.0, 6.0, 4.0]
+
+    coord = viewer._voxel_to_ct_coordinate(voxel)
+    assert coord.tolist() == [20.0, 38.0, 46.0]
+
+
+def test_record_annotation_persists_in_dataframe():
+    viewer = CTScanViewer.__new__(CTScanViewer)
+    viewer.view_plane = "axial"
+    viewer.ct_scan_raw = np.zeros((10, 10, 10))
+    viewer.slice_slider = widgets.IntSlider(value=3)
+    viewer.ct_affine = np.eye(4)
+    viewer.current_index = 0
+    viewer.df = pd.DataFrame([{"patient_key": "p1"}])
+    viewer.annotations_current_scan = []
+    viewer.annotation_summary = widgets.HTML(value="")
+    viewer.update_display = lambda *_: None
+
+    viewer._record_annotation("bounding_box", [(1.0, 2.0), (4.0, 5.0)])
+
+    stored = viewer.df.at[0, "annotations"]
+    assert isinstance(stored, list)
+    assert len(stored) == 1
+    ann = stored[0]
+    assert ann["label"] == "tumor"
+    assert ann["shape"] == "bounding_box"
+    assert ann["slice_idx"] == 3
+    assert ann["voxel_points"][0] == [2.0, 1.0, 3.0]
