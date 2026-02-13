@@ -424,13 +424,11 @@ def test_segment_volume_force_false_skips_undeclared_outputs_from_inference(tmp_
     nifti.write_text("nifti")
     (tmp_path / "liver.nii.gz").write_text("existing")
     (tmp_path / "pancreas.nii.gz").write_text("existing")
-    (tmp_path / "liver_vessels.nii.gz").write_text("existing")
 
     tasks_config = {
         "backend": "totalsegmentator",
         "tasks": [
             {"task": "total", "extra": {"roi_subset": ["liver", "pancreas"]}},
-            {"task": "liver_vessels", "extra": {}},
         ],
     }
 
@@ -449,6 +447,44 @@ def test_segment_volume_force_false_skips_undeclared_outputs_from_inference(tmp_
         force=False,
         backend=ShouldNotRunBackend(),
     )
+
+
+def test_segment_volume_force_false_multitask_does_not_skip_later_task_by_task_name(
+    tmp_path,
+):
+    nifti = tmp_path / "vol.nii.gz"
+    nifti.write_text("nifti")
+    # Simulate prior run where an earlier task already produced these files.
+    (tmp_path / "liver.nii.gz").write_text("existing")
+    (tmp_path / "liver_vessels.nii.gz").write_text("existing")
+
+    tasks_config = {
+        "backend": "totalsegmentator",
+        "tasks": [
+            {"task": "total", "extra": {"roi_subset": ["liver"]}},
+            {"task": "liver_vessels", "extra": {}},
+        ],
+    }
+
+    calls = []
+
+    class RecordingBackend:
+        def run(self, *, input_path, output_dir, task, fast, **kwargs):
+            del input_path, fast, kwargs
+            calls.append(task)
+            (Path(output_dir) / f"{task}.nii.gz").write_text("fresh")
+
+    segment_module.segment_volume(
+        nifti,
+        tmp_path,
+        tasks_config,
+        fast=False,
+        verbose=False,
+        force=False,
+        backend=RecordingBackend(),
+    )
+
+    assert calls == ["liver_vessels"]
 
 
 def test_segment_volume_force_false_runs_when_inferred_outputs_are_incomplete(tmp_path):

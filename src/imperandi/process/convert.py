@@ -11,6 +11,7 @@ import logging
 from pathlib import Path
 import os
 import argparse
+from typing import Any
 import pandas as pd
 from ast import literal_eval
 import dicom2nifti
@@ -435,33 +436,44 @@ def _estimate_convert_workload(
     *,
     output_dir: str | Path,
     force: bool,
-) -> dict[str, int | None]:
+) -> dict[str, Any]:
     """Estimate how many rows/patients are already converted versus pending."""
     total_volumes = int(len(df))
     if total_volumes == 0:
+        empty_mask = pd.Series(False, index=df.index, dtype=bool)
         return {
             "already_volumes": 0,
             "pending_volumes": 0,
             "already_patients": 0 if "patient_key" in df.columns else None,
             "pending_patients": 0 if "patient_key" in df.columns else None,
+            "already_series": empty_mask,
+            "pending_series": empty_mask,
+            "existing_outputs": {},
         }
 
     if force:
+        already_series = pd.Series(False, index=df.index, dtype=bool)
+        pending_series = ~already_series
         total_patients = _count_unique_patient_keys(df)
         return {
             "already_volumes": 0,
             "pending_volumes": total_volumes,
             "already_patients": 0 if total_patients is not None else None,
             "pending_patients": total_patients,
+            "already_series": already_series,
+            "pending_series": pending_series,
+            "existing_outputs": {},
         }
 
+    existing_outputs: dict[Any, str] = {}
     already_mask: list[bool] = []
-    for _, row in df.iterrows():
+    for idx, row in df.iterrows():
         try:
             export_path = _resolve_export_path_for_convert(row, output_dir)
-            already_mask.append(
-                _find_existing_nifti_output(row, export_path) is not None
-            )
+            existing_output = _find_existing_nifti_output(row, export_path)
+            already_mask.append(existing_output is not None)
+            if existing_output is not None:
+                existing_outputs[idx] = str(existing_output)
         except Exception:
             already_mask.append(False)
 
@@ -472,6 +484,9 @@ def _estimate_convert_workload(
         "pending_volumes": int(pending_series.sum()),
         "already_patients": _count_unique_patient_keys(df, mask=already_series),
         "pending_patients": _count_unique_patient_keys(df, mask=pending_series),
+        "already_series": already_series,
+        "pending_series": pending_series,
+        "existing_outputs": existing_outputs,
     }
 
 
@@ -594,7 +609,8 @@ def convert_dicom_to_nifti_parallel(
 
     logger.info("%s volumes to convert", n_samples)
 
-    df["volume_ordinal_in_series"] = df.groupby("series_id").cumcount() + 1
+    if "volume_ordinal_in_series" not in df.columns:
+        df["volume_ordinal_in_series"] = df.groupby("series_id").cumcount() + 1
 
     if "series_dir" not in df.columns:
         df["series_dir"] = df["dicom_path"].apply(
@@ -719,14 +735,32 @@ def main(args):
                 int(workload["pending_volumes"]),
             )
 
-        # Convert DICOM to NIfTI in parallel
-        df, df_err = convert_dicom_to_nifti_parallel(
-            df,
-            args.output_dir,
-            args.verbose,
-            args.num_workers,
-            force=getattr(args, "force", False),
-        )
+        already_series = workload["already_series"]
+        pending_series = workload["pending_series"]
+        existing_outputs = workload["existing_outputs"]
+
+        already_df = df.loc[already_series].copy()
+        for idx, output_path in existing_outputs.items():
+            if idx in already_df.index:
+                already_df.at[idx, "nifti_path"] = output_path
+
+        pending_df = df.loc[pending_series].copy()
+        if pending_df.empty:
+            df = already_df
+            df_err = pd.DataFrame()
+        else:
+            pending_df, df_err = convert_dicom_to_nifti_parallel(
+                pending_df,
+                args.output_dir,
+                args.verbose,
+                args.num_workers,
+                force=getattr(args, "force", False),
+            )
+            if already_df.empty:
+                df = pending_df
+            else:
+                df = pd.concat([already_df, pending_df]).sort_index()
+
         if not df_archive_err.empty:
             df_err = (
                 pd.concat([df_archive_err, df_err], ignore_index=True)

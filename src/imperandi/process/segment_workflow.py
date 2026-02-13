@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import multiprocessing as mp
 import time
@@ -38,6 +39,7 @@ from .segment_io import (
 logger = logging.getLogger(__name__)
 
 WorkerResult = Tuple[int, Optional[str], Optional[str], Optional[str]]
+TASK_STATE_FILENAME = ".imperandi_segment_tasks.json"
 
 
 def _build_postprocess_output_column_map(
@@ -270,33 +272,53 @@ def _normalize_nifti_filename(value: str) -> str:
     return f"{name}.nii.gz"
 
 
+def _dedupe_output_names(names: List[str]) -> List[str]:
+    """Return output names deduplicated case-insensitively preserving order."""
+    unique: List[str] = []
+    seen: set[str] = set()
+    for name in names:
+        normalized = _normalize_nifti_filename(name)
+        if not normalized:
+            continue
+        lower = normalized.lower()
+        if lower in seen:
+            continue
+        seen.add(lower)
+        unique.append(normalized)
+    return unique
+
+
+def _resolve_existing_output_name(output_dir: Path, output_name: str) -> str | None:
+    """Resolve one expected output name to an existing filename in output_dir."""
+    normalized = _normalize_nifti_filename(output_name)
+    if not normalized:
+        return None
+    primary = output_dir / normalized
+    if primary.exists():
+        return primary.name
+
+    lower = normalized.lower()
+    alt: Path | None = None
+    if lower.endswith(".nii.gz"):
+        alt = output_dir / f"{normalized[: -len('.nii.gz')]}.nii"
+    elif lower.endswith(".nii"):
+        alt = output_dir / f"{normalized[: -len('.nii')]}.nii.gz"
+    if alt is not None and alt.exists():
+        return alt.name
+    return None
+
+
 def _resolve_existing_output_paths(
     output_dir: Path,
     output_names: List[str],
 ) -> List[Path]:
     """Resolve expected outputs to existing files; returns [] if any are missing."""
     found: List[Path] = []
-    for raw_name in output_names:
-        normalized = _normalize_nifti_filename(raw_name)
-        if not normalized:
+    for raw_name in _dedupe_output_names(output_names):
+        resolved_name = _resolve_existing_output_name(output_dir, raw_name)
+        if resolved_name is None:
             return []
-
-        primary = output_dir / normalized
-        if primary.exists():
-            found.append(primary)
-            continue
-
-        lower = normalized.lower()
-        alt: Path | None = None
-        if lower.endswith(".nii.gz"):
-            alt = output_dir / f"{normalized[: -len('.nii.gz')]}.nii"
-        elif lower.endswith(".nii"):
-            alt = output_dir / f"{normalized[: -len('.nii')]}.nii.gz"
-        if alt is not None and alt.exists():
-            found.append(alt)
-            continue
-
-        return []
+        found.append(output_dir / resolved_name)
     return found
 
 
@@ -323,6 +345,122 @@ def _infer_task_outputs_from_extra(extra: Dict[str, Any]) -> List[str]:
             seen.add(lower)
             inferred.append(normalized)
     return inferred
+
+
+def _segment_task_signature(
+    *,
+    task_name: str,
+    task_fast: bool,
+    extra: Dict[str, Any],
+) -> str:
+    """Build a stable signature for one concrete task invocation."""
+    return json.dumps(
+        {"task": str(task_name), "fast": bool(task_fast), "extra": dict(extra)},
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+
+
+def _load_segment_task_state(
+    output_dir: Path,
+    *,
+    logger_obj: logging.Logger = logger,
+) -> Dict[str, List[str]]:
+    """Load per-task completion state for one output directory."""
+    state_path = output_dir / TASK_STATE_FILENAME
+    if not state_path.exists():
+        return {}
+    try:
+        raw = json.loads(state_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger_obj.warning("Failed to read task state %s: %s", state_path, exc)
+        return {}
+
+    if isinstance(raw, dict) and isinstance(raw.get("completed"), dict):
+        completed_raw = raw.get("completed")
+    elif isinstance(raw, dict):
+        completed_raw = raw
+    else:
+        completed_raw = None
+    if not isinstance(completed_raw, dict):
+        return {}
+
+    state: Dict[str, List[str]] = {}
+    for key, value in completed_raw.items():
+        if not isinstance(key, str):
+            continue
+        raw_outputs: List[str]
+        if isinstance(value, str):
+            raw_outputs = [value]
+        elif isinstance(value, list):
+            raw_outputs = [str(item) for item in value]
+        else:
+            raw_outputs = []
+        normalized = _dedupe_output_names(raw_outputs)
+        if normalized:
+            state[key] = normalized
+    return state
+
+
+def _save_segment_task_state(
+    output_dir: Path,
+    state: Dict[str, List[str]],
+    *,
+    logger_obj: logging.Logger = logger,
+) -> None:
+    """Persist per-task completion state for one output directory."""
+    state_path = output_dir / TASK_STATE_FILENAME
+    payload = {
+        "completed": {
+            key: _dedupe_output_names(value)
+            for key, value in sorted(state.items())
+            if _dedupe_output_names(value)
+        }
+    }
+    tmp_path = state_path.with_suffix(f"{state_path.suffix}.tmp")
+    try:
+        tmp_path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        tmp_path.replace(state_path)
+    except Exception as exc:
+        logger_obj.warning("Failed to write task state %s: %s", state_path, exc)
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except Exception:
+            pass
+
+
+def _update_segment_task_state_entry(
+    state: Dict[str, List[str]],
+    *,
+    task_signature: str,
+    output_dir: Path,
+    candidate_outputs: List[str],
+) -> bool:
+    """Update one state entry from candidate outputs; returns whether state changed."""
+    resolved_outputs: List[str] = []
+    seen: set[str] = set()
+    for raw_name in candidate_outputs:
+        existing_name = _resolve_existing_output_name(output_dir, raw_name)
+        if existing_name is None:
+            continue
+        lower = existing_name.lower()
+        if lower in seen:
+            continue
+        seen.add(lower)
+        resolved_outputs.append(existing_name)
+
+    if not resolved_outputs:
+        return False
+    previous = state.get(task_signature)
+    if previous == resolved_outputs:
+        return False
+    state[task_signature] = resolved_outputs
+    return True
 
 
 def _coerce_nifti_path(value: Any) -> Path | None:
@@ -366,6 +504,7 @@ def _is_segment_volume_already_processed(
 
     output_dir = nifti_path.parent
     key_to_output: Dict[str, str] = {}
+    task_state = _load_segment_task_state(output_dir, logger_obj=logger)
     register_output_key_map(
         key_to_output,
         discover_segmentation_outputs(output_dir, nifti_path),
@@ -385,16 +524,46 @@ def _is_segment_volume_already_processed(
             default_fast=default_fast,
             emit_warning=False,
         )
+        task_signature = _segment_task_signature(
+            task_name=task_name,
+            task_fast=False,
+            extra=extra,
+        )
+        # Recompute with concrete task_fast because signature includes fast.
+        task_fast, _ = resolve_task_fast_and_extra(
+            valid_task,
+            task_index=idx,
+            default_fast=default_fast,
+            emit_warning=False,
+        )
+        task_signature = _segment_task_signature(
+            task_name=task_name,
+            task_fast=task_fast,
+            extra=extra,
+        )
 
         declared_outputs = _resolve_declared_task_outputs(valid_task)
-        skip_outputs = declared_outputs or _infer_task_outputs_from_extra(extra)
+        inferred_outputs = _infer_task_outputs_from_extra(extra)
+        skip_outputs = declared_outputs or inferred_outputs
         if skip_outputs:
             skip_paths = _resolve_existing_output_paths(output_dir, skip_outputs)
             if skip_paths:
                 register_output_key_map(key_to_output, skip_paths, warnings=None)
                 continue
 
-        if key_to_output.get(task_name):
+        marker_outputs = task_state.get(task_signature, [])
+        if marker_outputs:
+            marker_paths = _resolve_existing_output_paths(output_dir, marker_outputs)
+            if marker_paths:
+                register_output_key_map(key_to_output, marker_paths, warnings=None)
+                continue
+
+        if _update_segment_task_state_entry(
+            task_state,
+            task_signature=task_signature,
+            output_dir=output_dir,
+            candidate_outputs=declared_outputs + inferred_outputs,
+        ):
             continue
         return False
 
@@ -419,24 +588,31 @@ def _estimate_segment_workload(
     tasks_config: Dict[str, Any],
     fast: bool,
     force: bool,
-) -> Dict[str, int | None]:
+) -> Dict[str, Any]:
     """Estimate already-processed vs pending segment volumes/patients."""
     total_volumes = int(len(df))
     if total_volumes == 0:
+        empty_mask = pd.Series(False, index=df.index, dtype=bool)
         return {
             "already_volumes": 0,
             "pending_volumes": 0,
             "already_patients": 0 if "patient_key" in df.columns else None,
             "pending_patients": 0 if "patient_key" in df.columns else None,
+            "already_series": empty_mask,
+            "pending_series": empty_mask,
         }
 
     if force:
+        already_series = pd.Series(False, index=df.index, dtype=bool)
+        pending_series = ~already_series
         total_patients = _count_unique_segment_patients(df)
         return {
             "already_volumes": 0,
             "pending_volumes": total_volumes,
             "already_patients": 0 if total_patients is not None else None,
             "pending_patients": total_patients,
+            "already_series": already_series,
+            "pending_series": pending_series,
         }
 
     already_mask: List[bool] = []
@@ -463,6 +639,8 @@ def _estimate_segment_workload(
         "pending_volumes": int(pending_series.sum()),
         "already_patients": _count_unique_segment_patients(df, mask=already_series),
         "pending_patients": _count_unique_segment_patients(df, mask=pending_series),
+        "already_series": already_series,
+        "pending_series": pending_series,
     }
 
 
@@ -521,6 +699,7 @@ def run_segment_volume_workflow(
 
     warnings: List[str] = []
     key_to_output: Dict[str, str] = {}
+    task_count = len(tasks)
     default_fast = resolve_manifest_fast_default(
         tasks_config,
         cli_fast=fast,
@@ -567,16 +746,19 @@ def run_segment_volume_workflow(
                 register_output_key_map(key_to_output, skip_paths, warnings)
                 continue
 
-            # Fallback for single-output tasks where output stem equals task name.
-            existing_by_task_name = key_to_output.get(task_name)
-            if existing_by_task_name:
-                if verbose:
-                    logger_obj.info(
-                        "Skip task %s - output key already mapped to %s",
-                        task_name,
-                        existing_by_task_name,
-                    )
-                continue
+            # Fallback for single-task configs where output stem equals task name.
+            # In multi-task configs this can incorrectly skip later tasks when an
+            # earlier task produced a same-named file.
+            if task_count == 1:
+                existing_by_task_name = key_to_output.get(task_name)
+                if existing_by_task_name:
+                    if verbose:
+                        logger_obj.info(
+                            "Skip task %s - output key already mapped to %s",
+                            task_name,
+                            existing_by_task_name,
+                        )
+                    continue
 
         before_snapshot = snapshot_segmentation_outputs(output_dir, nifti_path)
         try:
@@ -755,12 +937,25 @@ def run_segment_batch_workflow(
             int(workload["pending_volumes"]),
         )
 
+    already_series = workload["already_series"]
+    pending_series = workload["pending_series"]
+
+    precompleted_results: List[WorkerResult] = []
+    for idx, row in df.loc[already_series].iterrows():
+        source_nifti = _coerce_nifti_path(row.get("nifti_path"))
+        if source_nifti is None:
+            precompleted_results.append(
+                (int(idx), None, "missing nifti_path for pre-skipped row", None)
+            )
+            continue
+        precompleted_results.append((int(idx), str(source_nifti.parent), None, None))
+
     ctx = mp.get_context(args.start_method)
-    pending = deque((idx, row.to_dict()) for idx, row in df.iterrows())
+    pending = deque((idx, row.to_dict()) for idx, row in df.loc[pending_series].iterrows())
     total_jobs = len(pending)
     progress_iter = iter(tqdm_fn(range(total_jobs), total=total_jobs, desc="Segment"))
-    results: List[WorkerResult] = []
-    completed_rows: set[int] = set()
+    results: List[WorkerResult] = list(precompleted_results)
+    completed_rows: set[int] = {int(result[0]) for result in precompleted_results}
     active: Dict[int, Dict[str, Any]] = {}
 
     def _mark_completed(result: WorkerResult) -> None:

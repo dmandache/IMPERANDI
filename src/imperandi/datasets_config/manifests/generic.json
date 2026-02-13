@@ -17,20 +17,6 @@
       {
         "task": "total",
         "extra": { "roi_subset": ["liver"], "fast": true }
-      },
-      {
-        "task": "liver_vessels",
-        "extra": {"fast": false }
-      }
-    ],
-    "postprocess": [
-      {
-        "merge_keys": ["liver", "liver_tumor"],
-        "out_key": "liver_proc",
-        "radius_mm": 5.0,
-        "largest_cc": true,
-        "fill_holes": true,
-        "close": true
       }
     ]
   }
