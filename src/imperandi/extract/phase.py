@@ -79,6 +79,11 @@ def add_phase_arguments(
         default=None,
         help="CSV path for failed rows only (default: <csv_dir>/phase_errors.csv).",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-extract phase even when `totalseg_phase` already has a value.",
+    )
     if include_manifest:
         parser.add_argument(
             "--manifest",
@@ -208,10 +213,26 @@ def process_single_volume(
     return idx, normalized, None
 
 
+def _has_existing_totalseg_phase(value: Any) -> bool:
+    """Return whether one `totalseg_phase` cell should be treated as already set."""
+    if value is None:
+        return False
+    try:
+        if pd.isna(value):
+            return False
+    except Exception:
+        pass
+    text = str(value).strip()
+    if not text or text.lower() == "nan":
+        return False
+    return True
+
+
 def extract_phase_volumes(
     df: pd.DataFrame,
     *,
     verbose: bool,
+    force: bool = False,
     phase_extractor: Callable[[Any], Dict[str, Any]],
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """Extract phase volumes.
@@ -239,7 +260,15 @@ def extract_phase_volumes(
     if verbose:
         iterator = tqdm(iterator, total=len(df), desc="Phase")
 
+    has_totalseg_phase = "totalseg_phase" in df.columns
     for idx, row in iterator:
+        if (
+            not force
+            and has_totalseg_phase
+            and _has_existing_totalseg_phase(row.get("totalseg_phase"))
+        ):
+            continue
+
         _, phase_info, err_msg = process_single_volume(
             idx,
             row.to_dict(),
@@ -274,6 +303,7 @@ def main(args: argparse.Namespace) -> None:
     df, df_err = extract_phase_volumes(
         df,
         verbose=args.verbose,
+        force=bool(getattr(args, "force", False)),
         phase_extractor=phase_extractor,
     )
 

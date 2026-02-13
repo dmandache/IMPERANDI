@@ -15,6 +15,7 @@ def test_phase_parser_defaults_manifest_to_generic():
     parser = phase_module.build_parser()
     args = parser.parse_args([])
     assert args.manifest == "generic"
+    assert args.force is False
 
 
 def test_normalize_phase_args_defaults(tmp_path):
@@ -26,6 +27,7 @@ def test_normalize_phase_args_defaults(tmp_path):
         csv_path_opt=None,
         csv_path_out=None,
         error_csv_path=None,
+        force=False,
         totalseg_home_dir=None,
         verbose=False,
         dry_run=False,
@@ -70,6 +72,72 @@ def test_process_single_volume_missing_file():
     assert "file not found" in err
 
 
+def test_extract_phase_volumes_skips_existing_totalseg_phase_without_force(
+    tmp_path, monkeypatch
+):
+    nifti = tmp_path / "vol.nii.gz"
+    nifti.write_text("nifti")
+
+    monkeypatch.setattr(phase_module.nib, "load", lambda _: object())
+    calls = {"n": 0}
+
+    def fake_extractor(_):
+        calls["n"] += 1
+        return {"phase": "arterial"}
+
+    df = pd.DataFrame(
+        [
+            {"nifti_path": str(nifti), "totalseg_phase": "portal"},
+            {"nifti_path": str(nifti)},
+        ]
+    )
+
+    out_df, err_df = phase_module.extract_phase_volumes(
+        df,
+        verbose=False,
+        force=False,
+        phase_extractor=fake_extractor,
+    )
+
+    assert calls["n"] == 1
+    assert out_df.loc[0, "totalseg_phase"] == "portal"
+    assert out_df.loc[1, "totalseg_phase"] == "arterial"
+    assert err_df.empty
+
+
+def test_extract_phase_volumes_force_reruns_existing_totalseg_phase(
+    tmp_path, monkeypatch
+):
+    nifti = tmp_path / "vol.nii.gz"
+    nifti.write_text("nifti")
+
+    monkeypatch.setattr(phase_module.nib, "load", lambda _: object())
+    calls = {"n": 0}
+
+    def fake_extractor(_):
+        calls["n"] += 1
+        return {"phase": "arterial"}
+
+    df = pd.DataFrame(
+        [
+            {"nifti_path": str(nifti), "totalseg_phase": "portal"},
+            {"nifti_path": str(nifti)},
+        ]
+    )
+
+    out_df, err_df = phase_module.extract_phase_volumes(
+        df,
+        verbose=False,
+        force=True,
+        phase_extractor=fake_extractor,
+    )
+
+    assert calls["n"] == 2
+    assert out_df.loc[0, "totalseg_phase"] == "arterial"
+    assert out_df.loc[1, "totalseg_phase"] == "arterial"
+    assert err_df.empty
+
+
 def test_main_writes_phase_columns_and_error_csv(tmp_path, monkeypatch):
     valid_nifti = tmp_path / "valid.nii.gz"
     valid_nifti.write_text("nifti")
@@ -94,6 +162,7 @@ def test_main_writes_phase_columns_and_error_csv(tmp_path, monkeypatch):
         csv_path=str(csv_path),
         csv_path_out=str(tmp_path / "out.csv"),
         error_csv_path=str(tmp_path / "errors.csv"),
+        force=False,
         totalseg_home_dir=None,
         verbose=False,
     )

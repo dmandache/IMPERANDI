@@ -16,7 +16,7 @@
     "tasks": [
       {
         "task": "total",
-        "extra": { "roi_subset": ["liver"], "fast": true }
+        "extra": { "roi_subset": ["liver", "pancreas"], "fast": true }
       }
     ]
   }
