@@ -18,6 +18,7 @@ def test_convert_parser_defaults_manifest_to_generic():
     parser = convert_module.build_parser()
     args = parser.parse_args([])
     assert args.manifest == "generic"
+    assert args.force is False
 
 
 def test_convert_list_str_to_list_valid():
@@ -103,6 +104,122 @@ def test_process_single_volume_skips_existing(tmp_path, monkeypatch):
 
     assert error is None
     assert export_path == nifti_file
+
+
+def test_process_single_volume_skips_existing_before_reading_source(tmp_path, monkeypatch):
+    out_root = tmp_path / "out"
+    out_root.mkdir()
+
+    export_dir = out_root / "P1" / "ST1" / "S1"
+    export_dir.mkdir(parents=True, exist_ok=True)
+    nifti_file = export_dir / "scan.nii.gz"
+    nifti_file.write_text("fake nifti")
+
+    row = pd.Series(
+        {
+            "series_dir": str(tmp_path / "missing_series_dir"),
+            "dicom_path": [str(tmp_path / "missing.dcm")],
+            "volume_ordinal_in_series": 1,
+            "series_id": "S1",
+            "patient_key": "P1",
+            "study_id": "ST1",
+            "Modality": "CT",
+        }
+    )
+
+    monkeypatch.setattr(convert_module, "is_valid_nifti", lambda p: True)
+
+    k, export_path, error = convert_module.process_single_volume(
+        0, row, out_root, verbose=False
+    )
+
+    assert error is None
+    assert export_path == nifti_file
+
+
+def test_process_single_volume_skips_existing_row_nifti_path(tmp_path, monkeypatch):
+    out_root = tmp_path / "out"
+    out_root.mkdir()
+
+    existing_nifti = tmp_path / "already_done.nii"
+    existing_nifti.write_text("fake nifti")
+
+    row = pd.Series(
+        {
+            "series_dir": str(tmp_path / "missing_series_dir"),
+            "dicom_path": [str(tmp_path / "missing.dcm")],
+            "nifti_path": str(existing_nifti),
+            "volume_ordinal_in_series": 1,
+            "series_id": "S1",
+            "patient_key": "P1",
+            "study_id": "ST1",
+            "Modality": "CT",
+        }
+    )
+
+    monkeypatch.setattr(convert_module, "is_valid_nifti", lambda p: True)
+
+    k, export_path, error = convert_module.process_single_volume(
+        0, row, out_root, verbose=False
+    )
+
+    assert error is None
+    assert export_path == existing_nifti
+
+
+def test_process_single_volume_force_true_reruns_existing(tmp_path, monkeypatch):
+    out_root = tmp_path / "out"
+    out_root.mkdir()
+
+    series_dir = tmp_path / "series"
+    series_dir.mkdir()
+    (series_dir / "img1.dcm").write_text("dummy")
+
+    export_dir = out_root / "P1" / "ST1" / "S1"
+    export_dir.mkdir(parents=True, exist_ok=True)
+    nifti_file = export_dir / "scan.nii.gz"
+    nifti_file.write_text("existing nifti")
+
+    row = pd.Series(
+        {
+            "series_dir": str(series_dir),
+            "dicom_path": [str(series_dir / "img1.dcm")],
+            "volume_ordinal_in_series": 1,
+            "series_id": "S1",
+            "patient_key": "P1",
+            "study_id": "ST1",
+            "Modality": "CT",
+        }
+    )
+
+    calls = {"read": 0, "convert": 0}
+
+    def fake_read(_path):
+        calls["read"] += 1
+        return MagicMock()
+
+    def fake_convert(_arr, dst, reorient_nifti=False):
+        calls["convert"] += 1
+        Path(dst).write_text("fresh nifti")
+
+    monkeypatch.setattr(convert_module, "is_valid_nifti", lambda p: True)
+    monkeypatch.setattr(
+        convert_module.dicom2nifti.common,
+        "read_dicom_directory",
+        fake_read,
+    )
+    monkeypatch.setattr(
+        convert_module.dicom2nifti.convert_dicom, "dicom_array_to_nifti", fake_convert
+    )
+
+    k, export_path, error = convert_module.process_single_volume(
+        0, row, out_root, verbose=False, force=True
+    )
+
+    assert error is None
+    assert export_path == nifti_file
+    assert calls["read"] == 1
+    assert calls["convert"] == 1
 
 
 def test_process_single_volume_handles_conversion_error(tmp_path, monkeypatch):

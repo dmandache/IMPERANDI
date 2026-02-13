@@ -91,6 +91,12 @@ def add_convert_arguments(
     )
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose mode")
     parser.add_argument(
+        "--force",
+        action="store_true",
+        default=False,
+        help="Re-run conversion even if output NIfTI already exists.",
+    )
+    parser.add_argument(
         "--num_workers",
         type=int,
         default=2,
@@ -355,8 +361,43 @@ def materialize_archive_dicom_paths(
     return out, df_err
 
 
+def _find_existing_nifti_output(
+    row: pd.Series,
+    computed_export_path: Path,
+) -> Path | None:
+    """Return an existing valid NIfTI output path for this row, when available."""
+    candidates: list[Path] = []
+
+    row_nifti_path = row.get("nifti_path")
+    if isinstance(row_nifti_path, str) and row_nifti_path.strip():
+        candidates.append(Path(row_nifti_path))
+
+    candidates.append(computed_export_path)
+    if computed_export_path.name.lower().endswith(".nii.gz"):
+        legacy_nifti = computed_export_path.with_name(
+            f"{computed_export_path.name[: -len('.nii.gz')]}.nii"
+        )
+        candidates.append(legacy_nifti)
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        if not candidate.exists() or not candidate.is_file():
+            continue
+        if not is_valid_nifti(candidate):
+            continue
+        if candidate.stat().st_size <= 0:
+            continue
+        return candidate
+
+    return None
+
+
 # Function to convert a single DICOM volume to NIfTI (parallel task)
-def process_single_volume(k, row, output_dir, verbose):
+def process_single_volume(k, row, output_dir, verbose, force=False):
     """
     Convert a single DICOM series to a NIfTI file, saving the result to the specified output directory.
 
@@ -365,19 +406,13 @@ def process_single_volume(k, row, output_dir, verbose):
         row (pd.Series): Metadata for the current DICOM series.
         output_dir (str): Directory to save the NIfTI files.
         verbose (bool): If true, print additional logs for debugging.
+        force (bool): Whether to force reconversion even when output already exists.
 
     Returns:
         tuple: A tuple containing the index, export path (if successful), and error row (if unsuccessful).
     """
     setup_logging(verbose=verbose)
     try:
-        dicom_dir_path = row["series_dir"]
-        files_in_vol = row["dicom_path"]
-        files_in_dir = list(Path(dicom_dir_path).iterdir())
-
-        n_files_in_vol = len(files_in_vol) if isinstance(files_in_vol, list) else 1
-        n_files_in_dir = len(files_in_dir)
-
         if row.volume_ordinal_in_series > 1:
             if verbose:
                 logger.info("Multi-volume series")
@@ -389,42 +424,33 @@ def process_single_volume(k, row, output_dir, verbose):
             Path(output_dir)
             / str(row.patient_key)
             / str(row.study_id)
-            / str(series_id)  # / row.Modality
+            / str(series_id)
         )
-        # export_dir = Path(output_dir) / row.patient_key / row.date / row.Modality / row.volume_id
         export_path = export_dir / "scan.nii.gz"
 
-        # Check if file exists and skip
-        if (
-            export_path.exists()
-            and export_path.is_file()
-            and is_valid_nifti(export_path)
-        ):
-            sz = export_path.stat().st_size
-            if sz > 0:
+        # Check for any reusable output before touching source DICOM paths.
+        if not force:
+            existing_output = _find_existing_nifti_output(row, export_path)
+            if existing_output is not None:
                 if verbose:
+                    sz = existing_output.stat().st_size
                     logger.info(
-                        "✅ File %s exists and has size %.2f MB. Skipping...",
-                        export_path,
+                        "Skipping conversion, valid NIfTI exists at %s (%.2f MB).",
+                        existing_output,
                         sz * 1e-6,
                     )
-                return k, export_path, None
+                return k, existing_output, None
 
-        # Create export directory if it doesn't exist
+        dicom_dir_path = row["series_dir"]
+        files_in_vol = row["dicom_path"]
+        files_in_dir = list(Path(dicom_dir_path).iterdir())
+
+        n_files_in_vol = len(files_in_vol) if isinstance(files_in_vol, list) else 1
+        n_files_in_dir = len(files_in_dir)
+
         if not export_dir.exists():
             os.makedirs(export_dir, exist_ok=True)
 
-        # # Conversion process
-        # if n_files_in_dir != n_files_in_vol:
-        #     print(f"{n_files_in_vol} files in volume vs. {n_files_in_dir} files in series dir")
-        #     with tempfile.TemporaryDirectory(dir='/data/scratch/bdr220003/temp/', prefix='temp_convert_') as temp_dir:
-        #         print(f"Using intermediary temp dir {temp_dir}")
-        #         copy_files_to_temp_dir(paths=files_in_vol, temp_dir=temp_dir)
-        #         dicom2nifti.dicom_series_to_nifti(temp_dir, export_path, reorient_nifti=False)
-        # else:
-        #     dicom2nifti.dicom_series_to_nifti(dicom_dir_path, export_path, reorient_nifti=False)
-
-        # Conversion process
         def read_dicom_write_nifti(dicom_dir_one_volume):
             """Read DICOM write NIfTI.
 
@@ -444,7 +470,7 @@ def process_single_volume(k, row, output_dir, verbose):
                     n_files_in_dir,
                 )
 
-            temp_dir_root = ".tmp"  # "/data/scratch/bdr220003/temp/"
+            temp_dir_root = ".tmp"
             os.makedirs(temp_dir_root, exist_ok=True)
             with tempfile.TemporaryDirectory(
                 dir=temp_dir_root, prefix="temp_convert_"
@@ -455,28 +481,30 @@ def process_single_volume(k, row, output_dir, verbose):
                 read_dicom_write_nifti(temp_dir)
         else:
             if verbose:
-                logger.info("🧠 Processing volume %s", k)
+                logger.info("Processing volume %s", k)
             read_dicom_write_nifti(dicom_dir_path)
 
         if is_valid_nifti(export_path):
             return k, export_path, None
-        else:
-            logger.error(
-                "⚠️ Error processing volume %s: output is not valid nifti file.",
-                k,
-            )
-            row["error"] = "output not valid nifti"
-            return k, None, row
+
+        logger.error(
+            "Error processing volume %s: output is not valid nifti file.",
+            k,
+        )
+        row["error"] = "output not valid nifti"
+        return k, None, row
 
     except Exception:
         error_msg = traceback.format_exc()
-        logger.error("⚠️ Error processing volume %s: %s", k, error_msg)
+        logger.error("Error processing volume %s: %s", k, error_msg)
         row["error"] = error_msg
         return k, None, row
 
 
 # Function to convert DICOM to NIfTI in parallel
-def convert_dicom_to_nifti_parallel(df, output_dir, print_flag, num_workers):
+def convert_dicom_to_nifti_parallel(
+    df, output_dir, print_flag, num_workers, force=False
+):
     """
     Convert multiple DICOM volumes to NIfTI in parallel using multiprocessing.
 
@@ -485,6 +513,7 @@ def convert_dicom_to_nifti_parallel(df, output_dir, print_flag, num_workers):
         output_dir (str): Directory to save the NIfTI files.
         print_flag (bool): Whether to display progress using `tqdm`.
         num_workers (int): Number of parallel processes to use.
+        force (bool): Whether to force reconversion even when output already exists.
 
     Returns:
         tuple: The updated DataFrame with NIfTI paths and a DataFrame with any errors encountered.
@@ -505,7 +534,12 @@ def convert_dicom_to_nifti_parallel(df, output_dir, print_flag, num_workers):
     with ProcessPoolExecutor(max_workers=num_workers) as executor:
         futures = [
             executor.submit(
-                process_single_volume, k, df.iloc[k], output_dir, print_flag
+                process_single_volume,
+                k,
+                df.iloc[k],
+                output_dir,
+                print_flag,
+                force,
             )
             for k in range(n_samples)
         ]
@@ -590,7 +624,11 @@ def main(args):
 
         # Convert DICOM to NIfTI in parallel
         df, df_err = convert_dicom_to_nifti_parallel(
-            df, args.output_dir, args.verbose, args.num_workers
+            df,
+            args.output_dir,
+            args.verbose,
+            args.num_workers,
+            force=getattr(args, "force", False),
         )
         if not df_archive_err.empty:
             df_err = (
@@ -623,3 +661,4 @@ if __name__ == "__main__":
         raise SystemExit(0)
     setup_logging(verbose=getattr(args, "verbose", False))
     main(args)
+

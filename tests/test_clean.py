@@ -72,7 +72,7 @@ def test_standardize_patient_keys_supports_keyed_function_name(monkeypatch):
     assert out.loc[0, "patient_key"] == "ALICE"
 
 
-def test_unravel_patient_key_supports_multiple_operations(monkeypatch):
+def test_apply_derived_columns_supports_multiple_operations(monkeypatch):
     df = pd.DataFrame({"patient_key": ["alice"], "value": [2]})
 
     def resolver(cfg):
@@ -84,7 +84,7 @@ def test_unravel_patient_key_supports_multiple_operations(monkeypatch):
         return None
 
     monkeypatch.setattr(clean, "resolve_hook", resolver)
-    out = clean.unravel_patient_key(
+    out = clean.apply_derived_columns(
         df.copy(),
         manifest={
             "derived_columns": [
@@ -105,7 +105,7 @@ def test_unravel_patient_key_supports_multiple_operations(monkeypatch):
     assert out["double"].tolist() == [4]
 
 
-def test_unravel_patient_key_requires_explicit_derived_columns(monkeypatch):
+def test_apply_derived_columns_requires_explicit_derived_columns(monkeypatch):
     df = pd.DataFrame({"patient_key": ["alice"]})
 
     def resolver(_cfg):
@@ -114,7 +114,7 @@ def test_unravel_patient_key_requires_explicit_derived_columns(monkeypatch):
         )
 
     monkeypatch.setattr(clean, "resolve_hook", resolver)
-    out = clean.unravel_patient_key(
+    out = clean.apply_derived_columns(
         df.copy(),
         manifest={
             "id_standardization": {

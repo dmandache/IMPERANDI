@@ -259,6 +259,72 @@ def _resolve_declared_task_outputs(task: Dict[str, Any]) -> List[str]:
     return unique
 
 
+def _normalize_nifti_filename(value: str) -> str:
+    """Normalize one filename to a basename with a NIfTI extension."""
+    name = Path(str(value).strip()).name
+    if not name:
+        return ""
+    lower = name.lower()
+    if lower.endswith(".nii.gz") or lower.endswith(".nii"):
+        return name
+    return f"{name}.nii.gz"
+
+
+def _resolve_existing_output_paths(
+    output_dir: Path,
+    output_names: List[str],
+) -> List[Path]:
+    """Resolve expected outputs to existing files; returns [] if any are missing."""
+    found: List[Path] = []
+    for raw_name in output_names:
+        normalized = _normalize_nifti_filename(raw_name)
+        if not normalized:
+            return []
+
+        primary = output_dir / normalized
+        if primary.exists():
+            found.append(primary)
+            continue
+
+        lower = normalized.lower()
+        alt: Path | None = None
+        if lower.endswith(".nii.gz"):
+            alt = output_dir / f"{normalized[: -len('.nii.gz')]}.nii"
+        elif lower.endswith(".nii"):
+            alt = output_dir / f"{normalized[: -len('.nii')]}.nii.gz"
+        if alt is not None and alt.exists():
+            found.append(alt)
+            continue
+
+        return []
+    return found
+
+
+def _infer_task_outputs_from_extra(extra: Dict[str, Any]) -> List[str]:
+    """Infer expected output filenames from known TotalSegmentator task extras."""
+    inferred: List[str] = []
+    seen: set[str] = set()
+    for key in ("roi_subset", "roi_subset_robust"):
+        raw = extra.get(key)
+        values: List[str] = []
+        if isinstance(raw, str):
+            if raw.strip():
+                values = [raw.strip()]
+        elif isinstance(raw, (list, tuple, set)):
+            values = [str(item).strip() for item in raw if str(item).strip()]
+
+        for value in values:
+            normalized = _normalize_nifti_filename(value)
+            if not normalized:
+                continue
+            lower = normalized.lower()
+            if lower in seen:
+                continue
+            seen.add(lower)
+            inferred.append(normalized)
+    return inferred
+
+
 def _process_single_volume_subprocess(
     send_conn: Any,
     process_single_volume_fn: Callable[..., WorkerResult],
@@ -334,16 +400,41 @@ def run_segment_volume_workflow(
         )
 
         declared_outputs = _resolve_declared_task_outputs(valid_task)
-        if not force and declared_outputs:
-            declared_paths = [output_dir / name for name in declared_outputs]
-            if all(path.exists() for path in declared_paths):
+        if not force:
+            skip_outputs = declared_outputs
+            skip_reason = "declared outputs"
+
+            if not skip_outputs:
+                inferred_outputs = _infer_task_outputs_from_extra(extra)
+                if inferred_outputs:
+                    skip_outputs = inferred_outputs
+                    skip_reason = "inferred outputs"
+
+            if skip_outputs:
+                skip_paths = _resolve_existing_output_paths(output_dir, skip_outputs)
+            else:
+                skip_paths = []
+
+            if skip_paths:
                 if verbose:
                     logger_obj.info(
-                        "Skip task %s - declared outputs already exist: %s",
+                        "Skip task %s - %s already exist: %s",
                         task_name,
-                        ", ".join(declared_outputs),
+                        skip_reason,
+                        ", ".join(path.name for path in skip_paths),
                     )
-                register_output_key_map(key_to_output, declared_paths, warnings)
+                register_output_key_map(key_to_output, skip_paths, warnings)
+                continue
+
+            # Fallback for single-output tasks where output stem equals task name.
+            existing_by_task_name = key_to_output.get(task_name)
+            if existing_by_task_name:
+                if verbose:
+                    logger_obj.info(
+                        "Skip task %s - output key already mapped to %s",
+                        task_name,
+                        existing_by_task_name,
+                    )
                 continue
 
         before_snapshot = snapshot_segmentation_outputs(output_dir, nifti_path)
@@ -372,8 +463,6 @@ def run_segment_volume_workflow(
                     f"No segmentation masks found after task '{task_name}'."
                 )
             message = f"No new or updated segmentation outputs detected for task '{task_name}'."
-            if force:
-                raise RuntimeError(message)
             logger_obj.warning(message)
             warnings.append(message)
         elif verbose:
@@ -434,7 +523,9 @@ def run_segment_volume_workflow(
                 fail_policy_errors.append(exc)
                 logger_obj.error("%s", exc)
             else:
-                message = f"Postprocess operation {op['index']} failed with error: {exc}"
+                message = (
+                    f"Postprocess operation {op['index']} failed with error: {exc}"
+                )
                 logger_obj.warning(message)
                 warnings.append(message)
             continue

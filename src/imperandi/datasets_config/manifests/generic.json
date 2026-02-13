@@ -33,11 +33,9 @@
         "close": true
       },
       {
-        "in_key": "spleen",
-        "out_key": "spleen_proc",
+        "in_key": "pancreas",
+        "out_key": "pancreas",
         "radius_mm": 5.0,
-        "largest_cc": true,
-        "fill_holes": true,
         "close": true
       }
     ]
