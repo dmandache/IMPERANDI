@@ -7,7 +7,7 @@ This module intentionally keeps the historical public API stable while delegatin
 implementation details to smaller internal modules:
 - ``segment_config.py`` for configuration/postprocess resolution,
 - ``segment_io.py`` for mask I/O and output discovery,
-- ``segment_workflow.py`` for class-based orchestration.
+- ``segment_workflow.py`` for orchestration workflows.
 """
 
 from __future__ import annotations
@@ -25,31 +25,14 @@ from imperandi.utils.logging import setup_logging
 from imperandi.utils.manifest import DEFAULT_MANIFEST_NAME
 from imperandi.utils.misc import report_volumes  # type: ignore
 
-from .segment_config import (
-    _default_tasks_config,
-    get_postprocess_columns_and_outputs,
-    load_tasks_config,
-    normalize_postprocess_operations,
-    resolve_manifest_fast_default,
-    resolve_postprocess_config,
-    resolve_postprocess_operation,
-    resolve_postprocess_operations,
-    resolve_task_fast_and_extra,
-)
 from .segment_io import (
-    _mask_key_from_filename,
     clean_and_merge_masks,
-    compute_struct_elem,
-    load_nifti,
-    save_nifti,
 )
 from .segment_workflow import (
-    BatchSeams as _BatchSeams,
     TotalSegmentatorBackend,
-    VolumeSeams as _VolumeSeams,
-    _SegmentBatchRunner,
-    _SegmentVolumePipeline,
     prefetch_totalsegmentator_models as _prefetch_totalsegmentator_models,
+    run_segment_batch_workflow,
+    run_segment_volume_workflow,
 )
 
 DEFAULT_TIMEOUT = 15 * 60  # seconds
@@ -75,8 +58,7 @@ def segment_volume(
     backend: TotalSegmentatorBackend | None = None,
 ) -> List[str]:
     """Run segmentation tasks and optional post-processing."""
-    seams = _VolumeSeams(clean_and_merge_masks=clean_and_merge_masks, logger=logger)
-    pipeline = _SegmentVolumePipeline(
+    return run_segment_volume_workflow(
         nifti_path=nifti_path,
         output_dir=output_dir,
         tasks_config=tasks_config,
@@ -84,9 +66,9 @@ def segment_volume(
         verbose=verbose,
         force=force,
         backend=backend,
-        seams=seams,
+        clean_and_merge_masks_fn=clean_and_merge_masks,
+        logger_obj=logger,
     )
-    return pipeline.run()
 
 
 def process_single_volume(
@@ -256,21 +238,17 @@ def main(args: argparse.Namespace) -> None:
     """Run the module entry point."""
     setup_logging(verbose=getattr(args, "verbose", False))
 
-    seams = _BatchSeams(
-        process_single_volume=process_single_volume,
-        prefetch_totalsegmentator_models=prefetch_totalsegmentator_models,
-        process_pool_executor_cls=ProcessPoolExecutor,
-        as_completed=as_completed,
-        tqdm=tqdm,
-        report_volumes=report_volumes,
-        logger=logger,
-    )
-    runner = _SegmentBatchRunner(
+    run_segment_batch_workflow(
         args=args,
         manifest_base_path=Path(__file__).resolve().parents[1],
-        seams=seams,
+        process_single_volume_fn=process_single_volume,
+        prefetch_totalsegmentator_models_fn=prefetch_totalsegmentator_models,
+        process_pool_executor_cls=ProcessPoolExecutor,
+        as_completed_fn=as_completed,
+        tqdm_fn=tqdm,
+        report_volumes_fn=report_volumes,
+        logger_obj=logger,
     )
-    runner.run()
 
 
 if __name__ == "__main__":
