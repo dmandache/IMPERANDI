@@ -256,9 +256,7 @@ def extract_phase_volumes(
         raise KeyError("column 'nifti_path' missing")
 
     errors = []
-    iterator = df.iterrows()
-    if verbose:
-        iterator = tqdm(iterator, total=len(df), desc="Phase")
+    iterator = tqdm(df.iterrows(), total=len(df), desc="Phase")
 
     has_totalseg_phase = "totalseg_phase" in df.columns
     for idx, row in iterator:
@@ -300,19 +298,31 @@ def main(args: argparse.Namespace) -> None:
     phase_extractor = _load_phase_extractor()
 
     df = pd.read_csv(args.csv_path).copy()
-    df, df_err = extract_phase_volumes(
-        df,
-        verbose=args.verbose,
-        force=bool(getattr(args, "force", False)),
-        phase_extractor=phase_extractor,
-    )
+    df_err = pd.DataFrame()
+    fatal_exc: BaseException | None = None
+    try:
+        df, df_err = extract_phase_volumes(
+            df,
+            verbose=args.verbose,
+            force=bool(getattr(args, "force", False)),
+            phase_extractor=phase_extractor,
+        )
+    except BaseException as exc:
+        fatal_exc = exc
+        logger.error(
+            "Phase extraction terminated early (%s). Writing partial outputs.",
+            type(exc).__name__,
+        )
+    finally:
+        df.to_csv(args.csv_path_out, index=False)
+        logger.info("Wrote main table -> %s", args.csv_path_out)
 
-    df.to_csv(args.csv_path_out, index=False)
-    logger.info("Wrote main table -> %s", args.csv_path_out)
+        if not df_err.empty:
+            df_err.to_csv(args.error_csv_path, index=False)
+            logger.warning("%d rows failed -> %s", len(df_err), args.error_csv_path)
 
-    if not df_err.empty:
-        df_err.to_csv(args.error_csv_path, index=False)
-        logger.warning("%d rows failed -> %s", len(df_err), args.error_csv_path)
+    if fatal_exc is not None:
+        raise fatal_exc
 
 
 if __name__ == "__main__":

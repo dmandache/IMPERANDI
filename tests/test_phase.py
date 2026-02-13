@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import argparse
 
 import pandas as pd
+import pytest
 
 from imperandi.extract import phase as phase_module
 
@@ -178,3 +179,41 @@ def test_main_writes_phase_columns_and_error_csv(tmp_path, monkeypatch):
     err_df = pd.read_csv(args.error_csv_path)
     assert len(err_df) == 1
     assert "file not found" in err_df.loc[0, "error_message"]
+
+
+def test_main_writes_partial_output_when_unexpected_exception(tmp_path, monkeypatch):
+    nifti = tmp_path / "valid.nii.gz"
+    nifti.write_text("nifti")
+
+    csv_path = tmp_path / "nifti_index.csv"
+    pd.DataFrame([{"nifti_path": str(nifti), "study_id": "s1"}]).to_csv(
+        csv_path, index=False
+    )
+
+    monkeypatch.setattr(
+        phase_module,
+        "_load_phase_extractor",
+        lambda: (lambda _: {"phase": "arterial"}),
+    )
+
+    def fail_after_partial(df, *, verbose, force, phase_extractor):
+        del verbose, force, phase_extractor
+        df.at[0, "totalseg_phase"] = "arterial"
+        raise RuntimeError("unexpected failure")
+
+    monkeypatch.setattr(phase_module, "extract_phase_volumes", fail_after_partial)
+
+    args = argparse.Namespace(
+        csv_path=str(csv_path),
+        csv_path_out=str(tmp_path / "out.csv"),
+        error_csv_path=str(tmp_path / "errors.csv"),
+        force=False,
+        totalseg_home_dir=None,
+        verbose=False,
+    )
+
+    with pytest.raises(RuntimeError, match="unexpected failure"):
+        phase_module.main(args)
+
+    out_df = pd.read_csv(args.csv_path_out)
+    assert out_df.loc[0, "totalseg_phase"] == "arterial"
