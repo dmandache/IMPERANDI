@@ -211,6 +211,7 @@ You can pass either a manifest name (`generic`, `operandi`) or a custom manifest
 - Parallel execution controls are available for heavy stages (`parse`, `convert`, `segment`).
 - `parse` supports checkpointing for large datasets (`--checkpoint_frequency`).
 - `parse` reads tags from defaults (`DEFAULT_DICOM_TAGS`) plus `--tags`; use `--snapshot_tags` for full recursive tag snapshots on sampled data.
+- `parse` auto-detects archive-heavy inputs from a deterministic root sample (`--archive_detect_sample_size`) and can switch to archive-aware mode at runtime when needed.
 - Archive workflows are bounded by depth and include path-safety protections.
 - Most commands support `--dry-run` for pipeline planning and CI smoke checks.
 

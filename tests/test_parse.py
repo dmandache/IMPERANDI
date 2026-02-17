@@ -63,6 +63,7 @@ def test_normalize_parse_args_defaults_to_cwd():
     expected_root = Path.cwd()
     assert args.root_path == str(expected_root)
     assert args.output_dir == str(expected_root.parent)
+    assert args.archive_detect_sample_size == 128
 
 
 def test_normalize_parse_args_glob_defaults_output_to_matched_parent(tmp_path):
@@ -264,6 +265,17 @@ def test_get_dicom_path_entries_skips_corrupt_archive(tmp_path):
     assert entries == []
 
 
+def test_detect_archive_mode_by_subsample(tmp_path):
+    root = tmp_path / "root"
+    root.mkdir()
+    for i in range(5):
+        (root / f"{i:03d}.dcm").write_text("")
+    assert not parse.detect_archive_mode_by_subsample([root], sample_size=4)
+
+    (root / "010.zip").write_text("not-a-zip")
+    assert parse.detect_archive_mode_by_subsample([root], sample_size=20)
+
+
 def test_apply_id_standardization_monkeypatched_hook(monkeypatch):
     # prepare df
     df = pd.DataFrame({"patient_key": [" Alice ", "X", None, pd.NA]})
@@ -373,6 +385,51 @@ def test_read_dicom_header_selected_returns_only_requested(monkeypatch):
     assert set(out.index.tolist()) == {"PatientName", "Modality"}
     assert out["PatientName"] == "Alice"
     assert out["Modality"] == "CT"
+
+
+def test_build_global_readers_auto_switches(monkeypatch):
+    calls = []
+
+    def fake_standard(source, *, tags, force):
+        calls.append(("standard", source))
+        return pd.Series({"PatientName": "A"})
+
+    def fake_archive(source, *, tags, force, archive_max_depth):
+        calls.append(("archive", source))
+        return pd.Series({"PatientName": "B"})
+
+    monkeypatch.setattr(parse, "read_dicom_header_selected_standard", fake_standard)
+    monkeypatch.setattr(parse, "read_dicom_header_selected_archive_aware", fake_archive)
+    monkeypatch.setattr(
+        parse,
+        "read_dicom_header_standard",
+        lambda source, *, force: pd.Series({"x": 1}),
+    )
+    monkeypatch.setattr(
+        parse,
+        "read_dicom_header_archive_aware",
+        lambda source, *, force, archive_max_depth: pd.Series({"x": 2}),
+    )
+    monkeypatch.setattr(
+        parse, "is_archive_uri", lambda v: str(v).startswith("archive://")
+    )
+
+    selected, _full, state = parse.build_global_readers(
+        initial_archive_mode=False,
+        tags=["PatientName"],
+        force=False,
+        archive_max_depth=3,
+    )
+
+    selected("a.dcm")
+    selected("archive://x!y")
+    selected("b.dcm")
+
+    assert calls[0][0] == "standard"
+    assert calls[1][0] == "archive"
+    assert calls[2][0] == "archive"
+    assert state["archive_mode"]
+    assert state["auto_switched"]
 
 
 def test_process_with_checkpoint_keeps_csv_outputs(tmp_path, monkeypatch):

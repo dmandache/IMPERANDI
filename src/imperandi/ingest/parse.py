@@ -1,8 +1,9 @@
 ﻿import warnings
 import glob
+import io
 import json
 import logging
-from functools import partial
+import os
 from pathlib import Path
 import argparse
 from multiprocessing import cpu_count
@@ -14,10 +15,12 @@ from pandarallel import pandarallel
 from pydicom import dcmread, config
 
 from imperandi.utils.archive_io import (
-    ArchiveSession,
     DEFAULT_ARCHIVE_MAX_DEPTH,
+    decode_archive_uri,
     discover_dicom_sources,
     is_archive_filename,
+    is_archive_uri,
+    read_archive_member_bytes,
 )
 from imperandi.utils.logging import setup_logging
 from imperandi.utils.misc import print_args
@@ -164,6 +167,12 @@ def add_parse_arguments(
         help="Maximum recursion depth for nested archives.",
     )
     parser.add_argument(
+        "--archive_detect_sample_size",
+        type=int,
+        default=128,
+        help="Per-root deterministic sample size used to detect archive presence.",
+    )
+    parser.add_argument(
         "--archive_cache_dir",
         type=str,
         default=None,
@@ -235,6 +244,37 @@ def default_output_dir(root_path: Optional[str]) -> Path:
     return Path(root_path).parent
 
 
+def _iter_root_files_deterministic(root: Path):
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames.sort()
+        filenames.sort()
+        for filename in filenames:
+            yield Path(dirpath) / filename
+
+
+def detect_archive_mode_by_subsample(
+    resolved_roots: list[Path], sample_size: int = 128
+) -> bool:
+    sample_size = max(1, int(sample_size))
+    for root in resolved_roots:
+        if root.is_file():
+            if is_archive_filename(root.name):
+                return True
+            continue
+
+        if not root.is_dir():
+            continue
+
+        scanned = 0
+        for path in _iter_root_files_deterministic(root):
+            if is_archive_filename(path.name):
+                return True
+            scanned += 1
+            if scanned >= sample_size:
+                break
+    return False
+
+
 def normalize_parse_args(args: argparse.Namespace) -> argparse.Namespace:
     root_in = (
         args.root_path_opt
@@ -261,6 +301,9 @@ def normalize_parse_args(args: argparse.Namespace) -> argparse.Namespace:
     args.output_dir = str(output_dir)
     args.archive_max_depth = int(
         getattr(args, "archive_max_depth", DEFAULT_ARCHIVE_MAX_DEPTH)
+    )
+    args.archive_detect_sample_size = max(
+        1, int(getattr(args, "archive_detect_sample_size", 128))
     )
     args.archive_cache_dir = getattr(args, "archive_cache_dir", None)
     args.keep_archive_cache = bool(getattr(args, "keep_archive_cache", False))
@@ -426,15 +469,50 @@ def build_effective_tags(
     return effective
 
 
-def read_dicom_header_selected(fp, *, tags: list[str], force=False):
+def _load_dicom_dataset_standard(source, *, force=False, specific_tags=None):
+    kwargs = {
+        "stop_before_pixels": True,
+        "force": force,
+    }
+    if specific_tags is not None:
+        kwargs["specific_tags"] = specific_tags
+    return dcmread(Path(str(source)), **kwargs)
+
+
+def _load_dicom_dataset_archive_aware(
+    source,
+    *,
+    force=False,
+    specific_tags=None,
+    archive_max_depth=DEFAULT_ARCHIVE_MAX_DEPTH,
+):
+    kwargs = {
+        "stop_before_pixels": True,
+        "force": force,
+    }
+    if specific_tags is not None:
+        kwargs["specific_tags"] = specific_tags
+
+    src_str = str(source)
+    if is_archive_uri(src_str):
+        outer, entry_chain = decode_archive_uri(src_str)
+        payload = read_archive_member_bytes(
+            outer_archive_path=outer,
+            entry_chain=entry_chain,
+            max_depth=archive_max_depth,
+        )
+        return dcmread(io.BytesIO(payload), **kwargs)
+    return dcmread(Path(src_str), **kwargs)
+
+
+def read_dicom_header_selected_standard(source, *, tags: list[str], force=False):
     """
     Read selected tags from a DICOM header.
     Returns pd.Series with one key per requested tag.
     """
     try:
-        ds = dcmread(
-            fp,
-            stop_before_pixels=True,
+        ds = _load_dicom_dataset_standard(
+            source,
             force=force,
             specific_tags=tags,
         )
@@ -444,15 +522,48 @@ def read_dicom_header_selected(fp, *, tags: list[str], force=False):
         return pd.Series({})
 
 
-def read_dicom_header(fp, *, force=False):
+def read_dicom_header_selected_archive_aware(
+    source, *, tags: list[str], force=False, archive_max_depth=DEFAULT_ARCHIVE_MAX_DEPTH
+):
+    try:
+        ds = _load_dicom_dataset_archive_aware(
+            source,
+            force=force,
+            specific_tags=tags,
+            archive_max_depth=archive_max_depth,
+        )
+        values = {tag: _normalize_dicom_value(ds.get(tag)) for tag in tags}
+        return pd.Series(values)
+    except Exception:
+        return pd.Series({})
+
+
+def read_dicom_header_selected(
+    source,
+    *,
+    tags: list[str],
+    force=False,
+    archive_aware: bool = False,
+    archive_max_depth: int = DEFAULT_ARCHIVE_MAX_DEPTH,
+):
+    if archive_aware:
+        return read_dicom_header_selected_archive_aware(
+            source,
+            tags=tags,
+            force=force,
+            archive_max_depth=archive_max_depth,
+        )
+    return read_dicom_header_selected_standard(source, tags=tags, force=force)
+
+
+def read_dicom_header_standard(source, *, force=False):
     """
     Read header once: recursively extract all DICOM tags into columns.
     Returns pd.Series with all tags flattened.
     """
     try:
-        ds = dcmread(
-            fp,
-            stop_before_pixels=True,
+        ds = _load_dicom_dataset_standard(
+            source,
             force=force,
         )
         tags = extract_dicom_tags_recursive(ds)
@@ -462,8 +573,96 @@ def read_dicom_header(fp, *, force=False):
         return pd.Series({})
 
 
+def read_dicom_header_archive_aware(
+    source, *, force=False, archive_max_depth=DEFAULT_ARCHIVE_MAX_DEPTH
+):
+    try:
+        ds = _load_dicom_dataset_archive_aware(
+            source,
+            force=force,
+            archive_max_depth=archive_max_depth,
+        )
+        tags = extract_dicom_tags_recursive(ds)
+        return pd.Series(tags)
+    except Exception:
+        return pd.Series({})
+
+
+def read_dicom_header(
+    source,
+    *,
+    force=False,
+    archive_aware: bool = False,
+    archive_max_depth: int = DEFAULT_ARCHIVE_MAX_DEPTH,
+):
+    if archive_aware:
+        return read_dicom_header_archive_aware(
+            source,
+            force=force,
+            archive_max_depth=archive_max_depth,
+        )
+    return read_dicom_header_standard(source, force=force)
+
+
 def read_dicom_header_with_force(fp, force):
     return read_dicom_header(fp, force=force)
+
+
+def build_global_readers(
+    *,
+    initial_archive_mode: bool,
+    tags: list[str],
+    force: bool,
+    archive_max_depth: int,
+):
+    state = {
+        "archive_mode": bool(initial_archive_mode),
+        "auto_switched": False,
+    }
+
+    def selected(source):
+        if state["archive_mode"]:
+            return read_dicom_header_selected_archive_aware(
+                source,
+                tags=tags,
+                force=force,
+                archive_max_depth=archive_max_depth,
+            )
+        if is_archive_uri(str(source)):
+            state["archive_mode"] = True
+            state["auto_switched"] = True
+            logger.info(
+                "[archive][detect] archive URI encountered at runtime; switched to archive-aware mode."
+            )
+            return read_dicom_header_selected_archive_aware(
+                source,
+                tags=tags,
+                force=force,
+                archive_max_depth=archive_max_depth,
+            )
+        return read_dicom_header_selected_standard(source, tags=tags, force=force)
+
+    def full(source):
+        if state["archive_mode"]:
+            return read_dicom_header_archive_aware(
+                source,
+                force=force,
+                archive_max_depth=archive_max_depth,
+            )
+        if is_archive_uri(str(source)):
+            state["archive_mode"] = True
+            state["auto_switched"] = True
+            logger.info(
+                "[archive][detect] archive URI encountered at runtime; switched to archive-aware mode."
+            )
+            return read_dicom_header_archive_aware(
+                source,
+                force=force,
+                archive_max_depth=archive_max_depth,
+            )
+        return read_dicom_header_standard(source, force=force)
+
+    return selected, full, state
 
 
 def write_dicom_tags_snapshot(
@@ -690,6 +889,14 @@ def main(args):
     matched_roots = resolve_root_paths(root_path)
     if glob.has_magic(str(root_path)):
         logger.info("Root pattern %s matched %s entries", root_path, len(matched_roots))
+    archive_mode = detect_archive_mode_by_subsample(
+        matched_roots, sample_size=args.archive_detect_sample_size
+    )
+    logger.info(
+        "Archive mode detection (sample_size=%s): %s",
+        args.archive_detect_sample_size,
+        archive_mode,
+    )
 
     dicom_entries = get_dicom_path_entries(
         root_path, archive_max_depth=args.archive_max_depth
@@ -704,70 +911,53 @@ def main(args):
             "_relative_path": [entry["relative_path"] for entry in dicom_entries],
         }
     )
-    with ArchiveSession(
-        cache_dir=args.archive_cache_dir,
-        keep_cache=args.keep_archive_cache,
-        max_depth=args.archive_max_depth,
-    ) as archive_session:
-        read_paths = []
-        for source in df["dicom_path"]:
-            try:
-                read_paths.append(str(archive_session.materialize(source)))
-            except Exception as exc:
-                logger.warning("[archive][materialize] skipping %s (%s)", source, exc)
-                read_paths.append(None)
-        df["_read_path"] = read_paths
+    # 2) read selected tags once for all files
+    user_tags = [t.strip() for t in args.tags.split(",") if t.strip()]
+    effective_tags = build_effective_tags(
+        default_tags=DEFAULT_DICOM_TAGS,
+        user_tags=user_tags,
+        patient_tag=args.patient_key_from,
+        study_tag=args.study_id_from,
+        series_tag=args.series_id_from,
+    )
+    logger.info(
+        "Reading selected DICOM tags (count=%s, user tags=%s)",
+        len(effective_tags),
+        user_tags or "none",
+    )
+    read_selected_func, read_full_func, archive_state = build_global_readers(
+        initial_archive_mode=archive_mode,
+        tags=effective_tags,
+        force=args.force_dicom_read,
+        archive_max_depth=args.archive_max_depth,
+    )
 
-        skipped_materialization = int(df["_read_path"].isna().sum())
-        if skipped_materialization > 0:
-            logger.warning(
-                "[archive][materialize] skipped %s sources due to read errors.",
-                skipped_materialization,
-            )
-            df = df[df["_read_path"].notna()].reset_index(drop=True)
+    df = process_with_checkpoint(
+        df_paths=df,
+        read_func=read_selected_func,
+        checkpoint_frequency=args.checkpoint_frequency,
+        output_dir=output_dir,
+        final_name="dicom_paths_with_tags.csv",
+        read_path_col="dicom_path",
+    )
 
-        # 2) read selected tags once for all files
-        user_tags = [t.strip() for t in args.tags.split(",") if t.strip()]
-        effective_tags = build_effective_tags(
-            default_tags=DEFAULT_DICOM_TAGS,
-            user_tags=user_tags,
-            patient_tag=args.patient_key_from,
-            study_tag=args.study_id_from,
-            series_tag=args.series_id_from,
+    if args.snapshot_tags:
+        snapshot_path = output_dir / "dicom_tags_snapshot.ndjson"
+        written = write_dicom_tags_snapshot(
+            df=df,
+            output_path=snapshot_path,
+            sample_size=args.snapshot_sample_size,
+            seed=args.snapshot_seed,
+            series_col=args.series_id_from,
+            read_path_col="dicom_path",
+            read_full_func=read_full_func,
         )
+        logger.info("Saved tag snapshot: %s (records=%s)", snapshot_path, written)
+
+    if archive_state.get("auto_switched"):
         logger.info(
-            "Reading selected DICOM tags (count=%s, user tags=%s)",
-            len(effective_tags),
-            user_tags or "none",
+            "[archive][detect] runtime auto-switch applied; parse finished in archive-aware mode."
         )
-
-        read_func = partial(
-            read_dicom_header_selected,
-            tags=effective_tags,
-            force=args.force_dicom_read,
-        )
-
-        df = process_with_checkpoint(
-            df_paths=df,
-            read_func=read_func,
-            checkpoint_frequency=args.checkpoint_frequency,
-            output_dir=output_dir,
-            final_name="dicom_paths_with_tags.csv",
-            read_path_col="_read_path",
-        )
-
-        if args.snapshot_tags:
-            snapshot_path = output_dir / "dicom_tags_snapshot.ndjson"
-            written = write_dicom_tags_snapshot(
-                df=df,
-                output_path=snapshot_path,
-                sample_size=args.snapshot_sample_size,
-                seed=args.snapshot_seed,
-                series_col=args.series_id_from,
-                read_path_col="_read_path",
-                read_full_func=partial(read_dicom_header, force=args.force_dicom_read),
-            )
-            logger.info("Saved tag snapshot: %s (records=%s)", snapshot_path, written)
 
     logger.info("After tag extraction: %s columns=%s", df.shape, len(df.columns))
 
