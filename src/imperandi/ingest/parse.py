@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 # Make reading tolerant of non-conformant values
 config.settings.reading_validation_mode = config.IGNORE  # or config.WARN
 
+
 # -------------------------
 # CLI
 # -------------------------
@@ -388,7 +389,11 @@ def extract_dicom_tags_recursive(ds, parent_key=""):
                 tags.update(extract_dicom_tags_recursive(item, f"{key}[{i}]"))
         else:
             v = elem.value
-            tags[key] = None if v is None else ( [str(x) for x in v] if isinstance(v, (list, tuple)) else str(v) )
+            tags[key] = (
+                None
+                if v is None
+                else ([str(x) for x in v] if isinstance(v, (list, tuple)) else str(v))
+            )
     return tags
 
 
@@ -437,7 +442,6 @@ def read_dicom_header_selected(fp, *, tags: list[str], force=False):
         return pd.Series(values)
     except Exception:
         return pd.Series({})
-
 
 
 def read_dicom_header(fp, *, force=False):
