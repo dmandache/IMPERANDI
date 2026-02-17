@@ -10,7 +10,7 @@ from typing import Optional, Union
 import pandas as pd
 from tqdm import tqdm
 from pandarallel import pandarallel
-from pydicom import dcmread
+from pydicom import dcmread, config
 
 from imperandi.utils.archive_io import (
     ArchiveSession,
@@ -25,6 +25,8 @@ from imperandi.utils.manifest import load_manifest, resolve_hook
 warnings.filterwarnings("ignore")
 logger = logging.getLogger(__name__)
 
+# Make reading tolerant of non-conformant values
+config.settings.reading_validation_mode = config.IGNORE  # or config.WARN
 
 # -------------------------
 # CLI
@@ -359,11 +361,13 @@ def extract_dicom_tags_recursive(ds, parent_key=""):
     for elem in ds:
         key = f"{parent_key}_{elem.keyword}" if parent_key else elem.keyword
         if elem.VR == "SQ":
-            for i, item in enumerate(elem.value):
+            for i, item in enumerate(elem.value or []):
                 tags.update(extract_dicom_tags_recursive(item, f"{key}[{i}]"))
         else:
-            tags[key] = elem.value if elem.value else None
+            v = elem.value
+            tags[key] = None if v is None else ( [str(x) for x in v] if isinstance(v, (list, tuple)) else str(v) )
     return tags
+
 
 
 def read_dicom_header(fp, *, force=False):
