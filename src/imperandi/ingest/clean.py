@@ -10,6 +10,7 @@ import pandas as pd
 from pydicom.uid import UID
 from unidecode import unidecode
 
+from imperandi.datasets_config.defaults import *
 from imperandi.utils.manifest import load_manifest, resolve_hook
 from imperandi.utils.geometry import (
     classify_plane_from_iop,
@@ -19,124 +20,12 @@ from imperandi.utils.logging import setup_logging
 from imperandi.utils.misc import print_args, report_volumes, report_change
 from imperandi.utils.datetime import to_dates, to_times
 
-DEFAULT_VOLUME_LOWERBOUND = 30.0
-DEFAULT_VOLUME_UPPERBOUND = 500.0
-
-DEFAULT_MAX_PIXEL_SPACING_MM = 1.25
-DEFAULT_MAX_SLICE_THICKNESS_MM = 3.0
-
 COLUMNS_TO_USE = [
-    # ─────────────────────────
-    # Identifiers & paths
-    # ─────────────────────────
     "patient_key",
-    "PatientID",
-    "PatientName",
-    "StudyInstanceUID",
-    "SeriesInstanceUID",
-    "SOPInstanceUID",
     "study_id",
     "series_id",
     "dicom_path",
-    # ─────────────────────────
-    # Modality & SOP
-    # ─────────────────────────
-    "Modality",
-    "ModalitiesInStudy",
-    "SOPClassUID",
-    "Manufacturer",
-    "ManufacturerModelName",
-    "SoftwareVersions",
-    # ─────────────────────────
-    # Study-level metadata
-    # ─────────────────────────
-    "StudyDate",
-    "StudyTime",
-    "StudyDescription",
-    "StudyID",
-    "AccessionNumber",
-    "ReferringPhysicianName",
-    # ─────────────────────────
-    # Series-level metadata
-    # ─────────────────────────
-    "SeriesDate",
-    "SeriesTime",
-    "SeriesDescription",
-    "SeriesNumber",
-    "ProtocolName",
-    "BodyPartExamined",
-    "Laterality",
-    # ─────────────────────────
-    # Instance-level metadata
-    # ─────────────────────────
-    "InstanceNumber",
-    "AcquisitionNumber",
-    "InstanceCreationDate",
-    "InstanceCreationTime",
-    "ContentDate",
-    "ContentTime",
-    # ─────────────────────────
-    # Image geometry
-    # ─────────────────────────
-    "Rows",
-    "Columns",
-    "PixelSpacing",
-    "SliceThickness",
-    "SpacingBetweenSlices",
-    "ImageOrientationPatient",
-    "ImagePositionPatient",
-    "SliceLocation",
-    "FrameOfReferenceUID",
-    # ─────────────────────────
-    # Image type & acquisition
-    # ─────────────────────────
-    "ImageType",
-    "AcquisitionDate",
-    "AcquisitionTime",
-    "AcquisitionDateTime",
-    "AcquisitionMatrix",
-    "ScanningSequence",
-    "SequenceVariant",
-    "ScanOptions",
-    "RepetitionTime",
-    "EchoTime",
-    "EchoNumbers",
-    "FlipAngle",
-    # ─────────────────────────
-    # CT-specific (very common)
-    # ─────────────────────────
-    "KVP",
-    "ExposureTime",
-    "XRayTubeCurrent",
-    "Exposure",
-    "ExposureModulationType",
-    "ConvolutionKernel",
-    "ReconstructionDiameter",
-    # ─────────────────────────
-    # Pixel data interpretation
-    # ─────────────────────────
-    "PhotometricInterpretation",
-    "SamplesPerPixel",
-    "BitsAllocated",
-    "BitsStored",
-    "HighBit",
-    "PixelRepresentation",
-    "RescaleIntercept",
-    "RescaleSlope",
-    "RescaleType",
-    # ─────────────────────────
-    # Patient info (non-sensitive subset)
-    # ─────────────────────────
-    "PatientSex",
-    "PatientAge",
-    "PatientBirthDate",
-    # ─────────────────────────
-    # Misc / QC helpers
-    # ─────────────────────────
-    "NumberOfFrames",
-    "PositionReferenceIndicator",
-    "BurnedInAnnotation",
-]
+] + DEFAULT_DICOM_TAGS
 
 
 pd.options.mode.chained_assignment = None
