@@ -22,7 +22,7 @@ IMPERANDI is a Python framework and CLI for building analysis-ready CT imaging c
 ### 1) Ingest and harmonize imaging metadata (`parse` + `clean` = `ingest`)
 
 - Scans DICOM files from folders, globbed roots, and nested archives (`.zip`, `.tar`, `.tar.gz`, `.tgz`).
-- Extracts DICOM headers recursively into a raw metadata table (`dicom_paths_with_tags.csv`).
+- Extracts selected DICOM header tags into a raw metadata table (`dicom_paths_with_tags.csv`).
 - Builds stable patient/study/series identifiers from tags, folder structure, or hybrid fallback rules.
 - Applies manifest-driven hooks for patient-key standardization and derived columns.
 - Cleans and curates CT cohorts by filtering modality/noise patterns, localizers, non-target anatomy, non-axial acquisitions, and implausible scan geometry.
@@ -183,8 +183,9 @@ imperandi radiomics \
 ## Core outputs
 
 - `parse`:
-  - `dicom_paths_with_tags.csv` (raw extracted tags)
+  - `dicom_paths_with_tags.csv` (raw extracted selected tags)
   - `dicom_index.csv` (resolved IDs and normalized metadata)
+  - optional `dicom_tags_snapshot.ndjson` (full recursive tags on a sampled subset, via `--snapshot_tags`)
 - `clean`:
   - cleaned cohort table (default `<input>_clean.csv`)
 - `convert`:
@@ -209,6 +210,7 @@ You can pass either a manifest name (`generic`, `operandi`) or a custom manifest
 
 - Parallel execution controls are available for heavy stages (`parse`, `convert`, `segment`).
 - `parse` supports checkpointing for large datasets (`--checkpoint_frequency`).
+- `parse` reads tags from defaults (`DEFAULT_DICOM_TAGS`) plus `--tags`; use `--snapshot_tags` for full recursive tag snapshots on sampled data.
 - Archive workflows are bounded by depth and include path-safety protections.
 - Most commands support `--dry-run` for pipeline planning and CI smoke checks.
 

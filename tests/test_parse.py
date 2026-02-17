@@ -1,5 +1,6 @@
 import sys
 import io
+import json
 import tarfile
 import zipfile
 from pathlib import Path
@@ -332,3 +333,111 @@ def test_noop_when_no_derived_columns():
     df = pd.DataFrame({"a": [1]})
     out = parse.apply_derived_columns(df.copy(), {})
     assert out.equals(df)
+
+
+def test_build_effective_tags_includes_defaults_user_and_id_tags():
+    tags = parse.build_effective_tags(
+        default_tags=["PatientName", "StudyInstanceUID"],
+        user_tags=["Modality", "PatientName"],
+        patient_tag="PatientID",
+        study_tag="StudyInstanceUID",
+        series_tag="SeriesInstanceUID",
+    )
+    assert tags == [
+        "PatientName",
+        "StudyInstanceUID",
+        "Modality",
+        "PatientID",
+        "SeriesInstanceUID",
+    ]
+
+
+def test_read_dicom_header_selected_returns_only_requested(monkeypatch):
+    class FakeDataset:
+        def __init__(self):
+            self._values = {
+                "PatientName": "Alice",
+                "Modality": "CT",
+                "UnusedTag": "x",
+            }
+
+        def get(self, key):
+            return self._values.get(key)
+
+    monkeypatch.setattr(parse, "dcmread", lambda *args, **kwargs: FakeDataset())
+    out = parse.read_dicom_header_selected(
+        "fake.dcm",
+        tags=["PatientName", "Modality"],
+        force=False,
+    )
+    assert set(out.index.tolist()) == {"PatientName", "Modality"}
+    assert out["PatientName"] == "Alice"
+    assert out["Modality"] == "CT"
+
+
+def test_process_with_checkpoint_keeps_csv_outputs(tmp_path, monkeypatch):
+    monkeypatch.setattr(pd.Series, "parallel_apply", pd.Series.apply, raising=False)
+    df_paths = pd.DataFrame(
+        {"dicom_path": ["a.dcm", "b.dcm"], "_read_path": ["a.dcm", "b.dcm"]}
+    )
+
+    out = parse.process_with_checkpoint(
+        df_paths=df_paths,
+        read_func=lambda _: pd.Series({"PatientName": "x"}),
+        checkpoint_frequency=1,
+        output_dir=tmp_path,
+        final_name="dicom_paths_with_tags.csv",
+        read_path_col="_read_path",
+    )
+
+    assert (tmp_path / "dicom_paths_with_tags_000.csv").exists()
+    assert (tmp_path / "dicom_paths_with_tags_001.csv").exists()
+    assert (tmp_path / "dicom_paths_with_tags.csv").exists()
+    assert len(out) == 2
+
+
+def test_write_dicom_tags_snapshot_is_deterministic(tmp_path):
+    df = pd.DataFrame(
+        {
+            "dicom_path": [f"p{i}.dcm" for i in range(10)],
+            "_scan_root": ["root"] * 10,
+            "_relative_path": [f"rel/{i}.dcm" for i in range(10)],
+            "_read_path": [f"read/{i}.dcm" for i in range(10)],
+        }
+    )
+
+    def fake_full_reader(fp):
+        return pd.Series({"Source": fp})
+
+    out1 = tmp_path / "snap1.ndjson"
+    out2 = tmp_path / "snap2.ndjson"
+    n1 = parse.write_dicom_tags_snapshot(
+        df=df,
+        output_path=out1,
+        sample_size=5,
+        seed=42,
+        read_full_func=fake_full_reader,
+    )
+    n2 = parse.write_dicom_tags_snapshot(
+        df=df,
+        output_path=out2,
+        sample_size=5,
+        seed=42,
+        read_full_func=fake_full_reader,
+    )
+
+    lines1 = out1.read_text(encoding="utf-8").strip().splitlines()
+    lines2 = out2.read_text(encoding="utf-8").strip().splitlines()
+    assert n1 == 5
+    assert n2 == 5
+    assert lines1 == lines2
+
+    record = json.loads(lines1[0])
+    assert set(record.keys()) == {
+        "dicom_path",
+        "_scan_root",
+        "_relative_path",
+        "snapshot_seed",
+        "snapshot_index",
+        "tags",
+    }

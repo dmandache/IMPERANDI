@@ -1,5 +1,6 @@
 ﻿import warnings
 import glob
+import json
 import logging
 from functools import partial
 from pathlib import Path
@@ -21,6 +22,7 @@ from imperandi.utils.archive_io import (
 from imperandi.utils.logging import setup_logging
 from imperandi.utils.misc import print_args
 from imperandi.utils.manifest import load_manifest, resolve_hook
+from imperandi.datasets_config.defaults import DEFAULT_DICOM_TAGS
 
 warnings.filterwarnings("ignore")
 logger = logging.getLogger(__name__)
@@ -82,7 +84,7 @@ def add_parse_arguments(
         type=str,
         default="",
         help="Comma-separated list of additional DICOM keyword tags to read (e.g. PatientID,StudyInstanceUID,SeriesInstanceUID,Modality). "
-        "All DICOM tags are read recursively by default; this extends the default set.",
+        "These are added to the default selected tag set.",
     )
     parser.add_argument(
         "--force_dicom_read",
@@ -128,6 +130,24 @@ def add_parse_arguments(
         help="If set, process DICOM files in chunks of N and write checkpoint CSVs.",
     )
     parser.add_argument(
+        "--snapshot_tags",
+        action="store_true",
+        default=False,
+        help="Write a full recursive DICOM-tag snapshot for a sampled subset.",
+    )
+    parser.add_argument(
+        "--snapshot_sample_size",
+        default=500,
+        type=int,
+        help="Number of sampled DICOM files for full-tag snapshot generation.",
+    )
+    parser.add_argument(
+        "--snapshot_seed",
+        default=42,
+        type=int,
+        help="Random seed for deterministic snapshot sampling.",
+    )
+    parser.add_argument(
         "--num_workers",
         default=cpu_count(),
         type=int,
@@ -171,7 +191,7 @@ def build_parser(
 ) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Process DICOM files: read header tags once, then compute patient/study/series IDs from tags or path."
+            "Process DICOM files: read selected header tags once, then compute patient/study/series IDs from tags or path."
         ),
         add_help=add_help,
     )
@@ -243,6 +263,9 @@ def normalize_parse_args(args: argparse.Namespace) -> argparse.Namespace:
     )
     args.archive_cache_dir = getattr(args, "archive_cache_dir", None)
     args.keep_archive_cache = bool(getattr(args, "keep_archive_cache", False))
+    args.snapshot_tags = bool(getattr(args, "snapshot_tags", False))
+    args.snapshot_sample_size = int(getattr(args, "snapshot_sample_size", 500))
+    args.snapshot_seed = int(getattr(args, "snapshot_seed", 42))
 
     for attr in ("root_path_pos", "root_path_opt", "output_dir_pos", "output_dir_opt"):
         if hasattr(args, attr):
@@ -369,6 +392,53 @@ def extract_dicom_tags_recursive(ds, parent_key=""):
     return tags
 
 
+def _normalize_dicom_value(value):
+    if value is None:
+        return None
+    if hasattr(value, "value") and not isinstance(value, (str, bytes, list, tuple)):
+        value = value.value
+    if isinstance(value, (list, tuple)):
+        return [str(x) for x in value]
+    return str(value)
+
+
+def build_effective_tags(
+    *,
+    default_tags: list[str],
+    user_tags: list[str],
+    patient_tag: str,
+    study_tag: str,
+    series_tag: str,
+) -> list[str]:
+    effective = []
+    seen = set()
+    for tag in default_tags + user_tags + [patient_tag, study_tag, series_tag]:
+        t = str(tag).strip() if tag is not None else ""
+        if not t or t in seen:
+            continue
+        seen.add(t)
+        effective.append(t)
+    return effective
+
+
+def read_dicom_header_selected(fp, *, tags: list[str], force=False):
+    """
+    Read selected tags from a DICOM header.
+    Returns pd.Series with one key per requested tag.
+    """
+    try:
+        ds = dcmread(
+            fp,
+            stop_before_pixels=True,
+            force=force,
+            specific_tags=tags,
+        )
+        values = {tag: _normalize_dicom_value(ds.get(tag)) for tag in tags}
+        return pd.Series(values)
+    except Exception:
+        return pd.Series({})
+
+
 
 def read_dicom_header(fp, *, force=False):
     """
@@ -390,6 +460,46 @@ def read_dicom_header(fp, *, force=False):
 
 def read_dicom_header_with_force(fp, force):
     return read_dicom_header(fp, force=force)
+
+
+def write_dicom_tags_snapshot(
+    *,
+    df: pd.DataFrame,
+    output_path: Path,
+    sample_size: int,
+    seed: int,
+    read_path_col: str = "_read_path",
+    read_full_func=None,
+) -> int:
+    if sample_size <= 0 or df.empty:
+        return 0
+
+    n = min(sample_size, len(df))
+    sampled = df.sample(n=n, random_state=seed).reset_index(drop=True)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    written = 0
+    with output_path.open("w", encoding="utf-8") as handle:
+        for idx, row in sampled.iterrows():
+            read_fp = row.get(read_path_col)
+            if read_fp is None or str(read_fp).strip() == "":
+                continue
+
+            if read_full_func is None:
+                tags_series = read_dicom_header(read_fp)
+            else:
+                tags_series = read_full_func(read_fp)
+
+            record = {
+                "dicom_path": row.get("dicom_path"),
+                "_scan_root": row.get("_scan_root"),
+                "_relative_path": row.get("_relative_path"),
+                "snapshot_seed": seed,
+                "snapshot_index": int(idx),
+                "tags": tags_series.to_dict(),
+            }
+            handle.write(json.dumps(record, ensure_ascii=True) + "\n")
+            written += 1
+    return written
 
 
 # -------------------------
@@ -599,15 +709,26 @@ def main(args):
             )
             df = df[df["_read_path"].notna()].reset_index(drop=True)
 
-        # 2) read tags once for all files
-        #    - always read all tags recursively (comprehensive extraction)
+        # 2) read selected tags once for all files
         user_tags = [t.strip() for t in args.tags.split(",") if t.strip()]
+        effective_tags = build_effective_tags(
+            default_tags=DEFAULT_DICOM_TAGS,
+            user_tags=user_tags,
+            patient_tag=args.patient_key_from,
+            study_tag=args.study_id_from,
+            series_tag=args.series_id_from,
+        )
         logger.info(
-            "Reading all DICOM tags recursively (user tags to include: %s)",
+            "Reading selected DICOM tags (count=%s, user tags=%s)",
+            len(effective_tags),
             user_tags or "none",
         )
 
-        read_func = partial(read_dicom_header_with_force, force=args.force_dicom_read)
+        read_func = partial(
+            read_dicom_header_selected,
+            tags=effective_tags,
+            force=args.force_dicom_read,
+        )
 
         df = process_with_checkpoint(
             df_paths=df,
@@ -617,6 +738,18 @@ def main(args):
             final_name="dicom_paths_with_tags.csv",
             read_path_col="_read_path",
         )
+
+        if args.snapshot_tags:
+            snapshot_path = output_dir / "dicom_tags_snapshot.ndjson"
+            written = write_dicom_tags_snapshot(
+                df=df,
+                output_path=snapshot_path,
+                sample_size=args.snapshot_sample_size,
+                seed=args.snapshot_seed,
+                read_path_col="_read_path",
+                read_full_func=partial(read_dicom_header, force=args.force_dicom_read),
+            )
+            logger.info("Saved tag snapshot: %s (records=%s)", snapshot_path, written)
 
     logger.info("After tag extraction: %s columns=%s", df.shape, len(df.columns))
 

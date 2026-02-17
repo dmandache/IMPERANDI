@@ -102,3 +102,26 @@ def test_cli_radiomics_accepts_optional_csv_path_only(tmp_path):
     )
 
     assert exit_code == 0
+
+
+def test_cli_parse_accepts_snapshot_flags(tmp_path):
+    root_opt = tmp_path / "root_opt"
+    out_opt = tmp_path / "out_opt"
+
+    exit_code = cli.main(
+        [
+            "parse",
+            "--root_path",
+            str(root_opt),
+            "--output_dir",
+            str(out_opt),
+            "--snapshot_tags",
+            "--snapshot_sample_size",
+            "200",
+            "--snapshot_seed",
+            "123",
+            "--dry-run",
+        ]
+    )
+
+    assert exit_code == 0

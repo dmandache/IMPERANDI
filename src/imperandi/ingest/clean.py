@@ -10,7 +10,6 @@ import pandas as pd
 from pydicom.uid import UID
 from unidecode import unidecode
 
-from imperandi.datasets_config.defaults import *
 from imperandi.utils.manifest import load_manifest, resolve_hook
 from imperandi.utils.geometry import (
     classify_plane_from_iop,
@@ -19,6 +18,13 @@ from imperandi.utils.geometry import (
 from imperandi.utils.logging import setup_logging
 from imperandi.utils.misc import print_args, report_volumes, report_change
 from imperandi.utils.datetime import to_dates, to_times
+from imperandi.datasets_config.defaults import (
+    DEFAULT_DICOM_TAGS,
+    DEFAULT_VOLUME_LOWERBOUND,
+    DEFAULT_VOLUME_UPPERBOUND,
+    DEFAULT_MAX_PIXEL_SPACING_MM,
+    DEFAULT_MAX_SLICE_THICKNESS_MM,
+)
 
 COLUMNS_TO_USE = [
     "patient_key",
