@@ -5,10 +5,12 @@ zero_sha="0000000000000000000000000000000000000000"
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
-if command -v python3 >/dev/null 2>&1; then
-  python_launcher="python3"
-elif command -v python >/dev/null 2>&1; then
+if command -v py >/dev/null 2>&1 && py -3 -c "import sys" >/dev/null 2>&1; then
+  python_launcher="py"
+elif command -v python >/dev/null 2>&1 && python -c "import sys" >/dev/null 2>&1; then
   python_launcher="python"
+elif command -v python3 >/dev/null 2>&1 && python3 -c "import sys" >/dev/null 2>&1; then
+  python_launcher="python3"
 elif command -v py >/dev/null 2>&1; then
   python_launcher="py"
 else
