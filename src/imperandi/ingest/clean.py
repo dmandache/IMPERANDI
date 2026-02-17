@@ -1,7 +1,6 @@
 import argparse
 import logging
 import hashlib
-import importlib
 from ast import literal_eval
 from pathlib import Path
 
@@ -10,10 +9,14 @@ import pandas as pd
 from pydicom.uid import UID
 from unidecode import unidecode
 
-from imperandi.utils.manifest import load_manifest, resolve_hook
+from imperandi.utils.manifest import load_manifest
 from imperandi.utils.geometry import (
     classify_plane_from_iop,
     standardize_iop,
+)
+from imperandi.ingest.hook_manifests import (
+    apply_id_standardization,
+    apply_derived_columns,
 )
 from imperandi.utils.logging import setup_logging
 from imperandi.utils.misc import print_args, report_volumes, report_change
@@ -167,23 +170,6 @@ def normalize_clean_args(args: argparse.Namespace) -> argparse.Namespace:
     return args
 
 
-def resolve_standardization_hook(manifest: dict, hook_key: str):
-    hook_config = manifest.get("id_standardization", {})
-    normalized_config = {
-        "hook_module": hook_config.get("hook_module"),
-        "function": hook_config.get(hook_key),
-    }
-    return resolve_hook(normalized_config)
-
-
-def resolve_hook_module(manifest: dict):
-    hook_config = manifest.get("id_standardization", {})
-    module_name = hook_config.get("hook_module")
-    if not module_name:
-        return None
-    return importlib.import_module(f"imperandi.{module_name}")
-
-
 def read_csv_with_valid_columns(file):
     available_columns = pd.read_csv(file, nrows=0).columns
     valid_columns = [col for col in COLUMNS_TO_USE if col in available_columns]
@@ -201,24 +187,6 @@ def load_data(csv_path):
     df = df.dropna(axis=1, how="all")
     logger.info("%s %s", df.shape, df.columns)
 
-    return df
-
-
-def standardize_patient_keys(df, manifest: dict):
-    hook = resolve_standardization_hook(manifest, "patient_key")
-    if not hook:
-        return df
-    df["patient_key"] = df["patient_key"].apply(hook)
-    return df
-
-
-def unravel_patient_key(df, manifest: dict):
-    module = resolve_hook_module(manifest)
-    if not module or not hasattr(module, "extract_from_patient_key"):
-        return df
-    newcols = df.patient_key.apply(module.extract_from_patient_key)
-    newcols_to_add = newcols.loc[:, ~newcols.columns.isin(df.columns)]
-    df = df.join(newcols_to_add)
     return df
 
 
@@ -899,7 +867,7 @@ def clean_and_save_data(
     df = load_data(csv_path)
     report_volumes(df, "initial load")
 
-    df = standardize_patient_keys(df, manifest)
+    df = apply_id_standardization(df, manifest, logger=logger)
     report_volumes(df, "standardize patient key")
 
     df = to_dates(df)
@@ -907,7 +875,7 @@ def clean_and_save_data(
     df = add_date(df)  # generic date column
 
     df_prev = df.copy()
-    df = unravel_patient_key(df, manifest)
+    df = apply_derived_columns(df, manifest)
     report_volumes(df, "add new columns based on patient key")
     report_change(df, df_prev)
 

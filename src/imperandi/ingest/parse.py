@@ -24,8 +24,12 @@ from imperandi.utils.archive_io import (
 )
 from imperandi.utils.logging import setup_logging
 from imperandi.utils.misc import print_args
-from imperandi.utils.manifest import load_manifest, resolve_hook
+from imperandi.utils.manifest import load_manifest
 from imperandi.datasets_config.defaults import DEFAULT_DICOM_TAGS
+from imperandi.ingest.hook_manifests import (
+    apply_id_standardization,
+    apply_derived_columns,
+)
 
 warnings.filterwarnings("ignore")
 logger = logging.getLogger(__name__)
@@ -324,68 +328,6 @@ def parse_arguments():
     args = normalize_parse_args(args)
     logger.info("Running %s with args: %s", Path(__file__).name, args)
     return args
-
-
-def apply_id_standardization(df: pd.DataFrame, manifest: dict) -> pd.DataFrame:
-    hook = resolve_hook(manifest.get("id_standardization") or {})
-    if "patient_key" not in df.columns:
-        return df
-
-    # save raw once
-    if "patient_key_raw" not in df.columns:
-        df["patient_key_raw"] = df["patient_key"]
-
-    if not hook:
-        return df
-
-    df["patient_key"] = df["patient_key_raw"].apply(hook)
-
-    raw_ok = df["patient_key_raw"].notna() & (
-        df["patient_key_raw"].astype(str).str.strip() != ""
-    )
-    std_bad = df["patient_key"].isna() | (
-        df["patient_key"].astype(str).str.strip() == ""
-    )
-    failed = raw_ok & std_bad
-
-    if failed.any():
-        df["patient_key_std_failed"] = failed
-        n_keys = int(df.loc[failed, "patient_key_raw"].nunique())
-        logger.warning(
-            "[id_standardization] failed on unique raw keys=%s",
-            n_keys,
-        )
-
-    return df
-
-
-def apply_derived_columns(df: pd.DataFrame, manifest: dict) -> pd.DataFrame:
-    derived_columns = manifest.get("derived_columns", [])
-    if not derived_columns:
-        return df
-
-    for derived in derived_columns:
-        from_column = derived.get("from_column")
-        if not from_column or from_column not in df.columns:
-            continue
-        hook = resolve_hook(derived)
-        if not hook:
-            continue
-        derived_values = df[from_column].apply(hook)
-        derived_df = derived_values.apply(pd.Series)
-        if derived_df.empty:
-            continue
-        join_mode = derived.get("join_mode", "missing_only")
-        if join_mode == "overwrite":
-            df = df.drop(
-                columns=[col for col in derived_df.columns if col in df.columns]
-            )
-            df = df.join(derived_df)
-        else:
-            derived_df = derived_df.loc[:, ~derived_df.columns.isin(df.columns)]
-            if not derived_df.empty:
-                df = df.join(derived_df)
-    return df
 
 
 # -------------------------
@@ -970,7 +912,7 @@ def main(args):
         study_tag=args.study_id_from,
         series_tag=args.series_id_from,
     )
-    df = apply_id_standardization(df, manifest)
+    df = apply_id_standardization(df, manifest, logger=logger)
     df = apply_derived_columns(df, manifest)
 
     # 4) output final df
