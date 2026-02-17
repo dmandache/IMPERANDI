@@ -468,14 +468,27 @@ def write_dicom_tags_snapshot(
     output_path: Path,
     sample_size: int,
     seed: int,
+    series_col: str = "SeriesInstanceUID",
     read_path_col: str = "_read_path",
     read_full_func=None,
 ) -> int:
     if sample_size <= 0 or df.empty:
         return 0
 
-    n = min(sample_size, len(df))
-    sampled = df.sample(n=n, random_state=seed).reset_index(drop=True)
+    sampling_pool = df
+    if series_col in df.columns:
+        non_empty_series = df[df[series_col].notna()].copy()
+        if not non_empty_series.empty:
+            non_empty_series = non_empty_series[
+                non_empty_series[series_col].astype(str).str.strip() != ""
+            ]
+            if not non_empty_series.empty:
+                sampling_pool = non_empty_series.drop_duplicates(
+                    subset=[series_col], keep="first"
+                )
+
+    n = min(sample_size, len(sampling_pool))
+    sampled = sampling_pool.sample(n=n, random_state=seed).reset_index(drop=True)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     written = 0
     with output_path.open("w", encoding="utf-8") as handle:
@@ -746,6 +759,7 @@ def main(args):
                 output_path=snapshot_path,
                 sample_size=args.snapshot_sample_size,
                 seed=args.snapshot_seed,
+                series_col=args.series_id_from,
                 read_path_col="_read_path",
                 read_full_func=partial(read_dicom_header, force=args.force_dicom_read),
             )

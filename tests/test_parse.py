@@ -441,3 +441,30 @@ def test_write_dicom_tags_snapshot_is_deterministic(tmp_path):
         "snapshot_index",
         "tags",
     }
+
+
+def test_write_dicom_tags_snapshot_samples_unique_series_when_available(tmp_path):
+    df = pd.DataFrame(
+        {
+            "dicom_path": [f"p{i}.dcm" for i in range(8)],
+            "_scan_root": ["root"] * 8,
+            "_relative_path": [f"rel/{i}.dcm" for i in range(8)],
+            "_read_path": [f"read/{i}.dcm" for i in range(8)],
+            "SeriesInstanceUID": ["S1", "S1", "S2", "S2", "S3", "S3", "S4", "S4"],
+        }
+    )
+
+    out = tmp_path / "snap.ndjson"
+    n = parse.write_dicom_tags_snapshot(
+        df=df,
+        output_path=out,
+        sample_size=10,
+        seed=42,
+        series_col="SeriesInstanceUID",
+        read_full_func=lambda fp: pd.Series({"Source": fp}),
+    )
+
+    lines = [json.loads(x) for x in out.read_text(encoding="utf-8").splitlines() if x]
+    assert n == 4
+    assert len(lines) == 4
+    assert len({item["tags"]["Source"] for item in lines}) == 4

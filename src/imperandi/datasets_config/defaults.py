@@ -4,6 +4,41 @@ DEFAULT_VOLUME_UPPERBOUND = 500.0
 DEFAULT_MAX_PIXEL_SPACING_MM   = 1.25 # XY
 DEFAULT_MAX_SLICE_THICKNESS_MM = 3.0  # Z
 
+REQUIRED_DICOM_TAGS = [
+    # identifiers
+    "PatientID",
+    "PatientName",
+    "StudyInstanceUID",
+    "SeriesInstanceUID",
+    "SOPInstanceUID",
+    # modality and SOP
+    "Modality",
+    "ModalitiesInStudy",
+    "SOPClassUID",
+    # temporal metadata used by clean
+    "StudyDate",
+    "StudyTime",
+    "AcquisitionDate",
+    "AcquisitionTime",
+    "InstanceCreationDate",
+    "InstanceCreationTime",
+    # series and image semantics
+    "SeriesDescription",
+    "ImageType",
+    # geometry and spatial ordering
+    "Rows",
+    "Columns",
+    "PixelSpacing",
+    "SliceThickness",
+    "SpacingBetweenSlices",
+    "ImageOrientationPatient",
+    "ImagePositionPatient",
+    "SliceLocation",
+    # instance ordering
+    "InstanceNumber",
+    "AcquisitionNumber",
+]
+
 DEFAULT_DICOM_TAGS = [
     # ─────────────────────────
     # Identifiers & paths
