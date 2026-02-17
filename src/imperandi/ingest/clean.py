@@ -888,15 +888,15 @@ def compute_visit_order(df):
         .apply(lambda x: x.sort_values(by=["date"]))
     )
 
-    df_study["time_elapsed"] = df_study.groupby("patient_key")["date"].diff()
+    df_study["time_since_prev_exam"] = df_study.groupby("patient_key")["date"].diff()
     df_study["time_since_first_exam"] = df_study.groupby("patient_key")[
-        "time_elapsed"
+        "time_since_prev_exam"
     ].cumsum()
     df_study["visit_order"] = df_study.groupby("patient_key")["date"].cumcount()
     logger.info("%s %s", df.shape, df_study.shape)
 
     df = df.merge(
-        df_study[["time_elapsed", "time_since_first_exam", "visit_order"]],
+        df_study[["time_since_prev_exam", "time_since_first_exam", "visit_order"]],
         on=["patient_key", "study_id"],
         left_index=False,
         right_index=False,
@@ -927,11 +927,11 @@ def compute_acquisition_order(df):
         .apply(lambda x: x.sort_values(by=["time"]))
     )
 
-    df_study["time_elapsed_sec"] = (
+    df_study["time_since_prev_exam_sec"] = (
         df_study.groupby(["patient_key", "study_id"])["time"].diff().dt.total_seconds()
     )
     df_study["time_since_first_acquisition_sec"] = (
-        df_study.groupby(["patient_key", "study_id"])["time_elapsed_sec"]
+        df_study.groupby(["patient_key", "study_id"])["time_since_prev_exam_sec"]
         .cumsum()
         .fillna(0)
     )
@@ -942,7 +942,7 @@ def compute_acquisition_order(df):
     df = df.merge(
         df_study[
             [
-                "time_elapsed_sec",
+                "time_since_prev_exam_sec",
                 "time_since_first_acquisition_sec",
                 "acquisition_order",
             ]
