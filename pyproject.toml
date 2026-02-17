@@ -23,6 +23,7 @@ dependencies = [
 
 [project.optional-dependencies]
 segment = [
+  "matplotlib",
   "TotalSegmentator",
   "torchio",
   "scipy",
