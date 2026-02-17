@@ -1,0 +1,81 @@
+#!/usr/bin/env sh
+set -eu
+
+zero_sha="0000000000000000000000000000000000000000"
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+if command -v python3 >/dev/null 2>&1; then
+  python_launcher="python3"
+elif command -v python >/dev/null 2>&1; then
+  python_launcher="python"
+elif command -v py >/dev/null 2>&1; then
+  python_launcher="py"
+else
+  echo "No Python interpreter was found. Cannot clean notebook outputs." >&2
+  exit 1
+fi
+
+tmp_refs="$(mktemp 2>/dev/null || mktemp -t imperandi_nbpush_refs)"
+tmp_files="$(mktemp 2>/dev/null || mktemp -t imperandi_nbpush_files)"
+cleanup() {
+  rm -f "$tmp_refs" "$tmp_files"
+}
+trap cleanup EXIT INT TERM
+
+cat > "$tmp_refs"
+
+while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
+  local_ref="$(printf '%s' "${local_ref:-}" | tr -d '\r')"
+  local_sha="$(printf '%s' "${local_sha:-}" | tr -d '\r')"
+  remote_ref="$(printf '%s' "${remote_ref:-}" | tr -d '\r')"
+  remote_sha="$(printf '%s' "${remote_sha:-}" | tr -d '\r')"
+
+  [ -n "${local_ref:-}" ] || continue
+  [ "$local_sha" = "$zero_sha" ] && continue
+
+  if [ "$remote_sha" = "$zero_sha" ]; then
+    revs="$(git rev-list "$local_sha" --not --remotes)"
+  else
+    revs="$(git rev-list "$remote_sha..$local_sha")"
+  fi
+
+  [ -n "$revs" ] || continue
+  printf '%s\n' "$revs" | git diff-tree --stdin --no-commit-id --name-only -r --diff-filter=ACMRT -- '*.ipynb' >> "$tmp_files"
+done < "$tmp_refs"
+
+if [ ! -s "$tmp_files" ]; then
+  exit 0
+fi
+
+sort -u "$tmp_files" > "${tmp_files}.sorted"
+mv "${tmp_files}.sorted" "$tmp_files"
+
+changed=0
+while IFS= read -r notebook_path; do
+  [ -n "$notebook_path" ] || continue
+  [ -f "$notebook_path" ] || continue
+
+  status=0
+  if [ "$python_launcher" = "py" ]; then
+    py -3 ".githooks/strip_notebook_outputs.py" "$notebook_path" || status=$?
+  else
+    "$python_launcher" ".githooks/strip_notebook_outputs.py" "$notebook_path" || status=$?
+  fi
+
+  if [ "$status" -eq 2 ]; then
+    git add "$notebook_path"
+    changed=1
+  elif [ "$status" -ne 0 ]; then
+    echo "Failed to strip outputs from $notebook_path." >&2
+    exit "$status"
+  fi
+done < "$tmp_files"
+
+if [ "$changed" -eq 1 ]; then
+  echo "Notebook outputs were stripped and staged."
+  echo "Create a commit for the cleaned notebook(s), then push again."
+  exit 1
+fi
+
+exit 0

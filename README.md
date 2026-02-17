@@ -124,6 +124,14 @@ Development and test tooling:
 python -m pip install -e ".[dev]"
 ```
 
+Enable tracked git hooks (recommended):
+
+```bash
+git config core.hooksPath .githooks
+```
+
+With hooks enabled, `git push` strips output/execution state from changed `*.ipynb` files, stages those changes, and stops once so you can commit the cleaned notebooks.
+
 Install everything:
 
 ```bash
