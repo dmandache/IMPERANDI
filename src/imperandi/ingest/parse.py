@@ -784,7 +784,9 @@ def process_with_checkpoint(
 
     if checkpoint_frequency is None:
         tags_df = df_paths[read_path_col].parallel_apply(read_func)
-        tags_df = tags_df.replace("", float("NaN")).dropna(how="all", axis=1)
+        tags_df = tags_df.replace("", float("NaN")).infer_objects(copy=False).dropna(
+            how="all", axis=1
+        )
         out = pd.concat([df_paths, tags_df], axis=1)
         out.drop(columns=cols_to_drop_for_persist, errors="ignore").to_csv(
             output_dir / final_name, index=False
@@ -800,7 +802,9 @@ def process_with_checkpoint(
             continue
         chunk = df_paths.iloc[i : i + checkpoint_frequency].copy()
         tags_chunk = chunk[read_path_col].parallel_apply(read_func)
-        tags_chunk = tags_chunk.replace("", float("NaN")).dropna(how="all", axis=1)
+        tags_chunk = tags_chunk.replace("", float("NaN")).infer_objects(copy=False).dropna(
+            how="all", axis=1
+        )
         out_chunk = pd.concat([chunk, tags_chunk], axis=1)
         out_chunk.drop(columns=cols_to_drop_for_persist, errors="ignore").to_csv(
             ckpt, index=False

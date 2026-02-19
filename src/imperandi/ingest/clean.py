@@ -1,7 +1,9 @@
 import argparse
 import logging
 import hashlib
+import re
 from ast import literal_eval
+from datetime import time as dt_time
 from pathlib import Path
 
 import numpy as np
@@ -39,6 +41,10 @@ COLUMNS_TO_USE = [
 
 pd.options.mode.chained_assignment = None
 logger = logging.getLogger(__name__)
+
+DATETIME_TIME_RE = re.compile(
+    r"datetime\.time\(\s*(\d{1,2})\s*,\s*(\d{1,2})(?:\s*,\s*(\d{1,2}))?(?:\s*,\s*(\d{1,6}))?\s*\)"
+)
 
 
 def add_clean_arguments(
@@ -768,17 +774,81 @@ def compute_visit_order(df):
     return df
 
 
+def _normalize_instance_creation_time(value):
+    value = _as_python_scalar(value)
+
+    if value is None or _is_nan(value):
+        return None
+
+    if isinstance(value, dt_time):
+        return value
+
+    if isinstance(value, pd.Timestamp):
+        return value.time()
+
+    if isinstance(value, (list, tuple, np.ndarray)):
+        parsed = [_normalize_instance_creation_time(v) for v in value]
+        parsed = [t for t in parsed if t is not None]
+        return min(parsed) if parsed else None
+
+    if isinstance(value, (int, float)):
+        return _normalize_instance_creation_time(str(value))
+
+    if not isinstance(value, str):
+        return None
+
+    s = value.strip()
+    if not s or s.lower() in {"none", "nan", "nat"}:
+        return None
+
+    try:
+        literal = literal_eval(s)
+    except (ValueError, SyntaxError):
+        literal = None
+    if literal is not None:
+        # Avoid recursive no-op loops for scalar literals like:
+        # "120000.0" -> 120000.0 -> "120000.0" -> ...
+        is_scalar_noop = isinstance(literal, (str, int, float, bool)) and (
+            str(literal).strip() == s
+        )
+        if not is_scalar_noop:
+            parsed = _normalize_instance_creation_time(literal)
+            if parsed is not None:
+                return parsed
+
+    matches = DATETIME_TIME_RE.findall(s)
+    if matches:
+        parsed = []
+        for hh, mm, ss, us in matches:
+            try:
+                parsed.append(
+                    dt_time(
+                        hour=int(hh),
+                        minute=int(mm),
+                        second=int(ss) if ss else 0,
+                        microsecond=int(us) if us else 0,
+                    )
+                )
+            except ValueError:
+                continue
+        if parsed:
+            return min(parsed)
+
+    for fmt in ("%H%M%S.%f", "%H%M%S", "%H:%M:%S.%f", "%H:%M:%S"):
+        parsed = pd.to_datetime(s, format=fmt, errors="coerce")
+        if pd.notna(parsed):
+            return parsed.time()
+
+    return None
+
+
 def compute_acquisition_order(df):
     if "InstanceCreationTime" not in df.columns:
         return df
 
-    df["time"] = pd.to_datetime(
-        df["InstanceCreationTime"]
-        .fillna("0")
-        .apply(literal_eval)
-        .apply(lambda x: x[0] if isinstance(x, list) else x)
-        .astype(str),
-        format="%H%M%S.%f",
+    parsed_time = df["InstanceCreationTime"].apply(_normalize_instance_creation_time)
+    df["time"] = pd.to_timedelta(
+        parsed_time.apply(lambda t: t.isoformat() if t is not None else None),
         errors="coerce",
     )
 
