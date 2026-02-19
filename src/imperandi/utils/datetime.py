@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import pandas as pd
 import logging
 from datetime import time
@@ -7,6 +8,30 @@ from typing import Optional, Any
 import re
 
 logger = logging.getLogger(__name__)
+
+_CLOCK_TIME_NAME_ALLOWLIST = {
+    "studytime",
+    "seriestime",
+    "acquisitiontime",
+    "contenttime",
+    "instancecreationtime",
+    "acquisitiondatetime",
+}
+
+_DURATION_TIME_NAME_TOKENS = (
+    "duration",
+    "interval",
+    "latency",
+    "delay",
+    "elapsed",
+    "repetition",
+    "echo",
+    "inversion",
+    "exposure",
+    "trigger",
+    "frame",
+    "timesince",
+)
 
 
 def _get(meta: Any, key: str, default=None):
@@ -35,6 +60,22 @@ def _parse_dicom_time(s, include_ms=False) -> Optional[time]:
     s = str(s).strip()
     if not s or s.lower() == "nan":
         return None
+
+    if ":" in s:
+        parsed = pd.to_datetime(s, errors="coerce")
+        if pd.notna(parsed):
+            parsed_time = parsed.time()
+            if not include_ms:
+                parsed_time = parsed_time.replace(microsecond=0)
+            if (
+                parsed_time.hour
+                == parsed_time.minute
+                == parsed_time.second
+                == parsed_time.microsecond
+                == 0
+            ):
+                return None
+            return parsed_time
 
     # Split fractional part
     if "." in s:
@@ -84,8 +125,6 @@ def _parse_dicom_time(s, include_ms=False) -> Optional[time]:
 
 
 def earliest_acquisition_datetime(tm_or_list) -> Optional[time]:
-    import ast
-
     if tm_or_list is None or (isinstance(tm_or_list, float) and pd.isna(tm_or_list)):
         return None
 
@@ -108,13 +147,96 @@ def earliest_acquisition_datetime(tm_or_list) -> Optional[time]:
     return _parse_dicom_time(tm_or_list)
 
 
+def _normalize_col_name(col_name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", col_name.lower())
+
+
+def _iter_time_tokens(value):
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return []
+
+    if isinstance(value, (list, tuple)):
+        return list(value)
+
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return []
+        try:
+            parsed = ast.literal_eval(raw)
+        except Exception:
+            return [raw]
+        if isinstance(parsed, (list, tuple)):
+            return list(parsed)
+        return [parsed]
+
+    return [value]
+
+
+def _is_clock_like_token(token) -> bool:
+    if token is None or (isinstance(token, float) and pd.isna(token)):
+        return False
+    if isinstance(token, (time, pd.Timestamp)):
+        return True
+
+    s = str(token).strip()
+    if not s or s.lower() in {"none", "nan", "nat"}:
+        return False
+
+    # Accept explicit separators (e.g., 12:30:45, 2024-01-01 12:30:45).
+    if ":" in s:
+        return pd.notna(pd.to_datetime(s, errors="coerce"))
+
+    main = s.split(".", 1)[0].strip()
+    if not main.isdigit():
+        return False
+
+    # Keep fallback strict to avoid misclassifying durations like 500 or 1200.
+    if len(main) not in {6, 14}:
+        return False
+
+    return _parse_dicom_time(s) is not None
+
+
+def _has_clock_time_content(series: pd.Series, n_samples: int = 30) -> bool:
+    sample = series.dropna().head(n_samples)
+    if sample.empty:
+        return False
+
+    matches = sample.apply(
+        lambda value: any(_is_clock_like_token(token) for token in _iter_time_tokens(value))
+    )
+    return bool(matches.mean() >= 0.5)
+
+
+def _select_time_columns(df: pd.DataFrame) -> list[str]:
+    selected = []
+    for col in df.columns:
+        if "time" not in col.lower():
+            continue
+
+        normalized = _normalize_col_name(col)
+
+        if normalized in _CLOCK_TIME_NAME_ALLOWLIST or normalized.endswith("datetime"):
+            selected.append(col)
+            continue
+
+        if any(token in normalized for token in _DURATION_TIME_NAME_TOKENS):
+            continue
+
+        if _has_clock_time_content(df[col]):
+            selected.append(col)
+
+    return selected
+
+
 def to_times(df: pd.DataFrame) -> pd.DataFrame:
     """
     Convert time columns to python datetime.time.
     """
-    time_cols = [c for c in df.columns if "time" in c.lower()]
+    time_cols = _select_time_columns(df)
 
-    logger.info("Detected time columns: %s", time_cols)
+    logger.info("Detected real-time columns: %s", time_cols)
 
     for c in time_cols:
         df[c] = df[c].apply(earliest_acquisition_datetime)
