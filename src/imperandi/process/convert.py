@@ -298,20 +298,31 @@ def materialize_archive_dicom_paths(
 
 
 # Function to convert a single DICOM volume to NIfTI (parallel task)
-def process_single_volume(k, row, output_dir, verbose):
+def process_single_volume(k, row, output_dir, verbose, return_status=False):
     """
-    Convert a single DICOM series to a NIfTI file, saving the result to the specified output directory.
+    Convert a single DICOM series to a NIfTI file, saving the result to the
+    specified output directory.
 
     Args:
         k (int): Index of the current volume being processed.
         row (pd.Series): Metadata for the current DICOM series.
         output_dir (str): Directory to save the NIfTI files.
-        verbose (bool): If true, print additional logs for debugging.
+        verbose (bool): If true, configure verbose logging for worker setup.
 
     Returns:
-        tuple: A tuple containing the index, export path (if successful), and error row (if unsuccessful).
+        tuple:
+            - default (return_status=False): (index, export_path, error_row)
+            - with status (return_status=True):
+              (index, export_path, error_row, status), where status is
+              "converted", "skipped", or "failed".
     """
     setup_logging(verbose=verbose)
+
+    def _result(export_path, error_row, status):
+        if return_status:
+            return k, export_path, error_row, status
+        return k, export_path, error_row
+
     try:
         dicom_dir_path = row["series_dir"]
         files_in_vol = row["dicom_path"]
@@ -319,54 +330,29 @@ def process_single_volume(k, row, output_dir, verbose):
 
         n_files_in_vol = len(files_in_vol) if isinstance(files_in_vol, list) else 1
         n_files_in_dir = len(files_in_dir)
-
-        if row.volume_ordinal_in_series > 1:
-            if verbose:
-                logger.info("Multi-volume series")
-            series_id = row.series_id + "_" + str(row.volume_ordinal_in_series)
-        else:
-            series_id = row.series_id
-
-        export_dir = (
-            Path(output_dir)
-            / str(row.patient_key)
-            / str(row.study_id)
-            / str(series_id)  # / row.Modality
+        series_id = (
+            row.series_id + "_" + str(row.volume_ordinal_in_series)
+            if row.volume_ordinal_in_series > 1
+            else row.series_id
         )
-        # export_dir = Path(output_dir) / row.patient_key / row.date / row.Modality / row.volume_id
+
+        export_dir = Path(output_dir) / str(row.patient_key) / str(row.study_id) / str(
+            series_id
+        )
         export_path = export_dir / "scan.nii.gz"
 
-        # Check if file exists and skip
+        # Reuse existing valid outputs silently to avoid per-file success logs.
         if (
             export_path.exists()
             and export_path.is_file()
             and is_valid_nifti(export_path)
+            and export_path.stat().st_size > 0
         ):
-            sz = export_path.stat().st_size
-            if sz > 0:
-                if verbose:
-                    logger.info(
-                        "✅ File %s exists and has size %.2f MB. Skipping...",
-                        export_path,
-                        sz * 1e-6,
-                    )
-                return k, export_path, None
+            return _result(export_path, None, "skipped")
 
-        # Create export directory if it doesn't exist
         if not export_dir.exists():
             os.makedirs(export_dir, exist_ok=True)
 
-        # # Conversion process
-        # if n_files_in_dir != n_files_in_vol:
-        #     print(f"{n_files_in_vol} files in volume vs. {n_files_in_dir} files in series dir")
-        #     with tempfile.TemporaryDirectory(dir='/data/scratch/bdr220003/temp/', prefix='temp_convert_') as temp_dir:
-        #         print(f"Using intermediary temp dir {temp_dir}")
-        #         copy_files_to_temp_dir(paths=files_in_vol, temp_dir=temp_dir)
-        #         dicom2nifti.dicom_series_to_nifti(temp_dir, export_path, reorient_nifti=False)
-        # else:
-        #     dicom2nifti.dicom_series_to_nifti(dicom_dir_path, export_path, reorient_nifti=False)
-
-        # Conversion process
         def read_dicom_write_nifti(dicom_dir_one_volume):
             dicom_input = dicom2nifti.common.read_dicom_directory(dicom_dir_one_volume)
             dicom2nifti.convert_dicom.dicom_array_to_nifti(
@@ -374,42 +360,31 @@ def process_single_volume(k, row, output_dir, verbose):
             )
 
         if n_files_in_dir != n_files_in_vol:
-            if verbose:
-                logger.info(
-                    "%s files in volume vs. %s files in series dir",
-                    n_files_in_vol,
-                    n_files_in_dir,
-                )
-
-            temp_dir_root = ".tmp"  # "/data/scratch/bdr220003/temp/"
+            temp_dir_root = ".tmp"
             os.makedirs(temp_dir_root, exist_ok=True)
             with tempfile.TemporaryDirectory(
                 dir=temp_dir_root, prefix="temp_convert_"
             ) as temp_dir:
-                if verbose:
-                    logger.info("Using intermediary temp dir %s", temp_dir)
                 copy_files_to_temp_dir(paths=files_in_vol, temp_dir=temp_dir)
                 read_dicom_write_nifti(temp_dir)
         else:
-            if verbose:
-                logger.info("🧠 Processing volume %s", k)
             read_dicom_write_nifti(dicom_dir_path)
 
         if is_valid_nifti(export_path):
-            return k, export_path, None
-        else:
-            logger.error(
-                "⚠️ Error processing volume %s: output is not valid nifti file.",
-                k,
-            )
-            row["error"] = "output not valid nifti"
-            return k, None, row
+            return _result(export_path, None, "converted")
+
+        logger.error(
+            "Error processing volume %s: output is not a valid NIfTI file.",
+            k,
+        )
+        row["error"] = "output not valid nifti"
+        return _result(None, row, "failed")
 
     except Exception:
         error_msg = traceback.format_exc()
-        logger.error("⚠️ Error processing volume %s: %s", k, error_msg)
+        logger.error("Error processing volume %s: %s", k, error_msg)
         row["error"] = error_msg
-        return k, None, row
+        return _result(None, row, "failed")
 
 
 # Function to convert DICOM to NIfTI in parallel
@@ -424,10 +399,14 @@ def convert_dicom_to_nifti_parallel(df, output_dir, print_flag, num_workers):
         num_workers (int): Number of parallel processes to use.
 
     Returns:
-        tuple: The updated DataFrame with NIfTI paths and a DataFrame with any errors encountered.
+        tuple: The updated DataFrame with NIfTI paths and a DataFrame with any
+        errors encountered.
     """
     n_samples = len(df)
     df_err = pd.DataFrame()
+    converted_count = 0
+    skipped_count = 0
+    failed_count = 0
 
     logger.info("%s volumes to convert", n_samples)
 
@@ -438,45 +417,68 @@ def convert_dicom_to_nifti_parallel(df, output_dir, print_flag, num_workers):
             lambda x: Path(x[0]).parent if isinstance(x, list) else Path(x).parent
         )
 
-    # Use ProcessPoolExecutor to parallelize the task
+    # Use ProcessPoolExecutor to parallelize the task.
     with ProcessPoolExecutor(max_workers=num_workers) as executor:
         futures = [
             executor.submit(
-                process_single_volume, k, df.iloc[k], output_dir, print_flag
+                process_single_volume,
+                k,
+                df.iloc[k],
+                output_dir,
+                print_flag,
+                True,
             )
             for k in range(n_samples)
         ]
 
-        # Prepare iterator with optional progress bar
+        # Prepare iterator with optional progress bar.
         iterator = as_completed(futures)
         if print_flag:
             iterator = tqdm(as_completed(futures), total=n_samples)
 
-        # Collect results
+        # Collect results.
         for future in iterator:
             try:
-                k, export_path, error_row = future.result(
-                    timeout=600
-                )  # wait 10 mins max
+                result = future.result(timeout=600)  # wait 10 mins max
             except Exception as e:
-                logger.error("⚠️ Future failed to execute under 10mins: %s", e)
-                k, export_path, error_row = None, None, None
+                logger.error("Future failed to execute under 10 minutes: %s", e)
+                failed_count += 1
+                continue
+
+            if len(result) == 4:
+                k, export_path, error_row, status = result
+            else:
+                k, export_path, error_row = result
+                status = "failed" if error_row is not None else "converted"
+
+            if status == "converted":
+                converted_count += 1
+            elif status == "skipped":
+                skipped_count += 1
+            elif status == "failed":
+                failed_count += 1
 
             if export_path is not None:
                 df.iloc[k, df.columns.get_loc("nifti_path")] = str(export_path)
             elif error_row is not None:
-                # append error row to df_err as a row
+                # Append error row to df_err.
                 try:
                     df_err = pd.concat(
                         [df_err, error_row.to_frame().T], ignore_index=True
                     )
                 except Exception:
-                    # fallback: create a dataframe from dict
+                    # Fallback: create a dataframe from dict.
                     df_err = pd.concat(
                         [df_err, pd.DataFrame([error_row])], ignore_index=True
                     )
 
     df = df[df["nifti_path"].notna()]
+    logger.info(
+        "Conversion summary: %s converted, %s skipped (already valid), %s failed",
+        converted_count,
+        skipped_count,
+        failed_count,
+    )
 
     return df, df_err
 
@@ -559,3 +561,4 @@ if __name__ == "__main__":
         raise SystemExit(0)
     setup_logging(verbose=getattr(args, "verbose", False))
     main(args)
+

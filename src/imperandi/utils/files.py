@@ -29,13 +29,8 @@ def empty_dir(temp_dir):
 
 
 def copy_files_to_temp_dir(paths, temp_dir="/data/scratch/bdr220003/temp/"):
-    if dir_is_empty(temp_dir):
-        logger.info("Temp directory %s is empty", temp_dir)
-    else:
-        logger.info("Temp directory %s not empty", temp_dir)
-    check_permissions(temp_dir)
-
     temp_dir = Path(temp_dir)
+    temp_dir.mkdir(parents=True, exist_ok=True)
     for src_path in paths:
         src_path = Path(src_path)
         dst_path = temp_dir / src_path.name
