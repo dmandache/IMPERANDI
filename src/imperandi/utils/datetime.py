@@ -30,7 +30,7 @@ _DURATION_TIME_NAME_TOKENS = (
     "exposure",
     "trigger",
     "frame",
-    "timesince",
+    #"timesince",
 )
 
 
@@ -147,10 +147,6 @@ def earliest_acquisition_datetime(tm_or_list) -> Optional[time]:
     return _parse_dicom_time(tm_or_list)
 
 
-def _normalize_col_name(col_name: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "", col_name.lower())
-
-
 def _iter_time_tokens(value):
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return []
@@ -215,7 +211,7 @@ def _select_time_columns(df: pd.DataFrame) -> list[str]:
         if "time" not in col.lower():
             continue
 
-        normalized = _normalize_col_name(col)
+        normalized = col.lower()
 
         if normalized in _CLOCK_TIME_NAME_ALLOWLIST or normalized.endswith("datetime"):
             selected.append(col)

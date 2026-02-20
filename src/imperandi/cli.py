@@ -20,6 +20,13 @@ from imperandi.utils.misc import print_args
 logger = logging.getLogger(__name__)
 
 
+def _log_script_namespace(script_file: str, args: argparse.Namespace) -> None:
+    namespace = argparse.Namespace(
+        **{k: v for k, v in vars(args).items() if not k.startswith("_")}
+    )
+    logger.info("Running %s with namespace: %s", Path(script_file).name, namespace)
+
+
 def _load_phase_module():
     from imperandi.extract import phase as phase_module
 
@@ -184,6 +191,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _handle_parse(args: argparse.Namespace) -> int:
     args = parse_module.normalize_parse_args(args)
+    _log_script_namespace(parse_module.__file__, args)
     if args.dry_run:
         logger.info("Dry run: parse")
         print_args(args)
@@ -200,6 +208,7 @@ def _handle_parse(args: argparse.Namespace) -> int:
 
 def _handle_clean(args: argparse.Namespace) -> int:
     args = clean_module.normalize_clean_args(args)
+    _log_script_namespace(clean_module.__file__, args)
     if args.dry_run:
         logger.info("Dry run: clean")
         print_args(args)
@@ -226,6 +235,18 @@ def _handle_ingest(args: argparse.Namespace) -> int:
         Path(args.csv_path_out)
         if args.csv_path_out
         else output_dir / "dicom_index_clean.csv"
+    )
+    _log_script_namespace(parse_module.__file__, args)
+    _log_script_namespace(
+        clean_module.__file__,
+        argparse.Namespace(
+            csv_path=[str(parsed_csv)],
+            csv_path_out=str(clean_out),
+            csv_dict_path=args.csv_dict_path,
+            manifest=args.manifest,
+            volume_min=args.volume_min,
+            volume_max=args.volume_max,
+        ),
     )
     if args.dry_run:
         logger.info("Dry run: ingest (parse -> clean)")
@@ -255,6 +276,7 @@ def _handle_ingest(args: argparse.Namespace) -> int:
 
 def _handle_convert(args: argparse.Namespace) -> int:
     args = convert_module.normalize_convert_args(args)
+    _log_script_namespace(convert_module.__file__, args)
     if args.dry_run:
         logger.info("Dry run: convert")
         print_args(args)
@@ -266,6 +288,7 @@ def _handle_convert(args: argparse.Namespace) -> int:
 def _handle_phase(args: argparse.Namespace) -> int:
     phase_module = _load_phase_module()
     args = phase_module.normalize_phase_args(args)
+    _log_script_namespace(phase_module.__file__, args)
     if args.dry_run:
         logger.info("Dry run: phase")
         print_args(args)
@@ -284,6 +307,7 @@ def _handle_phase(args: argparse.Namespace) -> int:
 def _handle_radiomics(args: argparse.Namespace) -> int:
     radiomics_module = _load_radiomics_module()
     args = radiomics_module.normalize_radiomics_args(args)
+    _log_script_namespace(radiomics_module.__file__, args)
     if args.dry_run:
         logger.info("Dry run: radiomics")
         print_args(args)
@@ -302,6 +326,7 @@ def _handle_radiomics(args: argparse.Namespace) -> int:
 def _handle_segment(args: argparse.Namespace) -> int:
     segment_module = _load_segment_module()
     args = segment_module.normalize_segment_args(args)
+    _log_script_namespace(segment_module.__file__, args)
     if args.dry_run:
         logger.info("Dry run: segment")
         print_args(args)
