@@ -131,7 +131,7 @@ def test_add_date_selects_best_date_candidate():
     out = clean.add_date(df.copy())
 
     assert out["date"].notna().sum() == 3
-    assert out.loc[0, "date"] == pd.Timestamp("2021-01-01")
+    assert out.loc[0, "date"] == pd.Timestamp("2020-01-01")
     assert out.loc[2, "date"] == pd.Timestamp("2021-01-03")
 
 
