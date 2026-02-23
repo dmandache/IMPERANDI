@@ -224,24 +224,35 @@ def add_date(df):
     if not candidate_cols:
         return df
 
-    parsed_by_candidate = {}
-    valid_counts = {}
-    for col in candidate_cols:
-        parsed = pd.to_datetime(
+    parsed_by_candidate = {
+        col: pd.to_datetime(
             df[col].apply(lambda x: pd.NaT if isinstance(x, list) else x),
             errors="coerce",
         )
-        parsed_by_candidate[col] = parsed
-        valid_counts[col] = int(parsed.notna().sum())
+        for col in candidate_cols
+    }
+    # Ordered fallback: first candidate has highest priority, next ones fill gaps.
+    date = parsed_by_candidate[candidate_cols[0]].copy()
+    fill_contrib = {}
+    for col in candidate_cols[1:]:
+        missing_before = int(date.isna().sum())
+        date = date.fillna(parsed_by_candidate[col])
+        missing_after = int(date.isna().sum())
+        fill_contrib[col] = missing_before - missing_after
 
-    best_col = max(candidate_cols, key=lambda col: valid_counts[col])
+    df["date"] = date
+    total_valid = int(df["date"].notna().sum())
     logger.info(
-        "Selected date candidate '%s' (%d/%d valid)",
-        best_col,
-        valid_counts[best_col],
+        "Date candidates (priority order) %s -> %d/%d valid%s",
+        candidate_cols,
+        total_valid,
         len(df),
+        (
+            f"; fallback filled {fill_contrib}"
+            if any(v > 0 for v in fill_contrib.values())
+            else ""
+        ),
     )
-    df["date"] = parsed_by_candidate[best_col]
     return df
 
 
@@ -250,21 +261,31 @@ def add_time(df):
     if not candidate_cols:
         return df
 
-    parsed_by_candidate = {}
-    valid_counts = {}
-    for col in candidate_cols:
-        parsed = df[col].apply(_normalize_instance_creation_time)
-        parsed_by_candidate[col] = parsed
-        valid_counts[col] = int(parsed.notna().sum())
+    parsed_by_candidate = {
+        col: df[col].apply(_normalize_instance_creation_time) for col in candidate_cols
+    }
+    # Ordered fallback: first candidate has highest priority, next ones fill gaps.
+    time = parsed_by_candidate[candidate_cols[0]].copy()
+    fill_contrib = {}
+    for col in candidate_cols[1:]:
+        missing_before = int(time.isna().sum())
+        time = time.fillna(parsed_by_candidate[col])
+        missing_after = int(time.isna().sum())
+        fill_contrib[col] = missing_before - missing_after
 
-    best_col = max(candidate_cols, key=lambda col: valid_counts[col])
+    df["time"] = time
+    total_valid = int(df["time"].notna().sum())
     logger.info(
-        "Selected time candidate '%s' (%d/%d valid)",
-        best_col,
-        valid_counts[best_col],
+        "Time candidates (priority order) %s -> %d/%d valid%s",
+        candidate_cols,
+        total_valid,
         len(df),
+        (
+            f"; fallback filled {fill_contrib}"
+            if any(v > 0 for v in fill_contrib.values())
+            else ""
+        ),
     )
-    df["time"] = parsed_by_candidate[best_col]
     return df
 
 

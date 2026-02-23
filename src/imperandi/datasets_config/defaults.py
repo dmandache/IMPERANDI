@@ -153,7 +153,7 @@ TIME_CANDIDATES = [
     "ContentTime",
     "SeriesTime",
     "InstanceCreationTime",
-    #"StudyTime",
+    "StudyTime",
 ]
 
 DATE_CANDIDATES = [
