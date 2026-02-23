@@ -18,14 +18,14 @@ def print_args(args: argparse.Namespace) -> None:
 def report_volumes(df, step_name=None):
     unique_counts = df[["patient_key", "study_id", "series_id"]].nunique()
     if step_name:
-        logger.info("  >>>  After %s:", step_name)
-    logger.info("Unique patients: %s", unique_counts["patient_key"])
-    logger.info("Unique studies: %s", unique_counts["study_id"])
-    logger.info("Unique series: %s", unique_counts["series_id"])
+        logger.info("After %s:", step_name)
+    logger.info("\tUnique patients: %s", unique_counts["patient_key"])
+    logger.info("\tUnique studies:  %s", unique_counts["study_id"])
+    logger.info("\tUnique series:   %s", unique_counts["series_id"])
 
     if "volume_id" in df.columns:
         unique_volumes = df["volume_id"].nunique()
-        logger.info("Unique volumes: %s", unique_volumes)
+        logger.info("\tUnique volumes:  %s", unique_volumes)
 
 
 def report_change(df, previous_df, col=None):
