@@ -143,7 +143,7 @@ def parse_arguments():
     args = parser.parse_args()
     args = normalize_clean_args(args)
 
-    logger.info("Running %s script with arguments: %s", Path(__file__).name, args)
+    logger.info("🚀 Running %s script with arguments: %s", Path(__file__).name, args)
     return args
 
 

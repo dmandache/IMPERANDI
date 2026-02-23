@@ -24,7 +24,7 @@ def _log_script_namespace(script_file: str, args: argparse.Namespace) -> None:
     namespace = argparse.Namespace(
         **{k: v for k, v in vars(args).items() if not k.startswith("_")}
     )
-    logger.info("Running %s with namespace: %s", Path(script_file).name, namespace)
+    logger.info("🚀 Running %s with namespace: %s", Path(script_file).name, namespace)
 
 
 def _load_phase_module():

@@ -131,7 +131,7 @@ def parse_arguments():
     parser = build_parser()
     args = parser.parse_args()
     args = normalize_convert_args(args)
-    logger.info("Running %s script with arguments: %s", Path(__file__).name, args)
+    logger.info("🚀 Running %s script with arguments: %s", Path(__file__).name, args)
     return args
 
 

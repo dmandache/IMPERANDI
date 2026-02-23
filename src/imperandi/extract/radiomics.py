@@ -132,7 +132,7 @@ def parse_arguments() -> argparse.Namespace:
     parser = build_parser()
     args = parser.parse_args()
     args = normalize_radiomics_args(args)
-    logger.info("Running %s with args: %s", Path(__file__).name, args)
+    logger.info("🚀 Running %s with args: %s", Path(__file__).name, args)
     return args
 
 

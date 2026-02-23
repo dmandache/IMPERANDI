@@ -106,7 +106,7 @@ def parse_arguments() -> argparse.Namespace:
     parser = build_parser()
     args = parser.parse_args()
     args = normalize_phase_args(args)
-    logger.info("Running %s script with arguments: %s", Path(__file__).name, args)
+    logger.info("🚀 Running %s script with arguments: %s", Path(__file__).name, args)
     return args
 
 

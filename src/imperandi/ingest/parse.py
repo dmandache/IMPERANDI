@@ -326,7 +326,7 @@ def parse_arguments():
     parser = build_parser()
     args = parser.parse_args()
     args = normalize_parse_args(args)
-    logger.info("Running %s with args: %s", Path(__file__).name, args)
+    logger.info("🚀 Running %s with args: %s", Path(__file__).name, args)
     return args
 
 
