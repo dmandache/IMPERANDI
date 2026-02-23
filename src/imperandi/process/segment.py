@@ -21,6 +21,7 @@ import logging
 import multiprocessing as mp
 import traceback
 from concurrent.futures import ProcessPoolExecutor, TimeoutError, as_completed
+from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -609,45 +610,142 @@ def main(args: argparse.Namespace) -> None:
     df["warning_message"] = None
 
     # --- spawn multiprocessing pool -------------------------------------------
-    ctx = mp.get_context(
-        args.start_method
-    )  # 'spawn' required for torch / CUDA stability
+    try:
+        ctx = mp.get_context(
+            args.start_method
+        )  # 'spawn' required for torch / CUDA stability
+    except ValueError:
+        available = mp.get_all_start_methods()
+        fallback = "spawn" if "spawn" in available else available[0]
+        logger.warning(
+            "Unsupported start_method=%r on this platform; falling back to %r",
+            args.start_method,
+            fallback,
+        )
+        ctx = mp.get_context(fallback)
 
-    results: List[Tuple[int, str | None, str | None, str | None]] = []
+    def _broken_pool_message(exc: BaseException) -> str:
+        return (
+            "BrokenProcessPool: likely worker process died unexpectedly "
+            f"({type(exc).__name__}: {exc})"
+        )
 
-    with ProcessPoolExecutor(max_workers=args.num_workers, mp_context=ctx) as pool:
-        futures = {
-            pool.submit(
-                process_single_volume,
+    def _is_retryable(err_msg: str | None) -> bool:
+        if not err_msg:
+            return False
+        low = err_msg.lower()
+        return "worker crash" in low or "brokenprocesspool" in low
+
+    def _run_rows(
+        row_indices: List[int], *, desc: str
+    ) -> Dict[int, Tuple[int, str | None, str | None, str | None]]:
+        out: Dict[int, Tuple[int, str | None, str | None, str | None]] = {}
+        if not row_indices:
+            return out
+
+        pool = ProcessPoolExecutor(max_workers=args.num_workers, mp_context=ctx)
+        broken_pool = False
+        try:
+            futures = {
+                pool.submit(
+                    process_single_volume,
+                    idx,
+                    df.loc[idx].to_dict(),
+                    tasks_config,
+                    fast=args.fast,
+                    verbose=args.verbose,
+                    force=args.force,
+                ): idx
+                for idx in row_indices
+            }
+            pending = set(row_indices)
+            iterator = tqdm(as_completed(futures), total=len(futures), desc=desc)
+
+            try:
+                for fut in iterator:
+                    i = futures[fut]
+                    pending.discard(i)
+                    try:
+                        res = fut.result(timeout=args.timeout_sec)
+                    except TimeoutError:
+                        logger.warning("Row %d exceeded %ds – killed", i, args.timeout_sec)
+                        fut.cancel()
+                        res = (i, None, "timeout", None)
+                    except BrokenProcessPool as exc:
+                        msg = _broken_pool_message(exc)
+                        broken_pool = True
+                        logger.error(
+                            "BrokenProcessPool while collecting row %d; aborting fast: %s",
+                            i,
+                            exc,
+                        )
+                        out[i] = (i, None, msg, None)
+                        for j in pending:
+                            out[j] = (j, None, msg, None)
+                        for pending_fut in futures:
+                            pending_fut.cancel()
+                        break
+                    except Exception as exc:
+                        res = (i, None, f"worker crash: {type(exc).__name__}: {exc}", None)
+                        out[i] = res
+                    else:
+                        out[i] = res
+            except BrokenProcessPool as exc:
+                msg = _broken_pool_message(exc)
+                broken_pool = True
+                logger.error("BrokenProcessPool during completion loop; aborting fast: %s", exc)
+                for j in pending:
+                    out[j] = (j, None, msg, None)
+        finally:
+            if broken_pool:
+                # Force‑kill any orphaned processes after hard worker crashes (<= Py3.10).
+                pool.shutdown(wait=False, cancel_futures=True)
+                processes = getattr(pool, "_processes", None)
+                if processes:
+                    for p in processes.values():
+                        if p.is_alive():
+                            p.kill()
+            else:
+                # Graceful shutdown prevents collateral damage to interpreter state.
+                pool.shutdown(wait=True, cancel_futures=False)
+
+        return out
+
+    row_indices = list(df.index)
+    if args.num_workers <= 1:
+        logger.info(
+            "Running segmentation in single-worker mode (no multiprocessing pool)"
+        )
+        results_by_idx = {
+            idx: process_single_volume(
                 idx,
-                row.to_dict(),
+                df.loc[idx].to_dict(),
                 tasks_config,
                 fast=args.fast,
                 verbose=args.verbose,
                 force=args.force,
-            ): idx
-            for idx, row in df.iterrows()
+            )
+            for idx in tqdm(row_indices, total=len(row_indices), desc="Segment")
         }
+    else:
+        results_by_idx = _run_rows(row_indices, desc="Segment")
 
-        for fut in tqdm(as_completed(futures), total=len(futures), desc="Segment"):
-            i = futures[fut]
-            try:
-                res = fut.result(timeout=args.timeout_sec)
-            except TimeoutError:
-                logger.warning("Row %d exceeded %ds – killed", i, args.timeout_sec)
-                fut.cancel()
-                res = (i, None, "timeout", None)
-            except Exception as exc:
-                res = (i, None, f"worker crash: {exc}", None)
-            results.append(res)
+        retry_indices = [
+            i
+            for i in row_indices
+            if _is_retryable(results_by_idx.get(i, (i, None, None, None))[2])
+        ]
+        if retry_indices:
+            logger.warning(
+                "Retrying %d row(s) in a fresh executor after worker crash/BrokenProcessPool",
+                len(retry_indices),
+            )
+            retry_results = _run_rows(retry_indices, desc="Segment retry")
+            results_by_idx.update(retry_results)
 
-        # Force‑kill any orphaned processes (≤ Python 3.10)
-        pool.shutdown(wait=False, cancel_futures=True)
-        processes = getattr(pool, "_processes", None)
-        if processes:
-            for p in processes.values():
-                if p.is_alive():
-                    p.kill()
+    results: List[Tuple[int, str | None, str | None, str | None]] = [
+        results_by_idx[i] for i in row_indices if i in results_by_idx
+    ]
 
     # --- consolidate results ---------------------------------------------------
     errors: List[Dict[str, Any]] = []
@@ -694,7 +792,7 @@ def main(args: argparse.Namespace) -> None:
         except Exception:
             logger.debug("report_volumes() failed – continuing")
 
-    logger.info("All done ✔")
+    logger.info("Segmentation done ✔")
 
 
 if __name__ == "__main__":

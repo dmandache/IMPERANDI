@@ -550,6 +550,8 @@ def main(args):
         )
         report_volumes(df_err)
         df_err.to_csv(args.error_csv_path, index=False)
+    
+    logger.info("Conversion done ✔")
 
 
 if __name__ == "__main__":

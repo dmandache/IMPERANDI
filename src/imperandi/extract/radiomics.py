@@ -392,6 +392,8 @@ def main(args: argparse.Namespace) -> None:
         df_err.to_csv(args.error_csv_path, index=False)
         logger.warning("%d rows failed -> %s", len(df_err), args.error_csv_path)
 
+    logger.info("Radiomics extraction done ✔")
+
 
 if __name__ == "__main__":
     setup_logging()

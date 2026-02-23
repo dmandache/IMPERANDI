@@ -923,7 +923,7 @@ def main(args):
     out_final = output_dir / "dicom_index.csv"
     df.to_csv(out_final, index=False)
     logger.info("Saved final index: %s", out_final)
-    logger.info("Done.")
+    logger.info("Parsing done ✔")
 
 
 if __name__ == "__main__":

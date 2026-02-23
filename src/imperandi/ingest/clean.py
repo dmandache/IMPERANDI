@@ -521,7 +521,7 @@ def correct_volume_ids(df, z_tolerance=1e-3):
             summary = {}
 
         logger.info(
-            "%s : %s pseudo-volumes, %s total rows",
+            "%s : %s pseudo-volumes, %s total files",
             summary,
             len(volume_ids),
             len(group_df),
@@ -860,11 +860,11 @@ def compute_acquisition_order(df):
         .apply(lambda x: x.sort_values(by=["time"]))
     )
 
-    df_study["delay_since_prev_exam_sec"] = (
+    df_study["delay_since_prev_acq_sec"] = (
         df_study.groupby(["patient_key", "study_id"])["time"].diff().dt.total_seconds()
     )
-    df_study["delay_since_first_acquisition_sec"] = (
-        df_study.groupby(["patient_key", "study_id"])["delay_since_prev_exam_sec"]
+    df_study["delay_since_first_acq_sec"] = (
+        df_study.groupby(["patient_key", "study_id"])["delay_since_prev_acq_sec"]
         .cumsum()
         .fillna(0)
     )
@@ -875,8 +875,8 @@ def compute_acquisition_order(df):
     df = df.merge(
         df_study[
             [
-                "delay_since_prev_exam_sec",
-                "delay_since_first_acquisition_sec",
+                "delay_since_prev_acq_sec",
+                "delay_since_first_acq_sec",
                 "acquisition_order",
             ]
         ],
@@ -929,6 +929,39 @@ def reorder_columns(df):
     ]
 
     return df[ordered_cols]
+
+
+def reorder_rows(df):
+    sort_cols = []
+    tmp = pd.DataFrame(index=df.index)
+
+    if "patient_key" in df.columns:
+        tmp["_sort_patient_key"] = (
+            df["patient_key"].astype("string").fillna("").str.strip()
+        )
+        tmp.loc[tmp["_sort_patient_key"] == "", "_sort_patient_key"] = "~"
+        sort_cols.append("_sort_patient_key")
+
+    if "date" in df.columns:
+        tmp["_sort_date"] = pd.to_datetime(df["date"], errors="coerce")
+        sort_cols.append("_sort_date")
+
+    if "time" in df.columns:
+        time_values = df["time"].apply(
+            lambda value: value.isoformat() if isinstance(value, dt_time) else value
+        )
+        tmp["_sort_time"] = pd.to_timedelta(time_values, errors="coerce")
+        sort_cols.append("_sort_time")
+
+    if not sort_cols:
+        return df
+
+    ordered_idx = tmp.sort_values(
+        by=sort_cols,
+        kind="mergesort",
+        na_position="last",
+    ).index
+    return df.loc[ordered_idx].reset_index(drop=True)
 
 
 def clean_and_save_data(
@@ -1024,12 +1057,15 @@ def clean_and_save_data(
     df = df.dropna(axis=1, how="all") # drop empty columns
 
     df = reorder_columns(df)
+    df = reorder_rows(df)
 
     if csv_path_out:
         df.to_csv(csv_path_out, index=False)
         logger.info("Cleaned data saved to %s", csv_path_out)
     logger.info("shape : %s", df.shape)
     logger.info("columns : %s", df.columns)
+
+    logger.info("Cleaning done ✔")
 
 
 if __name__ == "__main__":

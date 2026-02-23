@@ -364,3 +364,59 @@ def test_main_records_warning_when_merged_mask_missing(tmp_path, monkeypatch):
     assert "warning_message" in out_df.columns
     assert "missing merged mask" in out_df.loc[0, "warning_message"]
     assert pd.isna(out_df.loc[0, "mask_merged"])
+
+
+def test_main_single_worker_avoids_process_pool(tmp_path, monkeypatch):
+    nifti = tmp_path / "vol.nii.gz"
+    nifti.write_text("nifti")
+
+    csv_path = tmp_path / "nifti_index.csv"
+    pd.DataFrame([{"nifti_path": str(nifti)}]).to_csv(csv_path, index=False)
+
+    config = {
+        "backend": "totalsegmentator",
+        "tasks": [
+            {"key": "liver", "task": "total", "output": "liver.nii.gz", "extra": {}},
+        ],
+    }
+    config_path = tmp_path / "tasks.json"
+    config_path.write_text(json.dumps(config))
+
+    monkeypatch.setattr(
+        segment_module, "prefetch_totalsegmentator_models", lambda *a, **k: None
+    )
+    monkeypatch.setattr(segment_module, "tqdm", lambda it, **kwargs: it)
+
+    def fail_if_pool_used(*args, **kwargs):
+        raise AssertionError("ProcessPoolExecutor should not be used in single-worker mode")
+
+    monkeypatch.setattr(segment_module, "ProcessPoolExecutor", fail_if_pool_used)
+
+    def fake_process_single_volume(
+        idx, row, tasks_config, *, fast, verbose, force, backend=None
+    ):
+        out_dir = Path(row["nifti_path"]).parent
+        (out_dir / "liver.nii.gz").write_text("mask")
+        return idx, str(out_dir), None, None
+
+    monkeypatch.setattr(
+        segment_module, "process_single_volume", fake_process_single_volume
+    )
+
+    args = argparse.Namespace(
+        csv_path=str(csv_path),
+        csv_path_out=str(tmp_path / "segmented.csv"),
+        error_csv_path=str(tmp_path / "errors.csv"),
+        tasks_config=str(config_path),
+        num_workers=1,
+        fast=False,
+        verbose=False,
+        force=False,
+        start_method="spawn",
+        timeout_sec=10,
+    )
+
+    segment_module.main(args)
+
+    out_df = pd.read_csv(args.csv_path_out)
+    assert out_df.loc[0, "mask_liver"].endswith("liver.nii.gz")
