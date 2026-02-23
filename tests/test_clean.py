@@ -313,6 +313,7 @@ def test_compute_visit_and_acquisition_order():
             "patient_key": ["p", "p", "p"],
             "study_id": ["s", "s", "s"],
             "volume_id": ["v1", "v2", "v3"],
+            "StudyDate": ["20200101", "20200101", "20200101"],
             "InstanceCreationTime": [
                 "['120000.000']",
                 "['120100.000']",
@@ -320,6 +321,8 @@ def test_compute_visit_and_acquisition_order():
             ],
         }
     )
+    df2 = clean.add_date(df2)
+    df2 = clean.add_time(df2)
     out2 = clean.compute_acquisition_order(df2.copy())
     assert "acquisition_order" in out2.columns
     assert set(out2["acquisition_order"].dropna()) == {0, 1, 2}
@@ -330,6 +333,7 @@ def test_compute_visit_and_acquisition_order():
             "patient_key": ["p", "p", "p"],
             "study_id": ["s", "s", "s"],
             "volume_id": ["v1", "v2", "v3"],
+            "StudyDate": ["20200101", "20200101", "20200101"],
             "InstanceCreationTime": [
                 [dt_time(17, 16, 35), dt_time(17, 16, 36)],
                 "[datetime.time(17, 16, 40), datetime.time(17, 16, 41)]",
@@ -337,6 +341,8 @@ def test_compute_visit_and_acquisition_order():
             ],
         }
     )
+    df3 = clean.add_date(df3)
+    df3 = clean.add_time(df3)
     out3 = clean.compute_acquisition_order(df3.copy())
     assert out3.set_index("volume_id").loc["v1", "acquisition_order"] == 0
     assert out3.set_index("volume_id").loc["v2", "acquisition_order"] == 1
