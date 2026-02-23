@@ -17,16 +17,16 @@ def apply_id_standardization(
     if "patient_key" not in df.columns:
         return df
 
-    if "patient_key_raw" not in df.columns:
-        df["patient_key_raw"] = df["patient_key"]
+    if "_patient_key_raw" not in df.columns:
+        df["_patient_key_raw"] = df["patient_key"]
 
     if not hook:
         return df
 
-    df["patient_key"] = df["patient_key_raw"].apply(hook)
+    df["patient_key"] = df["_patient_key_raw"].apply(hook)
 
-    raw_ok = df["patient_key_raw"].notna() & (
-        df["patient_key_raw"].astype(str).str.strip() != ""
+    raw_ok = df["_patient_key_raw"].notna() & (
+        df["_patient_key_raw"].astype(str).str.strip() != ""
     )
     std_bad = df["patient_key"].isna() | (
         df["patient_key"].astype(str).str.strip() == ""
@@ -36,7 +36,7 @@ def apply_id_standardization(
     if failed.any():
         df["patient_key_std_failed"] = failed
         if logger is not None:
-            n_keys = int(df.loc[failed, "patient_key_raw"].nunique())
+            n_keys = int(df.loc[failed, "_patient_key_raw"].nunique())
             logger.warning(
                 "[id_standardization] failed on unique raw keys=%s",
                 n_keys,

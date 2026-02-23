@@ -301,10 +301,10 @@ def test_apply_id_standardization_monkeypatched_hook(monkeypatch):
 
     print(out)
     # raw preserved
-    assert "patient_key_raw" in out.columns
+    assert "_patient_key_raw" in out.columns
     assert out.loc[0, "patient_key"] == "ALICE"
     # failing raw ('X') should mark std_failed True
-    assert out.loc[1, "patient_key_raw"] == "X"
+    assert out.loc[1, "_patient_key_raw"] == "X"
     assert out.loc[1, "patient_key_std_failed"]
     # None remains None and not marked as failed
     assert pd.isna(out.loc[2, "patient_key"])

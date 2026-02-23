@@ -846,22 +846,34 @@ def compute_acquisition_order(df):
     if "InstanceCreationTime" not in df.columns:
         return df
 
-    parsed_time = df["InstanceCreationTime"].apply(_normalize_instance_creation_time)
-    df["time"] = pd.to_timedelta(
-        parsed_time.apply(lambda t: t.isoformat() if t is not None else None),
-        errors="coerce",
-    )
+    df["time"] = df["InstanceCreationTime"].apply(_normalize_instance_creation_time)
+    df["_acq_timestamp"] = pd.to_datetime(df["date"], errors="coerce") + \
+        df["time"].apply(
+            lambda t: pd.Timedelta(
+                hours=t.hour,
+                minutes=t.minute,
+                seconds=t.second,
+                microseconds=t.microsecond,
+            ) if t is not None else pd.NaT
+        )
+
+    # One row per (patient, study, volume) with representative acquisition time
+
+    # df_study = (
+    #     df.reset_index()
+    #     .groupby(["patient_key", "study_id", "volume_id"], group_keys=False)
+    #     .first()
+    #     .groupby("patient_key", group_keys=False)
+    #     .apply(lambda x: x.sort_values(by=["_acq_timestamp"]))
+    # )
 
     df_study = (
-        df.reset_index()
-        .groupby(["patient_key", "study_id", "volume_id"], group_keys=False)
-        .first()
-        .groupby("patient_key", group_keys=False)
-        .apply(lambda x: x.sort_values(by=["time"]))
+        df.groupby(["patient_key", "study_id", "volume_id"], as_index=False)
+          .agg(_acq_timestamp=("_acq_acq_timestamp_ts", "min"))
     )
 
     df_study["delay_since_prev_acq_sec"] = (
-        df_study.groupby(["patient_key", "study_id"])["time"].diff().dt.total_seconds()
+        df_study.groupby(["patient_key", "study_id"])["_acq_timestamp"].diff().dt.total_seconds()
     )
     df_study["delay_since_first_acq_sec"] = (
         df_study.groupby(["patient_key", "study_id"])["delay_since_prev_acq_sec"]
@@ -869,12 +881,15 @@ def compute_acquisition_order(df):
         .fillna(0)
     )
     df_study["acquisition_order"] = df_study.groupby(["patient_key", "study_id"])[
-        "time"
+        "_acq_timestamp"
     ].cumcount()
 
     df = df.merge(
         df_study[
             [
+                "patient_key",
+                "study_id",
+                "volume_id",
                 "delay_since_prev_acq_sec",
                 "delay_since_first_acq_sec",
                 "acquisition_order",
