@@ -147,3 +147,19 @@ DEFAULT_DICOM_TAGS = [
     "PositionReferenceIndicator",
     "BurnedInAnnotation",
 ]
+
+TIME_CANDIDATES = [
+    "AcquisitionTime",
+    "ContentTime",
+    "SeriesTime",
+    "InstanceCreationTime",
+    "StudyTime",
+]
+
+DATE_CANDIDATES = [
+    "StudyDate",
+    "AcquisitionDate",
+    "ContentDate",
+    "SeriesDate",
+    "InstanceCreationDate",
+]

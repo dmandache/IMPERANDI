@@ -29,6 +29,8 @@ from imperandi.datasets_config.defaults import (
     DEFAULT_VOLUME_UPPERBOUND,
     DEFAULT_MAX_PIXEL_SPACING_MM,
     DEFAULT_MAX_SLICE_THICKNESS_MM,
+    DATE_CANDIDATES,
+    TIME_CANDIDATES,
 )
 
 COLUMNS_TO_USE = [
@@ -218,13 +220,51 @@ def remove_pet_ct(df):
 
 
 def add_date(df):
-    if "StudyDate" not in df.columns:
+    candidate_cols = [col for col in DATE_CANDIDATES if col in df.columns]
+    if not candidate_cols:
         return df
-    df["date"] = df["StudyDate"].apply(
-        lambda x: (
-            pd.to_datetime(x, errors="coerce") if not isinstance(x, list) else pd.NaT
+
+    parsed_by_candidate = {}
+    valid_counts = {}
+    for col in candidate_cols:
+        parsed = pd.to_datetime(
+            df[col].apply(lambda x: pd.NaT if isinstance(x, list) else x),
+            errors="coerce",
         )
+        parsed_by_candidate[col] = parsed
+        valid_counts[col] = int(parsed.notna().sum())
+
+    best_col = max(candidate_cols, key=lambda col: valid_counts[col])
+    logger.info(
+        "Selected date candidate '%s' (%d/%d valid)",
+        best_col,
+        valid_counts[best_col],
+        len(df),
     )
+    df["date"] = parsed_by_candidate[best_col]
+    return df
+
+
+def add_time(df):
+    candidate_cols = [col for col in TIME_CANDIDATES if col in df.columns]
+    if not candidate_cols:
+        return df
+
+    parsed_by_candidate = {}
+    valid_counts = {}
+    for col in candidate_cols:
+        parsed = df[col].apply(_normalize_instance_creation_time)
+        parsed_by_candidate[col] = parsed
+        valid_counts[col] = int(parsed.notna().sum())
+
+    best_col = max(candidate_cols, key=lambda col: valid_counts[col])
+    logger.info(
+        "Selected time candidate '%s' (%d/%d valid)",
+        best_col,
+        valid_counts[best_col],
+        len(df),
+    )
+    df["time"] = parsed_by_candidate[best_col]
     return df
 
 
@@ -843,10 +883,10 @@ def _normalize_instance_creation_time(value):
 
 
 def compute_acquisition_order(df):
-    if "InstanceCreationTime" not in df.columns:
+    if "time" not in df.columns:
         return df
 
-    df["time"] = df["InstanceCreationTime"].apply(_normalize_instance_creation_time)
+    df["time"] = df["time"].apply(_normalize_instance_creation_time)
     df["_acq_timestamp"] = pd.to_datetime(df["date"], errors="coerce") + \
         df["time"].apply(
             lambda t: pd.Timedelta(
@@ -991,6 +1031,7 @@ def clean_and_save_data(
     df = to_dates(df)
     df = to_times(df)
     df = add_date(df)  # generic date column
+    df = add_time(df)  # generic time column
 
     df_prev = df.copy()
     df = apply_derived_columns(df, manifest)

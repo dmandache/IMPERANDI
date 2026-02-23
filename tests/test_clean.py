@@ -119,6 +119,38 @@ def test_add_date_and_filter_image_type_and_remove_localizers_mpr():
     ).any()
 
 
+def test_add_date_selects_best_date_candidate():
+    df = pd.DataFrame(
+        {
+            "StudyDate": ["20200101", None, "bad"],
+            "AcquisitionDate": ["20210101", "20210102", "20210103"],
+            "ContentDate": [None, None, None],
+        }
+    )
+
+    out = clean.add_date(df.copy())
+
+    assert out["date"].notna().sum() == 3
+    assert out.loc[0, "date"] == pd.Timestamp("2021-01-01")
+    assert out.loc[2, "date"] == pd.Timestamp("2021-01-03")
+
+
+def test_add_time_selects_best_time_candidate():
+    df = pd.DataFrame(
+        {
+            "AcquisitionTime": ["bad", None, None],
+            "ContentTime": ["120000", "120100", "120200"],
+            "StudyTime": [None, None, None],
+        }
+    )
+
+    out = clean.add_time(df.copy())
+
+    assert out["time"].notna().sum() == 3
+    assert out.loc[0, "time"] == dt_time(12, 0, 0)
+    assert out.loc[2, "time"] == dt_time(12, 2, 0)
+
+
 def test_clean_scan_size_and_pixel_spacing():
     df = pd.DataFrame(
         {
