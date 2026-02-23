@@ -909,7 +909,7 @@ def compute_acquisition_order(df):
 
     df_study = (
         df.groupby(["patient_key", "study_id", "volume_id"], as_index=False)
-          .agg(_acq_timestamp=("_acq_acq_timestamp_ts", "min"))
+          .agg(_acq_timestamp=("_acq_timestamp", "min"))
     )
 
     df_study["delay_since_prev_acq_sec"] = (
