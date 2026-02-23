@@ -372,7 +372,7 @@ def segment_volume(
 
         if not dst.exists():
             raise RuntimeError(f"Expected mask not produced: {dst}")
-        else:
+        if verbose:
             logger.info("Mask saved at %s", dst)
 
     postprocess = tasks_config.get("postprocess")
