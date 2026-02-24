@@ -10,5 +10,33 @@
   "id_standardization": {
     "hook_module": "datasets_config.hooks.generic",
     "function": "standardize_patient_key"
+  },
+  "segmentation": {
+    "backend": "totalsegmentator",
+    "tasks": [
+      {
+        "key": "liver",
+        "task": "total",
+        "output": "liver.nii.gz",
+        "extra": { 
+          "roi_subset_robust": ["liver","pancres","spleen"], 
+          "fastest": true 
+        }
+      },
+      {
+        "key": "liver_tumor",
+        "task": "liver_vessels",
+        "output": "liver_tumor.nii.gz",
+        "extra": {}
+      }
+    ],
+    "postprocess": {
+      "merge_keys": ["liver", "liver_tumor"],
+      "output": "liver.nii.gz",
+      "radius_mm": 5.0,
+      "largest_cc": true,
+      "fill_holes": true,
+      "close": true
+    }
   }
 }

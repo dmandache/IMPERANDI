@@ -72,16 +72,21 @@ def patch_strategy(monkeypatch, **overrides):
     monkeypatch.setattr(mp_utils, "apply_strategy_env", lambda *a, **k: None)
 
 
-def test_load_tasks_config_default():
-    cfg = segment_module.load_tasks_config(None)
+def test_load_segmentation_config_default():
+    cfg = segment_module.load_segmentation_config(
+        None, base_path=Path(__file__).resolve().parents[1] / "src" / "imperandi"
+    )
     assert "tasks" in cfg
     assert cfg["backend"] == "totalsegmentator"
 
 
-def test_load_tasks_config_missing(tmp_path):
+def test_load_segmentation_config_missing(tmp_path):
     missing = tmp_path / "nope.json"
     with pytest.raises(FileNotFoundError):
-        segment_module.load_tasks_config(missing)
+        segment_module.load_segmentation_config(
+            str(missing),
+            base_path=Path(__file__).resolve().parents[1] / "src" / "imperandi",
+        )
 
 
 def test_segment_volume_calls_postprocess(tmp_path, monkeypatch):
@@ -275,7 +280,7 @@ def test_main_writes_mask_columns(tmp_path, monkeypatch):
     }
 
     config_path = tmp_path / "tasks.json"
-    config_path.write_text(json.dumps(config))
+    config_path.write_text(json.dumps({"segmentation": config}))
 
     class DummyFuture:
         def __init__(self, result):
@@ -321,7 +326,7 @@ def test_main_writes_mask_columns(tmp_path, monkeypatch):
         csv_path=str(csv_path),
         csv_path_out=str(tmp_path / "segmented.csv"),
         error_csv_path=str(tmp_path / "errors.csv"),
-        tasks_config=str(config_path),
+        manifest=str(config_path),
         num_workers=2,
         fast=False,
         verbose=False,
@@ -357,7 +362,7 @@ def test_main_records_warning_when_merged_mask_missing(tmp_path, monkeypatch):
     }
 
     config_path = tmp_path / "tasks.json"
-    config_path.write_text(json.dumps(config))
+    config_path.write_text(json.dumps({"segmentation": config}))
 
     class DummyFuture:
         def __init__(self, result):
@@ -400,7 +405,7 @@ def test_main_records_warning_when_merged_mask_missing(tmp_path, monkeypatch):
         csv_path=str(csv_path),
         csv_path_out=str(tmp_path / "segmented.csv"),
         error_csv_path=str(tmp_path / "errors.csv"),
-        tasks_config=str(config_path),
+        manifest=str(config_path),
         num_workers=2,
         fast=False,
         verbose=False,
@@ -431,7 +436,7 @@ def test_main_single_worker_avoids_process_pool(tmp_path, monkeypatch):
         ],
     }
     config_path = tmp_path / "tasks.json"
-    config_path.write_text(json.dumps(config))
+    config_path.write_text(json.dumps({"segmentation": config}))
 
     monkeypatch.setattr(
         segment_module, "prefetch_totalsegmentator_models", lambda *a, **k: None
@@ -459,7 +464,7 @@ def test_main_single_worker_avoids_process_pool(tmp_path, monkeypatch):
         csv_path=str(csv_path),
         csv_path_out=str(tmp_path / "segmented.csv"),
         error_csv_path=str(tmp_path / "errors.csv"),
-        tasks_config=str(config_path),
+        manifest=str(config_path),
         num_workers=1,
         fast=False,
         verbose=False,
@@ -515,7 +520,7 @@ def test_main_uses_strategy_effective_worker_count(tmp_path, monkeypatch):
         csv_path=str(csv_path),
         csv_path_out=str(tmp_path / "segmented.csv"),
         error_csv_path=str(tmp_path / "errors.csv"),
-        tasks_config=str(config_path),
+        manifest=str(config_path),
         num_workers=4,
         fast=False,
         verbose=False,
@@ -594,7 +599,7 @@ def test_main_uses_strategy_effective_start_method(tmp_path, monkeypatch):
         csv_path=str(csv_path),
         csv_path_out=str(tmp_path / "segmented.csv"),
         error_csv_path=str(tmp_path / "errors.csv"),
-        tasks_config=str(config_path),
+        manifest=str(config_path),
         num_workers=4,
         fast=False,
         verbose=False,
@@ -677,7 +682,7 @@ def test_main_enables_gpu_worker_pinning_for_multi_gpu(tmp_path, monkeypatch):
         csv_path=str(csv_path),
         csv_path_out=str(tmp_path / "segmented.csv"),
         error_csv_path=str(tmp_path / "errors.csv"),
-        tasks_config=str(config_path),
+        manifest=str(config_path),
         num_workers=2,
         fast=False,
         verbose=False,
@@ -756,7 +761,7 @@ def test_main_bounds_in_flight_submissions(tmp_path, monkeypatch):
         csv_path=str(csv_path),
         csv_path_out=str(tmp_path / "segmented.csv"),
         error_csv_path=str(tmp_path / "errors.csv"),
-        tasks_config=str(config_path),
+        manifest=str(config_path),
         num_workers=4,
         fast=False,
         verbose=False,
@@ -825,7 +830,7 @@ def test_main_enforces_wall_timeout_per_row(tmp_path, monkeypatch):
         csv_path=str(csv_path),
         csv_path_out=str(tmp_path / "segmented.csv"),
         error_csv_path=str(tmp_path / "errors.csv"),
-        tasks_config=str(config_path),
+        manifest=str(config_path),
         num_workers=2,
         fast=False,
         verbose=False,
@@ -905,7 +910,7 @@ def test_main_recycles_executor_by_recycle_every(tmp_path, monkeypatch):
         csv_path=str(csv_path),
         csv_path_out=str(tmp_path / "segmented.csv"),
         error_csv_path=str(tmp_path / "errors.csv"),
-        tasks_config=str(config_path),
+        manifest=str(config_path),
         num_workers=3,
         fast=False,
         verbose=False,
@@ -963,7 +968,7 @@ def test_main_subprocess_mode_currently_degrades_to_serial(tmp_path, monkeypatch
         csv_path=str(csv_path),
         csv_path_out=str(tmp_path / "segmented.csv"),
         error_csv_path=str(tmp_path / "errors.csv"),
-        tasks_config=str(config_path),
+        manifest=str(config_path),
         num_workers=4,
         fast=False,
         verbose=False,
