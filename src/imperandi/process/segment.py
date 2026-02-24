@@ -782,10 +782,11 @@ def main(args: argparse.Namespace) -> None:
     row_indices = list(df.index)
     run_serial = strategy.mode == "serial" or effective_workers <= 1
     if strategy.mode == "subprocess_per_case":
-        logger.warning(
-            "Strategy selected mode='subprocess_per_case', but this mode is deferred in segment; falling back to serial execution for now."
-        )
-        run_serial = True
+        # logger.warning(
+        #     "Strategy selected mode='subprocess_per_case', but this mode is deferred in segment; falling back to serial execution for now."
+        # )
+        # run_serial = True
+        pass
 
     if run_serial:
         logger.info(
