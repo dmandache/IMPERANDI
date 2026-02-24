@@ -104,6 +104,26 @@ def test_resolve_prefetch_task_name_handles_body_mr_fast_alias():
     assert segment_module._resolve_prefetch_task_name(task) == "body_mr_fast"
 
 
+def test_resolve_runtime_task_strips_fast_suffix_for_execution():
+    task_name, extra = segment_module._resolve_runtime_task("total_fast", {})
+    assert task_name == "total"
+    assert extra["fast"] is True
+
+
+def test_resolve_merge_outputs_rejects_merge_outputs_config():
+    postprocess = {"merge_outputs": ["a.nii.gz"]}
+    tasks = [{"key": "a", "output": "a.nii.gz"}]
+    with pytest.raises(ValueError, match="merge_outputs is not supported"):
+        segment_module.resolve_merge_outputs(postprocess, tasks)
+
+
+def test_resolve_merge_outputs_raises_when_merge_key_missing():
+    postprocess = {"merge_keys": ["missing_key"]}
+    tasks = [{"key": "a", "output": "a.nii.gz"}]
+    with pytest.raises(ValueError, match="unknown task key"):
+        segment_module.resolve_merge_outputs(postprocess, tasks)
+
+
 def test_segment_volume_calls_postprocess(tmp_path, monkeypatch):
     nifti = tmp_path / "vol.nii.gz"
     nifti.write_text("nifti")
