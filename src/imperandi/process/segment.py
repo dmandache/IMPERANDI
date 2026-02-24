@@ -155,6 +155,9 @@ def clean_and_merge_masks(
 
     # Optional: overwrite the originals with their cleaned‑up version
     for fname, mask in masks.items():
+        if fname == output_name:
+            # Keep merged output intact when destination name overlaps an input.
+            continue
         save_nifti(mask & merged, ref_affine, dir_path / fname)
 
     return True
@@ -203,19 +206,19 @@ def _default_segmentation_config() -> Dict[str, Any]:
             {
                 "key": "liver",
                 "task": "total",
-                "output": "liver.nii.gz",
+                "output": "liver",
                 "extra": {"roi_subset_robust": ["liver"]},
             },
             {
                 "key": "liver_tumor",
                 "task": "liver_vessels",
-                "output": "liver_tumor.nii.gz",
+                "output": "liver_tumor",
                 "extra": {},
             },
         ],
         "postprocess": {
             "merge_keys": ["liver", "liver_tumor"],
-            "output": "liver_all.nii.gz",
+            "output": "liver_all",
             "radius_mm": 5.0,
             "largest_cc": True,
             "fill_holes": True,
@@ -286,22 +289,65 @@ def _as_str_list(value: Any) -> List[str]:
 
 
 def infer_task_outputs(task: Dict[str, Any]) -> List[str]:
+    def _normalize_output_key(raw: str) -> str:
+        value = str(raw).strip()
+        if value.endswith(".nii.gz"):
+            value = value[: -len(".nii.gz")]
+        return value
+
     outputs: List[str] = []
-    outputs.extend(_as_str_list(task.get("outputs")))
-    outputs.extend(_as_str_list(task.get("output")))
+    outputs.extend(_normalize_output_key(v) for v in _as_str_list(task.get("outputs")))
+    outputs.extend(_normalize_output_key(v) for v in _as_str_list(task.get("output")))
     extra = task.get("extra", {})
     if isinstance(extra, dict):
         for roi_key in ("roi_subset_robust", "roi_subset"):
             for roi in _as_str_list(extra.get(roi_key)):
                 roi = roi.strip()
                 if roi:
-                    outputs.append(f"{roi}.nii.gz")
+                    outputs.append(_normalize_output_key(roi))
     # dedupe but keep order
     return list(dict.fromkeys(outputs))
 
 
+def _output_to_column(output_name: str) -> str:
+    value = str(output_name).strip()
+    if value.endswith(".nii.gz"):
+        value = value[: -len(".nii.gz")]
+    return f"mask_{value or 'unnamed'}"
+
+
+def _output_to_filename(output_name: str) -> str:
+    value = str(output_name).strip()
+    if value.endswith(".nii.gz"):
+        return value
+    return f"{value}.nii.gz"
+
+
+def build_output_column_map(tasks: List[Dict[str, Any]]) -> Dict[str, str]:
+    output_to_column: Dict[str, str] = {}
+    for task in tasks:
+        for output_name in infer_task_outputs(task):
+            if output_name not in output_to_column:
+                output_to_column[output_name] = _output_to_column(output_name)
+    return output_to_column
+
+
+def _merge_key_to_column(merge_key: str) -> str:
+    key = str(merge_key).strip()
+    if not key:
+        return "mask_unnamed"
+    if key.startswith("mask_"):
+        return key
+    if key.endswith(".nii.gz"):
+        key = key[: -len(".nii.gz")]
+    return f"mask_{key or 'unnamed'}"
+
+
 def resolve_merge_outputs(
-    postprocess: Dict[str, Any], tasks: List[Dict[str, Any]]
+    postprocess: Dict[str, Any],
+    tasks: List[Dict[str, Any]],
+    *,
+    output_to_column: Dict[str, str] | None = None,
 ) -> List[str]:
     merge_outputs = _as_str_list(postprocess.get("merge_outputs"))
     if merge_outputs:
@@ -312,21 +358,25 @@ def resolve_merge_outputs(
     merge_keys = _as_str_list(postprocess.get("merge_keys"))
     if not merge_keys:
         raise ValueError("postprocess.merge_keys is required for postprocess merging.")
-    key_to_output: Dict[str, str] = {}
-    for task in tasks:
-        key = task.get("key")
-        outputs = infer_task_outputs(task)
-        if key and outputs:
-            key_to_output[str(key)] = outputs[0]
 
-    missing = [k for k in merge_keys if k not in key_to_output]
+    output_to_column = output_to_column or build_output_column_map(tasks)
+    column_to_output: Dict[str, str] = {}
+    for output_name, column_name in output_to_column.items():
+        if column_name not in column_to_output:
+            column_to_output[column_name] = output_name
+
+    normalized_columns = [_merge_key_to_column(k) for k in merge_keys]
+    missing = [col for col in normalized_columns if col not in column_to_output]
     if missing:
         raise ValueError(
-            "postprocess.merge_keys references unknown task key(s): "
+            "postprocess.merge_keys references unknown mask column(s): "
             + ", ".join(missing)
+            + f". merge_keys={merge_keys}, normalized={normalized_columns}, "
+            + "available="
+            + ", ".join(sorted(column_to_output.keys()))
         )
 
-    return [key_to_output[k] for k in merge_keys]
+    return [column_to_output[column] for column in normalized_columns]
 
 
 def prefetch_totalsegmentator_models(tasks_config: Dict[str, Any]) -> None:
@@ -441,6 +491,7 @@ def segment_volume(
         raise ValueError(f"Unsupported backend: {backend_name}")
 
     backend = backend or TotalSegmentatorBackend()
+    output_to_column = build_output_column_map(tasks)
 
     for task in tasks:
         task_name = task["task"]
@@ -461,7 +512,7 @@ def segment_volume(
         # Keep a conservative default unless users explicitly override it.
         extra.setdefault("nr_thr_saving", 2)
 
-        expected_paths = [output_dir / output_name for output_name in task_outputs]
+        expected_paths = [output_dir / _output_to_filename(output_name) for output_name in task_outputs]
         if expected_paths and all(dst.exists() for dst in expected_paths) and not force:
             if verbose:
                 logger.info("Skip %s – files exist", task_name)
@@ -494,16 +545,24 @@ def segment_volume(
     if not postprocess:
         return warnings
 
-    merge_files = resolve_merge_outputs(postprocess, tasks)
+    merge_files = resolve_merge_outputs(
+        postprocess, tasks, output_to_column=output_to_column
+    )
     if not merge_files:
         return warnings
 
-    merged_name = postprocess.get("output", "mask_merged.nii.gz")
+    merged_output = str(postprocess.get("output", "merged")).strip() or "merged"
+    merged_name = _output_to_filename(merged_output)
     dst = output_dir / merged_name
-    if dst.exists() and not force:
-        if verbose:
-            logger.info("Skip %s – file exists", dst)
-        return warnings
+    if dst.exists():
+        logger.warning(
+            "Postprocess output will overwrite existing file and continue: %s", dst
+        )
+    if merged_output in output_to_column:
+        logger.warning(
+            "Postprocess output '%s' matches a task output key and will override it.",
+            merged_output,
+        )
 
     on_failure = str(postprocess.get("on_failure", "warn_only")).strip().lower()
     if on_failure not in {"warn_only", "fail"}:
@@ -513,7 +572,7 @@ def segment_volume(
 
     merged_ok = clean_and_merge_masks(
         output_dir,
-        merge_files,
+        [_output_to_filename(name) for name in merge_files],
         output_name=merged_name,
         radius_mm=float(postprocess.get("radius_mm", 5.0)),
         verbose=verbose,
@@ -854,27 +913,14 @@ def main(args: argparse.Namespace) -> None:
     if "nifti_path" not in df.columns:
         raise KeyError("column 'nifti_path' missing")
     df = df.drop_duplicates("nifti_path").copy()
-    output_to_column: Dict[str, str] = {}
-    for i, task in enumerate(tasks_config.get("tasks", [])):
-        outputs = infer_task_outputs(task)
-        if not outputs:
-            continue
-        key = str(task.get("key", "")).strip()
-        if key and len(outputs) == 1:
-            output_to_column[outputs[0]] = f"mask_{key}"
-            continue
-        for output_name in outputs:
-            stem = Path(output_name).name
-            if stem.endswith(".nii.gz"):
-                stem = stem[: -len(".nii.gz")]
-            else:
-                stem = Path(stem).stem
-            safe = re.sub(r"[^0-9A-Za-z_]+", "_", stem).strip("_").lower() or f"task_{i}"
-            output_to_column[output_name] = f"mask_{safe}"
+    output_to_column = build_output_column_map(tasks_config.get("tasks", []))
     for column_name in list(dict.fromkeys(output_to_column.values())):
         df[column_name] = None
     if tasks_config.get("postprocess"):
-        df["mask_merged"] = None
+        merged_output = str(
+            tasks_config["postprocess"].get("output", "merged")
+        ).strip() or "merged"
+        df[_output_to_column(merged_output)] = None
     df["warning_message"] = None
 
     completed_indices: set[int] = set()
@@ -937,18 +983,18 @@ def main(args: argparse.Namespace) -> None:
             base = Path(out_dir)
             row_warnings: List[str] = []
             for output_name, column_name in output_to_column.items():
-                mask_path = base / output_name
+                mask_path = base / _output_to_filename(output_name)
                 if mask_path.exists():
                     df.at[idx, column_name] = str(mask_path)
                 else:
                     row_warnings.append(f"missing mask: {mask_path}")
             if tasks_config.get("postprocess"):
-                merged_name = tasks_config["postprocess"].get(
-                    "output", "mask_merged.nii.gz"
-                )
-                merged_path = base / merged_name
+                merged_output = str(
+                    tasks_config["postprocess"].get("output", "merged")
+                ).strip() or "merged"
+                merged_path = base / _output_to_filename(merged_output)
                 if merged_path.exists():
-                    df.at[idx, "mask_merged"] = str(merged_path)
+                    df.at[idx, _output_to_column(merged_output)] = str(merged_path)
                 else:
                     row_warnings.append(f"missing merged mask: {merged_path}")
             if warning_msg:

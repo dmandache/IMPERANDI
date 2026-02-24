@@ -15,24 +15,20 @@
     "backend": "totalsegmentator",
     "tasks": [
       {
-        "key": "liver",
         "task": "total",
         "extra": { 
-          "roi_subset": ["liver","pancreas","spleen"], 
+          "roi_subset": ["liver", "pancreas", "spleen"], 
           "fastest": true 
         }
       },
       {
-        "key": "liver_tumor",
         "task": "liver_vessels",
-        "extra": {
-          "roi_subset": ["liver_tumor"]
-        }
+        "output": "liver_tumor"
       }
     ],
     "postprocess": {
       "merge_keys": ["liver", "liver_tumor"],
-      "output": "liver.nii.gz",
+      "output": "liver",
       "radius_mm": 5.0,
       "largest_cc": true,
       "fill_holes": true,

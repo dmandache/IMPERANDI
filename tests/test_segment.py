@@ -18,7 +18,7 @@ class DummyBackend:
     def __init__(self, outputs):
         self.outputs = outputs
 
-    def run(self, *, input_path, output_dir, task, fast, **kwargs):
+    def run(self, *, input_path, output_dir, task, **kwargs):
         out_name = self.outputs[task]
         (Path(output_dir) / out_name).write_text("mask")
 
@@ -119,9 +119,18 @@ def test_resolve_merge_outputs_rejects_merge_outputs_config():
 
 def test_resolve_merge_outputs_raises_when_merge_key_missing():
     postprocess = {"merge_keys": ["missing_key"]}
-    tasks = [{"key": "a", "output": "a.nii.gz"}]
-    with pytest.raises(ValueError, match="unknown task key"):
+    tasks = [{"output": "a.nii.gz"}]
+    with pytest.raises(ValueError, match="unknown mask column"):
         segment_module.resolve_merge_outputs(postprocess, tasks)
+
+
+def test_resolve_merge_outputs_supports_bare_and_mask_column_keys():
+    postprocess = {"merge_keys": ["a", "mask_b"]}
+    tasks = [{"output": "a.nii.gz"}, {"output": "b.nii.gz"}]
+    assert segment_module.resolve_merge_outputs(postprocess, tasks) == [
+        "a",
+        "b",
+    ]
 
 
 def test_segment_volume_calls_postprocess(tmp_path, monkeypatch):
@@ -160,7 +169,6 @@ def test_segment_volume_calls_postprocess(tmp_path, monkeypatch):
         nifti,
         tmp_path,
         tasks_config,
-        fast=True,
         verbose=False,
         force=True,
         backend=backend,
@@ -193,7 +201,6 @@ def test_segment_volume_warn_only_when_merge_missing(tmp_path, monkeypatch):
         nifti,
         tmp_path,
         tasks_config,
-        fast=False,
         verbose=False,
         force=True,
         backend=backend,
@@ -227,7 +234,6 @@ def test_segment_volume_fail_policy_when_merge_missing(tmp_path, monkeypatch):
             nifti,
             tmp_path,
             tasks_config,
-            fast=False,
             verbose=False,
             force=True,
             backend=backend,
@@ -251,7 +257,6 @@ def test_process_single_volume_success(tmp_path):
         0,
         {"nifti_path": str(nifti)},
         tasks_config,
-        fast=False,
         verbose=False,
         force=True,
         backend=backend,
@@ -274,14 +279,13 @@ def test_process_single_volume_missing_output(tmp_path):
     }
 
     class NoWriteBackend:
-        def run(self, *, input_path, output_dir, task, fast, **kwargs):
+        def run(self, *, input_path, output_dir, task, **kwargs):
             return None
 
     idx, out_dir, err, warning = segment_module.process_single_volume(
         0,
         {"nifti_path": str(nifti)},
         tasks_config,
-        fast=False,
         verbose=False,
         force=True,
         backend=NoWriteBackend(),
@@ -363,7 +367,6 @@ def test_main_writes_mask_columns(tmp_path, monkeypatch):
         error_csv_path=str(tmp_path / "errors.csv"),
         manifest=str(config_path),
         num_workers=2,
-        fast=False,
         verbose=False,
         force=False,
         start_method="spawn",
@@ -442,7 +445,6 @@ def test_main_records_warning_when_merged_mask_missing(tmp_path, monkeypatch):
         error_csv_path=str(tmp_path / "errors.csv"),
         manifest=str(config_path),
         num_workers=2,
-        fast=False,
         verbose=False,
         force=False,
         start_method="spawn",
@@ -501,7 +503,6 @@ def test_main_single_worker_avoids_process_pool(tmp_path, monkeypatch):
         error_csv_path=str(tmp_path / "errors.csv"),
         manifest=str(config_path),
         num_workers=1,
-        fast=False,
         verbose=False,
         force=False,
         start_method="spawn",
@@ -557,7 +558,6 @@ def test_main_uses_strategy_effective_worker_count(tmp_path, monkeypatch):
         error_csv_path=str(tmp_path / "errors.csv"),
         manifest=str(config_path),
         num_workers=4,
-        fast=False,
         verbose=False,
         force=False,
         start_method="fork",
@@ -636,7 +636,6 @@ def test_main_uses_strategy_effective_start_method(tmp_path, monkeypatch):
         error_csv_path=str(tmp_path / "errors.csv"),
         manifest=str(config_path),
         num_workers=4,
-        fast=False,
         verbose=False,
         force=False,
         start_method="fork",
@@ -719,7 +718,6 @@ def test_main_enables_gpu_worker_pinning_for_multi_gpu(tmp_path, monkeypatch):
         error_csv_path=str(tmp_path / "errors.csv"),
         manifest=str(config_path),
         num_workers=2,
-        fast=False,
         verbose=False,
         force=False,
         start_method="spawn",
@@ -798,7 +796,6 @@ def test_main_bounds_in_flight_submissions(tmp_path, monkeypatch):
         error_csv_path=str(tmp_path / "errors.csv"),
         manifest=str(config_path),
         num_workers=4,
-        fast=False,
         verbose=False,
         force=False,
         start_method="spawn",
@@ -867,7 +864,6 @@ def test_main_enforces_wall_timeout_per_row(tmp_path, monkeypatch):
         error_csv_path=str(tmp_path / "errors.csv"),
         manifest=str(config_path),
         num_workers=2,
-        fast=False,
         verbose=False,
         force=False,
         start_method="spawn",
@@ -947,7 +943,6 @@ def test_main_recycles_executor_by_recycle_every(tmp_path, monkeypatch):
         error_csv_path=str(tmp_path / "errors.csv"),
         manifest=str(config_path),
         num_workers=3,
-        fast=False,
         verbose=False,
         force=False,
         start_method="spawn",
@@ -1005,7 +1000,6 @@ def test_main_subprocess_mode_currently_degrades_to_serial(tmp_path, monkeypatch
         error_csv_path=str(tmp_path / "errors.csv"),
         manifest=str(config_path),
         num_workers=4,
-        fast=False,
         verbose=False,
         force=False,
         start_method="spawn",
