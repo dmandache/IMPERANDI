@@ -25,7 +25,7 @@ import re
 import threading
 import time
 import traceback
-from concurrent.futures import ProcessPoolExecutor, TimeoutError, as_completed
+from concurrent.futures import ProcessPoolExecutor, TimeoutError
 from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -703,25 +703,30 @@ def main(args: argparse.Namespace) -> None:
         if not row_indices:
             return out
 
-        try:
-            pool = ProcessPoolExecutor(
-                max_workers=effective_workers,
-                mp_context=ctx,
-                **pool_init_kwargs,
-            )
-        except TypeError as exc:
-            if pool_init_kwargs:
-                logger.warning(
-                    "Executor does not support worker initializer; running without GPU pinning (%s)",
-                    exc,
-                )
-            pool = ProcessPoolExecutor(max_workers=effective_workers, mp_context=ctx)
-        broken_pool = False
         max_in_flight = max(1, int(strategy.max_in_flight))
-        try:
+        row_queue = deque(row_indices)
+        broken_pool = False
+
+        while row_queue and not broken_pool:
+            try:
+                pool = ProcessPoolExecutor(
+                    max_workers=effective_workers,
+                    mp_context=ctx,
+                    **pool_init_kwargs,
+                )
+            except TypeError as exc:
+                if pool_init_kwargs:
+                    logger.warning(
+                        "Executor does not support worker initializer; running without GPU pinning (%s)",
+                        exc,
+                    )
+                pool = ProcessPoolExecutor(max_workers=effective_workers, mp_context=ctx)
+
             futures: Dict[Any, int] = {}
-            row_queue = deque(row_indices)
-            pending = set(row_indices)
+            submit_started_at: Dict[Any, float] = {}
+            restart_pool_for_timeout = False
+            broken_pool_msg: str | None = None
+
             def _submit_until_limit() -> None:
                 while row_queue and len(futures) < max_in_flight:
                     idx = row_queue.popleft()
@@ -735,61 +740,97 @@ def main(args: argparse.Namespace) -> None:
                         force=args.force,
                     )
                     futures[fut] = idx
+                    submit_started_at[fut] = time.monotonic()
 
             try:
                 _submit_until_limit()
-                while futures:
-                    completed = as_completed(list(futures))
-                    fut = next(iter(completed))
-                    i = futures[fut]
-                    del futures[fut]
-                    pending.discard(i)
-                    try:
-                        res = fut.result(timeout=effective_timeout)
-                    except TimeoutError:
-                        logger.warning("Row %d exceeded %ds – killed", i, effective_timeout)
-                        fut.cancel()
-                        res = (i, None, "timeout", None)
-                    except BrokenProcessPool as exc:
-                        msg = _broken_pool_message(exc)
-                        broken_pool = True
-                        logger.error(
-                            "BrokenProcessPool while collecting row %d; aborting fast: %s",
+                while futures and not restart_pool_for_timeout and not broken_pool:
+                    now = time.monotonic()
+                    timed_out_futures: List[Any] = []
+
+                    for fut, i in list(futures.items()):
+                        started_at = submit_started_at[fut]
+                        if now - started_at < effective_timeout:
+                            continue
+                        timed_out_futures.append(fut)
+                        logger.warning(
+                            "Row %d exceeded %ds wall time (elapsed %.1fs) – recycling worker pool",
                             i,
-                            exc,
+                            effective_timeout,
+                            now - started_at,
                         )
-                        out[i] = (i, None, msg, None)
-                        for j in pending:
-                            out[j] = (j, None, msg, None)
-                        for pending_fut in list(futures):
+                        out[i] = (i, None, f"timeout after {effective_timeout}s", None)
+                        if progress_bar is not None:
+                            progress_bar.update(1)
+
+                    if timed_out_futures:
+                        for timed_out in timed_out_futures:
+                            i = futures.pop(timed_out)
+                            submit_started_at.pop(timed_out, None)
+                            timed_out.cancel()
+                        # Re-queue remaining in-flight rows to retry in a fresh pool.
+                        for pending_fut, pending_idx in list(futures.items()):
+                            row_queue.appendleft(pending_idx)
                             pending_fut.cancel()
+                        futures.clear()
+                        submit_started_at.clear()
+                        restart_pool_for_timeout = True
                         break
-                    except Exception as exc:
-                        res = (i, None, f"worker crash: {type(exc).__name__}: {exc}", None)
+
+                    completed_any = False
+                    for fut, i in list(futures.items()):
+                        try:
+                            res = fut.result(timeout=0)
+                        except TimeoutError:
+                            continue
+                        except BrokenProcessPool as exc:
+                            broken_pool = True
+                            broken_pool_msg = _broken_pool_message(exc)
+                            logger.error(
+                                "BrokenProcessPool while collecting row %d; aborting fast: %s",
+                                i,
+                                exc,
+                            )
+                            break
+                        except Exception as exc:
+                            res = (i, None, f"worker crash: {type(exc).__name__}: {exc}", None)
+
+                        futures.pop(fut, None)
+                        submit_started_at.pop(fut, None)
                         out[i] = res
-                    else:
-                        out[i] = res
-                    if progress_bar is not None:
-                        progress_bar.update(1)
-                    _submit_until_limit()
+                        if progress_bar is not None:
+                            progress_bar.update(1)
+                        _submit_until_limit()
+                        completed_any = True
+
+                    if broken_pool:
+                        break
+                    if not completed_any:
+                        time.sleep(0.05)
             except BrokenProcessPool as exc:
-                msg = _broken_pool_message(exc)
                 broken_pool = True
+                broken_pool_msg = _broken_pool_message(exc)
                 logger.error("BrokenProcessPool during completion loop; aborting fast: %s", exc)
-                for j in pending:
-                    out[j] = (j, None, msg, None)
-        finally:
+            finally:
+                if broken_pool or restart_pool_for_timeout:
+                    # Force-kill orphaned workers after crash/timeout.
+                    pool.shutdown(wait=False, cancel_futures=True)
+                    processes = getattr(pool, "_processes", None)
+                    if processes:
+                        for p in processes.values():
+                            if p.is_alive():
+                                p.kill()
+                else:
+                    # Graceful shutdown prevents collateral damage to interpreter state.
+                    pool.shutdown(wait=True, cancel_futures=False)
+
             if broken_pool:
-                # Force‑kill any orphaned processes after hard worker crashes (<= Py3.10).
-                pool.shutdown(wait=False, cancel_futures=True)
-                processes = getattr(pool, "_processes", None)
-                if processes:
-                    for p in processes.values():
-                        if p.is_alive():
-                            p.kill()
-            else:
-                # Graceful shutdown prevents collateral damage to interpreter state.
-                pool.shutdown(wait=True, cancel_futures=False)
+                msg = broken_pool_msg or "BrokenProcessPool"
+                for i in list(futures.values()):
+                    out[i] = (i, None, msg, None)
+                for i in row_queue:
+                    out[i] = (i, None, msg, None)
+                break
 
         return out
 

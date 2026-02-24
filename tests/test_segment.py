@@ -311,7 +311,6 @@ def test_main_writes_mask_columns(tmp_path, monkeypatch):
             return None
 
     monkeypatch.setattr(segment_module, "ProcessPoolExecutor", DummyPool)
-    monkeypatch.setattr(segment_module, "as_completed", lambda futures: list(futures))
     monkeypatch.setattr(segment_module, "tqdm", passthrough_tqdm)
     monkeypatch.setattr(
         segment_module, "prefetch_totalsegmentator_models", lambda *a, **k: None
@@ -391,7 +390,6 @@ def test_main_records_warning_when_merged_mask_missing(tmp_path, monkeypatch):
             return None
 
     monkeypatch.setattr(segment_module, "ProcessPoolExecutor", DummyPool)
-    monkeypatch.setattr(segment_module, "as_completed", lambda futures: list(futures))
     monkeypatch.setattr(segment_module, "tqdm", passthrough_tqdm)
     monkeypatch.setattr(
         segment_module, "prefetch_totalsegmentator_models", lambda *a, **k: None
@@ -591,7 +589,6 @@ def test_main_uses_strategy_effective_start_method(tmp_path, monkeypatch):
             return None
 
     monkeypatch.setattr(segment_module, "ProcessPoolExecutor", DummyPool)
-    monkeypatch.setattr(segment_module, "as_completed", lambda futures: list(futures))
 
     args = argparse.Namespace(
         csv_path=str(csv_path),
@@ -675,7 +672,6 @@ def test_main_enables_gpu_worker_pinning_for_multi_gpu(tmp_path, monkeypatch):
             return None
 
     monkeypatch.setattr(segment_module, "ProcessPoolExecutor", DummyPool)
-    monkeypatch.setattr(segment_module, "as_completed", lambda futures: list(futures))
 
     args = argparse.Namespace(
         csv_path=str(csv_path),
@@ -755,7 +751,6 @@ def test_main_bounds_in_flight_submissions(tmp_path, monkeypatch):
             return None
 
     monkeypatch.setattr(segment_module, "ProcessPoolExecutor", DummyPool)
-    monkeypatch.setattr(segment_module, "as_completed", lambda futures: list(futures))
 
     args = argparse.Namespace(
         csv_path=str(csv_path),
@@ -773,6 +768,77 @@ def test_main_bounds_in_flight_submissions(tmp_path, monkeypatch):
     segment_module.main(args)
     assert DummyPool.last is not None
     assert DummyPool.last.max_outstanding <= 2
+
+
+def test_main_enforces_wall_timeout_per_row(tmp_path, monkeypatch):
+    nifti = tmp_path / "vol.nii.gz"
+    nifti.write_text("nifti")
+    csv_path = tmp_path / "nifti_index.csv"
+    pd.DataFrame([{"nifti_path": str(nifti)}]).to_csv(csv_path, index=False)
+    config_path = tmp_path / "tasks.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "backend": "totalsegmentator",
+                "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
+            }
+        )
+    )
+
+    monkeypatch.setattr(
+        segment_module, "prefetch_totalsegmentator_models", lambda *a, **k: None
+    )
+    monkeypatch.setattr(segment_module, "tqdm", passthrough_tqdm)
+    patch_strategy(monkeypatch, mode="process_pool", max_workers=2, max_in_flight=1)
+
+    class HangingFuture:
+        def result(self, timeout=None):
+            raise segment_module.TimeoutError()
+
+        def cancel(self):
+            return None
+
+    class DummyPool:
+        shutdown_calls = []
+
+        def __init__(self, max_workers=None, mp_context=None):
+            self._processes = None
+
+        def submit(self, fn, *args, **kwargs):
+            return HangingFuture()
+
+        def shutdown(self, wait=False, cancel_futures=True):
+            DummyPool.shutdown_calls.append((wait, cancel_futures))
+            return None
+
+    current = {"t": 0.0}
+
+    def fake_monotonic():
+        current["t"] += 0.6
+        return current["t"]
+
+    monkeypatch.setattr(segment_module, "ProcessPoolExecutor", DummyPool)
+    monkeypatch.setattr(segment_module.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(segment_module.time, "sleep", lambda *_a, **_k: None)
+
+    args = argparse.Namespace(
+        csv_path=str(csv_path),
+        csv_path_out=str(tmp_path / "segmented.csv"),
+        error_csv_path=str(tmp_path / "errors.csv"),
+        tasks_config=str(config_path),
+        num_workers=2,
+        fast=False,
+        verbose=False,
+        force=False,
+        start_method="spawn",
+        timeout_sec=1,
+    )
+
+    segment_module.main(args)
+
+    err_df = pd.read_csv(args.error_csv_path)
+    assert "timeout after 1s" in err_df.loc[0, "error_message"]
+    assert (False, True) in DummyPool.shutdown_calls
 
 
 def test_main_recycles_executor_by_recycle_every(tmp_path, monkeypatch):
@@ -834,7 +900,6 @@ def test_main_recycles_executor_by_recycle_every(tmp_path, monkeypatch):
             return None
 
     monkeypatch.setattr(segment_module, "ProcessPoolExecutor", DummyPool)
-    monkeypatch.setattr(segment_module, "as_completed", lambda futures: list(futures))
 
     args = argparse.Namespace(
         csv_path=str(csv_path),
