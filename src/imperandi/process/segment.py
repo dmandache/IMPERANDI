@@ -349,6 +349,12 @@ def segment_volume(
         task_name = task["task"]
         task_output = task["output"]
         extra = task.get("extra", {})
+        
+        # TotalSegmentator can spawn additional saving threads per process
+        # (nr_thr_saving defaults to 6). In our multi-process executor this can
+        # multiply aggressively and trigger worker instability on long runs.
+        # Keep a conservative default unless users explicitly override it.
+        extra.setdefault("nr_thr_saving", 2)
 
         dst = output_dir / task_output
         if dst.exists() and not force:
