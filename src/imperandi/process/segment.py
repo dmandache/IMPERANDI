@@ -16,9 +16,11 @@ The module supports both CLI and library usage:
 from __future__ import annotations
 
 import argparse
+from collections import deque
 import json
 import logging
 import multiprocessing as mp
+import threading, time
 import traceback
 from concurrent.futures import ProcessPoolExecutor, TimeoutError, as_completed
 from concurrent.futures.process import BrokenProcessPool
@@ -349,7 +351,7 @@ def segment_volume(
         task_name = task["task"]
         task_output = task["output"]
         extra = task.get("extra", {})
-        
+
         # TotalSegmentator can spawn additional saving threads per process
         # (nr_thr_saving defaults to 6). In our multi-process executor this can
         # multiply aggressively and trigger worker instability on long runs.
@@ -600,6 +602,40 @@ def main(args: argparse.Namespace) -> None:
     )
     prefetch_totalsegmentator_models(tasks_config, fast=args.fast)
 
+    from imperandi.utils.multiprocessing import (
+        apply_strategy_env,
+        strategy_to_log_dict,
+        decide_multiprocessing_strategy
+    )
+    # Decide
+    strategy = decide_multiprocessing_strategy(
+        prefer_gpu=True,
+        requested_workers=args.num_workers,
+        start_method_hint=args.start_method,
+        target_task_mem_mb=3000,      # tune (TotalSegmentator can be heavy)
+        need_hard_timeouts=True,
+    )
+
+    logger.info("MP strategy: %s", strategy_to_log_dict(strategy))
+    effective_workers = strategy.max_workers
+    effective_start_method = strategy.start_method
+    effective_timeout = args.timeout_sec
+    logger.info(
+        "Requested MP settings: workers=%d start_method=%s timeout_sec=%d | Effective: mode=%s workers=%d start_method=%s max_in_flight=%d recycle_every=%d",
+        args.num_workers,
+        args.start_method,
+        args.timeout_sec,
+        strategy.mode,
+        effective_workers,
+        effective_start_method,
+        strategy.max_in_flight,
+        strategy.recycle_every,
+    )
+
+    # Apply env caps BEFORE pool creation
+    apply_strategy_env(strategy)
+
+
     # --- read and pre‑clean CSV ------------------------------------------------
     df = pd.read_csv(args.csv_path).copy()
     if "nifti_path" not in df.columns:
@@ -618,14 +654,14 @@ def main(args: argparse.Namespace) -> None:
     # --- spawn multiprocessing pool -------------------------------------------
     try:
         ctx = mp.get_context(
-            args.start_method
+            effective_start_method
         )  # 'spawn' required for torch / CUDA stability
     except ValueError:
         available = mp.get_all_start_methods()
         fallback = "spawn" if "spawn" in available else available[0]
         logger.warning(
             "Unsupported start_method=%r on this platform; falling back to %r",
-            args.start_method,
+            effective_start_method,
             fallback,
         )
         ctx = mp.get_context(fallback)
@@ -649,32 +685,41 @@ def main(args: argparse.Namespace) -> None:
         if not row_indices:
             return out
 
-        pool = ProcessPoolExecutor(max_workers=args.num_workers, mp_context=ctx)
+        pool = ProcessPoolExecutor(max_workers=effective_workers, mp_context=ctx)
         broken_pool = False
+        max_in_flight = max(1, int(strategy.max_in_flight))
         try:
-            futures = {
-                pool.submit(
-                    process_single_volume,
-                    idx,
-                    df.loc[idx].to_dict(),
-                    tasks_config,
-                    fast=args.fast,
-                    verbose=args.verbose,
-                    force=args.force,
-                ): idx
-                for idx in row_indices
-            }
+            futures: Dict[Any, int] = {}
+            row_queue = deque(row_indices)
             pending = set(row_indices)
-            iterator = tqdm(as_completed(futures), total=len(futures), desc=desc)
+            progress_iter = iter(tqdm(range(len(row_indices)), desc=desc))
+
+            def _submit_until_limit() -> None:
+                while row_queue and len(futures) < max_in_flight:
+                    idx = row_queue.popleft()
+                    fut = pool.submit(
+                        process_single_volume,
+                        idx,
+                        df.loc[idx].to_dict(),
+                        tasks_config,
+                        fast=args.fast,
+                        verbose=args.verbose,
+                        force=args.force,
+                    )
+                    futures[fut] = idx
 
             try:
-                for fut in iterator:
+                _submit_until_limit()
+                while futures:
+                    completed = as_completed(list(futures))
+                    fut = next(iter(completed))
                     i = futures[fut]
+                    del futures[fut]
                     pending.discard(i)
                     try:
-                        res = fut.result(timeout=args.timeout_sec)
+                        res = fut.result(timeout=effective_timeout)
                     except TimeoutError:
-                        logger.warning("Row %d exceeded %ds – killed", i, args.timeout_sec)
+                        logger.warning("Row %d exceeded %ds – killed", i, effective_timeout)
                         fut.cancel()
                         res = (i, None, "timeout", None)
                     except BrokenProcessPool as exc:
@@ -688,7 +733,7 @@ def main(args: argparse.Namespace) -> None:
                         out[i] = (i, None, msg, None)
                         for j in pending:
                             out[j] = (j, None, msg, None)
-                        for pending_fut in futures:
+                        for pending_fut in list(futures):
                             pending_fut.cancel()
                         break
                     except Exception as exc:
@@ -696,6 +741,8 @@ def main(args: argparse.Namespace) -> None:
                         out[i] = res
                     else:
                         out[i] = res
+                    next(progress_iter, None)
+                    _submit_until_limit()
             except BrokenProcessPool as exc:
                 msg = _broken_pool_message(exc)
                 broken_pool = True
@@ -717,8 +764,30 @@ def main(args: argparse.Namespace) -> None:
 
         return out
 
+    def _run_rows_with_recycling(
+        row_indices: List[int], *, desc: str
+    ) -> Dict[int, Tuple[int, str | None, str | None, str | None]]:
+        if strategy.recycle_every <= 0:
+            return _run_rows(row_indices, desc=desc)
+
+        out: Dict[int, Tuple[int, str | None, str | None, str | None]] = {}
+        chunk_size = max(1, int(strategy.recycle_every))
+        total_chunks = (len(row_indices) + chunk_size - 1) // chunk_size
+        for chunk_idx, start in enumerate(range(0, len(row_indices), chunk_size), 1):
+            chunk = row_indices[start : start + chunk_size]
+            chunk_desc = f"{desc} [{chunk_idx}/{total_chunks}]"
+            out.update(_run_rows(chunk, desc=chunk_desc))
+        return out
+
     row_indices = list(df.index)
-    if args.num_workers <= 1:
+    run_serial = strategy.mode == "serial" or effective_workers <= 1
+    if strategy.mode == "subprocess_per_case":
+        logger.warning(
+            "Strategy selected mode='subprocess_per_case', but this mode is deferred in segment; falling back to serial execution for now."
+        )
+        run_serial = True
+
+    if run_serial:
         logger.info(
             "Running segmentation in single-worker mode (no multiprocessing pool)"
         )
@@ -734,7 +803,7 @@ def main(args: argparse.Namespace) -> None:
             for idx in tqdm(row_indices, total=len(row_indices), desc="Segment")
         }
     else:
-        results_by_idx = _run_rows(row_indices, desc="Segment")
+        results_by_idx = _run_rows_with_recycling(row_indices, desc="Segment")
 
         retry_indices = [
             i
@@ -746,7 +815,7 @@ def main(args: argparse.Namespace) -> None:
                 "Retrying %d row(s) in a fresh executor after worker crash/BrokenProcessPool",
                 len(retry_indices),
             )
-            retry_results = _run_rows(retry_indices, desc="Segment retry")
+            retry_results = _run_rows_with_recycling(retry_indices, desc="Segment retry")
             results_by_idx.update(retry_results)
 
     results: List[Tuple[int, str | None, str | None, str | None]] = [
@@ -799,6 +868,13 @@ def main(args: argparse.Namespace) -> None:
             logger.debug("report_volumes() failed – continuing")
 
     logger.info("Segmentation done ✔")
+
+    print("END: active_children:", mp.active_children(), flush=True)
+    print("END: threads:", [t.name for t in threading.enumerate()], flush=True)
+    time.sleep(2)
+    print("END2: active_children:", mp.active_children(), flush=True)
+
+    return
 
 
 if __name__ == "__main__":

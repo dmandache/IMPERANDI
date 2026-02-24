@@ -10,6 +10,8 @@ import pandas as pd
 import pytest
 
 from imperandi.process import segment as segment_module
+from imperandi.utils.multiprocessing import MPStrategy
+import imperandi.utils.multiprocessing as mp_utils
 
 
 class DummyBackend:
@@ -19,6 +21,32 @@ class DummyBackend:
     def run(self, *, input_path, output_dir, task, fast, **kwargs):
         out_name = self.outputs[task]
         (Path(output_dir) / out_name).write_text("mask")
+
+
+def make_strategy(**overrides):
+    data = {
+        "mode": "process_pool",
+        "start_method": "spawn",
+        "max_workers": 2,
+        "max_in_flight": 2,
+        "recycle_every": 0,
+        "env": {},
+        "use_gpu": False,
+        "gpu_count": 0,
+        "hard_timeout_supported": False,
+        "reasons": {"test": True},
+    }
+    data.update(overrides)
+    return MPStrategy(**data)
+
+
+def patch_strategy(monkeypatch, **overrides):
+    monkeypatch.setattr(
+        mp_utils,
+        "decide_multiprocessing_strategy",
+        lambda **kwargs: make_strategy(**overrides),
+    )
+    monkeypatch.setattr(mp_utils, "apply_strategy_env", lambda *a, **k: None)
 
 
 def test_load_tasks_config_default():
@@ -265,6 +293,7 @@ def test_main_writes_mask_columns(tmp_path, monkeypatch):
     monkeypatch.setattr(
         segment_module, "prefetch_totalsegmentator_models", lambda *a, **k: None
     )
+    patch_strategy(monkeypatch, mode="process_pool", max_workers=2, max_in_flight=2)
 
     args = argparse.Namespace(
         csv_path=str(csv_path),
@@ -344,6 +373,7 @@ def test_main_records_warning_when_merged_mask_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(
         segment_module, "prefetch_totalsegmentator_models", lambda *a, **k: None
     )
+    patch_strategy(monkeypatch, mode="process_pool", max_workers=2, max_in_flight=2)
 
     args = argparse.Namespace(
         csv_path=str(csv_path),
@@ -386,6 +416,7 @@ def test_main_single_worker_avoids_process_pool(tmp_path, monkeypatch):
         segment_module, "prefetch_totalsegmentator_models", lambda *a, **k: None
     )
     monkeypatch.setattr(segment_module, "tqdm", lambda it, **kwargs: it)
+    patch_strategy(monkeypatch, mode="serial", max_workers=1, max_in_flight=1)
 
     def fail_if_pool_used(*args, **kwargs):
         raise AssertionError("ProcessPoolExecutor should not be used in single-worker mode")
@@ -420,3 +451,359 @@ def test_main_single_worker_avoids_process_pool(tmp_path, monkeypatch):
 
     out_df = pd.read_csv(args.csv_path_out)
     assert out_df.loc[0, "mask_liver"].endswith("liver.nii.gz")
+
+
+def test_main_uses_strategy_effective_worker_count(tmp_path, monkeypatch):
+    nifti = tmp_path / "vol.nii.gz"
+    nifti.write_text("nifti")
+    csv_path = tmp_path / "nifti_index.csv"
+    pd.DataFrame([{"nifti_path": str(nifti)}]).to_csv(csv_path, index=False)
+    config_path = tmp_path / "tasks.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "backend": "totalsegmentator",
+                "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
+            }
+        )
+    )
+
+    monkeypatch.setattr(
+        segment_module, "prefetch_totalsegmentator_models", lambda *a, **k: None
+    )
+    monkeypatch.setattr(segment_module, "tqdm", lambda it, **kwargs: it)
+    patch_strategy(monkeypatch, mode="process_pool", max_workers=1, max_in_flight=1)
+
+    def fail_if_pool_used(*args, **kwargs):
+        raise AssertionError("ProcessPoolExecutor should not be used when strategy max_workers=1")
+
+    monkeypatch.setattr(segment_module, "ProcessPoolExecutor", fail_if_pool_used)
+
+    def fake_process_single_volume(
+        idx, row, tasks_config, *, fast, verbose, force, backend=None
+    ):
+        out_dir = Path(row["nifti_path"]).parent
+        (out_dir / "liver.nii.gz").write_text("mask")
+        return idx, str(out_dir), None, None
+
+    monkeypatch.setattr(
+        segment_module, "process_single_volume", fake_process_single_volume
+    )
+
+    args = argparse.Namespace(
+        csv_path=str(csv_path),
+        csv_path_out=str(tmp_path / "segmented.csv"),
+        error_csv_path=str(tmp_path / "errors.csv"),
+        tasks_config=str(config_path),
+        num_workers=4,
+        fast=False,
+        verbose=False,
+        force=False,
+        start_method="fork",
+        timeout_sec=10,
+    )
+
+    segment_module.main(args)
+    out_df = pd.read_csv(args.csv_path_out)
+    assert out_df.loc[0, "mask_liver"].endswith("liver.nii.gz")
+
+
+def test_main_uses_strategy_effective_start_method(tmp_path, monkeypatch):
+    nifti = tmp_path / "vol.nii.gz"
+    nifti.write_text("nifti")
+    csv_path = tmp_path / "nifti_index.csv"
+    pd.DataFrame([{"nifti_path": str(nifti)}]).to_csv(csv_path, index=False)
+    config_path = tmp_path / "tasks.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "backend": "totalsegmentator",
+                "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
+            }
+        )
+    )
+
+    monkeypatch.setattr(
+        segment_module, "prefetch_totalsegmentator_models", lambda *a, **k: None
+    )
+    monkeypatch.setattr(segment_module, "tqdm", lambda it, **kwargs: it)
+    patch_strategy(
+        monkeypatch,
+        mode="process_pool",
+        max_workers=2,
+        max_in_flight=1,
+        start_method="forkserver",
+    )
+
+    start_methods = []
+
+    def fake_get_context(method):
+        start_methods.append(method)
+        return object()
+
+    monkeypatch.setattr(segment_module.mp, "get_context", fake_get_context)
+
+    class DummyFuture:
+        def __init__(self, result):
+            self._result = result
+
+        def result(self, timeout=None):
+            return self._result
+
+        def cancel(self):
+            return None
+
+    class DummyPool:
+        def __init__(self, max_workers=None, mp_context=None):
+            self._processes = None
+
+        def submit(self, fn, *args, **kwargs):
+            idx = args[0]
+            row = args[1]
+            out_dir = Path(row["nifti_path"]).parent
+            (out_dir / "liver.nii.gz").write_text("mask")
+            return DummyFuture((idx, str(out_dir), None, None))
+
+        def shutdown(self, wait=False, cancel_futures=True):
+            return None
+
+    monkeypatch.setattr(segment_module, "ProcessPoolExecutor", DummyPool)
+    monkeypatch.setattr(segment_module, "as_completed", lambda futures: list(futures))
+
+    args = argparse.Namespace(
+        csv_path=str(csv_path),
+        csv_path_out=str(tmp_path / "segmented.csv"),
+        error_csv_path=str(tmp_path / "errors.csv"),
+        tasks_config=str(config_path),
+        num_workers=4,
+        fast=False,
+        verbose=False,
+        force=False,
+        start_method="fork",
+        timeout_sec=10,
+    )
+
+    segment_module.main(args)
+    assert start_methods == ["forkserver"]
+
+
+def test_main_bounds_in_flight_submissions(tmp_path, monkeypatch):
+    paths = []
+    for i in range(5):
+        nifti = tmp_path / f"vol_{i}.nii.gz"
+        nifti.write_text("nifti")
+        paths.append(str(nifti))
+
+    csv_path = tmp_path / "nifti_index.csv"
+    pd.DataFrame([{"nifti_path": p} for p in paths]).to_csv(csv_path, index=False)
+    config_path = tmp_path / "tasks.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "backend": "totalsegmentator",
+                "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
+            }
+        )
+    )
+
+    monkeypatch.setattr(
+        segment_module, "prefetch_totalsegmentator_models", lambda *a, **k: None
+    )
+    monkeypatch.setattr(segment_module, "tqdm", lambda it, **kwargs: it)
+    patch_strategy(monkeypatch, mode="process_pool", max_workers=4, max_in_flight=2)
+
+    class DummyFuture:
+        def __init__(self, result, pool):
+            self._result = result
+            self._pool = pool
+
+        def result(self, timeout=None):
+            self._pool.outstanding -= 1
+            return self._result
+
+        def cancel(self):
+            return None
+
+    class DummyPool:
+        last = None
+
+        def __init__(self, max_workers=None, mp_context=None):
+            self._processes = None
+            self.outstanding = 0
+            self.max_outstanding = 0
+            DummyPool.last = self
+
+        def submit(self, fn, *args, **kwargs):
+            idx = args[0]
+            row = args[1]
+            out_dir = Path(row["nifti_path"]).parent
+            (out_dir / "liver.nii.gz").write_text("mask")
+            self.outstanding += 1
+            self.max_outstanding = max(self.max_outstanding, self.outstanding)
+            return DummyFuture((idx, str(out_dir), None, None), self)
+
+        def shutdown(self, wait=False, cancel_futures=True):
+            return None
+
+    monkeypatch.setattr(segment_module, "ProcessPoolExecutor", DummyPool)
+    monkeypatch.setattr(segment_module, "as_completed", lambda futures: list(futures))
+
+    args = argparse.Namespace(
+        csv_path=str(csv_path),
+        csv_path_out=str(tmp_path / "segmented.csv"),
+        error_csv_path=str(tmp_path / "errors.csv"),
+        tasks_config=str(config_path),
+        num_workers=4,
+        fast=False,
+        verbose=False,
+        force=False,
+        start_method="spawn",
+        timeout_sec=10,
+    )
+
+    segment_module.main(args)
+    assert DummyPool.last is not None
+    assert DummyPool.last.max_outstanding <= 2
+
+
+def test_main_recycles_executor_by_recycle_every(tmp_path, monkeypatch):
+    paths = []
+    for i in range(3):
+        nifti = tmp_path / f"vol_{i}.nii.gz"
+        nifti.write_text("nifti")
+        paths.append(str(nifti))
+
+    csv_path = tmp_path / "nifti_index.csv"
+    pd.DataFrame([{"nifti_path": p} for p in paths]).to_csv(csv_path, index=False)
+    config_path = tmp_path / "tasks.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "backend": "totalsegmentator",
+                "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
+            }
+        )
+    )
+
+    monkeypatch.setattr(
+        segment_module, "prefetch_totalsegmentator_models", lambda *a, **k: None
+    )
+    monkeypatch.setattr(segment_module, "tqdm", lambda it, **kwargs: it)
+    patch_strategy(
+        monkeypatch,
+        mode="process_pool",
+        max_workers=2,
+        max_in_flight=2,
+        recycle_every=1,
+    )
+
+    class DummyFuture:
+        def __init__(self, result):
+            self._result = result
+
+        def result(self, timeout=None):
+            return self._result
+
+        def cancel(self):
+            return None
+
+    class DummyPool:
+        init_count = 0
+
+        def __init__(self, max_workers=None, mp_context=None):
+            self._processes = None
+            DummyPool.init_count += 1
+
+        def submit(self, fn, *args, **kwargs):
+            idx = args[0]
+            row = args[1]
+            out_dir = Path(row["nifti_path"]).parent
+            (out_dir / "liver.nii.gz").write_text("mask")
+            return DummyFuture((idx, str(out_dir), None, None))
+
+        def shutdown(self, wait=False, cancel_futures=True):
+            return None
+
+    monkeypatch.setattr(segment_module, "ProcessPoolExecutor", DummyPool)
+    monkeypatch.setattr(segment_module, "as_completed", lambda futures: list(futures))
+
+    args = argparse.Namespace(
+        csv_path=str(csv_path),
+        csv_path_out=str(tmp_path / "segmented.csv"),
+        error_csv_path=str(tmp_path / "errors.csv"),
+        tasks_config=str(config_path),
+        num_workers=3,
+        fast=False,
+        verbose=False,
+        force=False,
+        start_method="spawn",
+        timeout_sec=10,
+    )
+
+    segment_module.main(args)
+    assert DummyPool.init_count == 3
+
+
+def test_main_subprocess_mode_currently_degrades_to_serial_with_warning(
+    tmp_path, monkeypatch, caplog
+):
+    nifti = tmp_path / "vol.nii.gz"
+    nifti.write_text("nifti")
+    csv_path = tmp_path / "nifti_index.csv"
+    pd.DataFrame([{"nifti_path": str(nifti)}]).to_csv(csv_path, index=False)
+    config_path = tmp_path / "tasks.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "backend": "totalsegmentator",
+                "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
+            }
+        )
+    )
+
+    monkeypatch.setattr(
+        segment_module, "prefetch_totalsegmentator_models", lambda *a, **k: None
+    )
+    monkeypatch.setattr(segment_module, "tqdm", lambda it, **kwargs: it)
+    patch_strategy(
+        monkeypatch,
+        mode="subprocess_per_case",
+        max_workers=1,
+        max_in_flight=1,
+    )
+
+    def fail_if_pool_used(*args, **kwargs):
+        raise AssertionError("ProcessPoolExecutor should not be used in subprocess fallback mode")
+
+    monkeypatch.setattr(segment_module, "ProcessPoolExecutor", fail_if_pool_used)
+
+    def fake_process_single_volume(
+        idx, row, tasks_config, *, fast, verbose, force, backend=None
+    ):
+        out_dir = Path(row["nifti_path"]).parent
+        (out_dir / "liver.nii.gz").write_text("mask")
+        return idx, str(out_dir), None, None
+
+    monkeypatch.setattr(
+        segment_module, "process_single_volume", fake_process_single_volume
+    )
+    caplog.set_level("WARNING")
+
+    args = argparse.Namespace(
+        csv_path=str(csv_path),
+        csv_path_out=str(tmp_path / "segmented.csv"),
+        error_csv_path=str(tmp_path / "errors.csv"),
+        tasks_config=str(config_path),
+        num_workers=4,
+        fast=False,
+        verbose=False,
+        force=False,
+        start_method="spawn",
+        timeout_sec=10,
+    )
+
+    segment_module.main(args)
+    assert any(
+        "mode='subprocess_per_case'" in rec.message and "falling back to serial" in rec.message
+        for rec in caplog.records
+    )
