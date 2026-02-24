@@ -19,8 +19,8 @@
         "task": "total",
         "output": "liver.nii.gz",
         "extra": { 
-          "roi_subset_robust": ["liver","pancres","spleen"], 
-          "fastest": true 
+          "roi_subset_robust": ["liver","pancreas","spleen"], 
+          "fast": true 
         }
       },
       {
