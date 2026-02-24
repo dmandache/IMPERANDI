@@ -41,6 +41,15 @@ from tqdm import tqdm
 from imperandi.utils.misc import report_volumes  # type: ignore
 from imperandi.utils.logging import setup_logging
 from imperandi.utils.manifest import load_manifest
+from imperandi.utils.run_state import (
+    atomic_write_csv,
+    atomic_write_json,
+    compute_args_hash,
+    fingerprint_inputs,
+    load_state,
+    now_epoch,
+    state_matches,
+)
 
 # -----------------------------------------------------------------------------
 # Configuration & logging
@@ -593,6 +602,36 @@ def add_segment_arguments(
         default=DEFAULT_TIMEOUT,
         help="Per-volume timeout in seconds",
     )
+    parser.add_argument(
+        "--checkpoint_every_rows",
+        type=int,
+        default=25,
+        help="Flush checkpoint files every N processed rows.",
+    )
+    parser.add_argument(
+        "--checkpoint_every_sec",
+        type=int,
+        default=30,
+        help="Flush checkpoint files every T seconds.",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        default=False,
+        help="Resume from matching checkpoint state if available.",
+    )
+    parser.add_argument(
+        "--strict_resume",
+        action="store_true",
+        default=False,
+        help="Use content hashing for input fingerprint when resuming.",
+    )
+    parser.add_argument(
+        "--state_path",
+        type=str,
+        default=None,
+        help="Optional path for run state JSON.",
+    )
     if include_manifest:
         parser.add_argument(
             "--manifest",
@@ -657,6 +696,39 @@ def main(args: argparse.Namespace) -> None:
     )
     prefetch_totalsegmentator_models(tasks_config, fast=args.fast)
 
+    output_path = Path(args.csv_path_out)
+    error_path = Path(args.error_csv_path)
+    state_path = (
+        Path(args.state_path)
+        if getattr(args, "state_path", None)
+        else output_path.parent / f"{output_path.stem}.segment.state.json"
+    )
+    checkpoint_main_path = output_path.parent / f"{output_path.stem}.segment.checkpoint.csv"
+    checkpoint_err_path = error_path.parent / f"{error_path.stem}.segment.checkpoint.csv"
+
+    exclude_hash_args = {
+        "csv_path_out",
+        "error_csv_path",
+        "dry_run",
+        "verbose",
+        "resume",
+        "state_path",
+        "checkpoint_every_rows",
+        "checkpoint_every_sec",
+        "strict_resume",
+    }
+    args_hash = compute_args_hash(args, exclude_keys=exclude_hash_args)
+    input_fp = fingerprint_inputs(
+        args.csv_path, strict=bool(getattr(args, "strict_resume", False))
+    )
+    state = load_state(state_path)
+    can_resume = bool(getattr(args, "resume", False)) and state_matches(
+        state,
+        command="segment",
+        args_hash=args_hash,
+        input_fingerprint=input_fp,
+    )
+
     from imperandi.utils.multiprocessing import (
         apply_strategy_env,
         strategy_to_log_dict,
@@ -692,7 +764,11 @@ def main(args: argparse.Namespace) -> None:
 
 
     # --- read and pre‑clean CSV ------------------------------------------------
-    df = pd.read_csv(args.csv_path).copy()
+    if can_resume and checkpoint_main_path.exists():
+        logger.info("Resuming segment from checkpoint: %s", checkpoint_main_path)
+        df = pd.read_csv(checkpoint_main_path).copy()
+    else:
+        df = pd.read_csv(args.csv_path).copy()
     if "nifti_path" not in df.columns:
         unnamed = [c for c in df.columns if c.startswith("Unnamed:")]
         if unnamed:
@@ -705,6 +781,91 @@ def main(args: argparse.Namespace) -> None:
     if tasks_config.get("postprocess"):
         df["mask_merged"] = None
     df["warning_message"] = None
+
+    completed_indices: set[int] = set()
+    if can_resume:
+        completed_indices = {
+            int(i) for i in (state or {}).get("completed_indices", []) if isinstance(i, int)
+        }
+        logger.info("Resume enabled: %d completed rows restored from state", len(completed_indices))
+
+    errors_by_idx: Dict[int, str] = {}
+    if can_resume and checkpoint_err_path.exists():
+        err_ckpt = pd.read_csv(checkpoint_err_path)
+        if "idx" in err_ckpt.columns and "error_message" in err_ckpt.columns:
+            for _, row in err_ckpt.iterrows():
+                try:
+                    errors_by_idx[int(row["idx"])] = str(row["error_message"])
+                except Exception:
+                    continue
+
+    checkpoint_every_rows = max(1, int(getattr(args, "checkpoint_every_rows", 25)))
+    checkpoint_every_sec = max(1, int(getattr(args, "checkpoint_every_sec", 30)))
+    last_checkpoint_time = now_epoch()
+    processed_since_checkpoint = 0
+
+    def _checkpoint_write(*, force: bool = False) -> None:
+        nonlocal last_checkpoint_time, processed_since_checkpoint
+        elapsed = now_epoch() - last_checkpoint_time
+        if not force and processed_since_checkpoint < checkpoint_every_rows and elapsed < checkpoint_every_sec:
+            return
+
+        atomic_write_csv(df, checkpoint_main_path, index=False)
+        if errors_by_idx:
+            err_ckpt_df = pd.DataFrame(
+                [{"idx": k, "error_message": v} for k, v in sorted(errors_by_idx.items())]
+            )
+            atomic_write_csv(err_ckpt_df, checkpoint_err_path, index=False)
+        elif checkpoint_err_path.exists():
+            checkpoint_err_path.unlink()
+        atomic_write_json(
+            state_path,
+            {
+                "command": "segment",
+                "args_hash": args_hash,
+                "input_fingerprint": input_fp,
+                "completed_indices": sorted(completed_indices),
+                "updated_at_epoch": now_epoch(),
+            },
+        )
+        last_checkpoint_time = now_epoch()
+        processed_since_checkpoint = 0
+
+    def _apply_result(
+        idx: int, out_dir: str | None, err_msg: str | None, warning_msg: str | None
+    ) -> None:
+        nonlocal processed_since_checkpoint
+        completed_indices.add(int(idx))
+        processed_since_checkpoint += 1
+
+        if out_dir:
+            base = Path(out_dir)
+            row_warnings: List[str] = []
+            for task in tasks_config.get("tasks", []):
+                mask_path = base / task["output"]
+                if mask_path.exists():
+                    df.at[idx, f"mask_{task['key']}"] = str(mask_path)
+                else:
+                    row_warnings.append(f"missing mask: {mask_path}")
+            if tasks_config.get("postprocess"):
+                merged_name = tasks_config["postprocess"].get(
+                    "output", "mask_merged.nii.gz"
+                )
+                merged_path = base / merged_name
+                if merged_path.exists():
+                    df.at[idx, "mask_merged"] = str(merged_path)
+                else:
+                    row_warnings.append(f"missing merged mask: {merged_path}")
+            if warning_msg:
+                row_warnings.append(warning_msg)
+            if row_warnings:
+                df.at[idx, "warning_message"] = " | ".join(row_warnings)
+            if idx in errors_by_idx:
+                del errors_by_idx[idx]
+        else:
+            errors_by_idx[idx] = err_msg or "unknown"
+
+        _checkpoint_write(force=False)
 
     # --- spawn multiprocessing pool -------------------------------------------
     try:
@@ -749,7 +910,10 @@ def main(args: argparse.Namespace) -> None:
             )
 
     def _run_rows(
-        row_indices: List[int], *, progress_bar: tqdm | None = None
+        row_indices: List[int],
+        *,
+        progress_bar: tqdm | None = None,
+        on_result: Any | None = None,
     ) -> Dict[int, Tuple[int, str | None, str | None, str | None]]:
         out: Dict[int, Tuple[int, str | None, str | None, str | None]] = {}
         if not row_indices:
@@ -763,6 +927,8 @@ def main(args: argparse.Namespace) -> None:
             idx: int, result: Tuple[int, str | None, str | None, str | None]
         ) -> None:
             out[idx] = result
+            if on_result is not None:
+                on_result(*result)
             if progress_bar is not None:
                 progress_bar.update(1)
 
@@ -904,19 +1070,22 @@ def main(args: argparse.Namespace) -> None:
         return out
 
     def _run_rows_with_recycling(
-        row_indices: List[int], *, progress_bar: tqdm | None = None
+        row_indices: List[int],
+        *,
+        progress_bar: tqdm | None = None,
+        on_result: Any | None = None,
     ) -> Dict[int, Tuple[int, str | None, str | None, str | None]]:
         if strategy.recycle_every <= 0:
-            return _run_rows(row_indices, progress_bar=progress_bar)
+            return _run_rows(row_indices, progress_bar=progress_bar, on_result=on_result)
 
         out: Dict[int, Tuple[int, str | None, str | None, str | None]] = {}
         chunk_size = max(1, int(strategy.recycle_every))
         for start in range(0, len(row_indices), chunk_size):
             chunk = row_indices[start : start + chunk_size]
-            out.update(_run_rows(chunk, progress_bar=progress_bar))
+            out.update(_run_rows(chunk, progress_bar=progress_bar, on_result=on_result))
         return out
 
-    row_indices = list(df.index)
+    row_indices = [i for i in list(df.index) if i not in completed_indices]
     run_serial = strategy.mode == "serial" or effective_workers <= 1
     if strategy.mode == "subprocess_per_case":
         # logger.warning(
@@ -929,8 +1098,9 @@ def main(args: argparse.Namespace) -> None:
         logger.info(
             "Running segmentation in single-worker mode (no multiprocessing pool)"
         )
-        results_by_idx = {
-            idx: process_single_volume(
+        results_by_idx = {}
+        for idx in tqdm(row_indices, total=len(row_indices), desc="Segment"):
+            result = process_single_volume(
                 idx,
                 df.loc[idx].to_dict(),
                 tasks_config,
@@ -938,13 +1108,14 @@ def main(args: argparse.Namespace) -> None:
                 verbose=args.verbose,
                 force=args.force,
             )
-            for idx in tqdm(row_indices, total=len(row_indices), desc="Segment")
-        }
+            results_by_idx[idx] = result
+            _apply_result(*result)
     else:
         with tqdm(total=len(row_indices), desc="Segment") as progress_bar:
             results_by_idx = _run_rows_with_recycling(
                 row_indices,
                 progress_bar=progress_bar,
+                on_result=_apply_result,
             )
 
             retry_indices = [
@@ -962,6 +1133,7 @@ def main(args: argparse.Namespace) -> None:
                 retry_results = _run_rows_with_recycling(
                     retry_indices,
                     progress_bar=progress_bar,
+                    on_result=_apply_result,
                 )
                 results_by_idx.update(retry_results)
 
@@ -969,43 +1141,17 @@ def main(args: argparse.Namespace) -> None:
         results_by_idx[i] for i in row_indices if i in results_by_idx
     ]
 
-    # --- consolidate results ---------------------------------------------------
-    errors: List[Dict[str, Any]] = []
-    for idx, out_dir, err_msg, warning_msg in results:
-        if out_dir:
-            base = Path(out_dir)
-            row_warnings: List[str] = []
-            for task in tasks_config.get("tasks", []):
-                mask_path = base / task["output"]
-                if mask_path.exists():
-                    df.at[idx, f"mask_{task['key']}"] = str(mask_path)
-                else:
-                    row_warnings.append(f"missing mask: {mask_path}")
-            if tasks_config.get("postprocess"):
-                merged_name = tasks_config["postprocess"].get(
-                    "output", "mask_merged.nii.gz"
-                )
-                merged_path = base / merged_name
-                if merged_path.exists():
-                    df.at[idx, "mask_merged"] = str(merged_path)
-                else:
-                    row_warnings.append(f"missing merged mask: {merged_path}")
-            if warning_msg:
-                row_warnings.append(warning_msg)
-            if row_warnings:
-                df.at[idx, "warning_message"] = " | ".join(row_warnings)
-        else:
-            errors.append({"idx": idx, "error_message": err_msg or "unknown"})
+    _checkpoint_write(force=True)
 
     # --- write output tables ---------------------------------------------------
-    df.to_csv(args.csv_path_out, index=False)
+    atomic_write_csv(df, args.csv_path_out, index=False)
     logger.info("Wrote main table → %s", args.csv_path_out)
 
-    if errors:
-        err_idx = [r["idx"] for r in errors]
+    if errors_by_idx:
+        err_idx = sorted(errors_by_idx.keys())
         err_df = df.loc[err_idx].copy()
-        err_df["error_message"] = [r["error_message"] for r in errors]
-        err_df.to_csv(args.error_csv_path, index=False)
+        err_df["error_message"] = [errors_by_idx[i] for i in err_idx]
+        atomic_write_csv(err_df, args.error_csv_path, index=False)
         logger.warning("%d rows failed – see %s", len(err_df), args.error_csv_path)
 
         # Optional project‑specific volume report
@@ -1015,6 +1161,17 @@ def main(args: argparse.Namespace) -> None:
             logger.debug("report_volumes() failed – continuing")
 
     logger.info("Segmentation done ✔")
+    atomic_write_json(
+        state_path,
+        {
+            "command": "segment",
+            "args_hash": args_hash,
+            "input_fingerprint": input_fp,
+            "completed_indices": sorted(completed_indices),
+            "updated_at_epoch": now_epoch(),
+            "finished": True,
+        },
+    )
 
     print("END: active_children:", mp.active_children(), flush=True)
     print("END: threads:", [t.name for t in threading.enumerate()], flush=True)

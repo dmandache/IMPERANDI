@@ -21,6 +21,15 @@ from imperandi.utils.files import copy_files_to_temp_dir, check_file, is_valid_n
 from imperandi.utils.logging import setup_logging
 from imperandi.utils.misc import report_volumes, report_change, print_args
 from imperandi.utils.manifest import load_manifest
+from imperandi.utils.run_state import (
+    atomic_write_csv,
+    atomic_write_json,
+    compute_args_hash,
+    fingerprint_inputs,
+    load_state,
+    now_epoch,
+    state_matches,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +109,36 @@ def add_convert_arguments(
         action="store_true",
         default=False,
         help="Keep materialized archive cache after the command finishes.",
+    )
+    parser.add_argument(
+        "--checkpoint_every_rows",
+        type=int,
+        default=25,
+        help="Flush checkpoint files every N processed rows.",
+    )
+    parser.add_argument(
+        "--checkpoint_every_sec",
+        type=int,
+        default=30,
+        help="Flush checkpoint files every T seconds.",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        default=False,
+        help="Resume from matching checkpoint state if available.",
+    )
+    parser.add_argument(
+        "--strict_resume",
+        action="store_true",
+        default=False,
+        help="Use content hashing for input fingerprint when resuming.",
+    )
+    parser.add_argument(
+        "--state_path",
+        type=str,
+        default=None,
+        help="Optional path for run state JSON.",
     )
     if include_manifest:
         parser.add_argument(
@@ -388,7 +427,14 @@ def process_single_volume(k, row, output_dir, verbose, return_status=False):
 
 
 # Function to convert DICOM to NIfTI in parallel
-def convert_dicom_to_nifti_parallel(df, output_dir, print_flag, num_workers):
+def convert_dicom_to_nifti_parallel(
+    df,
+    output_dir,
+    print_flag,
+    num_workers,
+    *,
+    on_result=None,
+):
     """
     Convert multiple DICOM volumes to NIfTI in parallel using multiprocessing.
 
@@ -471,8 +517,9 @@ def convert_dicom_to_nifti_parallel(df, output_dir, print_flag, num_workers):
                     df_err = pd.concat(
                         [df_err, pd.DataFrame([error_row])], ignore_index=True
                     )
+            if on_result is not None:
+                on_result(k, export_path, error_row, status)
 
-    df = df[df["nifti_path"].notna()]
     logger.info(
         "Conversion summary: %s converted, %s skipped (already valid), %s failed",
         converted_count,
@@ -491,67 +538,201 @@ def main(args):
     Args:
         args (argparse.Namespace): Parsed command-line arguments.
     """
-    # If verbose, check input csv files
+    output_path = Path(args.csv_path_out)
+    error_path = Path(args.error_csv_path)
+    state_path = (
+        Path(args.state_path)
+        if getattr(args, "state_path", None)
+        else output_path.parent / f"{output_path.stem}.convert.state.json"
+    )
+    checkpoint_main_path = output_path.parent / f"{output_path.stem}.convert.checkpoint.csv"
+    checkpoint_err_path = error_path.parent / f"{error_path.stem}.convert.checkpoint.csv"
+
+    exclude_hash_args = {
+        "csv_path_out",
+        "error_csv_path",
+        "dry_run",
+        "verbose",
+        "resume",
+        "state_path",
+        "checkpoint_every_rows",
+        "checkpoint_every_sec",
+        "strict_resume",
+    }
+    args_hash = compute_args_hash(args, exclude_keys=exclude_hash_args)
+    input_fp = fingerprint_inputs(
+        args.csv_path, strict=bool(getattr(args, "strict_resume", False))
+    )
+    state = load_state(state_path)
+    can_resume = bool(getattr(args, "resume", False)) and state_matches(
+        state,
+        command="convert",
+        args_hash=args_hash,
+        input_fingerprint=input_fp,
+    )
+
     if args.verbose:
         for p in args.csv_path:
             check_file(p)
 
-    # Load manifest if provided
     if hasattr(args, "manifest") and args.manifest:
         load_manifest(args.manifest, base_path=Path(__file__).resolve().parents[1])
 
-    # Load data (support multiple CSV paths)
-    df_list = [pd.read_csv(p) for p in args.csv_path]
-    df = pd.concat(df_list, ignore_index=True)
+    if can_resume and checkpoint_main_path.exists():
+        logger.info("Resuming convert from checkpoint: %s", checkpoint_main_path)
+        df_all = pd.read_csv(checkpoint_main_path).copy()
+    else:
+        df_list = [pd.read_csv(p) for p in args.csv_path]
+        df_all = pd.concat(df_list, ignore_index=True)
+        df_all["_source_idx"] = df_all.index.astype(int)
 
-    # Columns placeholder
-    df["nifti_path"] = None
+    if "nifti_path" not in df_all.columns:
+        df_all["nifti_path"] = None
+    if "_source_idx" not in df_all.columns:
+        df_all["_source_idx"] = df_all.index.astype(int)
 
-    # Convert any list-like strings to actual lists
-    df = df.map(lambda x: convert_list_str_to_list(x) if isinstance(x, str) else x)
+    df_all = df_all.map(lambda x: convert_list_str_to_list(x) if isinstance(x, str) else x)
 
     logger.info("Before conversion:")
-    report_volumes(df)
-    df_prev = df.copy()
+    report_volumes(df_all)
+    df_prev = df_all.copy()
 
     if args.dry_run:
         logger.info("Dry run: convert")
         print_args(args)
         return
 
+    completed_indices: set[int] = set()
+    errors_by_idx: dict[int, dict] = {}
+    if can_resume:
+        completed_indices = {
+            int(i)
+            for i in (state or {}).get("completed_indices", [])
+            if isinstance(i, int)
+        }
+        logger.info(
+            "Resume enabled: %d completed rows restored from state",
+            len(completed_indices),
+        )
+        if checkpoint_err_path.exists():
+            err_ckpt = pd.read_csv(checkpoint_err_path)
+            for _, row in err_ckpt.iterrows():
+                if "_source_idx" in row:
+                    try:
+                        errors_by_idx[int(row["_source_idx"])] = row.to_dict()
+                    except Exception:
+                        continue
+
+    checkpoint_every_rows = max(1, int(getattr(args, "checkpoint_every_rows", 25)))
+    checkpoint_every_sec = max(1, int(getattr(args, "checkpoint_every_sec", 30)))
+    processed_since_checkpoint = 0
+    last_checkpoint_time = now_epoch()
+
+    def _checkpoint_write(*, force: bool = False) -> None:
+        nonlocal processed_since_checkpoint, last_checkpoint_time
+        elapsed = now_epoch() - last_checkpoint_time
+        if (
+            not force
+            and processed_since_checkpoint < checkpoint_every_rows
+            and elapsed < checkpoint_every_sec
+        ):
+            return
+        atomic_write_csv(df_all, checkpoint_main_path, index=False)
+        if errors_by_idx:
+            atomic_write_csv(
+                pd.DataFrame(list(errors_by_idx.values())),
+                checkpoint_err_path,
+                index=False,
+            )
+        elif checkpoint_err_path.exists():
+            checkpoint_err_path.unlink()
+        atomic_write_json(
+            state_path,
+            {
+                "command": "convert",
+                "args_hash": args_hash,
+                "input_fingerprint": input_fp,
+                "completed_indices": sorted(completed_indices),
+                "updated_at_epoch": now_epoch(),
+            },
+        )
+        processed_since_checkpoint = 0
+        last_checkpoint_time = now_epoch()
+
     with ArchiveSession(
         cache_dir=args.archive_cache_dir,
         keep_cache=args.keep_archive_cache,
         max_depth=args.archive_max_depth,
     ) as archive_session:
-        df, df_archive_err = materialize_archive_dicom_paths(df, archive_session)
-
-        # Convert DICOM to NIfTI in parallel
-        df, df_err = convert_dicom_to_nifti_parallel(
-            df, args.output_dir, args.verbose, args.num_workers
-        )
+        work_df = df_all[~df_all["_source_idx"].isin(completed_indices)].copy()
+        work_df = work_df.reset_index(drop=True)
+        work_df, df_archive_err = materialize_archive_dicom_paths(work_df, archive_session)
         if not df_archive_err.empty:
-            df_err = (
-                pd.concat([df_archive_err, df_err], ignore_index=True)
-                if not df_err.empty
-                else df_archive_err
-            )
+            for _, row in df_archive_err.iterrows():
+                if "_source_idx" in row:
+                    source_idx = int(row["_source_idx"])
+                    errors_by_idx[source_idx] = row.to_dict()
+                    completed_indices.add(source_idx)
+
+        def _on_result(k: int, export_path, error_row, status: str) -> None:
+            nonlocal processed_since_checkpoint
+            processed_since_checkpoint += 1
+            source_idx = int(work_df.iloc[k]["_source_idx"])
+            completed_indices.add(source_idx)
+            if export_path is not None:
+                mask = df_all["_source_idx"] == source_idx
+                df_all.loc[mask, "nifti_path"] = str(export_path)
+                errors_by_idx.pop(source_idx, None)
+            elif error_row is not None:
+                err_dict = (
+                    error_row.to_dict()
+                    if hasattr(error_row, "to_dict")
+                    else dict(error_row)
+                )
+                err_dict["_source_idx"] = source_idx
+                errors_by_idx[source_idx] = err_dict
+            _checkpoint_write(force=False)
+
+        _, _ = convert_dicom_to_nifti_parallel(
+            work_df,
+            args.output_dir,
+            args.verbose,
+            args.num_workers,
+            on_result=_on_result,
+        )
+        _checkpoint_write(force=True)
 
     logger.info("After conversion:")
-    report_volumes(df)
-    report_change(df, df_prev)
+    report_volumes(df_all)
+    report_change(df_all, df_prev)
 
-    # Save results
-    df.to_csv(args.csv_path_out, index=False)  # Save the updated CSV with NIfTI paths
-    if not df_err.empty:
+    df_success = df_all[df_all["nifti_path"].notna()].copy()
+    if "_source_idx" in df_success.columns:
+        df_success = df_success.drop(columns=["_source_idx"], errors="ignore")
+    atomic_write_csv(df_success, args.csv_path_out, index=False)
+    if errors_by_idx:
+        df_err = pd.DataFrame(list(errors_by_idx.values())).drop(
+            columns=["_source_idx"], errors="ignore"
+        )
         logger.warning(
             "⚠️ DICOM to Nifti Conversion Errors on patients : %s",
             df_err.patient_key.unique(),
         )
         report_volumes(df_err)
-        df_err.to_csv(args.error_csv_path, index=False)
-    
+        atomic_write_csv(df_err, args.error_csv_path, index=False)
+
     logger.info("Conversion done ✔")
+    atomic_write_json(
+        state_path,
+        {
+            "command": "convert",
+            "args_hash": args_hash,
+            "input_fingerprint": input_fp,
+            "completed_indices": sorted(completed_indices),
+            "updated_at_epoch": now_epoch(),
+            "finished": True,
+        },
+    )
 
 
 if __name__ == "__main__":
@@ -563,4 +744,3 @@ if __name__ == "__main__":
         raise SystemExit(0)
     setup_logging(verbose=getattr(args, "verbose", False))
     main(args)
-

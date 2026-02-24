@@ -12,6 +12,15 @@ from tqdm import tqdm
 
 from imperandi.utils.logging import setup_logging
 from imperandi.utils.misc import print_args
+from imperandi.utils.run_state import (
+    atomic_write_csv,
+    atomic_write_json,
+    compute_args_hash,
+    fingerprint_inputs,
+    load_state,
+    now_epoch,
+    state_matches,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +66,36 @@ def add_phase_arguments(
         help="CSV path for failed rows only (default: <csv_dir>/phase_errors.csv).",
     )
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose logging")
+    parser.add_argument(
+        "--checkpoint_every_rows",
+        type=int,
+        default=25,
+        help="Flush checkpoint files every N processed rows.",
+    )
+    parser.add_argument(
+        "--checkpoint_every_sec",
+        type=int,
+        default=30,
+        help="Flush checkpoint files every T seconds.",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        default=False,
+        help="Resume from matching checkpoint state if available.",
+    )
+    parser.add_argument(
+        "--strict_resume",
+        action="store_true",
+        default=False,
+        help="Use content hashing for input fingerprint when resuming.",
+    )
+    parser.add_argument(
+        "--state_path",
+        type=str,
+        default=None,
+        help="Optional path for run state JSON.",
+    )
     if include_dry_run:
         parser.add_argument(
             "--dry-run",
@@ -181,19 +220,138 @@ def extract_phase_volumes(
 def main(args: argparse.Namespace) -> None:
     phase_extractor = _load_phase_extractor()
 
-    df = pd.read_csv(args.csv_path).copy()
-    df, df_err = extract_phase_volumes(
-        df,
-        verbose=args.verbose,
-        phase_extractor=phase_extractor,
+    output_path = Path(args.csv_path_out)
+    error_path = Path(args.error_csv_path)
+    state_path = (
+        Path(args.state_path)
+        if getattr(args, "state_path", None)
+        else output_path.parent / f"{output_path.stem}.phase.state.json"
+    )
+    checkpoint_main_path = output_path.parent / f"{output_path.stem}.phase.checkpoint.csv"
+    checkpoint_err_path = error_path.parent / f"{error_path.stem}.phase.checkpoint.csv"
+    exclude_hash_args = {
+        "csv_path_out",
+        "error_csv_path",
+        "dry_run",
+        "verbose",
+        "resume",
+        "state_path",
+        "checkpoint_every_rows",
+        "checkpoint_every_sec",
+        "strict_resume",
+    }
+    args_hash = compute_args_hash(args, exclude_keys=exclude_hash_args)
+    input_fp = fingerprint_inputs(
+        args.csv_path, strict=bool(getattr(args, "strict_resume", False))
+    )
+    state = load_state(state_path)
+    can_resume = bool(getattr(args, "resume", False)) and state_matches(
+        state, command="phase", args_hash=args_hash, input_fingerprint=input_fp
     )
 
-    df.to_csv(args.csv_path_out, index=False)
+    if can_resume and checkpoint_main_path.exists():
+        logger.info("Resuming phase from checkpoint: %s", checkpoint_main_path)
+        df = pd.read_csv(checkpoint_main_path).copy()
+    else:
+        df = pd.read_csv(args.csv_path).copy()
+        df["_source_idx"] = df.index.astype(int)
+    if "_source_idx" not in df.columns:
+        df["_source_idx"] = df.index.astype(int)
+
+    errors_by_idx: Dict[int, Dict[str, Any]] = {}
+    completed_indices: set[int] = set()
+    if can_resume:
+        completed_indices = {
+            int(i)
+            for i in (state or {}).get("completed_indices", [])
+            if isinstance(i, int)
+        }
+        if checkpoint_err_path.exists():
+            err_ckpt = pd.read_csv(checkpoint_err_path)
+            for _, row in err_ckpt.iterrows():
+                if "_source_idx" in row:
+                    try:
+                        errors_by_idx[int(row["_source_idx"])] = row.to_dict()
+                    except Exception:
+                        pass
+
+    checkpoint_every_rows = max(1, int(getattr(args, "checkpoint_every_rows", 25)))
+    checkpoint_every_sec = max(1, int(getattr(args, "checkpoint_every_sec", 30)))
+    processed_since_checkpoint = 0
+    last_checkpoint_time = now_epoch()
+
+    def _checkpoint_write(*, force: bool = False) -> None:
+        nonlocal processed_since_checkpoint, last_checkpoint_time
+        elapsed = now_epoch() - last_checkpoint_time
+        if not force and processed_since_checkpoint < checkpoint_every_rows and elapsed < checkpoint_every_sec:
+            return
+        atomic_write_csv(df, checkpoint_main_path, index=False)
+        if errors_by_idx:
+            atomic_write_csv(pd.DataFrame(list(errors_by_idx.values())), checkpoint_err_path, index=False)
+        elif checkpoint_err_path.exists():
+            checkpoint_err_path.unlink()
+        atomic_write_json(
+            state_path,
+            {
+                "command": "phase",
+                "args_hash": args_hash,
+                "input_fingerprint": input_fp,
+                "completed_indices": sorted(completed_indices),
+                "updated_at_epoch": now_epoch(),
+            },
+        )
+        processed_since_checkpoint = 0
+        last_checkpoint_time = now_epoch()
+
+    iterator = df.index.tolist()
+    if args.verbose:
+        iterator = tqdm(iterator, total=len(iterator), desc="Phase")
+    for idx in iterator:
+        src_idx = int(df.at[idx, "_source_idx"])
+        if src_idx in completed_indices:
+            continue
+        _, phase_info, err_msg = process_single_volume(
+            idx,
+            df.loc[idx].to_dict(),
+            phase_extractor=phase_extractor,
+        )
+        if phase_info:
+            for key, value in phase_info.items():
+                df.at[idx, key] = value
+            if src_idx in errors_by_idx:
+                del errors_by_idx[src_idx]
+        else:
+            error_row = df.loc[idx].to_dict()
+            error_row["error_message"] = err_msg or "unknown"
+            errors_by_idx[src_idx] = error_row
+            if args.verbose and err_msg:
+                logger.warning("Row %s failed: %s", idx, err_msg)
+        completed_indices.add(src_idx)
+        processed_since_checkpoint += 1
+        _checkpoint_write(force=False)
+
+    _checkpoint_write(force=True)
+    df_out = df.drop(columns=["_source_idx"], errors="ignore")
+    atomic_write_csv(df_out, args.csv_path_out, index=False)
     logger.info("Wrote main table -> %s", args.csv_path_out)
 
-    if not df_err.empty:
-        df_err.to_csv(args.error_csv_path, index=False)
+    if errors_by_idx:
+        df_err = pd.DataFrame(list(errors_by_idx.values())).drop(
+            columns=["_source_idx"], errors="ignore"
+        )
+        atomic_write_csv(df_err, args.error_csv_path, index=False)
         logger.warning("%d rows failed -> %s", len(df_err), args.error_csv_path)
+    atomic_write_json(
+        state_path,
+        {
+            "command": "phase",
+            "args_hash": args_hash,
+            "input_fingerprint": input_fp,
+            "completed_indices": sorted(completed_indices),
+            "updated_at_epoch": now_epoch(),
+            "finished": True,
+        },
+    )
 
     logger.info("Phase extraction done ✔")
 
