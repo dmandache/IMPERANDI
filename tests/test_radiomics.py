@@ -48,8 +48,15 @@ def test_extract_radiomics_from_dataframe_records_missing_image():
 
 
 def test_main_writes_output_and_error_csv(tmp_path, monkeypatch):
+    good_nifti = tmp_path / "good.nii.gz"
+    bad_nifti = tmp_path / "bad.nii.gz"
+    good_nifti.write_text("nifti")
+    bad_nifti.write_text("nifti")
+
     csv_path = tmp_path / "nifti_index.csv"
-    pd.DataFrame([{"nifti_path": "x.nii.gz"}]).to_csv(csv_path, index=False)
+    pd.DataFrame(
+        [{"nifti_path": str(good_nifti)}, {"nifti_path": str(bad_nifti)}]
+    ).to_csv(csv_path, index=False)
 
     monkeypatch.setattr(
         radiomics_module,
@@ -62,14 +69,24 @@ def test_main_writes_output_and_error_csv(tmp_path, monkeypatch):
         lambda featureextractor_module, settings: object(),
     )
 
-    def fake_extract(df, *, extractor, sitk_module, verbose):
-        out = df.copy()
-        out["liver_original_shape_VoxelVolume"] = 1.0
-        err = pd.DataFrame([{"nifti_path": "x.nii.gz", "error_message": "mock error"}])
-        return out, err
+    def fake_liver_minus_tumor(
+        image_path,
+        liver_mask_path,
+        tumor_mask_path,
+        *,
+        extractor,
+        sitk_module,
+        prefix,
+    ):
+        if Path(image_path).name == "good.nii.gz":
+            return {"liver_original_shape_VoxelVolume": 1.0}, None
+        return {}, "mock error"
 
     monkeypatch.setattr(
-        radiomics_module, "extract_radiomics_from_dataframe", fake_extract
+        radiomics_module, "extract_radiomics_liver_minus_tumor", fake_liver_minus_tumor
+    )
+    monkeypatch.setattr(
+        radiomics_module, "extract_radiomics_safe", lambda *a, **k: ({}, None)
     )
 
     args = argparse.Namespace(
@@ -87,4 +104,4 @@ def test_main_writes_output_and_error_csv(tmp_path, monkeypatch):
 
     err_df = pd.read_csv(args.error_csv_path)
     assert len(err_df) == 1
-    assert err_df.loc[0, "error_message"] == "mock error"
+    assert "mock error" in err_df.loc[0, "error_message"]

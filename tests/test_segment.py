@@ -110,10 +110,10 @@ def test_resolve_runtime_task_strips_fast_suffix_for_execution():
     assert extra["fast"] is True
 
 
-def test_resolve_merge_outputs_rejects_merge_outputs_config():
+def test_resolve_merge_outputs_requires_merge_keys():
     postprocess = {"merge_outputs": ["a.nii.gz"]}
     tasks = [{"key": "a", "output": "a.nii.gz"}]
-    with pytest.raises(ValueError, match="merge_outputs is not supported"):
+    with pytest.raises(ValueError, match="merge_keys is required"):
         segment_module.resolve_merge_outputs(postprocess, tasks)
 
 
@@ -487,7 +487,7 @@ def test_main_single_worker_avoids_process_pool(tmp_path, monkeypatch):
     monkeypatch.setattr(segment_module, "ProcessPoolExecutor", fail_if_pool_used)
 
     def fake_process_single_volume(
-        idx, row, tasks_config, *, fast, verbose, force, backend=None
+        idx, row, tasks_config, *, verbose, force, backend=None, **kwargs
     ):
         out_dir = Path(row["nifti_path"]).parent
         (out_dir / "liver.nii.gz").write_text("mask")
@@ -542,7 +542,7 @@ def test_main_uses_strategy_effective_worker_count(tmp_path, monkeypatch):
     monkeypatch.setattr(segment_module, "ProcessPoolExecutor", fail_if_pool_used)
 
     def fake_process_single_volume(
-        idx, row, tasks_config, *, fast, verbose, force, backend=None
+        idx, row, tasks_config, *, verbose, force, backend=None, **kwargs
     ):
         out_dir = Path(row["nifti_path"]).parent
         (out_dir / "liver.nii.gz").write_text("mask")
@@ -985,7 +985,7 @@ def test_main_subprocess_mode_currently_degrades_to_serial(tmp_path, monkeypatch
     monkeypatch.setattr(segment_module, "ProcessPoolExecutor", fail_if_pool_used)
 
     def fake_process_single_volume(
-        idx, row, tasks_config, *, fast, verbose, force, backend=None
+        idx, row, tasks_config, *, verbose, force, backend=None, **kwargs
     ):
         out_dir = Path(row["nifti_path"]).parent
         (out_dir / "liver.nii.gz").write_text("mask")

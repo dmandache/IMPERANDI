@@ -1256,10 +1256,6 @@ def main(args: argparse.Namespace) -> None:
                 )
                 results_by_idx.update(retry_results)
 
-    results: List[Tuple[int, str | None, str | None, str | None]] = [
-        results_by_idx[i] for i in row_indices if i in results_by_idx
-    ]
-
     _checkpoint_write(force=True)
 
     # --- write output tables ---------------------------------------------------
