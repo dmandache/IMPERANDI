@@ -115,12 +115,6 @@ def add_radiomics_arguments(
         default=False,
         help="Use content hashing for input fingerprint when resuming.",
     )
-    parser.add_argument(
-        "--state_path",
-        type=str,
-        default=None,
-        help="Optional path for run state JSON.",
-    )
     if include_dry_run:
         parser.add_argument(
             "--dry-run",
@@ -412,22 +406,17 @@ def main(args: argparse.Namespace) -> None:
 
     output_path = Path(args.csv_path_out)
     error_path = Path(args.error_csv_path)
-    state_path = (
-        Path(args.state_path)
-        if getattr(args, "state_path", None)
-        else output_path.parent / f"{output_path.stem}.radiomics.state.json"
-    )
+    state_path = output_path.parent / f".{output_path.stem}.radiomics.state.json"
     checkpoint_main_path = (
-        output_path.parent / f"{output_path.stem}.radiomics.checkpoint.csv"
+        output_path.parent / f".{output_path.stem}.radiomics.checkpoint.csv"
     )
-    checkpoint_err_path = error_path.parent / f"{error_path.stem}.radiomics.checkpoint.csv"
+    checkpoint_err_path = error_path.parent / f".{error_path.stem}.radiomics.checkpoint.csv"
     exclude_hash_args = {
         "csv_path_out",
         "error_csv_path",
         "dry_run",
         "verbose",
         "resume",
-        "state_path",
         "checkpoint_every_rows",
         "checkpoint_every_sec",
         "strict_resume",

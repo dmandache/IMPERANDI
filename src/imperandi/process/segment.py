@@ -204,13 +204,10 @@ def _default_segmentation_config() -> Dict[str, Any]:
         "backend": "totalsegmentator",
         "tasks": [
             {
-                "key": "liver",
                 "task": "total",
-                "output": "liver",
-                "extra": {"roi_subset_robust": ["liver"]},
+                "extra": {"roi_subset_robust": ["liver"], "fastest": True},
             },
             {
-                "key": "liver_tumor",
                 "task": "liver_vessels",
                 "output": "liver_tumor",
                 "extra": {},
@@ -349,12 +346,6 @@ def resolve_merge_outputs(
     *,
     output_to_column: Dict[str, str] | None = None,
 ) -> List[str]:
-    merge_outputs = _as_str_list(postprocess.get("merge_outputs"))
-    if merge_outputs:
-        raise ValueError(
-            "postprocess.merge_outputs is not supported. Use postprocess.merge_keys."
-        )
-
     merge_keys = _as_str_list(postprocess.get("merge_keys"))
     if not merge_keys:
         raise ValueError("postprocess.merge_keys is required for postprocess merging.")
@@ -742,13 +733,13 @@ def add_segment_arguments(
     parser.add_argument(
         "--checkpoint_every_rows",
         type=int,
-        default=25,
+        default=50,
         help="Flush checkpoint files every N processed rows.",
     )
     parser.add_argument(
         "--checkpoint_every_sec",
         type=int,
-        default=30,
+        default=350,
         help="Flush checkpoint files every T seconds.",
     )
     parser.add_argument(
@@ -762,12 +753,6 @@ def add_segment_arguments(
         action="store_true",
         default=False,
         help="Use content hashing for input fingerprint when resuming.",
-    )
-    parser.add_argument(
-        "--state_path",
-        type=str,
-        default=None,
-        help="Optional path for run state JSON.",
     )
     if include_manifest:
         parser.add_argument(
@@ -835,13 +820,9 @@ def main(args: argparse.Namespace) -> None:
 
     output_path = Path(args.csv_path_out)
     error_path = Path(args.error_csv_path)
-    state_path = (
-        Path(args.state_path)
-        if getattr(args, "state_path", None)
-        else output_path.parent / f"{output_path.stem}.segment.state.json"
-    )
-    checkpoint_main_path = output_path.parent / f"{output_path.stem}.segment.checkpoint.csv"
-    checkpoint_err_path = error_path.parent / f"{error_path.stem}.segment.checkpoint.csv"
+    state_path = output_path.parent / f".{output_path.stem}.segment.state.json"
+    checkpoint_main_path = output_path.parent / f".{output_path.stem}.segment.checkpoint.csv"
+    checkpoint_err_path = error_path.parent / f".{error_path.stem}.segment.checkpoint.csv"
 
     exclude_hash_args = {
         "csv_path_out",
@@ -849,7 +830,6 @@ def main(args: argparse.Namespace) -> None:
         "dry_run",
         "verbose",
         "resume",
-        "state_path",
         "checkpoint_every_rows",
         "checkpoint_every_sec",
         "strict_resume",
