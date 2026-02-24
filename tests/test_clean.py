@@ -326,6 +326,8 @@ def test_compute_visit_and_acquisition_order():
     out2 = clean.compute_acquisition_order(df2.copy())
     assert "acquisition_order" in out2.columns
     assert set(out2["acquisition_order"].dropna()) == {0, 1, 2}
+    assert (out2["delay_since_prev_acq_sec"].dropna() >= 0).all()
+    assert (out2["delay_since_first_acq_sec"].dropna() >= 0).all()
 
     # Handles aggregated time values represented as datetime.time objects or repr strings
     df3 = pd.DataFrame(
@@ -347,6 +349,32 @@ def test_compute_visit_and_acquisition_order():
     assert out3.set_index("volume_id").loc["v1", "acquisition_order"] == 0
     assert out3.set_index("volume_id").loc["v2", "acquisition_order"] == 1
     assert out3.set_index("volume_id").loc["v3", "acquisition_order"] == 2
+    assert (out3["delay_since_prev_acq_sec"].dropna() >= 0).all()
+    assert (out3["delay_since_first_acq_sec"].dropna() >= 0).all()
+
+    # Ensure ordering uses acquisition timestamp, not lexical volume_id order.
+    df4 = pd.DataFrame(
+        {
+            "patient_key": ["p", "p", "p"],
+            "study_id": ["s", "s", "s"],
+            "volume_id": ["v1", "v2", "v3"],  # lexical order != acquisition order
+            "StudyDate": ["20200101", "20200101", "20200101"],
+            "InstanceCreationTime": [
+                "['120300.000']",  # should be order 2
+                "['120100.000']",  # should be order 0
+                "['120200.000']",  # should be order 1
+            ],
+        }
+    )
+    df4 = clean.add_date(df4)
+    df4 = clean.add_time(df4)
+    out4 = clean.compute_acquisition_order(df4.copy())
+    out4_by_volume = out4.set_index("volume_id")
+    assert out4_by_volume.loc["v2", "acquisition_order"] == 0
+    assert out4_by_volume.loc["v3", "acquisition_order"] == 1
+    assert out4_by_volume.loc["v1", "acquisition_order"] == 2
+    assert (out4["delay_since_prev_acq_sec"].dropna() >= 0).all()
+    assert (out4["delay_since_first_acq_sec"].dropna() >= 0).all()
 
 
 def test_drop_irrelevant_dicom_tags():

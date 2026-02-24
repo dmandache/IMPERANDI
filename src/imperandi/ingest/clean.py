@@ -907,9 +907,11 @@ def compute_acquisition_order(df):
     if "time" not in df.columns:
         return df
 
+    df = df.copy()
     df["time"] = df["time"].apply(_normalize_instance_creation_time)
-    df["_acq_timestamp"] = pd.to_datetime(df["date"], errors="coerce") + \
-        df["time"].apply(
+    df["_acq_timestamp"] = pd.to_datetime(df["date"], errors="coerce") + df[
+        "time"
+    ].apply(
             lambda t: pd.Timedelta(
                 hours=t.hour,
                 minutes=t.minute,
@@ -918,32 +920,31 @@ def compute_acquisition_order(df):
             ) if t is not None else pd.NaT
         )
 
-    # One row per (patient, study, volume) with representative acquisition time
-
-    # df_study = (
-    #     df.reset_index()
-    #     .groupby(["patient_key", "study_id", "volume_id"], group_keys=False)
-    #     .first()
-    #     .groupby("patient_key", group_keys=False)
-    #     .apply(lambda x: x.sort_values(by=["_acq_timestamp"]))
-    # )
+    # One row per (patient, study, volume) with representative acquisition time.
+    # Delays and order are computed on rows sorted by acquisition timestamp.
 
     df_study = (
         df.groupby(["patient_key", "study_id", "volume_id"], as_index=False)
           .agg(_acq_timestamp=("_acq_timestamp", "min"))
     )
+    df_study = df_study.sort_values(
+        by=["patient_key", "study_id", "_acq_timestamp", "volume_id"],
+        kind="mergesort",
+        na_position="last",
+    )
+    group_cols = ["patient_key", "study_id"]
 
     df_study["delay_since_prev_acq_sec"] = (
-        df_study.groupby(["patient_key", "study_id"])["_acq_timestamp"].diff().dt.total_seconds()
+        df_study.groupby(group_cols)["_acq_timestamp"].diff().dt.total_seconds()
     )
+    first_mask = df_study.groupby(group_cols).cumcount() == 0
+    df_study.loc[first_mask, "delay_since_prev_acq_sec"] = 0.0
+
+    first_ts = df_study.groupby(group_cols)["_acq_timestamp"].transform("min")
     df_study["delay_since_first_acq_sec"] = (
-        df_study.groupby(["patient_key", "study_id"])["delay_since_prev_acq_sec"]
-        .cumsum()
-        .fillna(0)
+        (df_study["_acq_timestamp"] - first_ts).dt.total_seconds()
     )
-    df_study["acquisition_order"] = df_study.groupby(["patient_key", "study_id"])[
-        "_acq_timestamp"
-    ].cumcount()
+    df_study["acquisition_order"] = df_study.groupby(group_cols).cumcount()
 
     df = df.merge(
         df_study[
@@ -996,6 +997,7 @@ def reorder_columns(df):
         "study_id",
         "series_id",
         "date",
+        "time",
     ]
 
     cols = df.columns.tolist()
