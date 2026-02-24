@@ -89,6 +89,21 @@ def test_load_segmentation_config_missing(tmp_path):
         )
 
 
+def test_resolve_prefetch_task_name_prefers_fast_variant_from_extra():
+    task = {"task": "total", "extra": {"fastest": True}}
+    assert segment_module._resolve_prefetch_task_name(task) == "total_fast"
+
+
+def test_resolve_prefetch_task_name_keeps_original_without_fast_flags():
+    task = {"task": "total", "extra": {"roi_subset_robust": ["liver"]}}
+    assert segment_module._resolve_prefetch_task_name(task) == "total"
+
+
+def test_resolve_prefetch_task_name_handles_body_mr_fast_alias():
+    task = {"task": "body_mr", "extra": {"fast": True}}
+    assert segment_module._resolve_prefetch_task_name(task) == "body_mr_fast"
+
+
 def test_segment_volume_calls_postprocess(tmp_path, monkeypatch):
     nifti = tmp_path / "vol.nii.gz"
     nifti.write_text("nifti")

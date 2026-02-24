@@ -183,7 +183,6 @@ class TotalSegmentatorBackend:
         input_path: Path,
         output_dir: Path,
         task: str,
-        fast: bool,
         **kwargs: Any,
     ) -> None:
         self._ensure_imported()
@@ -191,7 +190,6 @@ class TotalSegmentatorBackend:
             input=input_path,
             output=output_dir,
             task=task,
-            fast=fast,
             quiet=True,
             verbose=False,
             **kwargs,
@@ -203,20 +201,16 @@ def _default_segmentation_config() -> Dict[str, Any]:
         "backend": "totalsegmentator",
         "tasks": [
             {
-                "key": "liver",
                 "task": "total",
-                "output": "liver.nii.gz",
                 "extra": {"roi_subset_robust": ["liver"]},
             },
             {
-                "key": "liver_tumor",
                 "task": "liver_vessels",
-                "output": "liver_tumor.nii.gz",
-                "extra": {},
+                "extra": {"roi_subset_robust": ["liver_tumor"]},
             },
         ],
         "postprocess": {
-            "merge_keys": ["liver", "liver_tumor"],
+            "merge_outputs": ["liver.nii.gz", "liver_tumor.nii.gz"],
             "output": "liver_all.nii.gz",
             "radius_mm": 5.0,
             "largest_cc": True,
@@ -226,27 +220,157 @@ def _default_segmentation_config() -> Dict[str, Any]:
     }
 
 
+def _dedupe_keep_order(items: List[str]) -> List[str]:
+    seen: set[str] = set()
+    ordered: List[str] = []
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        ordered.append(item)
+    return ordered
+
+
+def _as_str_list(value: Any) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, (list, tuple)):
+        out: List[str] = []
+        for v in value:
+            if v is None:
+                continue
+            out.append(str(v))
+        return out
+    return [str(value)]
+
+
+def _output_to_column(output_name: str) -> str:
+    base = Path(output_name).name
+    if base.endswith(".nii.gz"):
+        stem = base[: -len(".nii.gz")]
+    else:
+        stem = Path(base).stem
+    safe = re.sub(r"[^0-9A-Za-z_]+", "_", stem).strip("_").lower()
+    return f"mask_{safe or 'unnamed'}"
+
+
+def infer_task_outputs(task: Dict[str, Any]) -> List[str]:
+    outputs: List[str] = []
+    outputs.extend(_as_str_list(task.get("outputs")))
+    outputs.extend(_as_str_list(task.get("output")))  # legacy support
+
+    extra = task.get("extra", {})
+    for key in ("roi_subset_robust", "roi_subset"):
+        for roi in _as_str_list(extra.get(key)):
+            roi = roi.strip()
+            if not roi:
+                continue
+            outputs.append(f"{roi}.nii.gz")
+
+    return _dedupe_keep_order(outputs)
+
+
+def collect_configured_outputs(tasks_config: Dict[str, Any]) -> List[str]:
+    outputs: List[str] = []
+    for task in tasks_config.get("tasks", []):
+        outputs.extend(infer_task_outputs(task))
+    return _dedupe_keep_order(outputs)
+
+
+def resolve_merge_outputs(
+    postprocess: Dict[str, Any], tasks: List[Dict[str, Any]]
+) -> List[str]:
+    merge_outputs = _as_str_list(postprocess.get("merge_outputs"))
+    if merge_outputs:
+        return _dedupe_keep_order(merge_outputs)
+
+    # Backward compatibility: resolve legacy key-based merge definitions.
+    merge_keys = _as_str_list(postprocess.get("merge_keys"))
+    if not merge_keys:
+        return []
+
+    key_to_outputs: Dict[str, List[str]] = {}
+    for task in tasks:
+        key = task.get("key")
+        if not key:
+            continue
+        key_to_outputs[str(key)] = infer_task_outputs(task)
+
+    resolved: List[str] = []
+    for merge_key in merge_keys:
+        resolved.extend(key_to_outputs.get(merge_key, []))
+    return _dedupe_keep_order(resolved)
+
+
+def _task_label(task: Dict[str, Any]) -> str:
+    if task.get("key"):
+        return str(task["key"])
+    task_name = str(task.get("task", "task"))
+    outputs = infer_task_outputs(task)
+    if outputs:
+        return f"{task_name}:{','.join(outputs)}"
+    return task_name
+
+
+def _validate_task_outputs(tasks: List[Dict[str, Any]]) -> None:
+    for task in tasks:
+        outputs = infer_task_outputs(task)
+        if outputs:
+            continue
+        raise ValueError(
+            "Cannot infer outputs for segmentation task "
+            f"{_task_label(task)!r}. Configure one of: "
+            "'outputs', legacy 'output', or extra.roi_subset_robust/roi_subset."
+        )
+
+
 def load_segmentation_config(manifest_arg: str | None, *, base_path: Path) -> Dict[str, Any]:
     """Load segmentation config from manifest, falling back to generic manifest."""
     generic_manifest = load_manifest("generic", base_path=base_path)
     generic_segmentation = generic_manifest.get("segmentation") or _default_segmentation_config()
 
     if not manifest_arg:
-        return copy.deepcopy(generic_segmentation)
+        config = copy.deepcopy(generic_segmentation)
+    else:
+        manifest = load_manifest(manifest_arg, base_path=base_path)
+        manifest_segmentation = manifest.get("segmentation")
+        if manifest_segmentation:
+            config = copy.deepcopy(manifest_segmentation)
+        elif "tasks" in manifest and "backend" in manifest:
+            # Backward compatibility for legacy files that were pure task configs.
+            config = copy.deepcopy(manifest)
+        else:
+            config = copy.deepcopy(generic_segmentation)
 
-    manifest = load_manifest(manifest_arg, base_path=base_path)
-    manifest_segmentation = manifest.get("segmentation")
-    if manifest_segmentation:
-        return copy.deepcopy(manifest_segmentation)
-    if "tasks" in manifest and "backend" in manifest:
-        # Backward compatibility for legacy files that were pure task configs.
-        return copy.deepcopy(manifest)
-    return copy.deepcopy(generic_segmentation)
+    _validate_task_outputs(config.get("tasks", []))
+    return config
 
 
-def prefetch_totalsegmentator_models(
-    tasks_config: Dict[str, Any], *, fast: bool
-) -> None:
+def _resolve_prefetch_task_name(task: Dict[str, Any]) -> str | None:
+    task_name = str(task.get("task", "")).strip()
+    if not task_name:
+        return None
+
+    extra = task.get("extra")
+    if not isinstance(extra, dict):
+        return task_name
+
+    fast_requested = bool(extra.get("fast")) or bool(extra.get("fastest"))
+    if not fast_requested:
+        return task_name
+
+    fast_aliases = {
+        "total": "total_fast",
+        "total_mr": "total_fast_mr",
+        "body": "body_fast",
+        "body_mr": "body_mr_fast",
+    }
+    return fast_aliases.get(task_name, task_name)
+
+
+def prefetch_totalsegmentator_models(tasks_config: Dict[str, Any]) -> None:
     """Download required TotalSegmentator weights before multiprocessing."""
     if tasks_config.get("backend", "totalsegmentator") != "totalsegmentator":
         return
@@ -301,22 +425,16 @@ def prefetch_totalsegmentator_models(
         "coronary_arteries": [507],
     }
 
-    task_names = {task["task"] for task in tasks if "task" in task}
+    task_names = {
+        resolved_name
+        for task in tasks
+        for resolved_name in [_resolve_prefetch_task_name(task)]
+        if resolved_name
+    }
     if not task_names:
         return
 
-    resolved_tasks: List[str] = []
-    for name in sorted(task_names):
-        if name == "total" and fast:
-            resolved_tasks.append("total_fast")
-        elif name == "total_mr" and fast:
-            resolved_tasks.append("total_fast_mr")
-        elif name == "body" and fast:
-            resolved_tasks.append("body_fast")
-        elif name == "body_mr" and fast:
-            resolved_tasks.append("body_mr_fast")
-        else:
-            resolved_tasks.append(name)
+    resolved_tasks = sorted(task_names)
 
     missing = [name for name in resolved_tasks if name not in task_to_id]
     if missing:
@@ -349,7 +467,6 @@ def segment_volume(
     output_dir: Path,
     tasks_config: Dict[str, Any],
     *,
-    fast: bool,
     verbose: bool = False,
     force: bool = False,
     backend: TotalSegmentatorBackend | None = None,
@@ -368,7 +485,7 @@ def segment_volume(
 
     for task in tasks:
         task_name = task["task"]
-        task_output = task["output"]
+        task_outputs = infer_task_outputs(task)
         extra = task.get("extra", {})
 
         # TotalSegmentator can spawn additional saving threads per process
@@ -377,10 +494,10 @@ def segment_volume(
         # Keep a conservative default unless users explicitly override it.
         extra.setdefault("nr_thr_saving", 2)
 
-        dst = output_dir / task_output
-        if dst.exists() and not force:
+        expected_paths = [output_dir / name for name in task_outputs]
+        if expected_paths and all(path.exists() for path in expected_paths) and not force:
             if verbose:
-                logger.info("Skip %s – file exists", dst)
+                logger.info("Skip %s – files already exist", _task_label(task))
             continue
 
         try:
@@ -388,7 +505,6 @@ def segment_volume(
                 input_path=nifti_path,
                 output_dir=output_dir,
                 task=task_name,
-                fast=fast,
                 **extra,
             )
         except Exception as exc:
@@ -397,21 +513,18 @@ def segment_volume(
             )
             raise
 
-        if not dst.exists():
-            raise RuntimeError(f"Expected mask not produced: {dst}")
+        missing_paths = [p for p in expected_paths if not p.exists()]
+        if missing_paths:
+            missing = ", ".join(str(p) for p in missing_paths)
+            raise RuntimeError(f"Expected mask(s) not produced: {missing}")
         if verbose:
-            logger.info("Mask saved at %s", dst)
+            logger.info("Masks saved for %s", _task_label(task))
 
     postprocess = tasks_config.get("postprocess")
     if not postprocess:
         return warnings
 
-    merge_keys = postprocess.get("merge_keys", [])
-    if not merge_keys:
-        return warnings
-
-    key_to_output = {task["key"]: task["output"] for task in tasks}
-    merge_files = [key_to_output[k] for k in merge_keys if k in key_to_output]
+    merge_files = resolve_merge_outputs(postprocess, tasks)
     if not merge_files:
         return warnings
 
@@ -458,7 +571,6 @@ def process_single_volume(
     row: Dict[str, Any],  # must be JSON‑serialisable
     tasks_config: Dict[str, Any],
     *,
-    fast: bool,
     verbose: bool,
     force: bool,
     backend: TotalSegmentatorBackend | None = None,
@@ -480,7 +592,6 @@ def process_single_volume(
             nifti_path,
             nifti_path.parent,
             tasks_config,
-            fast=fast,
             verbose=verbose,
             force=force,
             backend=backend,
@@ -581,9 +692,6 @@ def add_segment_arguments(
         help="CSV for failures only (default: alongside input CSV).",
     )
     parser.add_argument("--num_workers", type=int, default=4, help="Pool size")
-    parser.add_argument(
-        "--fast", action="store_true", help="Use TotalSegmentator fast mode"
-    )
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose logging")
     parser.add_argument(
         "--force",
@@ -694,7 +802,13 @@ def main(args: argparse.Namespace) -> None:
         getattr(args, "manifest", None),
         base_path=Path(__file__).resolve().parents[1],
     )
-    prefetch_totalsegmentator_models(tasks_config, fast=args.fast)
+    configured_outputs = collect_configured_outputs(tasks_config)
+    output_columns = {name: _output_to_column(name) for name in configured_outputs}
+    postprocess_cfg = tasks_config.get("postprocess")
+    if postprocess_cfg:
+        merged_output_name = str(postprocess_cfg.get("output", "mask_merged.nii.gz"))
+        output_columns[merged_output_name] = _output_to_column(merged_output_name)
+    prefetch_totalsegmentator_models(tasks_config)
 
     output_path = Path(args.csv_path_out)
     error_path = Path(args.error_csv_path)
@@ -776,10 +890,8 @@ def main(args: argparse.Namespace) -> None:
     if "nifti_path" not in df.columns:
         raise KeyError("column 'nifti_path' missing")
     df = df.drop_duplicates("nifti_path").copy()
-    for task in tasks_config.get("tasks", []):
-        df[f"mask_{task['key']}"] = None
-    if tasks_config.get("postprocess"):
-        df["mask_merged"] = None
+    for column in _dedupe_keep_order(list(output_columns.values())):
+        df[column] = None
     df["warning_message"] = None
 
     completed_indices: set[int] = set()
@@ -841,21 +953,12 @@ def main(args: argparse.Namespace) -> None:
         if out_dir:
             base = Path(out_dir)
             row_warnings: List[str] = []
-            for task in tasks_config.get("tasks", []):
-                mask_path = base / task["output"]
+            for output_name, column_name in output_columns.items():
+                mask_path = base / output_name
                 if mask_path.exists():
-                    df.at[idx, f"mask_{task['key']}"] = str(mask_path)
+                    df.at[idx, column_name] = str(mask_path)
                 else:
                     row_warnings.append(f"missing mask: {mask_path}")
-            if tasks_config.get("postprocess"):
-                merged_name = tasks_config["postprocess"].get(
-                    "output", "mask_merged.nii.gz"
-                )
-                merged_path = base / merged_name
-                if merged_path.exists():
-                    df.at[idx, "mask_merged"] = str(merged_path)
-                else:
-                    row_warnings.append(f"missing merged mask: {merged_path}")
             if warning_msg:
                 row_warnings.append(warning_msg)
             if row_warnings:
@@ -976,7 +1079,6 @@ def main(args: argparse.Namespace) -> None:
                         idx,
                         df.loc[idx].to_dict(),
                         tasks_config,
-                        fast=args.fast,
                         verbose=args.verbose,
                         force=args.force,
                     )
@@ -1104,7 +1206,6 @@ def main(args: argparse.Namespace) -> None:
                 idx,
                 df.loc[idx].to_dict(),
                 tasks_config,
-                fast=args.fast,
                 verbose=args.verbose,
                 force=args.force,
             )
