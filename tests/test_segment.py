@@ -23,6 +23,29 @@ class DummyBackend:
         (Path(output_dir) / out_name).write_text("mask")
 
 
+class DummyTqdmBar:
+    def __init__(self, total=None, **kwargs):
+        self.total = total
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return None
+
+    def update(self, n=1):
+        return None
+
+    def refresh(self):
+        return None
+
+
+def passthrough_tqdm(it=None, **kwargs):
+    if it is None:
+        return DummyTqdmBar(**kwargs)
+    return it
+
+
 def make_strategy(**overrides):
     data = {
         "mode": "process_pool",
@@ -289,7 +312,7 @@ def test_main_writes_mask_columns(tmp_path, monkeypatch):
 
     monkeypatch.setattr(segment_module, "ProcessPoolExecutor", DummyPool)
     monkeypatch.setattr(segment_module, "as_completed", lambda futures: list(futures))
-    monkeypatch.setattr(segment_module, "tqdm", lambda it, **kwargs: it)
+    monkeypatch.setattr(segment_module, "tqdm", passthrough_tqdm)
     monkeypatch.setattr(
         segment_module, "prefetch_totalsegmentator_models", lambda *a, **k: None
     )
@@ -369,7 +392,7 @@ def test_main_records_warning_when_merged_mask_missing(tmp_path, monkeypatch):
 
     monkeypatch.setattr(segment_module, "ProcessPoolExecutor", DummyPool)
     monkeypatch.setattr(segment_module, "as_completed", lambda futures: list(futures))
-    monkeypatch.setattr(segment_module, "tqdm", lambda it, **kwargs: it)
+    monkeypatch.setattr(segment_module, "tqdm", passthrough_tqdm)
     monkeypatch.setattr(
         segment_module, "prefetch_totalsegmentator_models", lambda *a, **k: None
     )
@@ -415,7 +438,7 @@ def test_main_single_worker_avoids_process_pool(tmp_path, monkeypatch):
     monkeypatch.setattr(
         segment_module, "prefetch_totalsegmentator_models", lambda *a, **k: None
     )
-    monkeypatch.setattr(segment_module, "tqdm", lambda it, **kwargs: it)
+    monkeypatch.setattr(segment_module, "tqdm", passthrough_tqdm)
     patch_strategy(monkeypatch, mode="serial", max_workers=1, max_in_flight=1)
 
     def fail_if_pool_used(*args, **kwargs):
@@ -471,7 +494,7 @@ def test_main_uses_strategy_effective_worker_count(tmp_path, monkeypatch):
     monkeypatch.setattr(
         segment_module, "prefetch_totalsegmentator_models", lambda *a, **k: None
     )
-    monkeypatch.setattr(segment_module, "tqdm", lambda it, **kwargs: it)
+    monkeypatch.setattr(segment_module, "tqdm", passthrough_tqdm)
     patch_strategy(monkeypatch, mode="process_pool", max_workers=1, max_in_flight=1)
 
     def fail_if_pool_used(*args, **kwargs):
@@ -526,7 +549,7 @@ def test_main_uses_strategy_effective_start_method(tmp_path, monkeypatch):
     monkeypatch.setattr(
         segment_module, "prefetch_totalsegmentator_models", lambda *a, **k: None
     )
-    monkeypatch.setattr(segment_module, "tqdm", lambda it, **kwargs: it)
+    monkeypatch.setattr(segment_module, "tqdm", passthrough_tqdm)
     patch_strategy(
         monkeypatch,
         mode="process_pool",
@@ -587,6 +610,92 @@ def test_main_uses_strategy_effective_start_method(tmp_path, monkeypatch):
     assert start_methods == ["forkserver"]
 
 
+def test_main_enables_gpu_worker_pinning_for_multi_gpu(tmp_path, monkeypatch):
+    nifti = tmp_path / "vol.nii.gz"
+    nifti.write_text("nifti")
+    csv_path = tmp_path / "nifti_index.csv"
+    pd.DataFrame([{"nifti_path": str(nifti)}]).to_csv(csv_path, index=False)
+    config_path = tmp_path / "tasks.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "backend": "totalsegmentator",
+                "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
+            }
+        )
+    )
+
+    monkeypatch.setattr(
+        segment_module, "prefetch_totalsegmentator_models", lambda *a, **k: None
+    )
+    monkeypatch.setattr(segment_module, "tqdm", passthrough_tqdm)
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "4,5")
+    patch_strategy(
+        monkeypatch,
+        mode="process_pool",
+        max_workers=2,
+        max_in_flight=1,
+        use_gpu=True,
+        gpu_count=2,
+    )
+
+    class DummyFuture:
+        def __init__(self, result):
+            self._result = result
+
+        def result(self, timeout=None):
+            return self._result
+
+        def cancel(self):
+            return None
+
+    class DummyPool:
+        last_initializer = None
+        last_initargs = None
+
+        def __init__(
+            self,
+            max_workers=None,
+            mp_context=None,
+            initializer=None,
+            initargs=(),
+        ):
+            self._processes = None
+            DummyPool.last_initializer = initializer
+            DummyPool.last_initargs = initargs
+
+        def submit(self, fn, *args, **kwargs):
+            idx = args[0]
+            row = args[1]
+            out_dir = Path(row["nifti_path"]).parent
+            (out_dir / "liver.nii.gz").write_text("mask")
+            return DummyFuture((idx, str(out_dir), None, None))
+
+        def shutdown(self, wait=False, cancel_futures=True):
+            return None
+
+    monkeypatch.setattr(segment_module, "ProcessPoolExecutor", DummyPool)
+    monkeypatch.setattr(segment_module, "as_completed", lambda futures: list(futures))
+
+    args = argparse.Namespace(
+        csv_path=str(csv_path),
+        csv_path_out=str(tmp_path / "segmented.csv"),
+        error_csv_path=str(tmp_path / "errors.csv"),
+        tasks_config=str(config_path),
+        num_workers=2,
+        fast=False,
+        verbose=False,
+        force=False,
+        start_method="spawn",
+        timeout_sec=10,
+    )
+
+    segment_module.main(args)
+
+    assert DummyPool.last_initializer is segment_module._worker_gpu_initializer
+    assert DummyPool.last_initargs == (["4", "5"],)
+
+
 def test_main_bounds_in_flight_submissions(tmp_path, monkeypatch):
     paths = []
     for i in range(5):
@@ -609,7 +718,7 @@ def test_main_bounds_in_flight_submissions(tmp_path, monkeypatch):
     monkeypatch.setattr(
         segment_module, "prefetch_totalsegmentator_models", lambda *a, **k: None
     )
-    monkeypatch.setattr(segment_module, "tqdm", lambda it, **kwargs: it)
+    monkeypatch.setattr(segment_module, "tqdm", passthrough_tqdm)
     patch_strategy(monkeypatch, mode="process_pool", max_workers=4, max_in_flight=2)
 
     class DummyFuture:
@@ -688,7 +797,7 @@ def test_main_recycles_executor_by_recycle_every(tmp_path, monkeypatch):
     monkeypatch.setattr(
         segment_module, "prefetch_totalsegmentator_models", lambda *a, **k: None
     )
-    monkeypatch.setattr(segment_module, "tqdm", lambda it, **kwargs: it)
+    monkeypatch.setattr(segment_module, "tqdm", passthrough_tqdm)
     patch_strategy(
         monkeypatch,
         mode="process_pool",
@@ -744,9 +853,7 @@ def test_main_recycles_executor_by_recycle_every(tmp_path, monkeypatch):
     assert DummyPool.init_count == 3
 
 
-def test_main_subprocess_mode_currently_degrades_to_serial_with_warning(
-    tmp_path, monkeypatch, caplog
-):
+def test_main_subprocess_mode_currently_degrades_to_serial(tmp_path, monkeypatch):
     nifti = tmp_path / "vol.nii.gz"
     nifti.write_text("nifti")
     csv_path = tmp_path / "nifti_index.csv"
@@ -764,7 +871,7 @@ def test_main_subprocess_mode_currently_degrades_to_serial_with_warning(
     monkeypatch.setattr(
         segment_module, "prefetch_totalsegmentator_models", lambda *a, **k: None
     )
-    monkeypatch.setattr(segment_module, "tqdm", lambda it, **kwargs: it)
+    monkeypatch.setattr(segment_module, "tqdm", passthrough_tqdm)
     patch_strategy(
         monkeypatch,
         mode="subprocess_per_case",
@@ -787,8 +894,6 @@ def test_main_subprocess_mode_currently_degrades_to_serial_with_warning(
     monkeypatch.setattr(
         segment_module, "process_single_volume", fake_process_single_volume
     )
-    caplog.set_level("WARNING")
-
     args = argparse.Namespace(
         csv_path=str(csv_path),
         csv_path_out=str(tmp_path / "segmented.csv"),
@@ -803,7 +908,5 @@ def test_main_subprocess_mode_currently_degrades_to_serial_with_warning(
     )
 
     segment_module.main(args)
-    assert any(
-        "mode='subprocess_per_case'" in rec.message and "falling back to serial" in rec.message
-        for rec in caplog.records
-    )
+    out_df = pd.read_csv(args.csv_path_out)
+    assert out_df.loc[0, "mask_liver"].endswith("liver.nii.gz")

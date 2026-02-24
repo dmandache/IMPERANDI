@@ -20,6 +20,8 @@ from collections import deque
 import json
 import logging
 import multiprocessing as mp
+import os
+import re
 import threading, time
 import traceback
 from concurrent.futures import ProcessPoolExecutor, TimeoutError, as_completed
@@ -357,6 +359,7 @@ def segment_volume(
         # multiply aggressively and trigger worker instability on long runs.
         # Keep a conservative default unless users explicitly override it.
         extra.setdefault("nr_thr_saving", 2)
+        extra.setdefault("quiet", True)
 
         dst = output_dir / task_output
         if dst.exists() and not force:
@@ -678,22 +681,47 @@ def main(args: argparse.Namespace) -> None:
         low = err_msg.lower()
         return "worker crash" in low or "brokenprocesspool" in low
 
+    gpu_tokens: List[str] = []
+    pool_init_kwargs: Dict[str, Any] = {}
+    if strategy.use_gpu and strategy.gpu_count > 0:
+        gpu_tokens = _resolve_visible_gpu_tokens(strategy.gpu_count)
+        if gpu_tokens:
+            pool_init_kwargs = {
+                "initializer": _worker_gpu_initializer,
+                "initargs": (gpu_tokens,),
+            }
+            logger.info(
+                "GPU worker pinning enabled: %d worker(s) across %d visible GPU token(s)",
+                effective_workers,
+                len(gpu_tokens),
+            )
+
     def _run_rows(
-        row_indices: List[int], *, desc: str
+        row_indices: List[int], *, progress_bar: tqdm | None = None
     ) -> Dict[int, Tuple[int, str | None, str | None, str | None]]:
         out: Dict[int, Tuple[int, str | None, str | None, str | None]] = {}
         if not row_indices:
             return out
 
-        pool = ProcessPoolExecutor(max_workers=effective_workers, mp_context=ctx)
+        try:
+            pool = ProcessPoolExecutor(
+                max_workers=effective_workers,
+                mp_context=ctx,
+                **pool_init_kwargs,
+            )
+        except TypeError as exc:
+            if pool_init_kwargs:
+                logger.warning(
+                    "Executor does not support worker initializer; running without GPU pinning (%s)",
+                    exc,
+                )
+            pool = ProcessPoolExecutor(max_workers=effective_workers, mp_context=ctx)
         broken_pool = False
         max_in_flight = max(1, int(strategy.max_in_flight))
         try:
             futures: Dict[Any, int] = {}
             row_queue = deque(row_indices)
             pending = set(row_indices)
-            progress_iter = iter(tqdm(range(len(row_indices)), desc=desc))
-
             def _submit_until_limit() -> None:
                 while row_queue and len(futures) < max_in_flight:
                     idx = row_queue.popleft()
@@ -741,7 +769,8 @@ def main(args: argparse.Namespace) -> None:
                         out[i] = res
                     else:
                         out[i] = res
-                    next(progress_iter, None)
+                    if progress_bar is not None:
+                        progress_bar.update(1)
                     _submit_until_limit()
             except BrokenProcessPool as exc:
                 msg = _broken_pool_message(exc)
@@ -765,18 +794,16 @@ def main(args: argparse.Namespace) -> None:
         return out
 
     def _run_rows_with_recycling(
-        row_indices: List[int], *, desc: str
+        row_indices: List[int], *, progress_bar: tqdm | None = None
     ) -> Dict[int, Tuple[int, str | None, str | None, str | None]]:
         if strategy.recycle_every <= 0:
-            return _run_rows(row_indices, desc=desc)
+            return _run_rows(row_indices, progress_bar=progress_bar)
 
         out: Dict[int, Tuple[int, str | None, str | None, str | None]] = {}
         chunk_size = max(1, int(strategy.recycle_every))
-        total_chunks = (len(row_indices) + chunk_size - 1) // chunk_size
-        for chunk_idx, start in enumerate(range(0, len(row_indices), chunk_size), 1):
+        for start in range(0, len(row_indices), chunk_size):
             chunk = row_indices[start : start + chunk_size]
-            chunk_desc = f"{desc} [{chunk_idx}/{total_chunks}]"
-            out.update(_run_rows(chunk, desc=chunk_desc))
+            out.update(_run_rows(chunk, progress_bar=progress_bar))
         return out
 
     row_indices = list(df.index)
@@ -804,20 +831,29 @@ def main(args: argparse.Namespace) -> None:
             for idx in tqdm(row_indices, total=len(row_indices), desc="Segment")
         }
     else:
-        results_by_idx = _run_rows_with_recycling(row_indices, desc="Segment")
-
-        retry_indices = [
-            i
-            for i in row_indices
-            if _is_retryable(results_by_idx.get(i, (i, None, None, None))[2])
-        ]
-        if retry_indices:
-            logger.warning(
-                "Retrying %d row(s) in a fresh executor after worker crash/BrokenProcessPool",
-                len(retry_indices),
+        with tqdm(total=len(row_indices), desc="Segment") as progress_bar:
+            results_by_idx = _run_rows_with_recycling(
+                row_indices,
+                progress_bar=progress_bar,
             )
-            retry_results = _run_rows_with_recycling(retry_indices, desc="Segment retry")
-            results_by_idx.update(retry_results)
+
+            retry_indices = [
+                i
+                for i in row_indices
+                if _is_retryable(results_by_idx.get(i, (i, None, None, None))[2])
+            ]
+            if retry_indices:
+                logger.warning(
+                    "Retrying %d row(s) in a fresh executor after worker crash/BrokenProcessPool",
+                    len(retry_indices),
+                )
+                progress_bar.total = (progress_bar.total or 0) + len(retry_indices)
+                progress_bar.refresh()
+                retry_results = _run_rows_with_recycling(
+                    retry_indices,
+                    progress_bar=progress_bar,
+                )
+                results_by_idx.update(retry_results)
 
     results: List[Tuple[int, str | None, str | None, str | None]] = [
         results_by_idx[i] for i in row_indices if i in results_by_idx
@@ -887,3 +923,53 @@ if __name__ == "__main__":
         logger.info("%s", args)
         raise SystemExit(0)
     main(args)
+# -----------------------------------------------------------------------------
+# GPU worker pinning helpers
+# -----------------------------------------------------------------------------
+
+
+def _resolve_visible_gpu_tokens(gpu_count: int) -> List[str]:
+    """
+    Return GPU tokens suitable for CUDA_VISIBLE_DEVICES assignment.
+
+    If CUDA_VISIBLE_DEVICES is already set (e.g. "2,3"), preserve those
+    logical tokens. Otherwise, default to "0..gpu_count-1".
+    """
+    value = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if value is not None:
+        parts = [part.strip() for part in value.split(",") if part.strip()]
+        if parts:
+            return parts
+    return [str(i) for i in range(max(0, int(gpu_count)))]
+
+
+def _worker_gpu_initializer(gpu_tokens: List[str]) -> None:
+    """
+    Pin each worker process to a single GPU token.
+
+    Mapping is deterministic per worker slot:
+      worker_slot -> gpu_tokens[worker_slot % len(gpu_tokens)]
+    """
+    if not gpu_tokens:
+        return
+
+    proc = mp.current_process()
+    slot_idx: int | None = None
+
+    identity = getattr(proc, "_identity", None)
+    if identity:
+        try:
+            slot_idx = int(identity[0]) - 1
+        except Exception:
+            slot_idx = None
+
+    if slot_idx is None:
+        m = re.search(r"(\d+)$", proc.name or "")
+        if m:
+            slot_idx = int(m.group(1)) - 1
+
+    if slot_idx is None:
+        slot_idx = 0
+
+    token = gpu_tokens[slot_idx % len(gpu_tokens)]
+    os.environ["CUDA_VISIBLE_DEVICES"] = token
