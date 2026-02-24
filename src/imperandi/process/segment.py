@@ -22,7 +22,8 @@ import logging
 import multiprocessing as mp
 import os
 import re
-import threading, time
+import threading
+import time
 import traceback
 from concurrent.futures import ProcessPoolExecutor, TimeoutError, as_completed
 from concurrent.futures.process import BrokenProcessPool
@@ -359,7 +360,6 @@ def segment_volume(
         # multiply aggressively and trigger worker instability on long runs.
         # Keep a conservative default unless users explicitly override it.
         extra.setdefault("nr_thr_saving", 2)
-        extra.setdefault("quiet", True)
 
         dst = output_dir / task_output
         if dst.exists() and not force:
