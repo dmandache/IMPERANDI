@@ -58,7 +58,7 @@ from imperandi.utils.run_state import (
 
 DEFAULT_TIMEOUT = 15 * 60  # seconds – hard wall per study inside the pool
 DEFAULT_CHECKPOINT_EVERY_ROWS = 50
-DEFAULT_CHECKPOINT_EVERY_SEC = 350
+DEFAULT_CHECKPOINT_EVERY_SEC = 5 * 60  # seconds
 
 logger = logging.getLogger(__name__)
 
