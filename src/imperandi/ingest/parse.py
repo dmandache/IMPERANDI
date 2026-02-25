@@ -807,9 +807,9 @@ def process_with_checkpoint(
                 pbar.update(chunk_len)
                 continue
             tags_chunk = chunk[read_path_col].parallel_apply(read_func)
-            tags_chunk = tags_chunk.replace("", float("NaN")).infer_objects(
-                copy=False
-            ).dropna(how="all", axis=1)
+            # Keep all selected tag columns in checkpoint outputs, even if a
+            # column is entirely empty for a chunk, so final schema is stable.
+            tags_chunk = tags_chunk.replace("", float("NaN")).infer_objects(copy=False)
             out_chunk = pd.concat([chunk, tags_chunk], axis=1)
             out_chunk.drop(columns=cols_to_drop_for_persist, errors="ignore").to_csv(
                 ckpt, index=False

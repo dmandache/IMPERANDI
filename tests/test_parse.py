@@ -465,6 +465,34 @@ def test_process_with_checkpoint_keeps_csv_outputs(tmp_path, monkeypatch):
     assert len(out) == 2
 
 
+def test_process_with_checkpoint_preserves_all_empty_columns_per_chunk(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(pd.Series, "parallel_apply", pd.Series.apply, raising=False)
+    df_paths = pd.DataFrame({"dicom_path": ["a.dcm", "b.dcm"]})
+
+    out = parse.process_with_checkpoint(
+        df_paths=df_paths,
+        read_func=lambda _: pd.Series(
+            {
+                "AcquisitionTime": "120000",
+                "InstanceCreationTime": None,
+            }
+        ),
+        checkpoint_frequency=1,
+        output_dir=tmp_path,
+        final_name="dicom_paths_with_tags.csv",
+    )
+
+    ckpt0 = pd.read_csv(tmp_path / "dicom_paths_with_tags_000.csv")
+    ckpt1 = pd.read_csv(tmp_path / "dicom_paths_with_tags_001.csv")
+
+    assert "InstanceCreationTime" in ckpt0.columns
+    assert "InstanceCreationTime" in ckpt1.columns
+    assert "InstanceCreationTime" in out.columns
+    assert out["InstanceCreationTime"].isna().all()
+
+
 def test_process_with_checkpoint_reports_file_progress(tmp_path, monkeypatch):
     monkeypatch.setattr(pd.Series, "parallel_apply", pd.Series.apply, raising=False)
     recorded = {"kwargs": None, "updates": []}
