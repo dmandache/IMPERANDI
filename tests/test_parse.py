@@ -573,7 +573,8 @@ def test_process_with_checkpoint_counts_skipped_chunks_in_progress(
 
 def test_process_with_checkpoint_rejects_non_positive_frequency(tmp_path):
     df_paths = pd.DataFrame({"dicom_path": ["a.dcm"]})
-    read_func = lambda _: pd.Series({"PatientName": "x"})
+    def read_func(_):
+        return pd.Series({"PatientName": "x"})
 
     with pytest.raises(ValueError, match="positive integer"):
         parse.process_with_checkpoint(
