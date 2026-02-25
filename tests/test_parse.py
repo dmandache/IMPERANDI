@@ -686,3 +686,39 @@ def test_write_dicom_tags_snapshot_samples_unique_series_when_available(tmp_path
     assert n == 4
     assert len(lines) == 4
     assert len({item["tags"]["Source"] for item in lines}) == 4
+
+
+def test_write_dicom_tags_snapshot_normalizes_missing_empty_strings(tmp_path):
+    df = pd.DataFrame(
+        {
+            "dicom_path": ["p0.dcm"],
+            "_scan_root": ["root"],
+            "_relative_path": ["rel/0.dcm"],
+            "_read_path": ["read/0.dcm"],
+        }
+    )
+
+    out = tmp_path / "snap_empty.ndjson"
+    n = parse.write_dicom_tags_snapshot(
+        df=df,
+        output_path=out,
+        sample_size=1,
+        seed=42,
+        read_full_func=lambda _: pd.Series(
+            {
+                "EmptyTag": "",
+                "WhitespaceTag": "   ",
+                "Nested": ["", "ok"],
+                "PresentTag": "value",
+            }
+        ),
+    )
+
+    assert n == 1
+    line = out.read_text(encoding="utf-8").strip()
+    record = json.loads(line)
+    tags = record["tags"]
+    assert tags["EmptyTag"] is None
+    assert tags["WhitespaceTag"] is None
+    assert tags["Nested"] == [None, "ok"]
+    assert tags["PresentTag"] == "value"

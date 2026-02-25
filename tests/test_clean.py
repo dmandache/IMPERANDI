@@ -10,6 +10,16 @@ import numpy as np
 
 from imperandi.ingest import clean
 
+ACQUISITION_TEMP_COLS = {
+    "_acq_timestamp",
+    "_series_number_sort",
+    "_acquisition_number_sort",
+}
+
+
+def _assert_no_acquisition_temp_cols(df: pd.DataFrame) -> None:
+    assert ACQUISITION_TEMP_COLS.isdisjoint(df.columns)
+
 
 def test_normalize_clean_args_prefers_optional_csv_path(tmp_path):
     csv_pos = tmp_path / "pos.csv"
@@ -344,6 +354,7 @@ def test_compute_visit_and_acquisition_order():
     assert set(out2["acquisition_order"].dropna()) == {0, 1, 2}
     assert (out2["delay_since_prev_acq_sec"].dropna() >= 0).all()
     assert (out2["delay_since_first_acq_sec"].dropna() >= 0).all()
+    _assert_no_acquisition_temp_cols(out2)
 
     # Handles aggregated time values represented as datetime.time objects or repr strings
     df3 = pd.DataFrame(
@@ -367,6 +378,7 @@ def test_compute_visit_and_acquisition_order():
     assert out3.set_index("volume_id").loc["v3", "acquisition_order"] == 2
     assert (out3["delay_since_prev_acq_sec"].dropna() >= 0).all()
     assert (out3["delay_since_first_acq_sec"].dropna() >= 0).all()
+    _assert_no_acquisition_temp_cols(out3)
 
     # Ensure ordering uses acquisition timestamp, not lexical volume_id order.
     df4 = pd.DataFrame(
@@ -391,6 +403,7 @@ def test_compute_visit_and_acquisition_order():
     assert out4_by_volume.loc["v1", "acquisition_order"] == 2
     assert (out4["delay_since_prev_acq_sec"].dropna() >= 0).all()
     assert (out4["delay_since_first_acq_sec"].dropna() >= 0).all()
+    _assert_no_acquisition_temp_cols(out4)
 
 
 def test_compute_acquisition_order_without_time_uses_series_and_acquisition_number():
@@ -413,6 +426,7 @@ def test_compute_acquisition_order_without_time_uses_series_and_acquisition_numb
     assert out_by_volume.loc["v2", "acquisition_order"] == 0
     assert out_by_volume.loc["v3", "acquisition_order"] == 1
     assert out_by_volume.loc["v1", "acquisition_order"] == 2
+    _assert_no_acquisition_temp_cols(out)
 
 
 def test_compute_acquisition_order_without_date_and_time_falls_back_to_numbers():
@@ -433,6 +447,7 @@ def test_compute_acquisition_order_without_date_and_time_falls_back_to_numbers()
     assert out_by_volume.loc["v2", "acquisition_order"] == 0
     assert out_by_volume.loc["v3", "acquisition_order"] == 1
     assert out_by_volume.loc["v1", "acquisition_order"] == 2
+    _assert_no_acquisition_temp_cols(out)
 
 
 def test_compute_acquisition_order_tie_breaks_by_volume_id_when_no_sort_keys():
@@ -450,6 +465,28 @@ def test_compute_acquisition_order_tie_breaks_by_volume_id_when_no_sort_keys():
     assert out_by_volume.loc["v1", "acquisition_order"] == 0
     assert out_by_volume.loc["v10", "acquisition_order"] == 1
     assert out_by_volume.loc["v2", "acquisition_order"] == 2
+    _assert_no_acquisition_temp_cols(out)
+
+
+def test_compute_acquisition_order_drops_internal_sort_columns():
+    df = pd.DataFrame(
+        {
+            "patient_key": ["p", "p"],
+            "study_id": ["s", "s"],
+            "volume_id": ["v1", "v2"],
+            "date": [pd.Timestamp("2020-01-01"), pd.Timestamp("2020-01-01")],
+            "time": [dt_time(12, 0, 0), dt_time(12, 1, 0)],
+            "SeriesNumber": [1, 1],
+            "AcquisitionNumber": [1, 2],
+        }
+    )
+
+    out = clean.compute_acquisition_order(df.copy())
+
+    _assert_no_acquisition_temp_cols(out)
+    assert "acquisition_order" in out.columns
+    assert "delay_since_prev_acq_sec" in out.columns
+    assert "delay_since_first_acq_sec" in out.columns
 
 
 def test_group_volumes_sorts_acquisition_number_numerically():

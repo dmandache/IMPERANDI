@@ -550,6 +550,21 @@ def read_dicom_header_with_force(fp, force):
     return read_dicom_header(fp, force=force)
 
 
+def _normalize_snapshot_missing_strings(value):
+    if isinstance(value, str):
+        return None if value.strip() == "" else value
+    if isinstance(value, list):
+        return [_normalize_snapshot_missing_strings(v) for v in value]
+    if isinstance(value, tuple):
+        return [_normalize_snapshot_missing_strings(v) for v in value]
+    if isinstance(value, dict):
+        return {
+            key: _normalize_snapshot_missing_strings(val)
+            for key, val in value.items()
+        }
+    return value
+
+
 def build_global_readers(
     *,
     initial_archive_mode: bool,
@@ -653,7 +668,7 @@ def write_dicom_tags_snapshot(
                 "_relative_path": row.get("_relative_path"),
                 "snapshot_seed": seed,
                 "snapshot_index": int(idx),
-                "tags": tags_series.to_dict(),
+                "tags": _normalize_snapshot_missing_strings(tags_series.to_dict()),
             }
             handle.write(json.dumps(record, ensure_ascii=True) + "\n")
             written += 1
