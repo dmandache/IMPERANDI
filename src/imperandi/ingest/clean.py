@@ -1024,6 +1024,14 @@ def compute_acquisition_order(df):
         right_index=False,
         how="left",
     )
+    df = df.drop(
+        columns=[
+            #"_acq_timestamp",
+            "_series_number_sort",
+            "_acquisition_number_sort",
+        ],
+        errors="ignore",
+    )
     return df
 
 
