@@ -903,6 +903,38 @@ def _normalize_instance_creation_time(value):
     return None
 
 
+def _normalize_acquisition_sort_number(value):
+    value = _as_python_scalar(value)
+
+    if value is None or _is_nan(value):
+        return np.nan
+
+    if isinstance(value, (int, float)):
+        return float(value)
+
+    if isinstance(value, (list, tuple, np.ndarray)):
+        parsed = [_normalize_acquisition_sort_number(v) for v in value]
+        parsed = [v for v in parsed if pd.notna(v)]
+        return min(parsed) if parsed else np.nan
+
+    if isinstance(value, str):
+        s = value.strip()
+        if not s or s.lower() in {"none", "nan", "nat"}:
+            return np.nan
+
+        direct = _parse_float(s)
+        if direct is not None:
+            return direct
+
+        try:
+            literal = literal_eval(s)
+        except (ValueError, SyntaxError):
+            return np.nan
+        return _normalize_acquisition_sort_number(literal)
+
+    return np.nan
+
+
 def compute_acquisition_order(df):
     if "time" not in df.columns:
         return df
@@ -920,15 +952,36 @@ def compute_acquisition_order(df):
             ) if t is not None else pd.NaT
         )
 
+    if "SeriesNumber" in df.columns:
+        df["_series_number_sort"] = df["SeriesNumber"].apply(
+            _normalize_acquisition_sort_number
+        )
+    if "AcquisitionNumber" in df.columns:
+        df["_acquisition_number_sort"] = df["AcquisitionNumber"].apply(
+            _normalize_acquisition_sort_number
+        )
+
     # One row per (patient, study, volume) with representative acquisition time.
     # Delays and order are computed on rows sorted by acquisition timestamp.
+    agg_map = {"_acq_timestamp": ("_acq_timestamp", "min")}
+    if "_series_number_sort" in df.columns:
+        agg_map["_series_number_sort"] = ("_series_number_sort", "min")
+    if "_acquisition_number_sort" in df.columns:
+        agg_map["_acquisition_number_sort"] = ("_acquisition_number_sort", "min")
 
-    df_study = (
-        df.groupby(["patient_key", "study_id", "volume_id"], as_index=False)
-          .agg(_acq_timestamp=("_acq_timestamp", "min"))
-    )
+    df_study = df.groupby(
+        ["patient_key", "study_id", "volume_id"], as_index=False
+    ).agg(**agg_map)
+
+    sort_cols = ["patient_key", "study_id", "_acq_timestamp"]
+    if "_series_number_sort" in df_study.columns:
+        sort_cols.append("_series_number_sort")
+    if "_acquisition_number_sort" in df_study.columns:
+        sort_cols.append("_acquisition_number_sort")
+    sort_cols.append("volume_id")
+
     df_study = df_study.sort_values(
-        by=["patient_key", "study_id", "_acq_timestamp", "volume_id"],
+        by=sort_cols,
         kind="mergesort",
         na_position="last",
     )
