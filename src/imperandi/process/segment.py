@@ -321,6 +321,16 @@ def _output_to_filename(output_name: str) -> str:
     return f"{value}.nii.gz"
 
 
+def _warning_dedupe_key(message: str) -> str:
+    if message.startswith(
+        "Postprocess output will overwrite existing file and continue:"
+    ):
+        return "postprocess_overwrite_existing_output"
+    if "matches a task output key and will override it." in message:
+        return "postprocess_output_key_override"
+    return message
+
+
 def build_output_column_map(tasks: List[Dict[str, Any]]) -> Dict[str, str]:
     output_to_column: Dict[str, str] = {}
     for task in tasks:
@@ -547,13 +557,12 @@ def segment_volume(
     merged_name = _output_to_filename(merged_output)
     dst = output_dir / merged_name
     if dst.exists():
-        logger.warning(
-            "Postprocess output will overwrite existing file and continue: %s", dst
+        warnings.append(
+            f"Postprocess output will overwrite existing file and continue: {dst}"
         )
     if merged_output in output_to_column:
-        logger.warning(
-            "Postprocess output '%s' matches a task output key and will override it.",
-            merged_output,
+        warnings.append(
+            f"Postprocess output '{merged_output}' matches a task output key and will override it."
         )
 
     on_failure = str(postprocess.get("on_failure", "warn_only")).strip().lower()
@@ -903,6 +912,7 @@ def main(args: argparse.Namespace) -> None:
         ).strip() or "merged"
         df[_output_to_column(merged_output)] = None
     df["warning_message"] = None
+    logged_warning_keys: set[str] = set()
 
     completed_indices: set[int] = set()
     if can_resume:
@@ -983,7 +993,23 @@ def main(args: argparse.Namespace) -> None:
                 else:
                     row_warnings.append(f"missing merged mask: {merged_path}")
             if warning_msg:
-                row_warnings.append(warning_msg)
+                warning_messages = [
+                    message.strip()
+                    for message in warning_msg.split(" | ")
+                    if message and message.strip()
+                ]
+                for message in warning_messages:
+                    key = _warning_dedupe_key(message)
+                    is_global_warning = key in {
+                        "postprocess_overwrite_existing_output",
+                        "postprocess_output_key_override",
+                    }
+                    if key not in logged_warning_keys:
+                        logger.warning(message)
+                        logged_warning_keys.add(key)
+                    if is_global_warning:
+                        continue
+                    row_warnings.append(message)
             if row_warnings:
                 df.at[idx, "warning_message"] = " | ".join(row_warnings)
             if idx in errors_by_idx:
