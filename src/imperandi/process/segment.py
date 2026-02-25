@@ -57,6 +57,8 @@ from imperandi.utils.run_state import (
 # os.environ.setdefault("TOTALSEG_HOME_DIR", str(Path.home() / ".totalsegmentator_v2"))
 
 DEFAULT_TIMEOUT = 15 * 60  # seconds – hard wall per study inside the pool
+DEFAULT_CHECKPOINT_EVERY_ROWS = 50
+DEFAULT_CHECKPOINT_EVERY_SEC = 350
 
 logger = logging.getLogger(__name__)
 
@@ -732,13 +734,13 @@ def add_segment_arguments(
     parser.add_argument(
         "--checkpoint_every_rows",
         type=int,
-        default=50,
+        default=DEFAULT_CHECKPOINT_EVERY_ROWS,
         help="Flush checkpoint files every N processed rows.",
     )
     parser.add_argument(
         "--checkpoint_every_sec",
         type=int,
-        default=350,
+        default=DEFAULT_CHECKPOINT_EVERY_SEC,
         help="Flush checkpoint files every T seconds.",
     )
     parser.add_argument(
@@ -919,8 +921,12 @@ def main(args: argparse.Namespace) -> None:
                 except Exception:
                     continue
 
-    checkpoint_every_rows = max(1, int(getattr(args, "checkpoint_every_rows", 25)))
-    checkpoint_every_sec = max(1, int(getattr(args, "checkpoint_every_sec", 30)))
+    checkpoint_every_rows = max(
+        1, int(getattr(args, "checkpoint_every_rows", DEFAULT_CHECKPOINT_EVERY_ROWS))
+    )
+    checkpoint_every_sec = max(
+        1, int(getattr(args, "checkpoint_every_sec", DEFAULT_CHECKPOINT_EVERY_SEC))
+    )
     last_checkpoint_time = now_epoch()
     processed_since_checkpoint = 0
 

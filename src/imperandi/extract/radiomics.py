@@ -21,6 +21,8 @@ from imperandi.utils.run_state import (
 )
 
 logger = logging.getLogger(__name__)
+DEFAULT_CHECKPOINT_EVERY_ROWS = 50
+DEFAULT_CHECKPOINT_EVERY_SEC = 350
 
 DEFAULT_SETTINGS = {
     "binWidth": 25,
@@ -94,13 +96,13 @@ def add_radiomics_arguments(
     parser.add_argument(
         "--checkpoint_every_rows",
         type=int,
-        default=25,
+        default=DEFAULT_CHECKPOINT_EVERY_ROWS,
         help="Flush checkpoint files every N processed rows.",
     )
     parser.add_argument(
         "--checkpoint_every_sec",
         type=int,
-        default=30,
+        default=DEFAULT_CHECKPOINT_EVERY_SEC,
         help="Flush checkpoint files every T seconds.",
     )
     parser.add_argument(
@@ -462,8 +464,12 @@ def main(args: argparse.Namespace) -> None:
                 except Exception:
                     pass
 
-    checkpoint_every_rows = max(1, int(getattr(args, "checkpoint_every_rows", 25)))
-    checkpoint_every_sec = max(1, int(getattr(args, "checkpoint_every_sec", 30)))
+    checkpoint_every_rows = max(
+        1, int(getattr(args, "checkpoint_every_rows", DEFAULT_CHECKPOINT_EVERY_ROWS))
+    )
+    checkpoint_every_sec = max(
+        1, int(getattr(args, "checkpoint_every_sec", DEFAULT_CHECKPOINT_EVERY_SEC))
+    )
     processed_since_checkpoint = 0
     last_checkpoint_time = now_epoch()
 
