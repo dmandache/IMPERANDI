@@ -47,6 +47,22 @@ def test_normalize_clean_args_accepts_positional_only(tmp_path):
     assert args.csv_path_out.endswith("input_clean.csv")
 
 
+def test_normalize_clean_args_uses_out_suffix_for_clean_input(tmp_path):
+    csv_clean = tmp_path / "dicom_index_clean.csv"
+    csv_clean.write_text("patient_key\np1\n")
+
+    args = clean.normalize_clean_args(
+        clean.argparse.Namespace(
+            csv_path_pos=[str(csv_clean)],
+            csv_path_opt=None,
+            csv_path_out=None,
+        )
+    )
+
+    assert args.csv_path == [str(csv_clean)]
+    assert args.csv_path_out.endswith("dicom_index_clean_out.csv")
+
+
 def test_uniform_string_and_remove_other_organs_description():
     assert clean.uniform_string("  Abc  .0") == "abc"
     assert clean.uniform_string("RévoluTion") == "revolution"
@@ -375,6 +391,79 @@ def test_compute_visit_and_acquisition_order():
     assert out4_by_volume.loc["v1", "acquisition_order"] == 2
     assert (out4["delay_since_prev_acq_sec"].dropna() >= 0).all()
     assert (out4["delay_since_first_acq_sec"].dropna() >= 0).all()
+
+
+def test_compute_acquisition_order_without_time_uses_series_and_acquisition_number():
+    df = pd.DataFrame(
+        {
+            "patient_key": ["p", "p", "p"],
+            "study_id": ["s", "s", "s"],
+            "volume_id": ["v1", "v2", "v3"],
+            "StudyDate": ["20200101", "20200101", "20200101"],
+            "SeriesNumber": [2, 1, 2],
+            "AcquisitionNumber": [10, 5, 1],
+        }
+    )
+    df = clean.add_date(df)
+
+    out = clean.compute_acquisition_order(df.copy())
+    out_by_volume = out.set_index("volume_id")
+
+    assert "acquisition_order" in out.columns
+    assert out_by_volume.loc["v2", "acquisition_order"] == 0
+    assert out_by_volume.loc["v3", "acquisition_order"] == 1
+    assert out_by_volume.loc["v1", "acquisition_order"] == 2
+
+
+def test_compute_acquisition_order_without_date_and_time_falls_back_to_numbers():
+    df = pd.DataFrame(
+        {
+            "patient_key": ["p", "p", "p"],
+            "study_id": ["s", "s", "s"],
+            "volume_id": ["v1", "v2", "v3"],
+            "SeriesNumber": [3, 1, 2],
+            "AcquisitionNumber": [1, 1, 1],
+        }
+    )
+
+    out = clean.compute_acquisition_order(df.copy())
+    out_by_volume = out.set_index("volume_id")
+
+    assert "acquisition_order" in out.columns
+    assert out_by_volume.loc["v2", "acquisition_order"] == 0
+    assert out_by_volume.loc["v3", "acquisition_order"] == 1
+    assert out_by_volume.loc["v1", "acquisition_order"] == 2
+
+
+def test_compute_acquisition_order_tie_breaks_by_volume_id_when_no_sort_keys():
+    df = pd.DataFrame(
+        {
+            "patient_key": ["p", "p", "p"],
+            "study_id": ["s", "s", "s"],
+            "volume_id": ["v2", "v10", "v1"],
+        }
+    )
+
+    out = clean.compute_acquisition_order(df.copy())
+    out_by_volume = out.set_index("volume_id")
+
+    assert out_by_volume.loc["v1", "acquisition_order"] == 0
+    assert out_by_volume.loc["v10", "acquisition_order"] == 1
+    assert out_by_volume.loc["v2", "acquisition_order"] == 2
+
+
+def test_group_volumes_sorts_acquisition_number_numerically():
+    df = pd.DataFrame(
+        {
+            "volume_id": ["v1", "v1", "v1", "v1"],
+            "AcquisitionNumber": ["10", "2", "2", "1"],
+        }
+    )
+
+    grouped = clean.group_volumes(df.copy())
+    row = grouped.iloc[0]
+
+    assert row["AcquisitionNumber"] == ["1", "2", "10"]
 
 
 def test_drop_irrelevant_dicom_tags():

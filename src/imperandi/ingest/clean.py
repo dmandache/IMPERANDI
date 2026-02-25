@@ -936,21 +936,29 @@ def _normalize_acquisition_sort_number(value):
 
 
 def compute_acquisition_order(df):
-    if "time" not in df.columns:
-        return df
-
     df = df.copy()
-    df["time"] = df["time"].apply(_normalize_instance_creation_time)
-    df["_acq_timestamp"] = pd.to_datetime(df["date"], errors="coerce") + df[
-        "time"
-    ].apply(
+    if "time" in df.columns:
+        df["time"] = df["time"].apply(_normalize_instance_creation_time)
+        time_delta = df["time"].apply(
             lambda t: pd.Timedelta(
                 hours=t.hour,
                 minutes=t.minute,
                 seconds=t.second,
                 microseconds=t.microsecond,
-            ) if t is not None else pd.NaT
+            )
+            if t is not None
+            else pd.NaT
         )
+        time_delta = pd.to_timedelta(time_delta, errors="coerce")
+    else:
+        time_delta = pd.Series(pd.NaT, index=df.index, dtype="timedelta64[ns]")
+
+    if "date" in df.columns:
+        date_values = pd.to_datetime(df["date"], errors="coerce")
+    else:
+        date_values = pd.Series(pd.NaT, index=df.index, dtype="datetime64[ns]")
+
+    df["_acq_timestamp"] = date_values + time_delta
 
     if "SeriesNumber" in df.columns:
         df["_series_number_sort"] = df["SeriesNumber"].apply(
@@ -961,8 +969,9 @@ def compute_acquisition_order(df):
             _normalize_acquisition_sort_number
         )
 
-    # One row per (patient, study, volume) with representative acquisition time.
-    # Delays and order are computed on rows sorted by acquisition timestamp.
+    # One row per (patient, study, volume) with representative acquisition keys.
+    # Sort primarily by acquisition timestamp when available, then fallback to
+    # numeric SeriesNumber and AcquisitionNumber.
     agg_map = {"_acq_timestamp": ("_acq_timestamp", "min")}
     if "_series_number_sort" in df.columns:
         agg_map["_series_number_sort"] = ("_series_number_sort", "min")
