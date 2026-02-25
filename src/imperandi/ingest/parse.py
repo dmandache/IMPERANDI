@@ -792,23 +792,29 @@ def process_with_checkpoint(
             output_dir / final_name, index=False
         )
         return out
+    if checkpoint_frequency <= 0:
+        raise ValueError("checkpoint_frequency must be a positive integer.")
 
     # chunked
     total_rows = df_paths.shape[0]
-    for i in tqdm(range(0, total_rows, checkpoint_frequency)):
-        chunk_idx = i // checkpoint_frequency
-        ckpt = output_dir / f"{Path(final_name).stem}_{chunk_idx:03d}.csv"
-        if ckpt.exists():
-            continue
-        chunk = df_paths.iloc[i : i + checkpoint_frequency].copy()
-        tags_chunk = chunk[read_path_col].parallel_apply(read_func)
-        tags_chunk = tags_chunk.replace("", float("NaN")).infer_objects(copy=False).dropna(
-            how="all", axis=1
-        )
-        out_chunk = pd.concat([chunk, tags_chunk], axis=1)
-        out_chunk.drop(columns=cols_to_drop_for_persist, errors="ignore").to_csv(
-            ckpt, index=False
-        )
+    with tqdm(total=total_rows, desc="Parse files", unit="file") as pbar:
+        for i in range(0, total_rows, checkpoint_frequency):
+            chunk_idx = i // checkpoint_frequency
+            ckpt = output_dir / f"{Path(final_name).stem}_{chunk_idx:03d}.csv"
+            chunk = df_paths.iloc[i : i + checkpoint_frequency].copy()
+            chunk_len = len(chunk)
+            if ckpt.exists():
+                pbar.update(chunk_len)
+                continue
+            tags_chunk = chunk[read_path_col].parallel_apply(read_func)
+            tags_chunk = tags_chunk.replace("", float("NaN")).infer_objects(
+                copy=False
+            ).dropna(how="all", axis=1)
+            out_chunk = pd.concat([chunk, tags_chunk], axis=1)
+            out_chunk.drop(columns=cols_to_drop_for_persist, errors="ignore").to_csv(
+                ckpt, index=False
+            )
+            pbar.update(chunk_len)
 
     # merge
     csv_files = sorted(glob.glob(str(output_dir / f"{Path(final_name).stem}_0*.csv")))

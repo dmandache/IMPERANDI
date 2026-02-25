@@ -9,6 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import pandas as pd
+import pytest
 
 from imperandi.ingest import parse
 from imperandi.ingest import hook_manifests
@@ -462,6 +463,127 @@ def test_process_with_checkpoint_keeps_csv_outputs(tmp_path, monkeypatch):
     assert (tmp_path / "dicom_paths_with_tags_001.csv").exists()
     assert (tmp_path / "dicom_paths_with_tags.csv").exists()
     assert len(out) == 2
+
+
+def test_process_with_checkpoint_reports_file_progress(tmp_path, monkeypatch):
+    monkeypatch.setattr(pd.Series, "parallel_apply", pd.Series.apply, raising=False)
+    recorded = {"kwargs": None, "updates": []}
+
+    class DummyProgressBar:
+        def __init__(self, **kwargs):
+            recorded["kwargs"] = kwargs
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def update(self, amount):
+            recorded["updates"].append(amount)
+
+    monkeypatch.setattr(parse, "tqdm", lambda **kwargs: DummyProgressBar(**kwargs))
+    df_paths = pd.DataFrame({"dicom_path": [f"f{i}.dcm" for i in range(5)]})
+
+    parse.process_with_checkpoint(
+        df_paths=df_paths,
+        read_func=lambda _: pd.Series({"PatientName": "x"}),
+        checkpoint_frequency=2,
+        output_dir=tmp_path,
+        final_name="dicom_paths_with_tags.csv",
+    )
+
+    assert recorded["kwargs"] == {"total": 5, "desc": "Parse files", "unit": "file"}
+    assert recorded["updates"] == [2, 2, 1]
+    assert sum(recorded["updates"]) == 5
+
+
+def test_process_with_checkpoint_counts_skipped_chunks_in_progress(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(pd.Series, "parallel_apply", pd.Series.apply, raising=False)
+    recorded = {"updates": []}
+    calls = []
+
+    class DummyProgressBar:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def update(self, amount):
+            recorded["updates"].append(amount)
+
+    monkeypatch.setattr(parse, "tqdm", lambda **kwargs: DummyProgressBar(**kwargs))
+    df_paths = pd.DataFrame({"dicom_path": ["a.dcm", "b.dcm", "c.dcm"]})
+
+    # Pre-create first checkpoint file so the first chunk is skipped.
+    pd.DataFrame(
+        {
+            "dicom_path": ["a.dcm", "b.dcm"],
+            "PatientName": ["x", "x"],
+        }
+    ).to_csv(tmp_path / "dicom_paths_with_tags_000.csv", index=False)
+
+    out = parse.process_with_checkpoint(
+        df_paths=df_paths,
+        read_func=lambda path: calls.append(path) or pd.Series({"PatientName": "x"}),
+        checkpoint_frequency=2,
+        output_dir=tmp_path,
+        final_name="dicom_paths_with_tags.csv",
+    )
+
+    assert calls == ["c.dcm"]
+    assert recorded["updates"] == [2, 1]
+    assert sum(recorded["updates"]) == 3
+    assert len(out) == 3
+
+
+def test_process_with_checkpoint_rejects_non_positive_frequency(tmp_path):
+    df_paths = pd.DataFrame({"dicom_path": ["a.dcm"]})
+    read_func = lambda _: pd.Series({"PatientName": "x"})
+
+    with pytest.raises(ValueError, match="positive integer"):
+        parse.process_with_checkpoint(
+            df_paths=df_paths,
+            read_func=read_func,
+            checkpoint_frequency=0,
+            output_dir=tmp_path,
+            final_name="dicom_paths_with_tags.csv",
+        )
+
+    with pytest.raises(ValueError, match="positive integer"):
+        parse.process_with_checkpoint(
+            df_paths=df_paths,
+            read_func=read_func,
+            checkpoint_frequency=-2,
+            output_dir=tmp_path,
+            final_name="dicom_paths_with_tags.csv",
+        )
+
+
+def test_process_with_checkpoint_without_checkpoints_writes_only_final(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(pd.Series, "parallel_apply", pd.Series.apply, raising=False)
+    df_paths = pd.DataFrame({"dicom_path": ["a.dcm", "b.dcm"]})
+
+    out = parse.process_with_checkpoint(
+        df_paths=df_paths,
+        read_func=lambda _: pd.Series({"PatientName": "x"}),
+        checkpoint_frequency=None,
+        output_dir=tmp_path,
+        final_name="dicom_paths_with_tags.csv",
+    )
+
+    assert (tmp_path / "dicom_paths_with_tags.csv").exists()
+    assert list(tmp_path.glob("dicom_paths_with_tags_*.csv")) == []
+    assert len(out) == 2
+    assert "PatientName" in out.columns
 
 
 def test_write_dicom_tags_snapshot_is_deterministic(tmp_path):
