@@ -22,7 +22,6 @@ import logging
 import multiprocessing as mp
 import os
 import re
-import threading
 import time
 import traceback
 from concurrent.futures import ProcessPoolExecutor, TimeoutError
@@ -1070,13 +1069,42 @@ def main(args: argparse.Namespace) -> None:
 
         def _shutdown_pool(pool: ProcessPoolExecutor, force: bool) -> None:
             if force:
-                # Force-kill orphaned workers after crash/timeout.
+                # Capture workers before shutdown mutates executor internals.
+                processes = list((getattr(pool, "_processes", None) or {}).values())
+                manager_thread = getattr(pool, "_executor_manager_thread", None)
+
+                # Stop queueing new work and cancel pending futures without blocking.
                 pool.shutdown(wait=False, cancel_futures=True)
-                processes = getattr(pool, "_processes", None)
-                if processes:
-                    for p in processes.values():
+
+                # Best-effort hard stop for timed-out/crashed worker pools.
+                for p in processes:
+                    try:
+                        if p.is_alive():
+                            p.terminate()
+                    except Exception:
+                        continue
+                for p in processes:
+                    try:
+                        p.join(timeout=1.0)
+                    except Exception:
+                        continue
+                for p in processes:
+                    try:
                         if p.is_alive():
                             p.kill()
+                    except Exception:
+                        continue
+                for p in processes:
+                    try:
+                        p.join(timeout=1.0)
+                    except Exception:
+                        continue
+
+                if manager_thread is not None:
+                    try:
+                        manager_thread.join(timeout=3.0)
+                    except Exception:
+                        pass
                 return
             # Graceful shutdown prevents collateral damage to interpreter state.
             pool.shutdown(wait=True, cancel_futures=False)
@@ -1287,11 +1315,6 @@ def main(args: argparse.Namespace) -> None:
             "finished": True,
         },
     )
-
-    print("END: active_children:", mp.active_children(), flush=True)
-    print("END: threads:", [t.name for t in threading.enumerate()], flush=True)
-    time.sleep(2)
-    print("END: active_children:", mp.active_children(), flush=True)
 
     return
 

@@ -877,6 +877,113 @@ def test_main_enforces_wall_timeout_per_row(tmp_path, monkeypatch):
     assert (False, True) in DummyPool.shutdown_calls
 
 
+def test_main_force_shutdown_terminates_and_joins_workers(tmp_path, monkeypatch):
+    nifti = tmp_path / "vol.nii.gz"
+    nifti.write_text("nifti")
+    csv_path = tmp_path / "nifti_index.csv"
+    pd.DataFrame([{"nifti_path": str(nifti)}]).to_csv(csv_path, index=False)
+    config_path = tmp_path / "tasks.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "backend": "totalsegmentator",
+                "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
+            }
+        )
+    )
+
+    monkeypatch.setattr(
+        segment_module, "prefetch_totalsegmentator_models", lambda *a, **k: None
+    )
+    monkeypatch.setattr(segment_module, "tqdm", passthrough_tqdm)
+    patch_strategy(monkeypatch, mode="process_pool", max_workers=2, max_in_flight=1)
+
+    class HangingFuture:
+        def result(self, timeout=None):
+            raise segment_module.TimeoutError()
+
+        def cancel(self):
+            return None
+
+    class DummyProcess:
+        def __init__(self):
+            self.alive = True
+            self.terminate_calls = 0
+            self.kill_calls = 0
+            self.join_calls = []
+
+        def is_alive(self):
+            return self.alive
+
+        def terminate(self):
+            self.terminate_calls += 1
+            self.alive = False
+
+        def kill(self):
+            self.kill_calls += 1
+            self.alive = False
+
+        def join(self, timeout=None):
+            self.join_calls.append(timeout)
+            return None
+
+    class DummyManagerThread:
+        def __init__(self):
+            self.join_calls = []
+
+        def join(self, timeout=None):
+            self.join_calls.append(timeout)
+            return None
+
+    class DummyPool:
+        last_process = None
+        last_manager = None
+
+        def __init__(self, max_workers=None, mp_context=None):
+            proc = DummyProcess()
+            manager = DummyManagerThread()
+            self._processes = {1: proc}
+            self._executor_manager_thread = manager
+            DummyPool.last_process = proc
+            DummyPool.last_manager = manager
+
+        def submit(self, fn, *args, **kwargs):
+            return HangingFuture()
+
+        def shutdown(self, wait=False, cancel_futures=True):
+            return None
+
+    current = {"t": 0.0}
+
+    def fake_monotonic():
+        current["t"] += 0.6
+        return current["t"]
+
+    monkeypatch.setattr(segment_module, "ProcessPoolExecutor", DummyPool)
+    monkeypatch.setattr(segment_module.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(segment_module.time, "sleep", lambda *_a, **_k: None)
+
+    args = argparse.Namespace(
+        csv_path=str(csv_path),
+        csv_path_out=str(tmp_path / "segmented.csv"),
+        error_csv_path=str(tmp_path / "errors.csv"),
+        manifest=str(config_path),
+        num_workers=2,
+        verbose=False,
+        force=False,
+        start_method="spawn",
+        timeout_sec=1,
+    )
+
+    segment_module.main(args)
+
+    assert DummyPool.last_process is not None
+    assert DummyPool.last_process.terminate_calls >= 1
+    assert len(DummyPool.last_process.join_calls) >= 1
+    assert DummyPool.last_manager is not None
+    assert DummyPool.last_manager.join_calls
+
+
 def test_main_recycles_executor_by_recycle_every(tmp_path, monkeypatch):
     paths = []
     for i in range(3):
