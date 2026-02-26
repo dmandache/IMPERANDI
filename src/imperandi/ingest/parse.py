@@ -972,7 +972,7 @@ def main(args):
         resume=bool(args.resume),
         strict_resume=bool(args.strict_resume),
         output_dir=output_dir,
-        final_name="dicom_paths_with_tags.csv",
+        final_name="dicom_index.csv",
         read_path_col="dicom_path",
     )
 
