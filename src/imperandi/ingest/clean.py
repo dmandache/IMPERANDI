@@ -35,6 +35,7 @@ from imperandi.datasets_config.defaults import (
 
 COLUMNS_TO_USE = [
     "patient_key",
+    "_patient_key_raw",
     "study_id",
     "series_id",
     "dicom_path",

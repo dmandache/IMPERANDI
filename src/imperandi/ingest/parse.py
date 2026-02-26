@@ -26,10 +26,7 @@ from imperandi.utils.logging import setup_logging
 from imperandi.utils.misc import print_args
 from imperandi.utils.manifest import load_manifest
 from imperandi.datasets_config.defaults import DEFAULT_DICOM_TAGS
-from imperandi.ingest.hook_manifests import (
-    apply_id_standardization,
-    apply_derived_columns,
-)
+from imperandi.ingest.hook_manifests import apply_id_standardization
 
 warnings.filterwarnings("ignore")
 logger = logging.getLogger(__name__)
@@ -938,7 +935,7 @@ def main(args):
         series_tag=args.series_id_from,
     )
     df = apply_id_standardization(df, manifest, logger=logger)
-    df = apply_derived_columns(df, manifest)
+    #df = apply_derived_columns(df, manifest)
 
     # 4) output final df
     out_final = output_dir / "dicom_index.csv"
