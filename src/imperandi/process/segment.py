@@ -842,7 +842,7 @@ def main(args: argparse.Namespace) -> None:
         prefer_gpu=True,
         requested_workers=args.num_workers,
         start_method_hint=args.start_method,
-        target_task_mem_mb=8000,      # tune (TotalSegmentator can be heavy)
+        target_task_mem_mb=6000,      # tune (TotalSegmentator can be heavy)
         need_hard_timeouts=True,
     )
 
