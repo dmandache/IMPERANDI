@@ -144,7 +144,7 @@ def parse_arguments():
     parser = build_parser()
     args = parser.parse_args()
     args = normalize_convert_args(args)
-    logger.info("🚀 Running %s script with arguments: %s", Path(__file__).name, args)
+    logger.debug("Running %s script with arguments: %s", Path(__file__).name, args)
     return args
 
 
@@ -404,7 +404,7 @@ def process_single_volume(k, row, output_dir, verbose, return_status=False):
 def convert_dicom_to_nifti_parallel(
     df,
     output_dir,
-    print_flag,
+    show_progress,
     num_workers,
     *,
     on_result=None,
@@ -415,7 +415,7 @@ def convert_dicom_to_nifti_parallel(
     Args:
         df (pd.DataFrame): DataFrame containing DICOM metadata.
         output_dir (str): Directory to save the NIfTI files.
-        print_flag (bool): Whether to display progress using `tqdm`.
+        show_progress (bool): Whether to display progress using `tqdm`.
         num_workers (int): Number of parallel processes to use.
 
     Returns:
@@ -428,7 +428,7 @@ def convert_dicom_to_nifti_parallel(
     skipped_count = 0
     failed_count = 0
 
-    logger.info("%s volumes to convert", n_samples)
+    logger.debug("%s volumes to convert", n_samples)
 
     df["volume_ordinal_in_series"] = df.groupby("series_id").cumcount() + 1
 
@@ -445,7 +445,7 @@ def convert_dicom_to_nifti_parallel(
                 k,
                 df.iloc[k],
                 output_dir,
-                print_flag,
+                False,
                 True,
             )
             for k in range(n_samples)
@@ -453,7 +453,7 @@ def convert_dicom_to_nifti_parallel(
 
         # Prepare iterator with optional progress bar.
         iterator = as_completed(futures)
-        if print_flag:
+        if show_progress:
             iterator = tqdm(as_completed(futures), total=n_samples)
 
         # Collect results.
@@ -560,8 +560,9 @@ def main(args):
 
     df_all = df_all.map(lambda x: convert_list_str_to_list(x) if isinstance(x, str) else x)
 
-    logger.info("Before conversion:")
-    report_volumes(df_all)
+    if args.verbose:
+        logger.info("Before conversion:")
+        report_volumes(df_all)
     df_prev = df_all.copy()
 
     if args.dry_run:
@@ -637,15 +638,16 @@ def main(args):
         _, _ = convert_dicom_to_nifti_parallel(
             work_df,
             args.output_dir,
-            args.verbose,
+            True,
             args.num_workers,
             on_result=_on_result,
         )
         _checkpoint_write(force=True)
 
-    logger.info("After conversion:")
-    report_volumes(df_all)
-    report_change(df_all, df_prev)
+    if args.verbose:
+        logger.info("After conversion:")
+        report_volumes(df_all)
+        report_change(df_all, df_prev)
 
     df_success = df_all[df_all["nifti_path"].notna()].copy()
     if "_source_idx" in df_success.columns:
@@ -656,10 +658,12 @@ def main(args):
             columns=["_source_idx"], errors="ignore"
         )
         logger.warning(
-            "⚠️ DICOM to Nifti Conversion Errors on patients : %s",
-            df_err.patient_key.unique(),
+            "DICOM->NIfTI conversion errors: %d row(s) (see %s)",
+            len(df_err),
+            args.error_csv_path,
         )
-        report_volumes(df_err)
+        if args.verbose:
+            report_volumes(df_err)
         atomic_write_csv(df_err, args.error_csv_path, index=False)
 
     logger.info("Conversion done ✔")
