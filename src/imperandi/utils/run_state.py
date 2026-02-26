@@ -5,10 +5,44 @@ import json
 import os
 import tempfile
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 import pandas as pd
+
+STATE_SCHEMA_VERSION = 2
+
+
+@dataclass(frozen=True)
+class CheckpointPaths:
+    state_path: Path
+    main_checkpoint_path: Path
+    error_checkpoint_path: Path
+
+
+@dataclass(frozen=True)
+class CheckpointConfig:
+    command: str
+    args_hash: str
+    input_fingerprint: list[dict[str, Any]]
+    checkpoint_every_rows: int
+    checkpoint_every_sec: int
+    resume_enabled: bool
+
+
+def build_checkpoint_paths(
+    output_path: str | Path,
+    error_path: str | Path,
+    command: str,
+) -> CheckpointPaths:
+    out = Path(output_path)
+    err = Path(error_path)
+    return CheckpointPaths(
+        state_path=out.parent / f".{out.stem}.{command}.state.json",
+        main_checkpoint_path=out.parent / f".{out.stem}.{command}.checkpoint.csv",
+        error_checkpoint_path=err.parent / f".{err.stem}.{command}.checkpoint.csv",
+    )
 
 
 def _normalize_for_json(value: Any) -> Any:
@@ -149,6 +183,8 @@ def state_matches(
 ) -> bool:
     if not state:
         return False
+    if state.get("schema_version") != STATE_SCHEMA_VERSION:
+        return False
     return (
         state.get("command") == command
         and state.get("args_hash") == args_hash
@@ -159,3 +195,126 @@ def state_matches(
 def now_epoch() -> float:
     return float(time.time())
 
+
+def prepare_resume_context(
+    *,
+    args: Any,
+    command: str,
+    inputs: str | Path | Sequence[str | Path] | None,
+    output_path: str | Path,
+    error_path: str | Path,
+    exclude_hash_args: Iterable[str] = (),
+) -> dict[str, Any]:
+    paths = build_checkpoint_paths(output_path, error_path, command)
+    args_hash = compute_args_hash(args, exclude_keys=exclude_hash_args)
+    input_fp = fingerprint_inputs(
+        inputs, strict=bool(getattr(args, "strict_resume", False))
+    )
+    state = load_state(paths.state_path)
+    resume_enabled = bool(getattr(args, "resume", False))
+    can_resume = resume_enabled and state_matches(
+        state,
+        command=command,
+        args_hash=args_hash,
+        input_fingerprint=input_fp,
+    )
+    return {
+        "paths": paths,
+        "state": state,
+        "can_resume": can_resume,
+        "config": CheckpointConfig(
+            command=command,
+            args_hash=args_hash,
+            input_fingerprint=input_fp,
+            checkpoint_every_rows=max(
+                1, int(getattr(args, "checkpoint_every_rows", 1))
+            ),
+            checkpoint_every_sec=max(1, int(getattr(args, "checkpoint_every_sec", 1))),
+            resume_enabled=resume_enabled,
+        ),
+    }
+
+
+class CheckpointManager:
+    def __init__(self, *, paths: CheckpointPaths, config: CheckpointConfig) -> None:
+        self.paths = paths
+        self.config = config
+        self._processed_since_checkpoint = 0
+        self._last_checkpoint_time = now_epoch()
+
+    def mark_processed(self, amount: int = 1) -> None:
+        self._processed_since_checkpoint += max(0, int(amount))
+
+    def should_flush(self, *, force: bool = False) -> bool:
+        if force:
+            return True
+        elapsed = now_epoch() - self._last_checkpoint_time
+        return (
+            self._processed_since_checkpoint >= self.config.checkpoint_every_rows
+            or elapsed >= self.config.checkpoint_every_sec
+        )
+
+    def _build_state_payload(
+        self,
+        *,
+        completed_indices: Iterable[int],
+        finished: bool,
+        extra_state: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "schema_version": STATE_SCHEMA_VERSION,
+            "command": self.config.command,
+            "args_hash": self.config.args_hash,
+            "input_fingerprint": self.config.input_fingerprint,
+            "completed_indices": sorted(int(i) for i in completed_indices),
+            "updated_at_epoch": now_epoch(),
+        }
+        if finished:
+            payload["finished"] = True
+        if extra_state:
+            payload.update(dict(extra_state))
+        return payload
+
+    def flush(
+        self,
+        *,
+        main_df: pd.DataFrame,
+        error_df: pd.DataFrame | None,
+        completed_indices: Iterable[int],
+        force: bool = False,
+        extra_state: Mapping[str, Any] | None = None,
+    ) -> bool:
+        if not self.should_flush(force=force):
+            return False
+
+        atomic_write_csv(main_df, self.paths.main_checkpoint_path, index=False)
+        if error_df is not None and not error_df.empty:
+            atomic_write_csv(error_df, self.paths.error_checkpoint_path, index=False)
+        elif self.paths.error_checkpoint_path.exists():
+            self.paths.error_checkpoint_path.unlink()
+        atomic_write_json(
+            self.paths.state_path,
+            self._build_state_payload(
+                completed_indices=completed_indices,
+                finished=False,
+                extra_state=extra_state,
+            ),
+        )
+        self._processed_since_checkpoint = 0
+        self._last_checkpoint_time = now_epoch()
+        return True
+
+    def finalize_state(
+        self,
+        *,
+        completed_indices: Iterable[int],
+        extra_state: Mapping[str, Any] | None = None,
+    ) -> None:
+        atomic_write_json(
+            self.paths.state_path,
+            self._build_state_payload(
+                completed_indices=completed_indices,
+                finished=True,
+                extra_state=extra_state,
+            ),
+        )

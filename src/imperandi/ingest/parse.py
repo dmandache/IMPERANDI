@@ -25,11 +25,19 @@ from imperandi.utils.archive_io import (
 from imperandi.utils.logging import setup_logging
 from imperandi.utils.misc import print_args
 from imperandi.utils.manifest import load_manifest
+from imperandi.utils.checkpoint_cli import add_checkpoint_arguments
+from imperandi.utils.run_state import (
+    atomic_write_csv,
+    CheckpointManager,
+    prepare_resume_context,
+)
 from imperandi.datasets_config.defaults import DEFAULT_DICOM_TAGS
 from imperandi.ingest.hook_manifests import apply_id_standardization
 
 warnings.filterwarnings("ignore")
 logger = logging.getLogger(__name__)
+DEFAULT_CHECKPOINT_EVERY_ROWS = 10_000
+DEFAULT_CHECKPOINT_EVERY_SEC = 350
 
 # Make reading tolerant of non-conformant values
 config.settings.reading_validation_mode = config.IGNORE  # or config.WARN
@@ -128,11 +136,10 @@ def add_parse_arguments(
     )
 
     # Performance
-    parser.add_argument(
-        "--checkpoint_frequency",
-        default=None,
-        type=int,
-        help="If set, process DICOM files in chunks of N and write checkpoint CSVs.",
+    add_checkpoint_arguments(
+        parser,
+        default_rows=DEFAULT_CHECKPOINT_EVERY_ROWS,
+        default_sec=DEFAULT_CHECKPOINT_EVERY_SEC,
     )
     parser.add_argument(
         "--snapshot_tags",
@@ -311,6 +318,16 @@ def normalize_parse_args(args: argparse.Namespace) -> argparse.Namespace:
     args.snapshot_tags = bool(getattr(args, "snapshot_tags", False))
     args.snapshot_sample_size = int(getattr(args, "snapshot_sample_size", 500))
     args.snapshot_seed = int(getattr(args, "snapshot_seed", 42))
+    args.checkpoint_every_rows = int(
+        getattr(args, "checkpoint_every_rows", DEFAULT_CHECKPOINT_EVERY_ROWS)
+    )
+    args.checkpoint_every_sec = int(
+        getattr(args, "checkpoint_every_sec", DEFAULT_CHECKPOINT_EVERY_SEC)
+    )
+    if args.checkpoint_every_rows <= 0:
+        raise ValueError("checkpoint_every_rows must be a positive integer.")
+    if args.checkpoint_every_sec <= 0:
+        raise ValueError("checkpoint_every_sec must be a positive integer.")
 
     for attr in ("root_path_pos", "root_path_opt", "output_dir_pos", "output_dir_opt"):
         if hasattr(args, attr):
@@ -784,57 +801,108 @@ def choose_ids(
 def process_with_checkpoint(
     df_paths: pd.DataFrame,
     read_func,
-    checkpoint_frequency: Optional[int],
+    checkpoint_every_rows: int,
+    checkpoint_every_sec: int,
+    resume: bool,
+    strict_resume: bool,
     output_dir: Path,
     final_name: str,
     read_path_col: str = "dicom_path",
 ):
     """
-    Apply read_func(dicom_path)->Series to df_paths with optional chunked checkpoint.
+    Apply read_func(dicom_path)->Series with unified row-level checkpoint/resume.
     """
+    if checkpoint_every_rows <= 0:
+        raise ValueError("checkpoint_every_rows must be a positive integer.")
+    if checkpoint_every_sec <= 0:
+        raise ValueError("checkpoint_every_sec must be a positive integer.")
+
     cols_to_drop_for_persist = [read_path_col] if read_path_col != "dicom_path" else []
+    output_path = output_dir / final_name
+    error_path = output_dir / f"{Path(final_name).stem}_errors.csv"
+    runtime_args = argparse.Namespace(
+        checkpoint_every_rows=checkpoint_every_rows,
+        checkpoint_every_sec=checkpoint_every_sec,
+        resume=resume,
+        strict_resume=strict_resume,
+    )
 
-    if checkpoint_frequency is None:
-        tags_df = df_paths[read_path_col].parallel_apply(read_func)
-        tags_df = tags_df.replace("", float("NaN")).infer_objects(copy=False).dropna(
-            how="all", axis=1
-        )
-        out = pd.concat([df_paths, tags_df], axis=1)
-        out.drop(columns=cols_to_drop_for_persist, errors="ignore").to_csv(
-            output_dir / final_name, index=False
-        )
-        return out
-    if checkpoint_frequency <= 0:
-        raise ValueError("checkpoint_frequency must be a positive integer.")
+    resume_ctx = prepare_resume_context(
+        args=runtime_args,
+        command="parse",
+        inputs=df_paths[read_path_col].tolist(),
+        output_path=output_path,
+        error_path=error_path,
+        exclude_hash_args=(),
+    )
+    paths = resume_ctx["paths"]
+    state = resume_ctx["state"]
+    can_resume = resume_ctx["can_resume"]
+    ckpt = CheckpointManager(paths=paths, config=resume_ctx["config"])
 
-    # chunked
-    total_rows = df_paths.shape[0]
+    if can_resume and paths.main_checkpoint_path.exists():
+        logger.info("Resuming parse from checkpoint: %s", paths.main_checkpoint_path)
+        df = pd.read_csv(paths.main_checkpoint_path).copy()
+    else:
+        df = df_paths.copy()
+        df["_source_idx"] = df.index.astype(int)
+
+    if "_source_idx" not in df.columns:
+        df["_source_idx"] = df.index.astype(int)
+
+    completed_indices: set[int] = set()
+    if can_resume:
+        completed_indices = {
+            int(i)
+            for i in (state or {}).get("completed_indices", [])
+            if isinstance(i, int)
+        }
+
+    if read_path_col not in df.columns:
+        raise KeyError(f"column '{read_path_col}' missing")
+
+    pending_indices = [
+        i for i in df.index.tolist() if int(df.at[i, "_source_idx"]) not in completed_indices
+    ]
+    total_rows = df.shape[0]
     with tqdm(total=total_rows, desc="Parse files", unit="file") as pbar:
-        for i in range(0, total_rows, checkpoint_frequency):
-            chunk_idx = i // checkpoint_frequency
-            ckpt = output_dir / f"{Path(final_name).stem}_{chunk_idx:03d}.csv"
-            chunk = df_paths.iloc[i : i + checkpoint_frequency].copy()
-            chunk_len = len(chunk)
-            if ckpt.exists():
-                pbar.update(chunk_len)
-                continue
+        if completed_indices:
+            pbar.update(len(completed_indices))
+        chunk_size = max(1, int(checkpoint_every_rows))
+        for start in range(0, len(pending_indices), chunk_size):
+            chunk_indices = pending_indices[start : start + chunk_size]
+            chunk = df.loc[chunk_indices].copy()
             tags_chunk = chunk[read_path_col].parallel_apply(read_func)
-            # Keep all selected tag columns in checkpoint outputs, even if a
-            # column is entirely empty for a chunk, so final schema is stable.
             tags_chunk = tags_chunk.replace("", float("NaN")).infer_objects(copy=False)
-            out_chunk = pd.concat([chunk, tags_chunk], axis=1)
-            out_chunk.drop(columns=cols_to_drop_for_persist, errors="ignore").to_csv(
-                ckpt, index=False
+            for col in tags_chunk.columns:
+                if col not in df.columns:
+                    df[col] = None
+                df.loc[chunk_indices, col] = tags_chunk[col].values
+            for idx in chunk_indices:
+                completed_indices.add(int(df.at[idx, "_source_idx"]))
+            ckpt.mark_processed(len(chunk_indices))
+            ckpt.flush(
+                main_df=df,
+                error_df=pd.DataFrame(),
+                completed_indices=completed_indices,
+                force=False,
             )
-            pbar.update(chunk_len)
+            pbar.update(len(chunk_indices))
 
-    # merge
-    csv_files = sorted(glob.glob(str(output_dir / f"{Path(final_name).stem}_0*.csv")))
-    if not csv_files:
-        raise RuntimeError("No checkpoint files found to merge.")
-    merged = pd.concat([pd.read_csv(p) for p in csv_files], ignore_index=True)
-    merged.to_csv(output_dir / final_name, index=False)
-    return merged
+    ckpt.flush(
+        main_df=df,
+        error_df=pd.DataFrame(),
+        completed_indices=completed_indices,
+        force=True,
+    )
+    out = df.drop(columns=["_source_idx"], errors="ignore")
+    atomic_write_csv(
+        out.drop(columns=cols_to_drop_for_persist, errors="ignore"),
+        output_path,
+        index=False,
+    )
+    ckpt.finalize_state(completed_indices=completed_indices)
+    return out
 
 
 # -------------------------
@@ -899,7 +967,10 @@ def main(args):
     df = process_with_checkpoint(
         df_paths=df,
         read_func=read_selected_func,
-        checkpoint_frequency=args.checkpoint_frequency,
+        checkpoint_every_rows=args.checkpoint_every_rows,
+        checkpoint_every_sec=args.checkpoint_every_sec,
+        resume=bool(args.resume),
+        strict_resume=bool(args.strict_resume),
         output_dir=output_dir,
         final_name="dicom_paths_with_tags.csv",
         read_path_col="dicom_path",

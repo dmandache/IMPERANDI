@@ -103,3 +103,37 @@ def test_main_writes_phase_columns_and_error_csv(tmp_path, monkeypatch):
     err_df = pd.read_csv(args.error_csv_path)
     assert len(err_df) == 1
     assert "file not found" in err_df.loc[0, "error_message"]
+
+
+def test_main_resume_skips_completed_rows(tmp_path, monkeypatch):
+    nifti = tmp_path / "valid.nii.gz"
+    nifti.write_text("nifti")
+    csv_path = tmp_path / "nifti_index.csv"
+    pd.DataFrame([{"nifti_path": str(nifti)}]).to_csv(csv_path, index=False)
+
+    calls = {"count": 0}
+
+    def fake_process_single_volume(idx, row, *, phase_extractor):
+        calls["count"] += 1
+        return idx, {"totalseg_phase": "portal"}, None
+
+    monkeypatch.setattr(phase_module, "_load_phase_extractor", lambda: (lambda _: {}))
+    monkeypatch.setattr(phase_module, "process_single_volume", fake_process_single_volume)
+
+    args = argparse.Namespace(
+        csv_path=str(csv_path),
+        csv_path_out=str(tmp_path / "out.csv"),
+        error_csv_path=str(tmp_path / "errors.csv"),
+        verbose=False,
+        checkpoint_every_rows=1,
+        checkpoint_every_sec=3600,
+        resume=False,
+        strict_resume=False,
+    )
+    phase_module.main(args)
+    assert calls["count"] == 1
+
+    calls["count"] = 0
+    args.resume = True
+    phase_module.main(args)
+    assert calls["count"] == 0

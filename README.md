@@ -217,7 +217,10 @@ You can pass either a manifest name (`generic`, `operandi`) or a custom manifest
 ## Performance and reliability notes
 
 - Parallel execution controls are available for heavy stages (`parse`, `convert`, `segment`).
-- `parse` supports checkpointing for large datasets (`--checkpoint_frequency`).
+- Long-running stages (`parse`, `convert`, `segment`, `phase`, `radiomics`) use a unified checkpoint interface:
+  `--checkpoint_every_rows`, `--checkpoint_every_sec`, `--resume`, `--strict_resume`.
+- Breaking change: legacy parse chunk checkpoints (`dicom_paths_with_tags_000.csv`, etc.) and
+  `--checkpoint_frequency` are no longer supported.
 - `parse` reads tags from defaults (`DEFAULT_DICOM_TAGS`) plus `--tags`; use `--snapshot_tags` for full recursive tag snapshots on sampled data.
 - `parse` auto-detects archive-heavy inputs from a deterministic root sample (`--archive_detect_sample_size`) and can switch to archive-aware mode at runtime when needed.
 - Archive workflows are bounded by depth and include path-safety protections.

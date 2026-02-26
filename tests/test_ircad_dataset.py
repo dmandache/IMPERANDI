@@ -47,7 +47,10 @@ def _build_parse_args(root_path: Path, output_dir: Path) -> argparse.Namespace:
         patient_key_from="PatientName",
         study_id_from="StudyInstanceUID",
         series_id_from="SeriesInstanceUID",
-        checkpoint_frequency=None,
+        checkpoint_every_rows=1000,
+        checkpoint_every_sec=350,
+        resume=False,
+        strict_resume=False,
         num_workers=1,
         verbose=False,
     )

@@ -21,14 +21,11 @@ from imperandi.utils.files import copy_files_to_temp_dir, check_file, is_valid_n
 from imperandi.utils.logging import setup_logging
 from imperandi.utils.misc import report_volumes, report_change, print_args
 from imperandi.utils.manifest import load_manifest
+from imperandi.utils.checkpoint_cli import add_checkpoint_arguments
 from imperandi.utils.run_state import (
     atomic_write_csv,
-    atomic_write_json,
-    compute_args_hash,
-    fingerprint_inputs,
-    load_state,
-    now_epoch,
-    state_matches,
+    CheckpointManager,
+    prepare_resume_context,
 )
 
 logger = logging.getLogger(__name__)
@@ -112,29 +109,10 @@ def add_convert_arguments(
         default=False,
         help="Keep materialized archive cache after the command finishes.",
     )
-    parser.add_argument(
-        "--checkpoint_every_rows",
-        type=int,
-        default=DEFAULT_CHECKPOINT_EVERY_ROWS,
-        help="Flush checkpoint files every N processed rows.",
-    )
-    parser.add_argument(
-        "--checkpoint_every_sec",
-        type=int,
-        default=DEFAULT_CHECKPOINT_EVERY_SEC,
-        help="Flush checkpoint files every T seconds.",
-    )
-    parser.add_argument(
-        "--resume",
-        action="store_true",
-        default=False,
-        help="Resume from matching checkpoint state if available.",
-    )
-    parser.add_argument(
-        "--strict_resume",
-        action="store_true",
-        default=False,
-        help="Use content hashing for input fingerprint when resuming.",
+    add_checkpoint_arguments(
+        parser,
+        default_rows=DEFAULT_CHECKPOINT_EVERY_ROWS,
+        default_sec=DEFAULT_CHECKPOINT_EVERY_SEC,
     )
     if include_manifest:
         parser.add_argument(
@@ -536,9 +514,6 @@ def main(args):
     """
     output_path = Path(args.csv_path_out)
     error_path = Path(args.error_csv_path)
-    state_path = output_path.parent / f".{output_path.stem}.convert.state.json"
-    checkpoint_main_path = output_path.parent / f".{output_path.stem}.convert.checkpoint.csv"
-    checkpoint_err_path = error_path.parent / f".{error_path.stem}.convert.checkpoint.csv"
 
     exclude_hash_args = {
         "csv_path_out",
@@ -550,17 +525,18 @@ def main(args):
         "checkpoint_every_sec",
         "strict_resume",
     }
-    args_hash = compute_args_hash(args, exclude_keys=exclude_hash_args)
-    input_fp = fingerprint_inputs(
-        args.csv_path, strict=bool(getattr(args, "strict_resume", False))
-    )
-    state = load_state(state_path)
-    can_resume = bool(getattr(args, "resume", False)) and state_matches(
-        state,
+    resume_ctx = prepare_resume_context(
+        args=args,
         command="convert",
-        args_hash=args_hash,
-        input_fingerprint=input_fp,
+        inputs=args.csv_path,
+        output_path=output_path,
+        error_path=error_path,
+        exclude_hash_args=exclude_hash_args,
     )
+    paths = resume_ctx["paths"]
+    state = resume_ctx["state"]
+    can_resume = resume_ctx["can_resume"]
+    ckpt = CheckpointManager(paths=paths, config=resume_ctx["config"])
 
     if args.verbose:
         for p in args.csv_path:
@@ -569,9 +545,9 @@ def main(args):
     if hasattr(args, "manifest") and args.manifest:
         load_manifest(args.manifest, base_path=Path(__file__).resolve().parents[1])
 
-    if can_resume and checkpoint_main_path.exists():
-        logger.info("Resuming convert from checkpoint: %s", checkpoint_main_path)
-        df_all = pd.read_csv(checkpoint_main_path).copy()
+    if can_resume and paths.main_checkpoint_path.exists():
+        logger.info("Resuming convert from checkpoint: %s", paths.main_checkpoint_path)
+        df_all = pd.read_csv(paths.main_checkpoint_path).copy()
     else:
         df_list = [pd.read_csv(p) for p in args.csv_path]
         df_all = pd.concat(df_list, ignore_index=True)
@@ -605,8 +581,8 @@ def main(args):
             "Resume enabled: %d completed rows restored from state",
             len(completed_indices),
         )
-        if checkpoint_err_path.exists():
-            err_ckpt = pd.read_csv(checkpoint_err_path)
+        if paths.error_checkpoint_path.exists():
+            err_ckpt = pd.read_csv(paths.error_checkpoint_path)
             for _, row in err_ckpt.iterrows():
                 if "_source_idx" in row:
                     try:
@@ -614,45 +590,16 @@ def main(args):
                     except Exception:
                         continue
 
-    checkpoint_every_rows = max(
-        1, int(getattr(args, "checkpoint_every_rows", DEFAULT_CHECKPOINT_EVERY_ROWS))
-    )
-    checkpoint_every_sec = max(
-        1, int(getattr(args, "checkpoint_every_sec", DEFAULT_CHECKPOINT_EVERY_SEC))
-    )
-    processed_since_checkpoint = 0
-    last_checkpoint_time = now_epoch()
-
     def _checkpoint_write(*, force: bool = False) -> None:
-        nonlocal processed_since_checkpoint, last_checkpoint_time
-        elapsed = now_epoch() - last_checkpoint_time
-        if (
-            not force
-            and processed_since_checkpoint < checkpoint_every_rows
-            and elapsed < checkpoint_every_sec
-        ):
-            return
-        atomic_write_csv(df_all, checkpoint_main_path, index=False)
-        if errors_by_idx:
-            atomic_write_csv(
-                pd.DataFrame(list(errors_by_idx.values())),
-                checkpoint_err_path,
-                index=False,
-            )
-        elif checkpoint_err_path.exists():
-            checkpoint_err_path.unlink()
-        atomic_write_json(
-            state_path,
-            {
-                "command": "convert",
-                "args_hash": args_hash,
-                "input_fingerprint": input_fp,
-                "completed_indices": sorted(completed_indices),
-                "updated_at_epoch": now_epoch(),
-            },
+        err_df = (
+            pd.DataFrame(list(errors_by_idx.values())) if errors_by_idx else pd.DataFrame()
         )
-        processed_since_checkpoint = 0
-        last_checkpoint_time = now_epoch()
+        ckpt.flush(
+            main_df=df_all,
+            error_df=err_df,
+            completed_indices=completed_indices,
+            force=force,
+        )
 
     with ArchiveSession(
         cache_dir=args.archive_cache_dir,
@@ -670,8 +617,7 @@ def main(args):
                     completed_indices.add(source_idx)
 
         def _on_result(k: int, export_path, error_row, status: str) -> None:
-            nonlocal processed_since_checkpoint
-            processed_since_checkpoint += 1
+            ckpt.mark_processed()
             source_idx = int(work_df.iloc[k]["_source_idx"])
             completed_indices.add(source_idx)
             if export_path is not None:
@@ -717,17 +663,7 @@ def main(args):
         atomic_write_csv(df_err, args.error_csv_path, index=False)
 
     logger.info("Conversion done ✔")
-    atomic_write_json(
-        state_path,
-        {
-            "command": "convert",
-            "args_hash": args_hash,
-            "input_fingerprint": input_fp,
-            "completed_indices": sorted(completed_indices),
-            "updated_at_epoch": now_epoch(),
-            "finished": True,
-        },
-    )
+    ckpt.finalize_state(completed_indices=completed_indices)
 
 
 if __name__ == "__main__":
