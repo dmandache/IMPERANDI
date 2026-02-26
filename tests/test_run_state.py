@@ -92,3 +92,40 @@ def test_checkpoint_manager_flush_and_finalize(tmp_path):
     state2 = load_state(ctx["paths"].state_path)
     assert state2 is not None
     assert state2["finished"] is True
+
+
+def test_prepare_resume_context_ignores_resume_checkpoint_flags_by_default(tmp_path):
+    output = tmp_path / "out.csv"
+    err = tmp_path / "errors.csv"
+    args_first = argparse.Namespace(
+        checkpoint_every_rows=1,
+        checkpoint_every_sec=1,
+        resume=False,
+        strict_resume=False,
+    )
+    ctx_first = prepare_resume_context(
+        args=args_first,
+        command="parse",
+        inputs=[output],
+        output_path=output,
+        error_path=err,
+    )
+    manager = CheckpointManager(paths=ctx_first["paths"], config=ctx_first["config"])
+    df = pd.DataFrame({"a": [1]})
+    manager.mark_processed()
+    manager.flush(main_df=df, error_df=pd.DataFrame(), completed_indices=[0], force=True)
+
+    args_second = argparse.Namespace(
+        checkpoint_every_rows=999,
+        checkpoint_every_sec=999,
+        resume=True,
+        strict_resume=False,
+    )
+    ctx_second = prepare_resume_context(
+        args=args_second,
+        command="parse",
+        inputs=[output],
+        output_path=output,
+        error_path=err,
+    )
+    assert ctx_second["can_resume"]

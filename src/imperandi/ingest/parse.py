@@ -833,7 +833,12 @@ def process_with_checkpoint(
         inputs=df_paths[read_path_col].tolist(),
         output_path=output_path,
         error_path=error_path,
-        exclude_hash_args=(),
+        exclude_hash_args=(
+            "resume",
+            "checkpoint_every_rows",
+            "checkpoint_every_sec",
+            "strict_resume",
+        ),
     )
     paths = resume_ctx["paths"]
     state = resume_ctx["state"]

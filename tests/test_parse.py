@@ -458,14 +458,14 @@ def test_process_with_checkpoint_keeps_csv_outputs(tmp_path, monkeypatch):
         resume=False,
         strict_resume=False,
         output_dir=tmp_path,
-        final_name="dicom_paths_with_tags.csv",
+        final_name="dicom_index.csv",
         read_path_col="_read_path",
     )
 
-    assert (tmp_path / "dicom_paths_with_tags.csv").exists()
-    assert (tmp_path / ".dicom_paths_with_tags.parse.state.json").exists()
-    assert (tmp_path / ".dicom_paths_with_tags.parse.checkpoint.csv").exists()
-    assert list(tmp_path.glob("dicom_paths_with_tags_*.csv")) == []
+    assert (tmp_path / "dicom_index.csv").exists()
+    assert (tmp_path / ".dicom_index.parse.state.json").exists()
+    assert (tmp_path / ".dicom_index.parse.checkpoint.csv").exists()
+    assert list(tmp_path.glob("dicom_index_*.csv")) == []
     assert len(out) == 2
 
 
@@ -488,10 +488,10 @@ def test_process_with_checkpoint_preserves_all_empty_columns_per_chunk(
         resume=False,
         strict_resume=False,
         output_dir=tmp_path,
-        final_name="dicom_paths_with_tags.csv",
+        final_name="dicom_index.csv",
     )
 
-    ckpt = pd.read_csv(tmp_path / ".dicom_paths_with_tags.parse.checkpoint.csv")
+    ckpt = pd.read_csv(tmp_path / ".dicom_index.parse.checkpoint.csv")
 
     assert "InstanceCreationTime" in ckpt.columns
     assert "InstanceCreationTime" in out.columns
@@ -526,7 +526,7 @@ def test_process_with_checkpoint_reports_file_progress(tmp_path, monkeypatch):
         resume=False,
         strict_resume=False,
         output_dir=tmp_path,
-        final_name="dicom_paths_with_tags.csv",
+        final_name="dicom_index.csv",
     )
 
     assert recorded["kwargs"] == {"total": 5, "desc": "Parse files", "unit": "file"}
@@ -565,7 +565,7 @@ def test_process_with_checkpoint_counts_resumed_rows_in_progress(
         resume=False,
         strict_resume=False,
         output_dir=tmp_path,
-        final_name="dicom_paths_with_tags.csv",
+        final_name="dicom_index.csv",
     )
 
     out = parse.process_with_checkpoint(
@@ -576,12 +576,12 @@ def test_process_with_checkpoint_counts_resumed_rows_in_progress(
         resume=True,
         strict_resume=False,
         output_dir=tmp_path,
-        final_name="dicom_paths_with_tags.csv",
+        final_name="dicom_index.csv",
     )
 
     assert calls == []
-    assert recorded["updates"] == [3]
-    assert sum(recorded["updates"]) == 3
+    assert recorded["updates"] == [2, 1, 3]
+    assert sum(recorded["updates"]) == 6
     assert len(out) == 3
 
 
@@ -600,7 +600,7 @@ def test_process_with_checkpoint_rejects_non_positive_frequency(tmp_path):
             resume=False,
             strict_resume=False,
             output_dir=tmp_path,
-            final_name="dicom_paths_with_tags.csv",
+            final_name="dicom_index.csv",
         )
 
     with pytest.raises(ValueError, match="positive integer"):
@@ -612,7 +612,7 @@ def test_process_with_checkpoint_rejects_non_positive_frequency(tmp_path):
             resume=False,
             strict_resume=False,
             output_dir=tmp_path,
-            final_name="dicom_paths_with_tags.csv",
+            final_name="dicom_index.csv",
         )
 
 
@@ -630,11 +630,11 @@ def test_process_with_checkpoint_without_checkpoints_writes_only_final(
         resume=False,
         strict_resume=False,
         output_dir=tmp_path,
-        final_name="dicom_paths_with_tags.csv",
+        final_name="dicom_index.csv",
     )
 
-    assert (tmp_path / "dicom_paths_with_tags.csv").exists()
-    assert list(tmp_path.glob("dicom_paths_with_tags_*.csv")) == []
+    assert (tmp_path / "dicom_index.csv").exists()
+    assert list(tmp_path.glob("dicom_index_*.csv")) == []
     assert len(out) == 2
     assert "PatientName" in out.columns
 

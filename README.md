@@ -22,7 +22,7 @@ IMPERANDI is a Python framework and CLI for building analysis-ready CT imaging c
 ### 1) Ingest and harmonize imaging metadata (`parse` + `clean` = `ingest`)
 
 - Scans DICOM files from folders, globbed roots, and nested archives (`.zip`, `.tar`, `.tar.gz`, `.tgz`).
-- Extracts selected DICOM header tags into a raw metadata table (`dicom_paths_with_tags.csv`).
+- Extracts selected DICOM header tags into a raw metadata table (`dicom_index.csv`).
 - Builds stable patient/study/series identifiers from tags, folder structure, or hybrid fallback rules.
 - Applies manifest-driven hooks for patient-key standardization and derived columns.
 - Cleans and curates CT cohorts by filtering modality/noise patterns, localizers, non-target anatomy, non-axial acquisitions, and implausible scan geometry.
@@ -191,7 +191,7 @@ imperandi radiomics \
 ## Core outputs
 
 - `parse`:
-  - `dicom_paths_with_tags.csv` (raw extracted selected tags)
+  - `dicom_index.csv` (raw extracted selected tags)
   - `dicom_index.csv` (resolved IDs and normalized metadata)
   - optional `dicom_tags_snapshot.ndjson` (full recursive tags on a sampled subset, via `--snapshot_tags`)
 - `clean`:
@@ -219,7 +219,7 @@ You can pass either a manifest name (`generic`, `operandi`) or a custom manifest
 - Parallel execution controls are available for heavy stages (`parse`, `convert`, `segment`).
 - Long-running stages (`parse`, `convert`, `segment`, `phase`, `radiomics`) use a unified checkpoint interface:
   `--checkpoint_every_rows`, `--checkpoint_every_sec`, `--resume`, `--strict_resume`.
-- Breaking change: legacy parse chunk checkpoints (`dicom_paths_with_tags_000.csv`, etc.) and
+- Breaking change: legacy parse chunk checkpoints (`dicom_index_000.csv`, etc.) and
   `--checkpoint_frequency` are no longer supported.
 - `parse` reads tags from defaults (`DEFAULT_DICOM_TAGS`) plus `--tags`; use `--snapshot_tags` for full recursive tag snapshots on sampled data.
 - `parse` auto-detects archive-heavy inputs from a deterministic root sample (`--archive_detect_sample_size`) and can switch to archive-aware mode at runtime when needed.

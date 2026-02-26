@@ -12,6 +12,14 @@ from typing import Any, Iterable, Mapping, Sequence
 import pandas as pd
 
 STATE_SCHEMA_VERSION = 2
+DEFAULT_HASH_EXCLUDE_KEYS = frozenset(
+    {
+        "resume",
+        "checkpoint_every_rows",
+        "checkpoint_every_sec",
+        "strict_resume",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -206,7 +214,10 @@ def prepare_resume_context(
     exclude_hash_args: Iterable[str] = (),
 ) -> dict[str, Any]:
     paths = build_checkpoint_paths(output_path, error_path, command)
-    args_hash = compute_args_hash(args, exclude_keys=exclude_hash_args)
+    hash_exclude_keys = tuple(
+        sorted(set(DEFAULT_HASH_EXCLUDE_KEYS).union(set(exclude_hash_args)))
+    )
+    args_hash = compute_args_hash(args, exclude_keys=hash_exclude_keys)
     input_fp = fingerprint_inputs(
         inputs, strict=bool(getattr(args, "strict_resume", False))
     )
