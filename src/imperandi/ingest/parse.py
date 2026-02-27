@@ -6,7 +6,6 @@ import logging
 import os
 from pathlib import Path
 import argparse
-from multiprocessing import cpu_count
 from typing import Optional, Union
 
 import pandas as pd
@@ -161,7 +160,7 @@ def add_parse_arguments(
     )
     parser.add_argument(
         "--num_workers",
-        default=cpu_count(),
+        default=4,
         type=int,
         help="Number of parallel workers (default: all CPUs).",
     )
