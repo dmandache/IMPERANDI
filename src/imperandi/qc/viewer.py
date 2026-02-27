@@ -76,6 +76,7 @@ class CTScanViewer:
         df,
         ct_scan_col,
         segmentation_cols=None,
+        phase_col=None,
         HU_min=-100,
         HU_max=400,
         exploration_mode="ordered",
@@ -84,10 +85,12 @@ class CTScanViewer:
         self.ct_scan_col = ct_scan_col
         self.patient_col = "patient_key" if "patient_key" in df.columns else None
         self.date_col = "date" if "date" in df.columns else None
-        if "totalseg_phase" in df.columns:
-            self.phase_col = "totalseg_phase"
+        if phase_col is not None and phase_col in df.columns:
+            self.phase_col = phase_col
         elif "phase" in df.columns:
             self.phase_col = "phase"
+        elif "totalseg_phase" in df.columns:
+            self.phase_col = "totalseg_phase"
         else:
             self.phase_col = None
 
