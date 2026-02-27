@@ -43,7 +43,10 @@ def test_process_single_volume_success(tmp_path, monkeypatch):
     idx, phase_info, err = phase_module.process_single_volume(
         0,
         {"nifti_path": str(nifti)},
-        phase_extractor=lambda _: {"phase": "portal", "probability": 0.9},
+        phase_extractor=lambda _, quiet=True: {
+            "phase": "portal",
+            "probability": 0.9,
+        },
     )
 
     assert idx == 0
@@ -56,7 +59,7 @@ def test_process_single_volume_missing_file():
     idx, phase_info, err = phase_module.process_single_volume(
         0,
         {"nifti_path": "does/not/exist.nii.gz"},
-        phase_extractor=lambda _: {"phase": "portal"},
+        phase_extractor=lambda _, quiet=True: {"phase": "portal"},
     )
 
     assert idx == 0
@@ -81,7 +84,7 @@ def test_main_writes_phase_columns_and_error_csv(tmp_path, monkeypatch):
     monkeypatch.setattr(
         phase_module,
         "_load_phase_extractor",
-        lambda: (lambda _: {"phase": "arterial", "confidence": 0.8}),
+        lambda: (lambda _, quiet=True: {"phase": "arterial", "confidence": 0.8}),
     )
 
     args = argparse.Namespace(
@@ -113,7 +116,7 @@ def test_main_resume_skips_completed_rows(tmp_path, monkeypatch):
 
     calls = {"count": 0}
 
-    def fake_process_single_volume(idx, row, *, phase_extractor):
+    def fake_process_single_volume(idx, row, *, phase_extractor, verbose=False):
         calls["count"] += 1
         return idx, {"totalseg_phase": "portal"}, None
 

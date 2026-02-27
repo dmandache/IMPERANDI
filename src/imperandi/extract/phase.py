@@ -128,6 +128,7 @@ def process_single_volume(
     row: Mapping[str, Any],
     *,
     phase_extractor: Callable[[Any], Dict[str, Any]],
+    verbose: bool = False,
 ) -> Tuple[int, Dict[str, Any] | None, str | None]:
     nifti_path_value = row.get("nifti_path")
     if not isinstance(nifti_path_value, str) or not nifti_path_value.strip():
@@ -139,7 +140,7 @@ def process_single_volume(
 
     try:
         nifti_image = nib.load(str(nifti_path))
-        phase_info = phase_extractor(nifti_image, quiet=True)
+        phase_info = phase_extractor(nifti_image, quiet=not verbose)
     except Exception as exc:
         logger.debug("Traceback for %s:\n%s", nifti_path, traceback.format_exc())
         return idx, None, str(exc)
@@ -167,15 +168,14 @@ def extract_phase_volumes(
         raise KeyError("column 'nifti_path' missing")
 
     errors = []
-    iterator = df.iterrows()
-    if verbose:
-        iterator = tqdm(iterator, total=len(df), desc="Phase")
+    iterator = tqdm(df.iterrows(), total=len(df), desc="Phase")
 
     for idx, row in iterator:
         _, phase_info, err_msg = process_single_volume(
             idx,
             row.to_dict(),
             phase_extractor=phase_extractor,
+            verbose=verbose,
         )
         if phase_info:
             for key, value in phase_info.items():
@@ -256,17 +256,18 @@ def main(args: argparse.Namespace) -> None:
             force=force,
         )
 
-    iterator = df.index.tolist()
-    if args.verbose:
-        iterator = tqdm(iterator, total=len(iterator), desc="Phase")
-    for idx in iterator:
+    row_indices = [
+        idx
+        for idx in df.index.tolist()
+        if int(df.at[idx, "_source_idx"]) not in completed_indices
+    ]
+    for idx in tqdm(row_indices, total=len(row_indices), desc="Phase"):
         src_idx = int(df.at[idx, "_source_idx"])
-        if src_idx in completed_indices:
-            continue
         _, phase_info, err_msg = process_single_volume(
             idx,
             df.loc[idx].to_dict(),
             phase_extractor=phase_extractor,
+            verbose=args.verbose,
         )
         if phase_info:
             for key, value in phase_info.items():
