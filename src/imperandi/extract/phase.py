@@ -161,7 +161,7 @@ def process_single_volume(
 
     try:
         nifti_image = nib.load(str(nifti_path))
-        phase_info = phase_extractor(nifti_image)
+        phase_info = phase_extractor(nifti_image, quiet=True)
     except Exception as exc:
         logger.debug("Traceback for %s:\n%s", nifti_path, traceback.format_exc())
         return idx, None, str(exc)
