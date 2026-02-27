@@ -453,15 +453,19 @@ def test_process_with_checkpoint_keeps_csv_outputs(tmp_path, monkeypatch):
     out = parse.process_with_checkpoint(
         df_paths=df_paths,
         read_func=lambda _: pd.Series({"PatientName": "x"}),
-        checkpoint_frequency=1,
+        checkpoint_every_rows=1,
+        checkpoint_every_sec=3600,
+        resume=False,
+        strict_resume=False,
         output_dir=tmp_path,
-        final_name="dicom_paths_with_tags.csv",
+        final_name="dicom_index.csv",
         read_path_col="_read_path",
     )
 
-    assert (tmp_path / "dicom_paths_with_tags_000.csv").exists()
-    assert (tmp_path / "dicom_paths_with_tags_001.csv").exists()
-    assert (tmp_path / "dicom_paths_with_tags.csv").exists()
+    assert (tmp_path / "dicom_index.csv").exists()
+    assert (tmp_path / ".dicom_index.parse.state.json").exists()
+    assert (tmp_path / ".dicom_index.parse.checkpoint.csv").exists()
+    assert list(tmp_path.glob("dicom_index_*.csv")) == []
     assert len(out) == 2
 
 
@@ -479,16 +483,17 @@ def test_process_with_checkpoint_preserves_all_empty_columns_per_chunk(
                 "InstanceCreationTime": None,
             }
         ),
-        checkpoint_frequency=1,
+        checkpoint_every_rows=1,
+        checkpoint_every_sec=3600,
+        resume=False,
+        strict_resume=False,
         output_dir=tmp_path,
-        final_name="dicom_paths_with_tags.csv",
+        final_name="dicom_index.csv",
     )
 
-    ckpt0 = pd.read_csv(tmp_path / "dicom_paths_with_tags_000.csv")
-    ckpt1 = pd.read_csv(tmp_path / "dicom_paths_with_tags_001.csv")
+    ckpt = pd.read_csv(tmp_path / ".dicom_index.parse.checkpoint.csv")
 
-    assert "InstanceCreationTime" in ckpt0.columns
-    assert "InstanceCreationTime" in ckpt1.columns
+    assert "InstanceCreationTime" in ckpt.columns
     assert "InstanceCreationTime" in out.columns
     assert out["InstanceCreationTime"].isna().all()
 
@@ -516,9 +521,12 @@ def test_process_with_checkpoint_reports_file_progress(tmp_path, monkeypatch):
     parse.process_with_checkpoint(
         df_paths=df_paths,
         read_func=lambda _: pd.Series({"PatientName": "x"}),
-        checkpoint_frequency=2,
+        checkpoint_every_rows=2,
+        checkpoint_every_sec=3600,
+        resume=False,
+        strict_resume=False,
         output_dir=tmp_path,
-        final_name="dicom_paths_with_tags.csv",
+        final_name="dicom_index.csv",
     )
 
     assert recorded["kwargs"] == {"total": 5, "desc": "Parse files", "unit": "file"}
@@ -526,7 +534,7 @@ def test_process_with_checkpoint_reports_file_progress(tmp_path, monkeypatch):
     assert sum(recorded["updates"]) == 5
 
 
-def test_process_with_checkpoint_counts_skipped_chunks_in_progress(
+def test_process_with_checkpoint_counts_resumed_rows_in_progress(
     tmp_path, monkeypatch
 ):
     monkeypatch.setattr(pd.Series, "parallel_apply", pd.Series.apply, raising=False)
@@ -549,30 +557,37 @@ def test_process_with_checkpoint_counts_skipped_chunks_in_progress(
     monkeypatch.setattr(parse, "tqdm", lambda **kwargs: DummyProgressBar(**kwargs))
     df_paths = pd.DataFrame({"dicom_path": ["a.dcm", "b.dcm", "c.dcm"]})
 
-    # Pre-create first checkpoint file so the first chunk is skipped.
-    pd.DataFrame(
-        {
-            "dicom_path": ["a.dcm", "b.dcm"],
-            "PatientName": ["x", "x"],
-        }
-    ).to_csv(tmp_path / "dicom_paths_with_tags_000.csv", index=False)
+    parse.process_with_checkpoint(
+        df_paths=df_paths,
+        read_func=lambda _: pd.Series({"PatientName": "x"}),
+        checkpoint_every_rows=2,
+        checkpoint_every_sec=3600,
+        resume=False,
+        strict_resume=False,
+        output_dir=tmp_path,
+        final_name="dicom_index.csv",
+    )
 
     out = parse.process_with_checkpoint(
         df_paths=df_paths,
         read_func=lambda path: calls.append(path) or pd.Series({"PatientName": "x"}),
-        checkpoint_frequency=2,
+        checkpoint_every_rows=2,
+        checkpoint_every_sec=3600,
+        resume=True,
+        strict_resume=False,
         output_dir=tmp_path,
-        final_name="dicom_paths_with_tags.csv",
+        final_name="dicom_index.csv",
     )
 
-    assert calls == ["c.dcm"]
-    assert recorded["updates"] == [2, 1]
-    assert sum(recorded["updates"]) == 3
+    assert calls == []
+    assert recorded["updates"] == [2, 1, 3]
+    assert sum(recorded["updates"]) == 6
     assert len(out) == 3
 
 
 def test_process_with_checkpoint_rejects_non_positive_frequency(tmp_path):
     df_paths = pd.DataFrame({"dicom_path": ["a.dcm"]})
+
     def read_func(_):
         return pd.Series({"PatientName": "x"})
 
@@ -580,18 +595,24 @@ def test_process_with_checkpoint_rejects_non_positive_frequency(tmp_path):
         parse.process_with_checkpoint(
             df_paths=df_paths,
             read_func=read_func,
-            checkpoint_frequency=0,
+            checkpoint_every_rows=0,
+            checkpoint_every_sec=10,
+            resume=False,
+            strict_resume=False,
             output_dir=tmp_path,
-            final_name="dicom_paths_with_tags.csv",
+            final_name="dicom_index.csv",
         )
 
     with pytest.raises(ValueError, match="positive integer"):
         parse.process_with_checkpoint(
             df_paths=df_paths,
             read_func=read_func,
-            checkpoint_frequency=-2,
+            checkpoint_every_rows=2,
+            checkpoint_every_sec=-1,
+            resume=False,
+            strict_resume=False,
             output_dir=tmp_path,
-            final_name="dicom_paths_with_tags.csv",
+            final_name="dicom_index.csv",
         )
 
 
@@ -604,13 +625,16 @@ def test_process_with_checkpoint_without_checkpoints_writes_only_final(
     out = parse.process_with_checkpoint(
         df_paths=df_paths,
         read_func=lambda _: pd.Series({"PatientName": "x"}),
-        checkpoint_frequency=None,
+        checkpoint_every_rows=10,
+        checkpoint_every_sec=3600,
+        resume=False,
+        strict_resume=False,
         output_dir=tmp_path,
-        final_name="dicom_paths_with_tags.csv",
+        final_name="dicom_index.csv",
     )
 
-    assert (tmp_path / "dicom_paths_with_tags.csv").exists()
-    assert list(tmp_path.glob("dicom_paths_with_tags_*.csv")) == []
+    assert (tmp_path / "dicom_index.csv").exists()
+    assert list(tmp_path.glob("dicom_index_*.csv")) == []
     assert len(out) == 2
     assert "PatientName" in out.columns
 

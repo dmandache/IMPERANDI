@@ -40,14 +40,11 @@ from tqdm import tqdm
 from imperandi.utils.misc import report_volumes  # type: ignore
 from imperandi.utils.logging import setup_logging
 from imperandi.utils.manifest import load_manifest
+from imperandi.utils.checkpoint_cli import add_checkpoint_arguments
 from imperandi.utils.run_state import (
     atomic_write_csv,
-    atomic_write_json,
-    compute_args_hash,
-    fingerprint_inputs,
-    load_state,
-    now_epoch,
-    state_matches,
+    CheckpointManager,
+    prepare_resume_context,
 )
 
 # -----------------------------------------------------------------------------
@@ -740,29 +737,10 @@ def add_segment_arguments(
         default=DEFAULT_TIMEOUT,
         help="Per-volume timeout in seconds",
     )
-    parser.add_argument(
-        "--checkpoint_every_rows",
-        type=int,
-        default=DEFAULT_CHECKPOINT_EVERY_ROWS,
-        help="Flush checkpoint files every N processed rows.",
-    )
-    parser.add_argument(
-        "--checkpoint_every_sec",
-        type=int,
-        default=DEFAULT_CHECKPOINT_EVERY_SEC,
-        help="Flush checkpoint files every T seconds.",
-    )
-    parser.add_argument(
-        "--resume",
-        action="store_true",
-        default=False,
-        help="Resume from matching checkpoint state if available.",
-    )
-    parser.add_argument(
-        "--strict_resume",
-        action="store_true",
-        default=False,
-        help="Use content hashing for input fingerprint when resuming.",
+    add_checkpoint_arguments(
+        parser,
+        default_rows=DEFAULT_CHECKPOINT_EVERY_ROWS,
+        default_sec=DEFAULT_CHECKPOINT_EVERY_SEC,
     )
     if include_manifest:
         parser.add_argument(
@@ -830,9 +808,6 @@ def main(args: argparse.Namespace) -> None:
 
     output_path = Path(args.csv_path_out)
     error_path = Path(args.error_csv_path)
-    state_path = output_path.parent / f".{output_path.stem}.segment.state.json"
-    checkpoint_main_path = output_path.parent / f".{output_path.stem}.segment.checkpoint.csv"
-    checkpoint_err_path = error_path.parent / f".{error_path.stem}.segment.checkpoint.csv"
 
     exclude_hash_args = {
         "csv_path_out",
@@ -844,17 +819,18 @@ def main(args: argparse.Namespace) -> None:
         "checkpoint_every_sec",
         "strict_resume",
     }
-    args_hash = compute_args_hash(args, exclude_keys=exclude_hash_args)
-    input_fp = fingerprint_inputs(
-        args.csv_path, strict=bool(getattr(args, "strict_resume", False))
-    )
-    state = load_state(state_path)
-    can_resume = bool(getattr(args, "resume", False)) and state_matches(
-        state,
+    resume_ctx = prepare_resume_context(
+        args=args,
         command="segment",
-        args_hash=args_hash,
-        input_fingerprint=input_fp,
+        inputs=args.csv_path,
+        output_path=output_path,
+        error_path=error_path,
+        exclude_hash_args=exclude_hash_args,
     )
+    paths = resume_ctx["paths"]
+    state = resume_ctx["state"]
+    can_resume = resume_ctx["can_resume"]
+    ckpt = CheckpointManager(paths=paths, config=resume_ctx["config"])
 
     from imperandi.utils.multiprocessing import (
         apply_strategy_env,
@@ -866,7 +842,7 @@ def main(args: argparse.Namespace) -> None:
         prefer_gpu=True,
         requested_workers=args.num_workers,
         start_method_hint=args.start_method,
-        target_task_mem_mb=3000,      # tune (TotalSegmentator can be heavy)
+        target_task_mem_mb=6000,      # tune (TotalSegmentator can be heavy)
         need_hard_timeouts=True,
     )
 
@@ -891,9 +867,9 @@ def main(args: argparse.Namespace) -> None:
 
 
     # --- read and pre‑clean CSV ------------------------------------------------
-    if can_resume and checkpoint_main_path.exists():
-        logger.info("Resuming segment from checkpoint: %s", checkpoint_main_path)
-        df = pd.read_csv(checkpoint_main_path).copy()
+    if can_resume and paths.main_checkpoint_path.exists():
+        logger.info("Resuming segment from checkpoint: %s", paths.main_checkpoint_path)
+        df = pd.read_csv(paths.main_checkpoint_path).copy()
     else:
         df = pd.read_csv(args.csv_path).copy()
     if "nifti_path" not in df.columns:
@@ -922,8 +898,8 @@ def main(args: argparse.Namespace) -> None:
         logger.info("Resume enabled: %d completed rows restored from state", len(completed_indices))
 
     errors_by_idx: Dict[int, str] = {}
-    if can_resume and checkpoint_err_path.exists():
-        err_ckpt = pd.read_csv(checkpoint_err_path)
+    if can_resume and paths.error_checkpoint_path.exists():
+        err_ckpt = pd.read_csv(paths.error_checkpoint_path)
         if "idx" in err_ckpt.columns and "error_message" in err_ckpt.columns:
             for _, row in err_ckpt.iterrows():
                 try:
@@ -931,48 +907,26 @@ def main(args: argparse.Namespace) -> None:
                 except Exception:
                     continue
 
-    checkpoint_every_rows = max(
-        1, int(getattr(args, "checkpoint_every_rows", DEFAULT_CHECKPOINT_EVERY_ROWS))
-    )
-    checkpoint_every_sec = max(
-        1, int(getattr(args, "checkpoint_every_sec", DEFAULT_CHECKPOINT_EVERY_SEC))
-    )
-    last_checkpoint_time = now_epoch()
-    processed_since_checkpoint = 0
-
     def _checkpoint_write(*, force: bool = False) -> None:
-        nonlocal last_checkpoint_time, processed_since_checkpoint
-        elapsed = now_epoch() - last_checkpoint_time
-        if not force and processed_since_checkpoint < checkpoint_every_rows and elapsed < checkpoint_every_sec:
-            return
-
-        atomic_write_csv(df, checkpoint_main_path, index=False)
-        if errors_by_idx:
-            err_ckpt_df = pd.DataFrame(
+        err_ckpt_df = (
+            pd.DataFrame(
                 [{"idx": k, "error_message": v} for k, v in sorted(errors_by_idx.items())]
             )
-            atomic_write_csv(err_ckpt_df, checkpoint_err_path, index=False)
-        elif checkpoint_err_path.exists():
-            checkpoint_err_path.unlink()
-        atomic_write_json(
-            state_path,
-            {
-                "command": "segment",
-                "args_hash": args_hash,
-                "input_fingerprint": input_fp,
-                "completed_indices": sorted(completed_indices),
-                "updated_at_epoch": now_epoch(),
-            },
+            if errors_by_idx
+            else pd.DataFrame()
         )
-        last_checkpoint_time = now_epoch()
-        processed_since_checkpoint = 0
+        ckpt.flush(
+            main_df=df,
+            error_df=err_ckpt_df,
+            completed_indices=completed_indices,
+            force=force,
+        )
 
     def _apply_result(
         idx: int, out_dir: str | None, err_msg: str | None, warning_msg: str | None
     ) -> None:
-        nonlocal processed_since_checkpoint
         completed_indices.add(int(idx))
-        processed_since_checkpoint += 1
+        ckpt.mark_processed()
 
         if out_dir:
             base = Path(out_dir)
@@ -1336,17 +1290,7 @@ def main(args: argparse.Namespace) -> None:
             logger.debug("report_volumes() failed – continuing")
 
     logger.info("Segmentation done ✔")
-    atomic_write_json(
-        state_path,
-        {
-            "command": "segment",
-            "args_hash": args_hash,
-            "input_fingerprint": input_fp,
-            "completed_indices": sorted(completed_indices),
-            "updated_at_epoch": now_epoch(),
-            "finished": True,
-        },
-    )
+    ckpt.finalize_state(completed_indices=completed_indices)
 
     return
 

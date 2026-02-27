@@ -1116,3 +1116,60 @@ def test_main_subprocess_mode_currently_degrades_to_serial(tmp_path, monkeypatch
     segment_module.main(args)
     out_df = pd.read_csv(args.csv_path_out)
     assert out_df.loc[0, "mask_liver"].endswith("liver.nii.gz")
+
+
+def test_main_resume_skips_completed_rows(tmp_path, monkeypatch):
+    nifti = tmp_path / "vol.nii.gz"
+    nifti.write_text("nifti")
+    csv_path = tmp_path / "nifti_index.csv"
+    pd.DataFrame([{"nifti_path": str(nifti)}]).to_csv(csv_path, index=False)
+    config_path = tmp_path / "tasks.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "backend": "totalsegmentator",
+                "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
+            }
+        )
+    )
+
+    monkeypatch.setattr(
+        segment_module, "prefetch_totalsegmentator_models", lambda *a, **k: None
+    )
+    monkeypatch.setattr(segment_module, "tqdm", passthrough_tqdm)
+    patch_strategy(monkeypatch, mode="serial", max_workers=1, max_in_flight=1)
+
+    calls = {"count": 0}
+
+    def fake_process_single_volume(
+        idx, row, tasks_config, *, verbose, force, backend=None, **kwargs
+    ):
+        calls["count"] += 1
+        out_dir = Path(row["nifti_path"]).parent
+        (out_dir / "liver.nii.gz").write_text("mask")
+        return idx, str(out_dir), None, None
+
+    monkeypatch.setattr(segment_module, "process_single_volume", fake_process_single_volume)
+
+    args = argparse.Namespace(
+        csv_path=str(csv_path),
+        csv_path_out=str(tmp_path / "segmented.csv"),
+        error_csv_path=str(tmp_path / "errors.csv"),
+        manifest=str(config_path),
+        num_workers=1,
+        verbose=False,
+        force=False,
+        start_method="spawn",
+        timeout_sec=10,
+        checkpoint_every_rows=1,
+        checkpoint_every_sec=3600,
+        resume=False,
+        strict_resume=False,
+    )
+    segment_module.main(args)
+    assert calls["count"] == 1
+
+    calls["count"] = 0
+    args.resume = True
+    segment_module.main(args)
+    assert calls["count"] == 0

@@ -1,5 +1,6 @@
 import sys
 from pathlib import Path
+import pytest
 
 # Ensure src/ is on sys.path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -125,3 +126,46 @@ def test_cli_parse_accepts_snapshot_flags(tmp_path):
     )
 
     assert exit_code == 0
+
+
+def test_cli_parse_accepts_canonical_checkpoint_flags(tmp_path):
+    root_opt = tmp_path / "root_opt"
+    out_opt = tmp_path / "out_opt"
+
+    exit_code = cli.main(
+        [
+            "parse",
+            "--root_path",
+            str(root_opt),
+            "--output_dir",
+            str(out_opt),
+            "--checkpoint_every_rows",
+            "200",
+            "--checkpoint_every_sec",
+            "30",
+            "--resume",
+            "--strict_resume",
+            "--dry-run",
+        ]
+    )
+
+    assert exit_code == 0
+
+
+def test_cli_parse_rejects_legacy_checkpoint_frequency_flag(tmp_path):
+    root_opt = tmp_path / "root_opt"
+    out_opt = tmp_path / "out_opt"
+
+    with pytest.raises(SystemExit):
+        cli.main(
+            [
+                "parse",
+                "--root_path",
+                str(root_opt),
+                "--output_dir",
+                str(out_opt),
+                "--checkpoint_frequency",
+                "100",
+                "--dry-run",
+            ]
+        )
