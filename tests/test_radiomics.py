@@ -90,7 +90,7 @@ def test_main_writes_output_and_error_csv(tmp_path, monkeypatch):
         return {}, "mock error"
 
     monkeypatch.setattr(
-        radiomics_module, "extract_radiomics_liver_minus_tumor", fake_liver_minus_tumor
+        radiomics_module, "extract_radiomics_organ_minus_tumor", fake_liver_minus_tumor
     )
     monkeypatch.setattr(
         radiomics_module, "extract_radiomics_safe", lambda *a, **k: ({}, None)
@@ -141,7 +141,7 @@ def test_main_resume_skips_completed_rows(tmp_path, monkeypatch):
         calls["count"] += 1
         return {"f": 1.0}, None
 
-    monkeypatch.setattr(radiomics_module, "extract_radiomics_liver_minus_tumor", fake_liver)
+    monkeypatch.setattr(radiomics_module, "extract_radiomics_organ_minus_tumor", fake_liver)
     monkeypatch.setattr(radiomics_module, "extract_radiomics_safe", lambda *a, **k: ({}, None))
 
     args = argparse.Namespace(
