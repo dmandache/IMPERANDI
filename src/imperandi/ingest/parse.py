@@ -842,7 +842,20 @@ def process_with_checkpoint(
     paths = resume_ctx["paths"]
     state = resume_ctx["state"]
     can_resume = resume_ctx["can_resume"]
+    already_finished = resume_ctx["already_finished"]
     ckpt = CheckpointManager(paths=paths, config=resume_ctx["config"])
+
+    if already_finished:
+        logger.info(
+            "Resume enabled and matching parse run already finished; skipping execution."
+        )
+        if output_path.exists():
+            return pd.read_csv(output_path)
+        if paths.main_checkpoint_path.exists():
+            return pd.read_csv(paths.main_checkpoint_path).drop(
+                columns=["_source_idx"], errors="ignore"
+            )
+        return df_paths.copy()
 
     if can_resume and paths.main_checkpoint_path.exists():
         logger.info("Resuming parse from checkpoint: %s", paths.main_checkpoint_path)

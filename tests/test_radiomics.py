@@ -125,12 +125,13 @@ def test_main_resume_skips_completed_rows(tmp_path, monkeypatch):
     ).to_csv(csv_path, index=False)
 
     calls = {"count": 0}
+    dep_calls = {"count": 0}
 
-    monkeypatch.setattr(
-        radiomics_module,
-        "_load_radiomics_dependencies",
-        lambda: (object(), object()),
-    )
+    def fake_load_deps():
+        dep_calls["count"] += 1
+        return object(), object()
+
+    monkeypatch.setattr(radiomics_module, "_load_radiomics_dependencies", fake_load_deps)
     monkeypatch.setattr(
         radiomics_module,
         "_create_radiomics_extractor",
@@ -162,3 +163,4 @@ def test_main_resume_skips_completed_rows(tmp_path, monkeypatch):
     args.resume = True
     radiomics_module.main(args)
     assert calls["count"] == 0
+    assert dep_calls["count"] == 1

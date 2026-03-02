@@ -1133,9 +1133,12 @@ def test_main_resume_skips_completed_rows(tmp_path, monkeypatch):
         )
     )
 
-    monkeypatch.setattr(
-        segment_module, "prefetch_totalsegmentator_models", lambda *a, **k: None
-    )
+    prefetch_calls = {"count": 0}
+
+    def fake_prefetch(*args, **kwargs):
+        prefetch_calls["count"] += 1
+
+    monkeypatch.setattr(segment_module, "prefetch_totalsegmentator_models", fake_prefetch)
     monkeypatch.setattr(segment_module, "tqdm", passthrough_tqdm)
     patch_strategy(monkeypatch, mode="serial", max_workers=1, max_in_flight=1)
 
@@ -1173,3 +1176,4 @@ def test_main_resume_skips_completed_rows(tmp_path, monkeypatch):
     args.resume = True
     segment_module.main(args)
     assert calls["count"] == 0
+    assert prefetch_calls["count"] == 1

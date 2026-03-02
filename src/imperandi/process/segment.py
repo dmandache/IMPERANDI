@@ -800,12 +800,6 @@ def normalize_segment_args(args: argparse.Namespace) -> argparse.Namespace:
 
 def main(args: argparse.Namespace) -> None:
     setup_logging(verbose=getattr(args, "verbose", False))
-    tasks_config = load_segmentation_config(
-        getattr(args, "manifest", None),
-        base_path=Path(__file__).resolve().parents[1],
-    )
-    prefetch_totalsegmentator_models(tasks_config)
-
     output_path = Path(args.csv_path_out)
     error_path = Path(args.error_csv_path)
 
@@ -830,7 +824,20 @@ def main(args: argparse.Namespace) -> None:
     paths = resume_ctx["paths"]
     state = resume_ctx["state"]
     can_resume = resume_ctx["can_resume"]
+    already_finished = resume_ctx["already_finished"]
     ckpt = CheckpointManager(paths=paths, config=resume_ctx["config"])
+
+    if already_finished:
+        logger.info(
+            "Resume enabled and matching segment run already finished; skipping execution."
+        )
+        return
+
+    tasks_config = load_segmentation_config(
+        getattr(args, "manifest", None),
+        base_path=Path(__file__).resolve().parents[1],
+    )
+    prefetch_totalsegmentator_models(tasks_config)
 
     from imperandi.utils.multiprocessing import (
         apply_strategy_env,

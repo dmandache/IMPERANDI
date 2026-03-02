@@ -443,9 +443,6 @@ def extract_radiomics_from_dataframe(
 
 
 def main(args: argparse.Namespace) -> None:
-    sitk_module, featureextractor_module = _load_radiomics_dependencies()
-    extractor = _create_radiomics_extractor(featureextractor_module, DEFAULT_SETTINGS)
-
     output_path = Path(args.csv_path_out)
     error_path = Path(args.error_csv_path)
     exclude_hash_args = {
@@ -469,7 +466,17 @@ def main(args: argparse.Namespace) -> None:
     paths = resume_ctx["paths"]
     state = resume_ctx["state"]
     can_resume = resume_ctx["can_resume"]
+    already_finished = resume_ctx["already_finished"]
     ckpt = CheckpointManager(paths=paths, config=resume_ctx["config"])
+
+    if already_finished:
+        logger.info(
+            "Resume enabled and matching radiomics run already finished; skipping execution."
+        )
+        return
+
+    sitk_module, featureextractor_module = _load_radiomics_dependencies()
+    extractor = _create_radiomics_extractor(featureextractor_module, DEFAULT_SETTINGS)
 
     if can_resume and paths.main_checkpoint_path.exists():
         logger.info("Resuming radiomics from checkpoint: %s", paths.main_checkpoint_path)
