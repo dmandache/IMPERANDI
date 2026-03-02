@@ -224,7 +224,7 @@ You can pass either a manifest name (`generic`, `operandi`) or a custom manifest
 - Archive workflows are bounded by depth and include path-safety protections.
 - Most commands support `--dry-run` for pipeline planning and CI smoke checks.
 
-## Testing (slow datasets)
+<!-- ## Testing (slow datasets)
 
 Slow integration tests for the [IRCAD dataset](https://www.ircad.fr/research/data-sets/liver-segmentation-3d-ircadb-01/) are available and skipped unless data is present.
 
@@ -241,6 +241,52 @@ python -m pytest -m slow
 ```bash
 python -m imperandi parse --root_path tests/data/IRCAD_DICOM --output_dir tests/data
 python -m imperandi clean --csv_path tests/data/dicom_index.csv --csv_path_out tests/data/dicom_index_clean.csv
+``` -->
+
+## Use Case on IRCAD Dataset
+
+Download the dataset (~800MB):
+
+```bash
+wget https://cloud.ircad.fr/index.php/s/JN3z7EynBiwYyjy/download -O ircad.zip
 ```
 
-Data is not auto-downloaded due to dataset licensing constraints.
+Unzip the archive:
+
+```bash
+unzip ircad.zip -d ircad_dicom
+```
+
+After extraction, your structure should look similar to:
+```
+ircad_dicom/
+└── 3Dircadb1/
+    ├── 3Dircadb1.1/
+    │   ├── PATIENT_DICOM.zip/
+    │   ├── MASKS_DICOM.zip/
+    │   └── ...
+```
+
+Install package:
+
+```bash
+conda create -n imperandi310 python=3.10
+conda activate imperandi310
+pip install -e .[all]
+```
+
+Execute pipeline:
+```bash
+imperandi ingest "ircad_dicom/3Dircadb1/**/PATIENT_DICOM*" . --snapshot_tags
+imperandi convert dicom_index_clean.csv ircad_nifti/
+imperandi segment nifti_index.csv
+imperandi phase nifti_index.csv
+imperandi radiomics nifti_index.csv
+```
+
+Inspect results with dashboards:
+- explore images & segmentations with the interactive viewer
+- inspect DICOM tags
+- basic radiomics statistics
+
+
