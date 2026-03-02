@@ -143,13 +143,74 @@ def test_cli_parse_accepts_canonical_checkpoint_flags(tmp_path):
             "200",
             "--checkpoint_every_sec",
             "30",
-            "--resume",
+            "--no_resume",
             "--strict_resume",
             "--dry-run",
         ]
     )
 
     assert exit_code == 0
+
+
+def test_cli_parse_resume_enabled_by_default(tmp_path, capsys):
+    root_opt = tmp_path / "root_opt"
+    out_opt = tmp_path / "out_opt"
+
+    exit_code = cli.main(
+        [
+            "parse",
+            "--root_path",
+            str(root_opt),
+            "--output_dir",
+            str(out_opt),
+            "--dry-run",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    resume_line = next(line for line in output.splitlines() if line.strip().startswith("resume"))
+    assert exit_code == 0
+    assert resume_line.strip().endswith("True")
+
+
+def test_cli_parse_no_resume_disables_resume(tmp_path, capsys):
+    root_opt = tmp_path / "root_opt"
+    out_opt = tmp_path / "out_opt"
+
+    exit_code = cli.main(
+        [
+            "parse",
+            "--root_path",
+            str(root_opt),
+            "--output_dir",
+            str(out_opt),
+            "--no_resume",
+            "--dry-run",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    resume_line = next(line for line in output.splitlines() if line.strip().startswith("resume"))
+    assert exit_code == 0
+    assert resume_line.strip().endswith("False")
+
+
+def test_cli_parse_rejects_removed_resume_flag(tmp_path):
+    root_opt = tmp_path / "root_opt"
+    out_opt = tmp_path / "out_opt"
+
+    with pytest.raises(SystemExit):
+        cli.main(
+            [
+                "parse",
+                "--root_path",
+                str(root_opt),
+                "--output_dir",
+                str(out_opt),
+                "--resume",
+                "--dry-run",
+            ]
+        )
 
 
 def test_cli_parse_rejects_legacy_checkpoint_frequency_flag(tmp_path):

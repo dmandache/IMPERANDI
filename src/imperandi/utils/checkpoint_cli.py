@@ -25,10 +25,11 @@ def add_checkpoint_arguments(
     )
     if include_resume:
         parser.add_argument(
-            "--resume",
-            action="store_true",
-            default=False,
-            help="Resume from matching checkpoint state if available.",
+            "--no_resume",
+            action="store_false",
+            dest="resume",
+            default=True,
+            help="Disable resume from matching checkpoint state.",
         )
     if include_strict:
         parser.add_argument(

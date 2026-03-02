@@ -218,7 +218,8 @@ You can pass either a manifest name (`generic`, `operandi`) or a custom manifest
 
 - Parallel execution controls are available for heavy stages (`parse`, `convert`, `segment`).
 - Long-running stages (`parse`, `convert`, `segment`, `phase`, `radiomics`) use a unified checkpoint interface:
-  `--checkpoint_every_rows`, `--checkpoint_every_sec`, `--resume`, `--strict_resume`.
+  `--checkpoint_every_rows`, `--checkpoint_every_sec`, `--no_resume`, `--strict_resume`.
+- Resume is enabled by default; pass `--no_resume` to disable it.
 - `parse` reads tags from defaults (`DEFAULT_DICOM_TAGS`) plus `--tags`; use `--snapshot_tags` for full recursive tag snapshots on sampled data.
 - `parse` auto-detects archive-heavy inputs from a deterministic root sample (`--archive_detect_sample_size`) and can switch to archive-aware mode at runtime when needed.
 - Archive workflows are bounded by depth and include path-safety protections.
@@ -288,5 +289,4 @@ Inspect results with dashboards:
 - explore images & segmentations with the interactive viewer
 - inspect DICOM tags
 - basic radiomics statistics
-
 
