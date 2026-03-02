@@ -1,13 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Default value
-DIR_PATH="./tests/data"
-
-# If first argument exists, override
-if [ -n "$1" ]; then
-  DIR_PATH="$1"
-fi
+# Default value for DIR_PATH is "./tests/data" if not provided as an argument
+DIR_PATH="${1:-"./tests/data"}"
 
 imperandi ingest "${DIR_PATH}/IRCAD_DICOM" --snapshot_tags
 imperandi convert "${DIR_PATH}/dicom_index_clean.csv" "${DIR_PATH}/IRCAD_nifti"
