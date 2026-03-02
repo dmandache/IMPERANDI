@@ -50,12 +50,19 @@ def test_extract_radiomics_from_dataframe_records_missing_image():
 def test_main_writes_output_and_error_csv(tmp_path, monkeypatch):
     good_nifti = tmp_path / "good.nii.gz"
     bad_nifti = tmp_path / "bad.nii.gz"
+    good_mask = tmp_path / "good_mask.nii.gz"
+    bad_mask = tmp_path / "bad_mask.nii.gz"
     good_nifti.write_text("nifti")
     bad_nifti.write_text("nifti")
+    good_mask.write_text("mask")
+    bad_mask.write_text("mask")
 
     csv_path = tmp_path / "nifti_index.csv"
     pd.DataFrame(
-        [{"nifti_path": str(good_nifti)}, {"nifti_path": str(bad_nifti)}]
+        [
+            {"nifti_path": str(good_nifti), "mask_liver": str(good_mask)},
+            {"nifti_path": str(bad_nifti), "mask_liver": str(bad_mask)},
+        ]
     ).to_csv(csv_path, index=False)
 
     monkeypatch.setattr(
@@ -109,9 +116,13 @@ def test_main_writes_output_and_error_csv(tmp_path, monkeypatch):
 
 def test_main_resume_skips_completed_rows(tmp_path, monkeypatch):
     good_nifti = tmp_path / "good.nii.gz"
+    good_mask = tmp_path / "good_mask.nii.gz"
     good_nifti.write_text("nifti")
+    good_mask.write_text("mask")
     csv_path = tmp_path / "nifti_index.csv"
-    pd.DataFrame([{"nifti_path": str(good_nifti)}]).to_csv(csv_path, index=False)
+    pd.DataFrame(
+        [{"nifti_path": str(good_nifti), "mask_liver": str(good_mask)}]
+    ).to_csv(csv_path, index=False)
 
     calls = {"count": 0}
 

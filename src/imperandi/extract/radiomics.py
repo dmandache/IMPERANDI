@@ -217,6 +217,46 @@ def mask_has_voxels(mask, sitk_module) -> bool:
     return bool(sitk_module.GetArrayViewFromImage(mask).sum() > 0)
 
 
+def _extract_original_features(
+    result: Dict[str, Any],
+    *,
+    prefix: str,
+    include_shape: bool = True,
+    include_non_shape: bool = True,
+) -> Dict[str, Any]:
+    features: Dict[str, Any] = {}
+    for key, value in result.items():
+        skey = str(key)
+        if not skey.startswith("original"):
+            continue
+        is_shape = skey.startswith("original_shape_")
+        if (is_shape and not include_shape) or ((not is_shape) and not include_non_shape):
+            continue
+        features[f"{prefix}_{skey}"] = value
+    return features
+
+
+def _resample_to_reference_if_needed(mask_image, reference_image, sitk_module):
+    if (
+        mask_image.GetSize(),
+        mask_image.GetSpacing(),
+        mask_image.GetOrigin(),
+        mask_image.GetDirection(),
+    ) == (
+        reference_image.GetSize(),
+        reference_image.GetSpacing(),
+        reference_image.GetOrigin(),
+        reference_image.GetDirection(),
+    ):
+        return mask_image
+
+    rs = sitk_module.ResampleImageFilter()
+    rs.SetReferenceImage(reference_image)
+    rs.SetInterpolator(sitk_module.sitkNearestNeighbor)
+    rs.SetDefaultPixelValue(0)
+    return rs.Execute(mask_image)
+
+
 def extract_radiomics_safe(
     image_path: str,
     mask_path: Optional[str],
@@ -235,17 +275,13 @@ def extract_radiomics_safe(
 
         image = sitk_module.ReadImage(image_path)
         result = extractor.execute(image, mask_image)
-        features = {
-            f"{prefix}_{k}": v
-            for k, v in result.items()
-            if str(k).startswith("original")
-        }
+        features = _extract_original_features(result, prefix=prefix)
         return features, None
     except Exception as exc:
         return {}, f"Error extracting {prefix} features: {exc}"
 
 
-def extract_radiomics_liver_minus_tumor(
+def extract_radiomics_organ_minus_tumor(
     image_path: str,
     liver_mask_path: Optional[str],
     tumor_mask_path: Optional[str],
@@ -255,59 +291,109 @@ def extract_radiomics_liver_minus_tumor(
     prefix: str = "liver",
 ) -> Tuple[Dict[str, Any], Optional[str]]:
     if not liver_mask_path or not Path(liver_mask_path).exists():
-        return {}, "missing liver mask"
+        return {}, f"missing {prefix} mask"
 
     try:
         img = sitk_module.ReadImage(image_path)
-        liver = sitk_module.ReadImage(liver_mask_path)
+        organ = sitk_module.ReadImage(liver_mask_path)
 
-        if sitk_module.GetArrayViewFromImage(liver).sum() == 0:
-            return {}, "empty liver mask"
+        if sitk_module.GetArrayViewFromImage(organ).sum() == 0:
+            return {}, f"empty {prefix} mask"
 
-        liver_bin = sitk_module.Cast(
-            sitk_module.NotEqual(liver, 0), sitk_module.sitkUInt8
+        organ_bin = sitk_module.Cast(
+            sitk_module.NotEqual(organ, 0), sitk_module.sitkUInt8
+        )
+        has_tumor = bool(tumor_mask_path and Path(tumor_mask_path).exists())
+
+        if not has_tumor:
+            result = extractor.execute(img, organ_bin)
+            return _extract_original_features(result, prefix=prefix), None
+
+        tumor = sitk_module.ReadImage(tumor_mask_path)
+        if sitk_module.GetArrayViewFromImage(tumor).sum() == 0:
+            result = extractor.execute(img, organ_bin)
+            return _extract_original_features(result, prefix=prefix), None
+
+        tumor = _resample_to_reference_if_needed(tumor, organ, sitk_module)
+        tumor_bin = sitk_module.Cast(sitk_module.NotEqual(tumor, 0), sitk_module.sitkUInt8)
+        organ_minus_tumor = sitk_module.And(
+            organ_bin,
+            sitk_module.Cast(sitk_module.Not(tumor_bin), sitk_module.sitkUInt8),
         )
 
-        if tumor_mask_path and Path(tumor_mask_path).exists():
-            tumor = sitk_module.ReadImage(tumor_mask_path)
-            if sitk_module.GetArrayViewFromImage(tumor).sum() > 0:
-                if (
-                    tumor.GetSize(),
-                    tumor.GetSpacing(),
-                    tumor.GetOrigin(),
-                    tumor.GetDirection(),
-                ) != (
-                    liver.GetSize(),
-                    liver.GetSpacing(),
-                    liver.GetOrigin(),
-                    liver.GetDirection(),
-                ):
-                    rs = sitk_module.ResampleImageFilter()
-                    rs.SetReferenceImage(liver)
-                    rs.SetInterpolator(sitk_module.sitkNearestNeighbor)
-                    rs.SetDefaultPixelValue(0)
-                    tumor = rs.Execute(tumor)
+        shape_result = extractor.execute(img, organ_bin)
+        features = _extract_original_features(
+            shape_result,
+            prefix=prefix,
+            include_shape=True,
+            include_non_shape=False,
+        )
 
-                tumor_bin = sitk_module.Cast(
-                    sitk_module.NotEqual(tumor, 0), sitk_module.sitkUInt8
-                )
-                liver_bin = sitk_module.And(
-                    liver_bin,
-                    sitk_module.Cast(sitk_module.Not(tumor_bin), sitk_module.sitkUInt8),
-                )
+        if sitk_module.GetArrayViewFromImage(organ_minus_tumor).sum() == 0:
+            return features, f"{prefix}_minus_tumor mask is empty"
 
-        if sitk_module.GetArrayViewFromImage(liver_bin).sum() == 0:
-            return {}, "liver_minus_tumor mask is empty"
-
-        result = extractor.execute(img, liver_bin)
-        features = {
-            f"{prefix}_{k}": v
-            for k, v in result.items()
-            if str(k).startswith("original")
-        }
+        non_shape_result = extractor.execute(img, organ_minus_tumor)
+        features.update(
+            _extract_original_features(
+                non_shape_result,
+                prefix=prefix,
+                include_shape=False,
+                include_non_shape=True,
+            )
+        )
         return features, None
     except Exception as exc:
-        return {}, f"Error extracting liver_minus_tumor: {exc}"
+        return {}, f"Error extracting {prefix}_minus_tumor: {exc}"
+
+
+def _get_mask_columns(df: pd.DataFrame) -> list[str]:
+    return [col for col in df.columns if col.startswith("mask_")]
+
+
+def _extract_row_features(
+    row: pd.Series,
+    mask_columns: list[str],
+    *,
+    extractor,
+    sitk_module,
+) -> Tuple[Dict[str, Any], list[str]]:
+    image_path = row.get("nifti_path")
+    features: Dict[str, Any] = {}
+    messages: list[str] = []
+
+    if not isinstance(image_path, str) or not Path(image_path).exists():
+        return {}, [f"CT image path is missing or invalid: {image_path}"]
+
+    mask_columns_set = set(mask_columns)
+    for mask_col in mask_columns:
+        prefix = mask_col.replace("mask_", "", 1)
+        mask_path = row.get(mask_col)
+
+        if prefix.endswith("_tumor"):
+            roi_features, roi_msg = extract_radiomics_safe(
+                image_path,
+                mask_path,
+                prefix,
+                extractor=extractor,
+                sitk_module=sitk_module,
+            )
+        else:
+            tumor_col = f"{mask_col}_tumor"
+            tumor_path = row.get(tumor_col) if tumor_col in mask_columns_set else None
+            roi_features, roi_msg = extract_radiomics_organ_minus_tumor(
+                image_path,
+                mask_path,
+                tumor_path,
+                extractor=extractor,
+                sitk_module=sitk_module,
+                prefix=prefix,
+            )
+
+        features.update(roi_features)
+        if roi_msg:
+            messages.append(roi_msg)
+
+    return features, messages
 
 
 def extract_radiomics_from_dataframe(
@@ -319,50 +405,26 @@ def extract_radiomics_from_dataframe(
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     all_features = []
     errors = []
+    mask_columns = _get_mask_columns(df)
 
     iterator = df.iterrows()
     if verbose:
         iterator = tqdm(iterator, total=len(df), desc="Radiomics")
 
     for idx, row in iterator:
-        image_path = row.get("nifti_path")
-        liver_mask_path = row.get("mask_liver")  # row.get("liver_path")
-        tumor_mask_path = row.get("mask_liver_tumor")  # row.get("liver_tumor_path")
+        features, messages = _extract_row_features(
+            row,
+            mask_columns,
+            extractor=extractor,
+            sitk_module=sitk_module,
+        )
 
-        if not isinstance(image_path, str) or not Path(image_path).exists():
+        if messages and "CT image path is missing or invalid" in messages[0]:
             error_row = row.to_dict()
-            error_row["error_message"] = (
-                f"CT image path is missing or invalid: {image_path}"
-            )
+            error_row["error_message"] = messages[0]
             errors.append(error_row)
             all_features.append({})
             continue
-
-        features = {}
-        messages = []
-
-        liver_features, liver_msg = extract_radiomics_liver_minus_tumor(
-            image_path,
-            liver_mask_path,
-            tumor_mask_path,
-            extractor=extractor,
-            sitk_module=sitk_module,
-            prefix="liver",
-        )
-        features.update(liver_features)
-        if liver_msg:
-            messages.append(liver_msg)
-
-        tumor_features, tumor_msg = extract_radiomics_safe(
-            image_path,
-            tumor_mask_path,
-            "tumor",
-            extractor=extractor,
-            sitk_module=sitk_module,
-        )
-        features.update(tumor_features)
-        if tumor_msg:
-            messages.append(tumor_msg)
 
         all_features.append(features)
         if not features:
@@ -422,6 +484,7 @@ def main(args: argparse.Namespace) -> None:
         raise KeyError("column 'nifti_path' missing")
     if not args.skip_filter:
         df = filter_df(df)
+    mask_columns = _get_mask_columns(df)
 
     logger.info("Extracting radiomics from %d rows", len(df))
     completed_indices: set[int] = set()
@@ -461,44 +524,22 @@ def main(args: argparse.Namespace) -> None:
         if src_idx in completed_indices:
             continue
         row = df.loc[idx]
-        image_path = row.get("nifti_path")
-        liver_mask_path = row.get("mask_liver")
-        tumor_mask_path = row.get("mask_liver_tumor")
 
-        if not isinstance(image_path, str) or not Path(image_path).exists():
+        features, messages = _extract_row_features(
+            row,
+            mask_columns,
+            extractor=extractor,
+            sitk_module=sitk_module,
+        )
+
+        if messages and "CT image path is missing or invalid" in messages[0]:
             error_row = row.to_dict()
-            error_row["error_message"] = (
-                f"CT image path is missing or invalid: {image_path}"
-            )
+            error_row["error_message"] = messages[0]
             errors_by_idx[src_idx] = error_row
             completed_indices.add(src_idx)
             ckpt.mark_processed()
             _checkpoint_write(force=False)
             continue
-
-        features = {}
-        messages = []
-        liver_features, liver_msg = extract_radiomics_liver_minus_tumor(
-            image_path,
-            liver_mask_path,
-            tumor_mask_path,
-            extractor=extractor,
-            sitk_module=sitk_module,
-            prefix="liver",
-        )
-        features.update(liver_features)
-        if liver_msg:
-            messages.append(liver_msg)
-        tumor_features, tumor_msg = extract_radiomics_safe(
-            image_path,
-            tumor_mask_path,
-            "tumor",
-            extractor=extractor,
-            sitk_module=sitk_module,
-        )
-        features.update(tumor_features)
-        if tumor_msg:
-            messages.append(tumor_msg)
 
         for key, value in features.items():
             df.at[idx, key] = value
