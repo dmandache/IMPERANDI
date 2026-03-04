@@ -150,6 +150,44 @@ def test_prepare_resume_context_marks_already_finished(tmp_path):
         error_path=err,
     )
     manager = CheckpointManager(paths=ctx["paths"], config=ctx["config"])
+    pd.DataFrame({"a": [1]}).to_csv(output, index=False)
+    manager.finalize_state(completed_indices=[0])
+
+    resumed = prepare_resume_context(
+        args=args,
+        command="convert",
+        inputs=[output],
+        output_path=output,
+        error_path=err,
+    )
+    assert not resumed["can_resume"]
+    assert resumed["already_finished"]
+
+
+def test_prepare_resume_context_finished_without_output_uses_checkpoint_if_available(tmp_path):
+    output = tmp_path / "out.csv"
+    err = tmp_path / "errors.csv"
+    args = argparse.Namespace(
+        checkpoint_every_rows=1,
+        checkpoint_every_sec=1,
+        resume=True,
+        strict_resume=False,
+    )
+    ctx = prepare_resume_context(
+        args=args,
+        command="convert",
+        inputs=[output],
+        output_path=output,
+        error_path=err,
+    )
+    manager = CheckpointManager(paths=ctx["paths"], config=ctx["config"])
+    manager.mark_processed()
+    manager.flush(
+        main_df=pd.DataFrame({"a": [1]}),
+        error_df=pd.DataFrame(),
+        completed_indices=[0],
+        force=True,
+    )
     manager.finalize_state(completed_indices=[0])
 
     resumed = prepare_resume_context(
@@ -160,4 +198,41 @@ def test_prepare_resume_context_marks_already_finished(tmp_path):
         error_path=err,
     )
     assert resumed["can_resume"]
-    assert resumed["already_finished"]
+    assert not resumed["already_finished"]
+
+
+def test_prepare_resume_context_disables_resume_without_checkpoint(tmp_path):
+    output = tmp_path / "out.csv"
+    err = tmp_path / "errors.csv"
+    args = argparse.Namespace(
+        checkpoint_every_rows=1,
+        checkpoint_every_sec=1,
+        resume=True,
+        strict_resume=False,
+    )
+    ctx = prepare_resume_context(
+        args=args,
+        command="phase",
+        inputs=[output],
+        output_path=output,
+        error_path=err,
+    )
+    manager = CheckpointManager(paths=ctx["paths"], config=ctx["config"])
+    manager.mark_processed()
+    manager.flush(
+        main_df=pd.DataFrame({"a": [1]}),
+        error_df=pd.DataFrame(),
+        completed_indices=[0],
+        force=True,
+    )
+
+    ctx["paths"].main_checkpoint_path.unlink()
+    resumed = prepare_resume_context(
+        args=args,
+        command="phase",
+        inputs=[output],
+        output_path=output,
+        error_path=err,
+    )
+    assert not resumed["can_resume"]
+    assert not resumed["already_finished"]

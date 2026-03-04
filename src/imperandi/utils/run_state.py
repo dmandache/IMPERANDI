@@ -223,13 +223,17 @@ def prepare_resume_context(
     )
     state = load_state(paths.state_path)
     resume_enabled = bool(getattr(args, "resume", False))
-    can_resume = resume_enabled and state_matches(
+    state_is_compatible = resume_enabled and state_matches(
         state,
         command=command,
         args_hash=args_hash,
         input_fingerprint=input_fp,
     )
-    already_finished = can_resume and bool((state or {}).get("finished"))
+    finished_state = state_is_compatible and bool((state or {}).get("finished"))
+    output_exists = Path(output_path).exists()
+    checkpoint_exists = paths.main_checkpoint_path.exists()
+    already_finished = finished_state and output_exists
+    can_resume = state_is_compatible and checkpoint_exists
     return {
         "paths": paths,
         "state": state,
