@@ -192,8 +192,6 @@ def extract_phase_volumes(
 
 
 def main(args: argparse.Namespace) -> None:
-    phase_extractor = _load_phase_extractor()
-
     output_path = Path(args.csv_path_out)
     error_path = Path(args.error_csv_path)
     exclude_hash_args = {
@@ -217,7 +215,16 @@ def main(args: argparse.Namespace) -> None:
     paths = resume_ctx["paths"]
     state = resume_ctx["state"]
     can_resume = resume_ctx["can_resume"]
+    already_finished = resume_ctx["already_finished"]
     ckpt = CheckpointManager(paths=paths, config=resume_ctx["config"])
+
+    if already_finished:
+        logger.info(
+            "Resume enabled and matching phase run already finished; skipping execution."
+        )
+        return
+
+    phase_extractor = _load_phase_extractor()
 
     if can_resume and paths.main_checkpoint_path.exists():
         logger.info("Resuming phase from checkpoint: %s", paths.main_checkpoint_path)

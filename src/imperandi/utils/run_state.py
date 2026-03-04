@@ -229,10 +229,12 @@ def prepare_resume_context(
         args_hash=args_hash,
         input_fingerprint=input_fp,
     )
+    already_finished = can_resume and bool((state or {}).get("finished"))
     return {
         "paths": paths,
         "state": state,
         "can_resume": can_resume,
+        "already_finished": already_finished,
         "config": CheckpointConfig(
             command=command,
             args_hash=args_hash,

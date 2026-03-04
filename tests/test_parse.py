@@ -534,7 +534,7 @@ def test_process_with_checkpoint_reports_file_progress(tmp_path, monkeypatch):
     assert sum(recorded["updates"]) == 5
 
 
-def test_process_with_checkpoint_counts_resumed_rows_in_progress(
+def test_process_with_checkpoint_skips_when_matching_run_already_finished(
     tmp_path, monkeypatch
 ):
     monkeypatch.setattr(pd.Series, "parallel_apply", pd.Series.apply, raising=False)
@@ -580,8 +580,8 @@ def test_process_with_checkpoint_counts_resumed_rows_in_progress(
     )
 
     assert calls == []
-    assert recorded["updates"] == [2, 1, 3]
-    assert sum(recorded["updates"]) == 6
+    assert recorded["updates"] == [2, 1]
+    assert sum(recorded["updates"]) == 3
     assert len(out) == 3
 
 

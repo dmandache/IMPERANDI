@@ -481,6 +481,7 @@ def segment_volume(
 ) -> List[str]:
     """Run segmentation tasks and optional post‐processing."""
     warnings: List[str] = []
+    ran_any_task = False
     tasks = tasks_config.get("tasks", [])
     if not tasks:
         raise ValueError("No tasks provided in config")
@@ -524,6 +525,7 @@ def segment_volume(
                 task=task_name,
                 **extra,
             )
+            ran_any_task = True
         except Exception as exc:
             logger.error(
                 "Segmentation failed on %s (%s): %s", nifti_path, task_name, exc
@@ -553,6 +555,13 @@ def segment_volume(
     merged_output = str(postprocess.get("output", "merged")).strip() or "merged"
     merged_name = _output_to_filename(merged_output)
     dst = output_dir / merged_name
+    if dst.exists() and not force and not ran_any_task:
+        if verbose:
+            logger.info(
+                "Skip postprocess – output exists and row already has task outputs: %s",
+                dst,
+            )
+        return warnings
     if dst.exists():
         warnings.append(
             f"Postprocess output will overwrite existing file and continue: {dst}"
@@ -800,12 +809,6 @@ def normalize_segment_args(args: argparse.Namespace) -> argparse.Namespace:
 
 def main(args: argparse.Namespace) -> None:
     setup_logging(verbose=getattr(args, "verbose", False))
-    tasks_config = load_segmentation_config(
-        getattr(args, "manifest", None),
-        base_path=Path(__file__).resolve().parents[1],
-    )
-    prefetch_totalsegmentator_models(tasks_config)
-
     output_path = Path(args.csv_path_out)
     error_path = Path(args.error_csv_path)
 
@@ -830,7 +833,20 @@ def main(args: argparse.Namespace) -> None:
     paths = resume_ctx["paths"]
     state = resume_ctx["state"]
     can_resume = resume_ctx["can_resume"]
+    already_finished = resume_ctx["already_finished"]
     ckpt = CheckpointManager(paths=paths, config=resume_ctx["config"])
+
+    if already_finished:
+        logger.info(
+            "Resume enabled and matching segment run already finished; skipping execution."
+        )
+        return
+
+    tasks_config = load_segmentation_config(
+        getattr(args, "manifest", None),
+        base_path=Path(__file__).resolve().parents[1],
+    )
+    prefetch_totalsegmentator_models(tasks_config)
 
     from imperandi.utils.multiprocessing import (
         apply_strategy_env,

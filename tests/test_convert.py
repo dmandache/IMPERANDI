@@ -286,4 +286,4 @@ def test_main_resume_uses_checkpoint_state(tmp_path, monkeypatch):
 
     args.resume = True
     convert_module.main(args)
-    assert work_sizes[-1] == 0
+    assert work_sizes == [1]

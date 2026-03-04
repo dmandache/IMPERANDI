@@ -536,7 +536,14 @@ def main(args):
     paths = resume_ctx["paths"]
     state = resume_ctx["state"]
     can_resume = resume_ctx["can_resume"]
+    already_finished = resume_ctx["already_finished"]
     ckpt = CheckpointManager(paths=paths, config=resume_ctx["config"])
+
+    if already_finished:
+        logger.info(
+            "Resume enabled and matching convert run already finished; skipping execution."
+        )
+        return
 
     if args.verbose:
         for p in args.csv_path:

@@ -115,12 +115,17 @@ def test_main_resume_skips_completed_rows(tmp_path, monkeypatch):
     pd.DataFrame([{"nifti_path": str(nifti)}]).to_csv(csv_path, index=False)
 
     calls = {"count": 0}
+    extractor_loads = {"count": 0}
 
     def fake_process_single_volume(idx, row, *, phase_extractor, verbose=False):
         calls["count"] += 1
         return idx, {"totalseg_phase": "portal"}, None
 
-    monkeypatch.setattr(phase_module, "_load_phase_extractor", lambda: (lambda _: {}))
+    def fake_load_phase_extractor():
+        extractor_loads["count"] += 1
+        return lambda _: {}
+
+    monkeypatch.setattr(phase_module, "_load_phase_extractor", fake_load_phase_extractor)
     monkeypatch.setattr(phase_module, "process_single_volume", fake_process_single_volume)
 
     args = argparse.Namespace(
@@ -140,3 +145,4 @@ def test_main_resume_skips_completed_rows(tmp_path, monkeypatch):
     args.resume = True
     phase_module.main(args)
     assert calls["count"] == 0
+    assert extractor_loads["count"] == 1
