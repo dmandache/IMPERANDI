@@ -44,8 +44,8 @@ def test_main_records_missing_image_path_error(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         radiomics_module,
-        "_create_radiomics_extractor",
-        lambda featureextractor_module, settings: object(),
+        "_create_radiomics_extractors",
+        lambda featureextractor_module, settings: {"all": object(), "shape": object(), "non_shape": object()},
     )
 
     args = argparse.Namespace(
@@ -94,8 +94,8 @@ def test_main_writes_output_and_error_csv(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         radiomics_module,
-        "_create_radiomics_extractor",
-        lambda featureextractor_module, settings: object(),
+        "_create_radiomics_extractors",
+        lambda featureextractor_module, settings: {"all": object(), "shape": object(), "non_shape": object()},
     )
 
     def fake_liver_minus_tumor(
@@ -103,7 +103,7 @@ def test_main_writes_output_and_error_csv(tmp_path, monkeypatch):
         liver_mask_path,
         tumor_mask_path,
         *,
-        extractor,
+        extractors,
         sitk_module,
         prefix,
     ):
@@ -156,8 +156,8 @@ def test_main_resume_skips_completed_rows(tmp_path, monkeypatch):
     monkeypatch.setattr(radiomics_module, "_load_radiomics_dependencies", fake_load_deps)
     monkeypatch.setattr(
         radiomics_module,
-        "_create_radiomics_extractor",
-        lambda featureextractor_module, settings: object(),
+        "_create_radiomics_extractors",
+        lambda featureextractor_module, settings: {"all": object(), "shape": object(), "non_shape": object()},
     )
 
     def fake_liver(*args, **kwargs):
@@ -209,8 +209,8 @@ def test_main_preserves_foreign_columns_from_existing_output(tmp_path, monkeypat
     )
     monkeypatch.setattr(
         radiomics_module,
-        "_create_radiomics_extractor",
-        lambda featureextractor_module, settings: object(),
+        "_create_radiomics_extractors",
+        lambda featureextractor_module, settings: {"all": object(), "shape": object(), "non_shape": object()},
     )
     monkeypatch.setattr(
         radiomics_module,
@@ -237,3 +237,256 @@ def test_main_preserves_foreign_columns_from_existing_output(tmp_path, monkeypat
     out_df = pd.read_csv(out_path)
     assert "foreign_col" in out_df.columns
     assert out_df.loc[0, "foreign_col"] == "keep"
+
+
+def test_project_radiomics_features_keeps_non_original_and_drops_diagnostics():
+    result = {
+        "original_firstorder_Mean": 1.0,
+        "wavelet-HLL_glcm_Contrast": 2.0,
+        "log-sigma-1-0-mm-3D_glrlm_RunLengthNonUniformity": 3.0,
+        "diagnostics_Image-original_Spacing": (1.0, 1.0, 1.0),
+    }
+    out = radiomics_module._project_radiomics_features(result, prefix="liver")
+    assert out == {
+        "liver_original_firstorder_Mean": 1.0,
+        "liver_wavelet-HLL_glcm_Contrast": 2.0,
+        "liver_log-sigma-1-0-mm-3D_glrlm_RunLengthNonUniformity": 3.0,
+    }
+
+
+def test_create_radiomics_extractors_configures_shape_and_non_shape():
+    class FakeExtractor:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.calls = []
+            self.featureClassNames = ["firstorder", "shape", "glcm"]
+
+        def disableAllFeatures(self):
+            self.calls.append(("disableAllFeatures",))
+
+        def enableFeatureClassByName(self, name):
+            self.calls.append(("enableFeatureClassByName", name))
+
+    class FakeFeatureExtractorModule:
+        RadiomicsFeatureExtractor = FakeExtractor
+
+    extractors = radiomics_module._create_radiomics_extractors(
+        FakeFeatureExtractorModule,
+        {"binWidth": 25},
+    )
+    assert set(extractors.keys()) == {"all", "shape", "non_shape"}
+
+    shape_calls = extractors["shape"].calls
+    assert ("disableAllFeatures",) in shape_calls
+    assert ("enableFeatureClassByName", "shape") in shape_calls
+
+    non_shape_calls = extractors["non_shape"].calls
+    assert ("disableAllFeatures",) in non_shape_calls
+    assert ("enableFeatureClassByName", "firstorder") in non_shape_calls
+    assert ("enableFeatureClassByName", "glcm") in non_shape_calls
+    assert ("enableFeatureClassByName", "shape") not in non_shape_calls
+
+
+def test_extract_radiomics_organ_minus_tumor_uses_shape_and_non_shape_extractors(tmp_path):
+    image_path = tmp_path / "img.nii.gz"
+    organ_path = tmp_path / "organ.nii.gz"
+    tumor_path = tmp_path / "tumor.nii.gz"
+    image_path.write_text("x")
+    organ_path.write_text("x")
+    tumor_path.write_text("x")
+
+    class FakeExtractor:
+        def __init__(self, result):
+            self.result = result
+            self.calls = []
+
+        def execute(self, image, mask):
+            self.calls.append((image, mask))
+            return dict(self.result)
+
+    extractors = {
+        "all": FakeExtractor({"original_firstorder_Mean": 99.0}),
+        "shape": FakeExtractor({"original_shape_VoxelVolume": 1.0}),
+        "non_shape": FakeExtractor({"wavelet-HLL_glcm_Contrast": 2.0}),
+    }
+
+    class FakeSitk:
+        sitkUInt8 = "uint8"
+
+        @staticmethod
+        def ReadImage(path):
+            return path
+
+        @staticmethod
+        def GetArrayViewFromImage(img):
+            if str(img) == str(tumor_path):
+                return [1]
+            return [1]
+
+        @staticmethod
+        def Cast(img, _dtype):
+            return img
+
+        @staticmethod
+        def NotEqual(img, _value):
+            return f"bin({img})"
+
+        @staticmethod
+        def Not(img):
+            return f"not({img})"
+
+        @staticmethod
+        def And(a, b):
+            return f"{a}&{b}"
+
+    old_resample = radiomics_module._resample_to_reference_if_needed
+    old_is_existing = radiomics_module._is_existing_path
+    try:
+        radiomics_module._resample_to_reference_if_needed = lambda mask, ref, sitk_module: mask
+        radiomics_module._is_existing_path = lambda value: bool(value)
+        features, msg = radiomics_module.extract_radiomics_organ_minus_tumor(
+            str(image_path),
+            str(organ_path),
+            str(tumor_path),
+            extractors=extractors,
+            sitk_module=FakeSitk,
+            prefix="liver",
+        )
+    finally:
+        radiomics_module._resample_to_reference_if_needed = old_resample
+        radiomics_module._is_existing_path = old_is_existing
+
+    assert msg is None
+    assert features["liver_original_shape_VoxelVolume"] == 1.0
+    assert features["liver_wavelet-HLL_glcm_Contrast"] == 2.0
+    assert len(extractors["shape"].calls) == 1
+    assert len(extractors["non_shape"].calls) == 1
+    assert len(extractors["all"].calls) == 0
+
+
+def test_extract_radiomics_organ_minus_tumor_missing_tumor_uses_all_extractor(tmp_path):
+    image_path = tmp_path / "img.nii.gz"
+    organ_path = tmp_path / "organ.nii.gz"
+    image_path.write_text("x")
+    organ_path.write_text("x")
+
+    class FakeExtractor:
+        def __init__(self, result):
+            self.result = result
+            self.calls = []
+
+        def execute(self, image, mask):
+            self.calls.append((image, mask))
+            return dict(self.result)
+
+    extractors = {
+        "all": FakeExtractor({"original_firstorder_Mean": 99.0}),
+        "shape": FakeExtractor({"original_shape_VoxelVolume": 1.0}),
+        "non_shape": FakeExtractor({"wavelet-HLL_glcm_Contrast": 2.0}),
+    }
+
+    class FakeSitk:
+        sitkUInt8 = "uint8"
+
+        @staticmethod
+        def ReadImage(path):
+            return path
+
+        @staticmethod
+        def GetArrayViewFromImage(_img):
+            return [1]
+
+        @staticmethod
+        def Cast(img, _dtype):
+            return img
+
+        @staticmethod
+        def NotEqual(img, _value):
+            return f"bin({img})"
+
+    old_is_existing = radiomics_module._is_existing_path
+    try:
+        radiomics_module._is_existing_path = (
+            lambda value: bool(value) and str(value) == str(organ_path)
+        )
+        features, msg = radiomics_module.extract_radiomics_organ_minus_tumor(
+            str(image_path),
+            str(organ_path),
+            None,
+            extractors=extractors,
+            sitk_module=FakeSitk,
+            prefix="liver",
+        )
+    finally:
+        radiomics_module._is_existing_path = old_is_existing
+
+    assert msg is None
+    assert features["liver_original_firstorder_Mean"] == 99.0
+    assert len(extractors["all"].calls) == 1
+    assert len(extractors["shape"].calls) == 0
+    assert len(extractors["non_shape"].calls) == 0
+
+
+def test_extract_radiomics_organ_minus_tumor_empty_tumor_uses_all_extractor(tmp_path):
+    image_path = tmp_path / "img.nii.gz"
+    organ_path = tmp_path / "organ.nii.gz"
+    tumor_path = tmp_path / "tumor.nii.gz"
+    image_path.write_text("x")
+    organ_path.write_text("x")
+    tumor_path.write_text("x")
+
+    class FakeExtractor:
+        def __init__(self, result):
+            self.result = result
+            self.calls = []
+
+        def execute(self, image, mask):
+            self.calls.append((image, mask))
+            return dict(self.result)
+
+    extractors = {
+        "all": FakeExtractor({"original_firstorder_Mean": 99.0}),
+        "shape": FakeExtractor({"original_shape_VoxelVolume": 1.0}),
+        "non_shape": FakeExtractor({"wavelet-HLL_glcm_Contrast": 2.0}),
+    }
+
+    class FakeSitk:
+        sitkUInt8 = "uint8"
+
+        @staticmethod
+        def ReadImage(path):
+            return path
+
+        @staticmethod
+        def GetArrayViewFromImage(img):
+            if str(img) == str(tumor_path):
+                return [0]
+            return [1]
+
+        @staticmethod
+        def Cast(img, _dtype):
+            return img
+
+        @staticmethod
+        def NotEqual(img, _value):
+            return f"bin({img})"
+
+    old_is_existing = radiomics_module._is_existing_path
+    try:
+        radiomics_module._is_existing_path = lambda value: bool(value)
+        features, msg = radiomics_module.extract_radiomics_organ_minus_tumor(
+            str(image_path),
+            str(organ_path),
+            str(tumor_path),
+            extractors=extractors,
+            sitk_module=FakeSitk,
+            prefix="liver",
+        )
+    finally:
+        radiomics_module._is_existing_path = old_is_existing
+
+    assert msg is None
+    assert features["liver_original_firstorder_Mean"] == 99.0
+    assert len(extractors["all"].calls) == 1
+    assert len(extractors["shape"].calls) == 0
+    assert len(extractors["non_shape"].calls) == 0

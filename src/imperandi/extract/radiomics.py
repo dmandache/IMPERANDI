@@ -49,8 +49,28 @@ def _load_radiomics_dependencies():
     return sitk, featureextractor
 
 
-def _create_radiomics_extractor(featureextractor_module, settings: Dict[str, Any]):
-    return featureextractor_module.RadiomicsFeatureExtractor(**settings)
+def _create_radiomics_extractors(featureextractor_module, settings: Dict[str, Any]):
+    def _new_extractor():
+        return featureextractor_module.RadiomicsFeatureExtractor(**settings)
+
+    extractor_all = _new_extractor()
+
+    extractor_shape = _new_extractor()
+    extractor_shape.disableAllFeatures()
+    extractor_shape.enableFeatureClassByName("shape")
+
+    extractor_non_shape = _new_extractor()
+    extractor_non_shape.disableAllFeatures()
+    for feature_class_name in extractor_non_shape.featureClassNames:
+        if str(feature_class_name).lower() == "shape":
+            continue
+        extractor_non_shape.enableFeatureClassByName(feature_class_name)
+
+    return {
+        "all": extractor_all,
+        "shape": extractor_shape,
+        "non_shape": extractor_non_shape,
+    }
 
 
 def add_radiomics_arguments(
@@ -226,20 +246,11 @@ def _is_existing_path(value: Any) -> bool:
     return bool(path) and Path(path).exists()
 
 
-def _extract_original_features(
-    result: Dict[str, Any],
-    *,
-    prefix: str,
-    include_shape: bool = True,
-    include_non_shape: bool = True,
-) -> Dict[str, Any]:
+def _project_radiomics_features(result: Dict[str, Any], *, prefix: str) -> Dict[str, Any]:
     features: Dict[str, Any] = {}
     for key, value in result.items():
         skey = str(key)
-        if not skey.startswith("original"):
-            continue
-        is_shape = skey.startswith("original_shape_")
-        if (is_shape and not include_shape) or ((not is_shape) and not include_non_shape):
+        if skey.startswith("diagnostics_"):
             continue
         features[f"{prefix}_{skey}"] = value
     return features
@@ -271,7 +282,7 @@ def extract_radiomics_safe(
     mask_path: Optional[str],
     prefix: str,
     *,
-    extractor,
+    extractors,
     sitk_module,
 ) -> Tuple[Dict[str, Any], Optional[str]]:
     if not _is_existing_path(mask_path):
@@ -283,8 +294,8 @@ def extract_radiomics_safe(
             return {}, f"{prefix} mask is empty: {mask_path}"
 
         image = sitk_module.ReadImage(image_path)
-        result = extractor.execute(image, mask_image)
-        features = _extract_original_features(result, prefix=prefix)
+        result = extractors["all"].execute(image, mask_image)
+        features = _project_radiomics_features(result, prefix=prefix)
         return features, None
     except Exception as exc:
         return {}, f"Error extracting {prefix} features: {exc}"
@@ -295,7 +306,7 @@ def extract_radiomics_organ_minus_tumor(
     organ_mask_path: Optional[str],
     tumor_mask_path: Optional[str],
     *,
-    extractor,
+    extractors,
     sitk_module,
     prefix: str = "liver",
 ) -> Tuple[Dict[str, Any], Optional[str]]:
@@ -315,13 +326,13 @@ def extract_radiomics_organ_minus_tumor(
         has_tumor = _is_existing_path(tumor_mask_path)
 
         if not has_tumor:
-            result = extractor.execute(img, organ_bin)
-            return _extract_original_features(result, prefix=prefix), None
+            result = extractors["all"].execute(img, organ_bin)
+            return _project_radiomics_features(result, prefix=prefix), None
 
         tumor = sitk_module.ReadImage(tumor_mask_path)
         if sitk_module.GetArrayViewFromImage(tumor).sum() == 0:
-            result = extractor.execute(img, organ_bin)
-            return _extract_original_features(result, prefix=prefix), None
+            result = extractors["all"].execute(img, organ_bin)
+            return _project_radiomics_features(result, prefix=prefix), None
 
         tumor = _resample_to_reference_if_needed(tumor, organ, sitk_module)
         tumor_bin = sitk_module.Cast(sitk_module.NotEqual(tumor, 0), sitk_module.sitkUInt8)
@@ -330,26 +341,14 @@ def extract_radiomics_organ_minus_tumor(
             sitk_module.Cast(sitk_module.Not(tumor_bin), sitk_module.sitkUInt8),
         )
 
-        shape_result = extractor.execute(img, organ_bin)
-        features = _extract_original_features(
-            shape_result,
-            prefix=prefix,
-            include_shape=True,
-            include_non_shape=False,
-        )
+        shape_result = extractors["shape"].execute(img, organ_bin)
+        features = _project_radiomics_features(shape_result, prefix=prefix)
 
         if sitk_module.GetArrayViewFromImage(organ_minus_tumor).sum() == 0:
             return features, f"{prefix}_minus_tumor mask is empty"
 
-        non_shape_result = extractor.execute(img, organ_minus_tumor)
-        features.update(
-            _extract_original_features(
-                non_shape_result,
-                prefix=prefix,
-                include_shape=False,
-                include_non_shape=True,
-            )
-        )
+        non_shape_result = extractors["non_shape"].execute(img, organ_minus_tumor)
+        features.update(_project_radiomics_features(non_shape_result, prefix=prefix))
         return features, None
     except Exception as exc:
         return {}, f"Error extracting {prefix}_minus_tumor: {exc}"
@@ -363,7 +362,7 @@ def _extract_row_features(
     row: pd.Series,
     mask_columns: list[str],
     *,
-    extractor,
+    extractors,
     sitk_module,
 ) -> Tuple[Dict[str, Any], list[str]]:
     image_path = row.get("nifti_path")
@@ -383,7 +382,7 @@ def _extract_row_features(
                 image_path,
                 mask_path,
                 prefix,
-                extractor=extractor,
+                extractors=extractors,
                 sitk_module=sitk_module,
             )
         else:
@@ -393,7 +392,7 @@ def _extract_row_features(
                 image_path,
                 mask_path,
                 tumor_path,
-                extractor=extractor,
+                extractors=extractors,
                 sitk_module=sitk_module,
                 prefix=prefix,
             )
@@ -439,7 +438,7 @@ def main(args: argparse.Namespace) -> None:
         return
 
     sitk_module, featureextractor_module = _load_radiomics_dependencies()
-    extractor = _create_radiomics_extractor(featureextractor_module, DEFAULT_SETTINGS)
+    extractors = _create_radiomics_extractors(featureextractor_module, DEFAULT_SETTINGS)
 
     if can_resume and paths.main_checkpoint_path.exists():
         logger.info("Resuming radiomics from checkpoint: %s", paths.main_checkpoint_path)
@@ -498,7 +497,7 @@ def main(args: argparse.Namespace) -> None:
         features, messages = _extract_row_features(
             row,
             mask_columns,
-            extractor=extractor,
+            extractors=extractors,
             sitk_module=sitk_module,
         )
 
