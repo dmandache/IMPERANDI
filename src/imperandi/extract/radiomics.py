@@ -284,19 +284,19 @@ def extract_radiomics_safe(
 
 def extract_radiomics_organ_minus_tumor(
     image_path: str,
-    liver_mask_path: Optional[str],
+    organ_mask_path: Optional[str],
     tumor_mask_path: Optional[str],
     *,
     extractor,
     sitk_module,
     prefix: str = "liver",
 ) -> Tuple[Dict[str, Any], Optional[str]]:
-    if not liver_mask_path or not Path(liver_mask_path).exists():
+    if not organ_mask_path or not Path(organ_mask_path).exists():
         return {}, f"missing {prefix} mask"
 
     try:
         img = sitk_module.ReadImage(image_path)
-        organ = sitk_module.ReadImage(liver_mask_path)
+        organ = sitk_module.ReadImage(organ_mask_path)
 
         if sitk_module.GetArrayViewFromImage(organ).sum() == 0:
             return {}, f"empty {prefix} mask"
@@ -494,7 +494,7 @@ def main(args: argparse.Namespace) -> None:
         df = filter_df(df)
     mask_columns = _get_mask_columns(df)
 
-    logger.info("Extracting radiomics from %d rows", len(df))
+    logger.info("Extracting radiomics from %d rows and ROIs: %s", len(df), mask_columns)
     completed_indices: set[int] = set()
     if can_resume:
         completed_indices = {
