@@ -135,8 +135,10 @@ def test_prepare_resume_context_ignores_resume_checkpoint_flags_by_default(tmp_p
 
 
 def test_prepare_resume_context_marks_already_finished(tmp_path):
+    csv_in = tmp_path / "input.csv"
     output = tmp_path / "out.csv"
     err = tmp_path / "errors.csv"
+    pd.DataFrame({"a": [1]}).to_csv(csv_in, index=False)
     args = argparse.Namespace(
         checkpoint_every_rows=1,
         checkpoint_every_sec=1,
@@ -146,7 +148,7 @@ def test_prepare_resume_context_marks_already_finished(tmp_path):
     ctx = prepare_resume_context(
         args=args,
         command="convert",
-        inputs=[output],
+        inputs=[csv_in],
         output_path=output,
         error_path=err,
     )
@@ -157,7 +159,7 @@ def test_prepare_resume_context_marks_already_finished(tmp_path):
     resumed = prepare_resume_context(
         args=args,
         command="convert",
-        inputs=[output],
+        inputs=[csv_in],
         output_path=output,
         error_path=err,
     )

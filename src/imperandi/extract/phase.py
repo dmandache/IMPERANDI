@@ -155,43 +155,6 @@ def process_single_volume(
     return idx, normalized, None
 
 
-def extract_phase_volumes(
-    df: pd.DataFrame,
-    *,
-    verbose: bool,
-    phase_extractor: Callable[[Any], Dict[str, Any]],
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    if "nifti_path" not in df.columns:
-        unnamed = [c for c in df.columns if c.startswith("Unnamed:")]
-        if unnamed:
-            df = df.drop(columns=unnamed)
-    if "nifti_path" not in df.columns:
-        raise KeyError("column 'nifti_path' missing")
-
-    errors = []
-    iterator = tqdm(df.iterrows(), total=len(df), desc="Phase")
-
-    for idx, row in iterator:
-        _, phase_info, err_msg = process_single_volume(
-            idx,
-            row.to_dict(),
-            phase_extractor=phase_extractor,
-            verbose=verbose,
-        )
-        if phase_info:
-            for key, value in phase_info.items():
-                df.at[idx, key] = value
-            continue
-
-        error_row = row.to_dict()
-        error_row["error_message"] = err_msg or "unknown"
-        errors.append(error_row)
-        if verbose and err_msg:
-            logger.warning("Row %s failed: %s", idx, err_msg)
-
-    return df, pd.DataFrame(errors)
-
-
 def main(args: argparse.Namespace) -> None:
     output_path = Path(args.csv_path_out)
     error_path = Path(args.error_csv_path)
