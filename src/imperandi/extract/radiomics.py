@@ -218,6 +218,14 @@ def mask_has_voxels(mask, sitk_module) -> bool:
     return bool(sitk_module.GetArrayViewFromImage(mask).sum() > 0)
 
 
+def _is_existing_path(value: Any) -> bool:
+    """Return True only for non-empty string paths that exist on disk."""
+    if not isinstance(value, str):
+        return False
+    path = value.strip()
+    return bool(path) and Path(path).exists()
+
+
 def _extract_original_features(
     result: Dict[str, Any],
     *,
@@ -266,7 +274,7 @@ def extract_radiomics_safe(
     extractor,
     sitk_module,
 ) -> Tuple[Dict[str, Any], Optional[str]]:
-    if not mask_path or not Path(mask_path).exists():
+    if not _is_existing_path(mask_path):
         return {}, f"{prefix} mask path is missing: {mask_path}"
 
     try:
@@ -291,7 +299,7 @@ def extract_radiomics_organ_minus_tumor(
     sitk_module,
     prefix: str = "liver",
 ) -> Tuple[Dict[str, Any], Optional[str]]:
-    if not organ_mask_path or not Path(organ_mask_path).exists():
+    if not _is_existing_path(organ_mask_path):
         return {}, f"missing {prefix} mask"
 
     try:
@@ -304,7 +312,7 @@ def extract_radiomics_organ_minus_tumor(
         organ_bin = sitk_module.Cast(
             sitk_module.NotEqual(organ, 0), sitk_module.sitkUInt8
         )
-        has_tumor = bool(tumor_mask_path and Path(tumor_mask_path).exists())
+        has_tumor = _is_existing_path(tumor_mask_path)
 
         if not has_tumor:
             result = extractor.execute(img, organ_bin)
