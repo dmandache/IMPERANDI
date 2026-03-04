@@ -481,6 +481,7 @@ def segment_volume(
 ) -> List[str]:
     """Run segmentation tasks and optional post‐processing."""
     warnings: List[str] = []
+    ran_any_task = False
     tasks = tasks_config.get("tasks", [])
     if not tasks:
         raise ValueError("No tasks provided in config")
@@ -524,6 +525,7 @@ def segment_volume(
                 task=task_name,
                 **extra,
             )
+            ran_any_task = True
         except Exception as exc:
             logger.error(
                 "Segmentation failed on %s (%s): %s", nifti_path, task_name, exc
@@ -553,6 +555,13 @@ def segment_volume(
     merged_output = str(postprocess.get("output", "merged")).strip() or "merged"
     merged_name = _output_to_filename(merged_output)
     dst = output_dir / merged_name
+    if dst.exists() and not force and not ran_any_task:
+        if verbose:
+            logger.info(
+                "Skip postprocess – output exists and row already has task outputs: %s",
+                dst,
+            )
+        return warnings
     if dst.exists():
         warnings.append(
             f"Postprocess output will overwrite existing file and continue: {dst}"

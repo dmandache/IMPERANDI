@@ -178,6 +178,87 @@ def test_segment_volume_calls_postprocess(tmp_path, monkeypatch):
     assert set(calls["mask_files"]) == {"a.nii.gz", "b.nii.gz"}
 
 
+def test_segment_volume_skips_postprocess_when_outputs_already_checkpointed(tmp_path, monkeypatch):
+    nifti = tmp_path / "vol.nii.gz"
+    nifti.write_text("nifti")
+    (tmp_path / "a.nii.gz").write_text("mask")
+    (tmp_path / "b.nii.gz").write_text("mask")
+    (tmp_path / "merged.nii.gz").write_text("merged")
+
+    tasks_config = {
+        "backend": "totalsegmentator",
+        "tasks": [
+            {"key": "a", "task": "task_a", "output": "a.nii.gz", "extra": {}},
+            {"key": "b", "task": "task_b", "output": "b.nii.gz", "extra": {}},
+        ],
+        "postprocess": {
+            "merge_keys": ["a", "b"],
+            "output": "merged.nii.gz",
+        },
+    }
+
+    backend = DummyBackend({"task_a": "a.nii.gz", "task_b": "b.nii.gz"})
+    merge_calls = {"count": 0}
+
+    def fake_clean(*args, **kwargs):
+        merge_calls["count"] += 1
+        return True
+
+    monkeypatch.setattr(segment_module, "clean_and_merge_masks", fake_clean)
+
+    warnings = segment_module.segment_volume(
+        nifti,
+        tmp_path,
+        tasks_config,
+        verbose=False,
+        force=False,
+        backend=backend,
+    )
+
+    assert merge_calls["count"] == 0
+    assert warnings == []
+
+
+def test_segment_volume_runs_postprocess_when_any_task_ran(tmp_path, monkeypatch):
+    nifti = tmp_path / "vol.nii.gz"
+    nifti.write_text("nifti")
+    (tmp_path / "a.nii.gz").write_text("mask")
+    (tmp_path / "merged.nii.gz").write_text("merged")
+
+    tasks_config = {
+        "backend": "totalsegmentator",
+        "tasks": [
+            {"key": "a", "task": "task_a", "output": "a.nii.gz", "extra": {}},
+            {"key": "b", "task": "task_b", "output": "b.nii.gz", "extra": {}},
+        ],
+        "postprocess": {
+            "merge_keys": ["a", "b"],
+            "output": "merged.nii.gz",
+        },
+    }
+
+    backend = DummyBackend({"task_a": "a.nii.gz", "task_b": "b.nii.gz"})
+    merge_calls = {"count": 0}
+
+    def fake_clean(*args, **kwargs):
+        merge_calls["count"] += 1
+        return True
+
+    monkeypatch.setattr(segment_module, "clean_and_merge_masks", fake_clean)
+
+    warnings = segment_module.segment_volume(
+        nifti,
+        tmp_path,
+        tasks_config,
+        verbose=False,
+        force=False,
+        backend=backend,
+    )
+
+    assert merge_calls["count"] == 1
+    assert any("overwrite existing file" in message for message in warnings)
+
+
 def test_segment_volume_warn_only_when_merge_missing(tmp_path, monkeypatch):
     nifti = tmp_path / "vol.nii.gz"
     nifti.write_text("nifti")
