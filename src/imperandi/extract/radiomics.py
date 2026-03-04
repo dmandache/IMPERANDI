@@ -405,52 +405,6 @@ def _extract_row_features(
     return features, messages
 
 
-def extract_radiomics_from_dataframe(
-    df: pd.DataFrame,
-    *,
-    extractor,
-    sitk_module,
-    verbose: bool = False,
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    all_features = []
-    errors = []
-    mask_columns = _get_mask_columns(df)
-
-    iterator = df.iterrows()
-    if verbose:
-        iterator = tqdm(iterator, total=len(df), desc="Radiomics")
-
-    for idx, row in iterator:
-        features, messages = _extract_row_features(
-            row,
-            mask_columns,
-            extractor=extractor,
-            sitk_module=sitk_module,
-        )
-
-        if messages and "CT image path is missing or invalid" in messages[0]:
-            error_row = row.to_dict()
-            error_row["error_message"] = messages[0]
-            errors.append(error_row)
-            all_features.append({})
-            continue
-
-        all_features.append(features)
-        if not features:
-            error_row = row.to_dict()
-            error_row["error_message"] = (
-                " | ".join(messages) if messages else "no features extracted"
-            )
-            errors.append(error_row)
-
-    features_df = pd.DataFrame(all_features)
-    df_features = pd.concat(
-        [df.reset_index(drop=True), features_df.reset_index(drop=True)],
-        axis=1,
-    )
-    return df_features, pd.DataFrame(errors)
-
-
 def main(args: argparse.Namespace) -> None:
     output_path = Path(args.csv_path_out)
     error_path = Path(args.error_csv_path)

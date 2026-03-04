@@ -33,18 +33,40 @@ def test_normalize_radiomics_args_defaults(tmp_path):
     assert not hasattr(out, "csv_path_opt")
 
 
-def test_extract_radiomics_from_dataframe_records_missing_image():
-    df = pd.DataFrame([{"nifti_path": "missing_file.nii.gz"}])
-    df_out, df_err = radiomics_module.extract_radiomics_from_dataframe(
-        df,
-        extractor=object(),
-        sitk_module=object(),
-        verbose=False,
+def test_main_records_missing_image_path_error(tmp_path, monkeypatch):
+    csv_path = tmp_path / "nifti_index.csv"
+    pd.DataFrame([{"nifti_path": "missing_file.nii.gz"}]).to_csv(csv_path, index=False)
+
+    monkeypatch.setattr(
+        radiomics_module,
+        "_load_radiomics_dependencies",
+        lambda: (object(), object()),
+    )
+    monkeypatch.setattr(
+        radiomics_module,
+        "_create_radiomics_extractor",
+        lambda featureextractor_module, settings: object(),
     )
 
-    assert len(df_out) == 1
-    assert len(df_err) == 1
-    assert "missing or invalid" in df_err.loc[0, "error_message"]
+    args = argparse.Namespace(
+        csv_path=str(csv_path),
+        csv_path_out=str(tmp_path / "out.csv"),
+        error_csv_path=str(tmp_path / "errors.csv"),
+        skip_filter=True,
+        verbose=False,
+        checkpoint_every_rows=1,
+        checkpoint_every_sec=3600,
+        resume=False,
+        strict_resume=False,
+    )
+
+    radiomics_module.main(args)
+
+    out_df = pd.read_csv(args.csv_path_out)
+    err_df = pd.read_csv(args.error_csv_path)
+    assert len(out_df) == 1
+    assert len(err_df) == 1
+    assert "missing or invalid" in err_df.loc[0, "error_message"]
 
 
 def test_main_writes_output_and_error_csv(tmp_path, monkeypatch):
