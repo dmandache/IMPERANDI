@@ -16,6 +16,7 @@ from imperandi.utils.checkpoint_cli import add_checkpoint_arguments
 from imperandi.utils.run_state import (
     atomic_write_csv,
     CheckpointManager,
+    merge_with_existing_output,
     prepare_resume_context,
 )
 
@@ -293,6 +294,12 @@ def main(args: argparse.Namespace) -> None:
 
     _checkpoint_write(force=True)
     df_out = df.drop(columns=["_source_idx"], errors="ignore")
+    df_out = merge_with_existing_output(
+        df_out,
+        args.csv_path_out,
+        preferred_keys=["nifti_path", "_source_idx"],
+        strict=True,
+    )
     atomic_write_csv(df_out, args.csv_path_out, index=False)
     logger.info("Wrote main table -> %s", args.csv_path_out)
 

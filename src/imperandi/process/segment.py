@@ -44,6 +44,7 @@ from imperandi.utils.checkpoint_cli import add_checkpoint_arguments
 from imperandi.utils.run_state import (
     atomic_write_csv,
     CheckpointManager,
+    merge_with_existing_output,
     prepare_resume_context,
 )
 
@@ -897,13 +898,17 @@ def main(args: argparse.Namespace) -> None:
     df = df.drop_duplicates("nifti_path").copy()
     output_to_column = build_output_column_map(tasks_config.get("tasks", []))
     for column_name in list(dict.fromkeys(output_to_column.values())):
-        df[column_name] = None
+        if column_name not in df.columns:
+            df[column_name] = None
     if tasks_config.get("postprocess"):
         merged_output = str(
             tasks_config["postprocess"].get("output", "merged")
         ).strip() or "merged"
-        df[_output_to_column(merged_output)] = None
-    df["warning_message"] = None
+        merged_col = _output_to_column(merged_output)
+        if merged_col not in df.columns:
+            df[merged_col] = None
+    if "warning_message" not in df.columns:
+        df["warning_message"] = None
     logged_warning_keys: set[str] = set()
 
     completed_indices: set[int] = set()
@@ -1289,6 +1294,12 @@ def main(args: argparse.Namespace) -> None:
     _checkpoint_write(force=True)
 
     # --- write output tables ---------------------------------------------------
+    df = merge_with_existing_output(
+        df,
+        args.csv_path_out,
+        preferred_keys=["nifti_path", "_source_idx"],
+        strict=True,
+    )
     atomic_write_csv(df, args.csv_path_out, index=False)
     logger.info("Wrote main table → %s", args.csv_path_out)
 

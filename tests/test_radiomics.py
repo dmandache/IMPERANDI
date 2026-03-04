@@ -164,3 +164,54 @@ def test_main_resume_skips_completed_rows(tmp_path, monkeypatch):
     radiomics_module.main(args)
     assert calls["count"] == 0
     assert dep_calls["count"] == 1
+
+
+def test_main_preserves_foreign_columns_from_existing_output(tmp_path, monkeypatch):
+    nifti = tmp_path / "good.nii.gz"
+    mask = tmp_path / "good_mask.nii.gz"
+    nifti.write_text("nifti")
+    mask.write_text("mask")
+    csv_path = tmp_path / "nifti_index.csv"
+    out_path = tmp_path / "out.csv"
+    pd.DataFrame([{"nifti_path": str(nifti), "mask_liver": str(mask)}]).to_csv(
+        csv_path, index=False
+    )
+    pd.DataFrame([{"nifti_path": str(nifti), "foreign_col": "keep"}]).to_csv(
+        out_path, index=False
+    )
+
+    monkeypatch.setattr(
+        radiomics_module,
+        "_load_radiomics_dependencies",
+        lambda: (object(), object()),
+    )
+    monkeypatch.setattr(
+        radiomics_module,
+        "_create_radiomics_extractor",
+        lambda featureextractor_module, settings: object(),
+    )
+    monkeypatch.setattr(
+        radiomics_module,
+        "extract_radiomics_organ_minus_tumor",
+        lambda *a, **k: ({"liver_original_shape_VoxelVolume": 1.0}, None),
+    )
+    monkeypatch.setattr(
+        radiomics_module, "extract_radiomics_safe", lambda *a, **k: ({}, None)
+    )
+
+    args = argparse.Namespace(
+        csv_path=str(csv_path),
+        csv_path_out=str(out_path),
+        error_csv_path=str(tmp_path / "errors.csv"),
+        skip_filter=True,
+        verbose=False,
+        checkpoint_every_rows=1,
+        checkpoint_every_sec=3600,
+        resume=False,
+        strict_resume=False,
+    )
+    radiomics_module.main(args)
+
+    out_df = pd.read_csv(out_path)
+    assert "foreign_col" in out_df.columns
+    assert out_df.loc[0, "foreign_col"] == "keep"

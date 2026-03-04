@@ -9,6 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import pandas as pd
+import pytest
 from unittest.mock import MagicMock
 
 from imperandi.process import convert as convert_module
@@ -287,3 +288,111 @@ def test_main_resume_uses_checkpoint_state(tmp_path, monkeypatch):
     args.resume = True
     convert_module.main(args)
     assert work_sizes == [1]
+
+
+def test_main_preserves_foreign_columns_from_existing_output(tmp_path, monkeypatch):
+    csv_path = tmp_path / "dicom_index.csv"
+    out_path = tmp_path / "out.csv"
+    pd.DataFrame(
+        [
+            {
+                "dicom_path": ["a.dcm"],
+                "series_id": "S1",
+                "study_id": "ST1",
+                "patient_key": "P1",
+                "Modality": "CT",
+            }
+        ]
+    ).to_csv(csv_path, index=False)
+    pd.DataFrame(
+        [{"series_id": "S1", "foreign_col": "keep"}]
+    ).to_csv(out_path, index=False)
+
+    def fake_convert(work_df, output_dir, verbose, num_workers, on_result):
+        for i in range(len(work_df)):
+            on_result(i, Path(output_dir) / "scan.nii.gz", None, "ok")
+        return work_df, pd.DataFrame()
+
+    monkeypatch.setattr(convert_module, "convert_dicom_to_nifti_parallel", fake_convert)
+    monkeypatch.setattr(
+        convert_module,
+        "materialize_archive_dicom_paths",
+        lambda df, session: (df, pd.DataFrame()),
+    )
+    monkeypatch.setattr(convert_module, "report_volumes", lambda *_: None)
+    monkeypatch.setattr(convert_module, "report_change", lambda *_: None)
+
+    args = argparse.Namespace(
+        csv_path=[str(csv_path)],
+        output_dir=str(tmp_path / "nifti"),
+        csv_path_out=str(out_path),
+        error_csv_path=str(tmp_path / "err.csv"),
+        verbose=False,
+        dry_run=False,
+        num_workers=1,
+        archive_max_depth=3,
+        archive_cache_dir=None,
+        keep_archive_cache=False,
+        resume=False,
+        strict_resume=False,
+        checkpoint_every_rows=1,
+        checkpoint_every_sec=3600,
+        manifest=None,
+    )
+    convert_module.main(args)
+    out_df = pd.read_csv(out_path)
+    assert "foreign_col" in out_df.columns
+    assert out_df.loc[0, "foreign_col"] == "keep"
+
+
+def test_main_fails_fast_on_unsafe_shared_output_alignment(tmp_path, monkeypatch):
+    csv_path = tmp_path / "dicom_index.csv"
+    out_path = tmp_path / "out.csv"
+    pd.DataFrame(
+        [
+            {
+                "dicom_path": ["a.dcm"],
+                "series_id": "S1",
+                "study_id": "ST1",
+                "patient_key": "P1",
+                "Modality": "CT",
+            }
+        ]
+    ).to_csv(csv_path, index=False)
+    pd.DataFrame(
+        [{"foreign_col": "x"}, {"foreign_col": "y"}]
+    ).to_csv(out_path, index=False)
+
+    def fake_convert(work_df, output_dir, verbose, num_workers, on_result):
+        for i in range(len(work_df)):
+            on_result(i, Path(output_dir) / "scan.nii.gz", None, "ok")
+        return work_df, pd.DataFrame()
+
+    monkeypatch.setattr(convert_module, "convert_dicom_to_nifti_parallel", fake_convert)
+    monkeypatch.setattr(
+        convert_module,
+        "materialize_archive_dicom_paths",
+        lambda df, session: (df, pd.DataFrame()),
+    )
+    monkeypatch.setattr(convert_module, "report_volumes", lambda *_: None)
+    monkeypatch.setattr(convert_module, "report_change", lambda *_: None)
+
+    args = argparse.Namespace(
+        csv_path=[str(csv_path)],
+        output_dir=str(tmp_path / "nifti"),
+        csv_path_out=str(out_path),
+        error_csv_path=str(tmp_path / "err.csv"),
+        verbose=False,
+        dry_run=False,
+        num_workers=1,
+        archive_max_depth=3,
+        archive_cache_dir=None,
+        keep_archive_cache=False,
+        resume=False,
+        strict_resume=False,
+        checkpoint_every_rows=1,
+        checkpoint_every_sec=3600,
+        manifest=None,
+    )
+    with pytest.raises(ValueError, match="Cannot safely preserve existing output columns"):
+        convert_module.main(args)

@@ -25,6 +25,7 @@ from imperandi.utils.checkpoint_cli import add_checkpoint_arguments
 from imperandi.utils.run_state import (
     atomic_write_csv,
     CheckpointManager,
+    merge_with_existing_output,
     prepare_resume_context,
 )
 
@@ -659,6 +660,12 @@ def main(args):
     df_success = df_all[df_all["nifti_path"].notna()].copy()
     if "_source_idx" in df_success.columns:
         df_success = df_success.drop(columns=["_source_idx"], errors="ignore")
+    df_success = merge_with_existing_output(
+        df_success,
+        args.csv_path_out,
+        preferred_keys=["dicom_path", "series_path", "series_id", "nifti_path", "_source_idx"],
+        strict=True,
+    )
     atomic_write_csv(df_success, args.csv_path_out, index=False)
     if errors_by_idx:
         df_err = pd.DataFrame(list(errors_by_idx.values())).drop(

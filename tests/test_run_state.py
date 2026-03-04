@@ -11,6 +11,7 @@ from imperandi.utils.run_state import (
     CheckpointManager,
     build_checkpoint_paths,
     load_state,
+    merge_with_existing_output,
     prepare_resume_context,
 )
 
@@ -236,3 +237,90 @@ def test_prepare_resume_context_disables_resume_without_checkpoint(tmp_path):
     )
     assert not resumed["can_resume"]
     assert not resumed["already_finished"]
+
+
+def test_merge_with_existing_output_passthrough_when_missing(tmp_path):
+    new_df = pd.DataFrame({"nifti_path": ["a.nii.gz"], "x": [1]})
+    out = merge_with_existing_output(
+        new_df,
+        tmp_path / "missing.csv",
+        preferred_keys=["nifti_path"],
+    )
+    pd.testing.assert_frame_equal(out, new_df)
+
+
+def test_merge_with_existing_output_keyed_merge_preserves_foreign_columns(tmp_path):
+    output = tmp_path / "out.csv"
+    pd.DataFrame(
+        {
+            "nifti_path": ["a.nii.gz", "b.nii.gz"],
+            "foreign_col": ["keep-a", "keep-b"],
+        }
+    ).to_csv(output, index=False)
+    new_df = pd.DataFrame(
+        {
+            "nifti_path": ["a.nii.gz", "b.nii.gz"],
+            "local_col": [1, 2],
+        }
+    )
+
+    out = merge_with_existing_output(
+        new_df,
+        output,
+        preferred_keys=["nifti_path"],
+    )
+    assert "foreign_col" in out.columns
+    assert out["foreign_col"].tolist() == ["keep-a", "keep-b"]
+
+
+def test_merge_with_existing_output_falls_back_to_index_when_lengths_match(tmp_path):
+    output = tmp_path / "out.csv"
+    pd.DataFrame({"foreign_col": ["a", "b"]}).to_csv(output, index=False)
+    new_df = pd.DataFrame({"local_col": [1, 2]})
+
+    out = merge_with_existing_output(
+        new_df,
+        output,
+        preferred_keys=["nifti_path"],
+    )
+    assert out["foreign_col"].tolist() == ["a", "b"]
+
+
+def test_merge_with_existing_output_raises_on_unsafe_alignment(tmp_path):
+    output = tmp_path / "out.csv"
+    pd.DataFrame({"foreign_col": ["a", "b", "c"]}).to_csv(output, index=False)
+    new_df = pd.DataFrame({"local_col": [1, 2]})
+
+    try:
+        merge_with_existing_output(
+            new_df,
+            output,
+            preferred_keys=["nifti_path"],
+            strict=True,
+        )
+        assert False, "Expected ValueError for unsafe merge"
+    except ValueError as exc:
+        assert "Cannot safely preserve existing output columns" in str(exc)
+
+
+def test_merge_with_existing_output_duplicate_key_uses_index_fallback(tmp_path):
+    output = tmp_path / "out.csv"
+    pd.DataFrame(
+        {
+            "nifti_path": ["a.nii.gz", "a.nii.gz"],
+            "foreign_col": ["keep-1", "keep-2"],
+        }
+    ).to_csv(output, index=False)
+    new_df = pd.DataFrame(
+        {
+            "nifti_path": ["x.nii.gz", "y.nii.gz"],
+            "local_col": [1, 2],
+        }
+    )
+
+    out = merge_with_existing_output(
+        new_df,
+        output,
+        preferred_keys=["nifti_path"],
+    )
+    assert out["foreign_col"].tolist() == ["keep-1", "keep-2"]

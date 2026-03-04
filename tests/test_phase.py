@@ -146,3 +146,37 @@ def test_main_resume_skips_completed_rows(tmp_path, monkeypatch):
     phase_module.main(args)
     assert calls["count"] == 0
     assert extractor_loads["count"] == 1
+
+
+def test_main_preserves_foreign_columns_from_existing_output(tmp_path, monkeypatch):
+    nifti = tmp_path / "valid.nii.gz"
+    nifti.write_text("nifti")
+    csv_path = tmp_path / "nifti_index.csv"
+    out_path = tmp_path / "out.csv"
+    pd.DataFrame([{"nifti_path": str(nifti)}]).to_csv(csv_path, index=False)
+    pd.DataFrame(
+        [{"nifti_path": str(nifti), "foreign_col": "keep-me"}]
+    ).to_csv(out_path, index=False)
+
+    monkeypatch.setattr(phase_module.nib, "load", lambda _: object())
+    monkeypatch.setattr(
+        phase_module,
+        "_load_phase_extractor",
+        lambda: (lambda _, quiet=True: {"phase": "portal"}),
+    )
+
+    args = argparse.Namespace(
+        csv_path=str(csv_path),
+        csv_path_out=str(out_path),
+        error_csv_path=str(tmp_path / "errors.csv"),
+        verbose=False,
+        checkpoint_every_rows=1,
+        checkpoint_every_sec=3600,
+        resume=False,
+        strict_resume=False,
+    )
+    phase_module.main(args)
+
+    out_df = pd.read_csv(out_path)
+    assert "foreign_col" in out_df.columns
+    assert out_df.loc[0, "foreign_col"] == "keep-me"

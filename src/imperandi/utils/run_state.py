@@ -252,6 +252,62 @@ def prepare_resume_context(
     }
 
 
+def _is_safe_unique_key(df: pd.DataFrame, key: str) -> bool:
+    if key not in df.columns:
+        return False
+    series = df[key]
+    if series.empty:
+        return True
+    non_null = series.dropna()
+    return bool(non_null.is_unique)
+
+
+def merge_with_existing_output(
+    new_df: pd.DataFrame,
+    output_path: str | Path,
+    preferred_keys: Sequence[str],
+    *,
+    strict: bool = True,
+) -> pd.DataFrame:
+    p = Path(output_path)
+    if not p.exists():
+        return new_df
+
+    existing_df = pd.read_csv(p)
+    if existing_df.empty or new_df.empty:
+        return new_df
+
+    foreign_columns = [c for c in existing_df.columns if c not in new_df.columns]
+    if not foreign_columns:
+        return new_df
+
+    merged_df = new_df.copy()
+    for key in preferred_keys:
+        if (
+            key in merged_df.columns
+            and key in existing_df.columns
+            and _is_safe_unique_key(merged_df, key)
+            and _is_safe_unique_key(existing_df, key)
+        ):
+            right = existing_df[[key, *foreign_columns]].copy()
+            return merged_df.merge(right, on=key, how="left")
+
+    if len(existing_df) == len(merged_df):
+        for col in foreign_columns:
+            merged_df[col] = existing_df[col].values
+        return merged_df
+
+    if strict:
+        tried = ", ".join(preferred_keys) if preferred_keys else "(none)"
+        raise ValueError(
+            "Cannot safely preserve existing output columns while writing "
+            f"{p}: no unique shared key matched among [{tried}] and row counts differ "
+            f"(new={len(merged_df)}, existing={len(existing_df)})."
+        )
+
+    return merged_df
+
+
 class CheckpointManager:
     def __init__(self, *, paths: CheckpointPaths, config: CheckpointConfig) -> None:
         self.paths = paths
