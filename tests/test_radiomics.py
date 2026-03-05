@@ -536,6 +536,44 @@ def test_create_radiomics_extractors_supports_settings_path_and_manifest_dict():
     assert dict_extractors["all"].kwargs == {}
 
 
+def test_create_radiomics_extractors_preserves_multiple_image_types_from_manifest_dict():
+    class FakeExtractor:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+            self.calls = []
+            self.featureClassNames = ["firstorder", "shape"]
+
+        def disableAllFeatures(self):
+            self.calls.append(("disableAllFeatures",))
+
+        def enableFeatureClassByName(self, name):
+            self.calls.append(("enableFeatureClassByName", name))
+
+    class FakeFeatureExtractorModule:
+        RadiomicsFeatureExtractor = FakeExtractor
+
+    manifest_like_settings = {
+        "setting": {
+            "binWidth": 25,
+            "resampledPixelSpacing": [1, 1, 1],
+        },
+        "imageType": {
+            "Original": {},
+            "Wavelet": {},
+            "LoG": {"sigma": [1.0, 2.0, 3.0]},
+        },
+    }
+    extractors = radiomics_module._create_radiomics_extractors(
+        FakeFeatureExtractorModule,
+        settings_dict=manifest_like_settings,
+    )
+
+    assert extractors["all"].args == (manifest_like_settings,)
+    assert extractors["shape"].args == (manifest_like_settings,)
+    assert extractors["non_shape"].args == (manifest_like_settings,)
+
+
 def test_create_radiomics_extractors_rejects_multiple_sources():
     class FakeFeatureExtractorModule:
         class RadiomicsFeatureExtractor:
