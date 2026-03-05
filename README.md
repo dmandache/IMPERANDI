@@ -213,8 +213,7 @@ prefers manifest `radiomics` settings when that section exists.
 ## Core outputs
 
 - `parse`:
-  - `dicom_index.csv` (raw extracted selected tags)
-  - `dicom_index.csv` (resolved IDs and normalized metadata)
+  - `dicom_index.csv` (resolved IDs and selected DICOM tags)
   - optional `dicom_tags_snapshot.ndjson` (full recursive tags on a sampled subset, via `--snapshot_tags`)
 - `clean`:
   - cleaned cohort table (default `<input>_clean.csv`)
