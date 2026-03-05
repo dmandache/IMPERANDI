@@ -7,8 +7,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import argparse
 import logging
 import pandas as pd
+import pytest
 
 from imperandi.extract import radiomics as radiomics_module
+
+
+def _fake_extractors_factory(*args, **kwargs):
+    return {"all": object(), "shape": object(), "non_shape": object()}
 
 
 def test_normalize_radiomics_args_defaults(tmp_path):
@@ -21,6 +26,8 @@ def test_normalize_radiomics_args_defaults(tmp_path):
         csv_path_out=None,
         error_csv_path=None,
         skip_filter=False,
+        manifest=None,
+        pyradiomics_settings=None,
         verbose=False,
         dry_run=False,
     )
@@ -30,8 +37,130 @@ def test_normalize_radiomics_args_defaults(tmp_path):
     assert out.csv_path == str(csv_path.resolve())
     assert out.csv_path_out == str(csv_path.parent / "nifti_index_radiomics.csv")
     assert out.error_csv_path == str(csv_path.parent / "radiomics_errors.csv")
+    assert out.pyradiomics_settings is None
     assert not hasattr(out, "csv_path_pos")
     assert not hasattr(out, "csv_path_opt")
+
+
+def test_normalize_radiomics_args_validates_pyradiomics_settings_path(tmp_path, monkeypatch):
+    csv_path = tmp_path / "nifti_index.csv"
+    csv_path.write_text("nifti_path\n")
+    settings_path = tmp_path / "params.yaml"
+    settings_path.write_text("setting:\n  binWidth: 5\n")
+    monkeypatch.chdir(tmp_path)
+
+    args = argparse.Namespace(
+        csv_path_pos=str(csv_path),
+        csv_path_opt=None,
+        csv_path_out=None,
+        error_csv_path=None,
+        skip_filter=False,
+        manifest=None,
+        pyradiomics_settings="params.yaml",
+        verbose=False,
+        dry_run=False,
+    )
+
+    out = radiomics_module.normalize_radiomics_args(args)
+    assert out.pyradiomics_settings == str(settings_path.resolve())
+
+
+def test_normalize_radiomics_args_rejects_missing_or_non_yaml_settings_path(tmp_path):
+    csv_path = tmp_path / "nifti_index.csv"
+    csv_path.write_text("nifti_path\n")
+
+    args_missing = argparse.Namespace(
+        csv_path_pos=str(csv_path),
+        csv_path_opt=None,
+        csv_path_out=None,
+        error_csv_path=None,
+        skip_filter=False,
+        manifest=None,
+        pyradiomics_settings=str(tmp_path / "missing.yaml"),
+        verbose=False,
+        dry_run=False,
+    )
+    with pytest.raises(FileNotFoundError):
+        radiomics_module.normalize_radiomics_args(args_missing)
+
+    bad_path = tmp_path / "params.txt"
+    bad_path.write_text("setting:\n  binWidth: 5\n")
+    args_bad_suffix = argparse.Namespace(
+        csv_path_pos=str(csv_path),
+        csv_path_opt=None,
+        csv_path_out=None,
+        error_csv_path=None,
+        skip_filter=False,
+        manifest=None,
+        pyradiomics_settings=str(bad_path),
+        verbose=False,
+        dry_run=False,
+    )
+    with pytest.raises(ValueError):
+        radiomics_module.normalize_radiomics_args(args_bad_suffix)
+
+
+def test_resolve_pyradiomics_settings_source_prefers_manifest_and_warns_twice(
+    tmp_path, monkeypatch, caplog
+):
+    settings_path = tmp_path / "params.yaml"
+    settings_path.write_text("setting:\n  binWidth: 5\n")
+    monkeypatch.setattr(
+        radiomics_module,
+        "load_manifest",
+        lambda *args, **kwargs: {"radiomics": {"setting": {"binWidth": 9}}},
+    )
+
+    args = argparse.Namespace(
+        manifest="generic",
+        pyradiomics_settings=str(settings_path),
+    )
+    caplog.set_level(logging.WARNING, logger=radiomics_module.__name__)
+
+    source_kind, source_path, source_dict = (
+        radiomics_module._resolve_pyradiomics_settings_source(args)
+    )
+
+    assert source_kind == "manifest"
+    assert source_path is None
+    assert source_dict == {"setting": {"binWidth": 9}}
+    warnings = [
+        record.message
+        for record in caplog.records
+        if record.levelno >= logging.WARNING
+    ]
+    assert len(warnings) == 2
+    assert "Both --manifest and --pyradiomics_settings were provided" in warnings[0]
+    assert "preferring manifest settings" in warnings[1]
+
+
+def test_resolve_pyradiomics_settings_source_uses_cli_file_when_manifest_has_no_radiomics(
+    tmp_path, monkeypatch, caplog
+):
+    settings_path = tmp_path / "params.yaml"
+    settings_path.write_text("setting:\n  binWidth: 5\n")
+    monkeypatch.setattr(radiomics_module, "load_manifest", lambda *args, **kwargs: {})
+
+    args = argparse.Namespace(
+        manifest="generic",
+        pyradiomics_settings=str(settings_path),
+    )
+    caplog.set_level(logging.WARNING, logger=radiomics_module.__name__)
+
+    source_kind, source_path, source_dict = (
+        radiomics_module._resolve_pyradiomics_settings_source(args)
+    )
+
+    assert source_kind == "cli_file"
+    assert source_path == str(settings_path.resolve())
+    assert source_dict is None
+    warnings = [
+        record.message
+        for record in caplog.records
+        if record.levelno >= logging.WARNING
+    ]
+    assert len(warnings) == 1
+    assert "Both --manifest and --pyradiomics_settings were provided" in warnings[0]
 
 
 def test_configure_pyradiomics_output_toggles_logger_state():
@@ -87,7 +216,7 @@ def test_main_records_missing_image_path_error(tmp_path, monkeypatch):
     monkeypatch.setattr(
         radiomics_module,
         "_create_radiomics_extractors",
-        lambda featureextractor_module, settings: {"all": object(), "shape": object(), "non_shape": object()},
+        _fake_extractors_factory,
     )
 
     args = argparse.Namespace(
@@ -123,11 +252,7 @@ def test_main_uses_tqdm_even_when_not_verbose(tmp_path, monkeypatch):
     monkeypatch.setattr(
         radiomics_module,
         "_create_radiomics_extractors",
-        lambda featureextractor_module, settings: {
-            "all": object(),
-            "shape": object(),
-            "non_shape": object(),
-        },
+        _fake_extractors_factory,
     )
 
     tqdm_calls = {"count": 0, "desc": None, "unit": None}
@@ -185,7 +310,7 @@ def test_main_writes_output_and_error_csv(tmp_path, monkeypatch):
     monkeypatch.setattr(
         radiomics_module,
         "_create_radiomics_extractors",
-        lambda featureextractor_module, settings: {"all": object(), "shape": object(), "non_shape": object()},
+        _fake_extractors_factory,
     )
 
     def fake_liver_minus_tumor(
@@ -248,7 +373,7 @@ def test_main_resume_skips_completed_rows(tmp_path, monkeypatch):
     monkeypatch.setattr(
         radiomics_module,
         "_create_radiomics_extractors",
-        lambda featureextractor_module, settings: {"all": object(), "shape": object(), "non_shape": object()},
+        _fake_extractors_factory,
     )
 
     def fake_liver(*args, **kwargs):
@@ -301,7 +426,7 @@ def test_main_preserves_foreign_columns_from_existing_output(tmp_path, monkeypat
     monkeypatch.setattr(
         radiomics_module,
         "_create_radiomics_extractors",
-        lambda featureextractor_module, settings: {"all": object(), "shape": object(), "non_shape": object()},
+        _fake_extractors_factory,
     )
     monkeypatch.setattr(
         radiomics_module,
@@ -347,7 +472,8 @@ def test_project_radiomics_features_keeps_non_original_and_drops_diagnostics():
 
 def test_create_radiomics_extractors_configures_shape_and_non_shape():
     class FakeExtractor:
-        def __init__(self, **kwargs):
+        def __init__(self, *args, **kwargs):
+            self.args = args
             self.kwargs = kwargs
             self.calls = []
             self.featureClassNames = ["firstorder", "shape", "glcm"]
@@ -376,6 +502,52 @@ def test_create_radiomics_extractors_configures_shape_and_non_shape():
     assert ("enableFeatureClassByName", "firstorder") in non_shape_calls
     assert ("enableFeatureClassByName", "glcm") in non_shape_calls
     assert ("enableFeatureClassByName", "shape") not in non_shape_calls
+
+
+def test_create_radiomics_extractors_supports_settings_path_and_manifest_dict():
+    class FakeExtractor:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+            self.calls = []
+            self.featureClassNames = ["firstorder", "shape"]
+
+        def disableAllFeatures(self):
+            self.calls.append(("disableAllFeatures",))
+
+        def enableFeatureClassByName(self, name):
+            self.calls.append(("enableFeatureClassByName", name))
+
+    class FakeFeatureExtractorModule:
+        RadiomicsFeatureExtractor = FakeExtractor
+
+    path_extractors = radiomics_module._create_radiomics_extractors(
+        FakeFeatureExtractorModule,
+        settings_path="params.yaml",
+    )
+    assert path_extractors["all"].args == ("params.yaml",)
+    assert path_extractors["all"].kwargs == {}
+
+    dict_extractors = radiomics_module._create_radiomics_extractors(
+        FakeFeatureExtractorModule,
+        settings_dict={"setting": {"binWidth": 7}},
+    )
+    assert dict_extractors["all"].args == ({"setting": {"binWidth": 7}},)
+    assert dict_extractors["all"].kwargs == {}
+
+
+def test_create_radiomics_extractors_rejects_multiple_sources():
+    class FakeFeatureExtractorModule:
+        class RadiomicsFeatureExtractor:
+            def __init__(self, *args, **kwargs):
+                pass
+
+    with pytest.raises(ValueError):
+        radiomics_module._create_radiomics_extractors(
+            FakeFeatureExtractorModule,
+            {"binWidth": 25},
+            settings_path="params.yaml",
+        )
 
 
 def test_build_dataset_strategy_describes_extractor_plan():

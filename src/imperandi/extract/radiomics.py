@@ -10,6 +10,7 @@ from tqdm import tqdm
 
 from imperandi.utils.logging import setup_logging
 from imperandi.utils.misc import print_args
+from imperandi.utils.manifest import load_manifest
 from imperandi.utils.checkpoint_cli import add_checkpoint_arguments
 from imperandi.utils.run_state import (
     atomic_write_csv,
@@ -27,6 +28,7 @@ DEFAULT_SETTINGS = {
     "resampledPixelSpacing": [1, 1, 1],
     "resegmentRange": [-150, 250],
 }
+YAML_SUFFIXES = (".yaml", ".yml")
 
 
 def _load_radiomics_dependencies():
@@ -49,8 +51,27 @@ def _load_radiomics_dependencies():
     return sitk, featureextractor
 
 
-def _create_radiomics_extractors(featureextractor_module, settings: Dict[str, Any]):
+def _create_radiomics_extractors(
+    featureextractor_module,
+    settings: Optional[Dict[str, Any]] = None,
+    *,
+    settings_path: Optional[str] = None,
+    settings_dict: Optional[Dict[str, Any]] = None,
+):
+    mode_count = int(settings is not None) + int(settings_path is not None) + int(
+        settings_dict is not None
+    )
+    if mode_count != 1:
+        raise ValueError(
+            "Exactly one settings source must be provided "
+            "(settings kwargs, settings_path, or settings_dict)."
+        )
+
     def _new_extractor():
+        if settings_dict is not None:
+            return featureextractor_module.RadiomicsFeatureExtractor(settings_dict)
+        if settings_path is not None:
+            return featureextractor_module.RadiomicsFeatureExtractor(settings_path)
         return featureextractor_module.RadiomicsFeatureExtractor(**settings)
 
     extractor_all = _new_extractor()
@@ -123,6 +144,79 @@ def _execute_extractor(
     return extractor.execute(image, mask)
 
 
+def _normalize_pyradiomics_settings_path(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+
+    path = Path(raw)
+    if path.suffix.lower() not in YAML_SUFFIXES:
+        raise ValueError(
+            "Expected a YAML file for --pyradiomics_settings "
+            f"(accepted: {', '.join(YAML_SUFFIXES)}): {path}"
+        )
+    if not path.exists():
+        raise FileNotFoundError(f"PyRadiomics settings YAML file not found: {path}")
+    if not path.is_file():
+        raise ValueError(f"PyRadiomics settings path is not a file: {path}")
+    return str(path.resolve())
+
+
+def _load_manifest_radiomics_settings(
+    manifest_arg: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    if not manifest_arg:
+        return None
+    manifest = load_manifest(
+        manifest_arg,
+        base_path=Path(__file__).resolve().parents[1],
+    )
+    radiomics_settings = manifest.get("radiomics")
+    if radiomics_settings is None:
+        return None
+    if not isinstance(radiomics_settings, dict):
+        raise ValueError(
+            "Manifest radiomics settings must be an object under key 'radiomics'."
+        )
+    return radiomics_settings
+
+
+def _resolve_pyradiomics_settings_source(
+    args: argparse.Namespace,
+) -> tuple[str, Optional[str], Optional[Dict[str, Any]]]:
+    manifest_arg = getattr(args, "manifest", None)
+    cli_settings_path = _normalize_pyradiomics_settings_path(
+        getattr(args, "pyradiomics_settings", None)
+    )
+    manifest_settings: Optional[Dict[str, Any]] = None
+
+    if manifest_arg and cli_settings_path:
+        logger.warning(
+            "Both --manifest and --pyradiomics_settings were provided; "
+            "checking manifest radiomics settings first."
+        )
+    if manifest_arg:
+        manifest_settings = _load_manifest_radiomics_settings(manifest_arg)
+
+    if manifest_settings is not None:
+        if cli_settings_path:
+            logger.warning(
+                "Manifest contains a 'radiomics' settings section; "
+                "preferring manifest settings over --pyradiomics_settings."
+            )
+        logger.info("PyRadiomics settings source: manifest")
+        return "manifest", None, manifest_settings
+
+    if cli_settings_path:
+        logger.info("PyRadiomics settings source: cli_file (%s)", cli_settings_path)
+        return "cli_file", cli_settings_path, None
+
+    logger.info("PyRadiomics settings source: defaults")
+    return "defaults", None, None
+
+
 def add_radiomics_arguments(
     parser: argparse.ArgumentParser,
     include_dry_run: bool = True,
@@ -159,6 +253,18 @@ def add_radiomics_arguments(
         action="store_true",
         default=False,
         help="Skip legacy cohort filtering and process all rows.",
+    )
+    parser.add_argument(
+        "--manifest",
+        type=str,
+        default=None,
+        help="Dataset manifest name or path to manifest JSON.",
+    )
+    parser.add_argument(
+        "--pyradiomics_settings",
+        type=str,
+        default=None,
+        help="Path to a PyRadiomics YAML settings file.",
     )
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose logging.")
     add_checkpoint_arguments(
@@ -206,6 +312,12 @@ def normalize_radiomics_args(args: argparse.Namespace) -> argparse.Namespace:
         args.error_csv_path = str(Path(args.error_csv_path))
     else:
         args.error_csv_path = str(csv_path.parent / "radiomics_errors.csv")
+
+    args.pyradiomics_settings = _normalize_pyradiomics_settings_path(
+        getattr(args, "pyradiomics_settings", None)
+    )
+    if getattr(args, "manifest", None) is not None:
+        args.manifest = str(args.manifest)
 
     del args.csv_path_pos
     del args.csv_path_opt
@@ -599,7 +711,24 @@ def main(args: argparse.Namespace) -> None:
         enabled=bool(getattr(args, "verbose", False)),
         verbose=bool(getattr(args, "verbose", False)),
     )
-    extractors = _create_radiomics_extractors(featureextractor_module, DEFAULT_SETTINGS)
+    source_kind, settings_path, settings_dict = _resolve_pyradiomics_settings_source(
+        args
+    )
+    if source_kind == "manifest":
+        extractors = _create_radiomics_extractors(
+            featureextractor_module,
+            settings_dict=settings_dict,
+        )
+    elif source_kind == "cli_file":
+        extractors = _create_radiomics_extractors(
+            featureextractor_module,
+            settings_path=settings_path,
+        )
+    else:
+        extractors = _create_radiomics_extractors(
+            featureextractor_module,
+            DEFAULT_SETTINGS,
+        )
 
     if can_resume and paths.main_checkpoint_path.exists():
         logger.info("Resuming radiomics from checkpoint: %s", paths.main_checkpoint_path)

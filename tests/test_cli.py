@@ -1,5 +1,6 @@
 import sys
 from pathlib import Path
+import json
 import pytest
 
 # Ensure src/ is on sys.path for imports
@@ -98,6 +99,56 @@ def test_cli_radiomics_accepts_optional_csv_path_only(tmp_path):
             "radiomics",
             "--csv_path",
             str(csv_in),
+            "--dry-run",
+        ]
+    )
+
+    assert exit_code == 0
+
+
+def test_cli_radiomics_accepts_pyradiomics_settings_yaml(tmp_path):
+    csv_in = tmp_path / "nifti_index.csv"
+    csv_in.write_text("patient_key,phase,nifti_path\n")
+    params_yaml = tmp_path / "Params.yaml"
+    params_yaml.write_text("setting:\n  binWidth: 25\n")
+
+    exit_code = cli.main(
+        [
+            "radiomics",
+            "--csv_path",
+            str(csv_in),
+            "--pyradiomics_settings",
+            str(params_yaml),
+            "--dry-run",
+        ]
+    )
+
+    assert exit_code == 0
+
+
+def test_cli_radiomics_accepts_manifest_with_direct_radiomics_object(tmp_path):
+    csv_in = tmp_path / "nifti_index.csv"
+    csv_in.write_text("patient_key,phase,nifti_path\n")
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "dataset_name": "tmp",
+                "radiomics": {
+                    "setting": {"binWidth": 17},
+                    "imageType": {"Original": {}},
+                },
+            }
+        )
+    )
+
+    exit_code = cli.main(
+        [
+            "radiomics",
+            "--csv_path",
+            str(csv_in),
+            "--manifest",
+            str(manifest_path),
             "--dry-run",
         ]
     )
