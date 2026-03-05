@@ -58,11 +58,12 @@ Impact: enables phase-aware stratification and analysis without manual review of
 
 ### 5) Radiomics feature extraction (`radiomics`)
 
-- Extracts PyRadiomics features for liver and tumor regions from CT + masks.
-- Includes a liver-minus-tumor extraction path for cleaner parenchyma characterization.
+- Extracts PyRadiomics features for organ and tumor regions from CT + masks.
+- Includes a organ-minus-tumor extraction path for cleaner parenchyma characterization.
 - Supports optional cohort filtering controls and error-aware output generation.
+- Supports PyRadiomics parameterization from either `--pyradiomics_settings /path/to/Params.yaml` or manifest `radiomics` settings.
 
-Impact: accelerates feature engineering for prognostic and response modeling pipelines.
+Impact: accelerates feature exctraction for prognostic and response modeling pipelines.
 
 ### 6) Interactive quality control viewer (Jupyter)
 
@@ -81,9 +82,9 @@ IMPERANDI ships a single CLI with these subcommands:
 - `clean`: filter and normalize parsed metadata.
 - `ingest`: run `parse` then `clean`.
 - `convert`: convert indexed DICOM volumes to NIfTI.
-- `segment`: run configurable segmentation on NIfTI volumes (requires `.[segment]`).
-- `phase`: extract contrast phase metadata from NIfTI volumes (requires `.[segment]`).
-- `radiomics`: extract radiomics features from NIfTI volumes and masks (requires radiomics dependencies).
+- `segment`: run configurable segmentation on NIfTI volumes (requires _TotalSegmentator_, install with `.[segment]`).
+- `phase`: extract contrast phase metadata from NIfTI volumes (requires _TotalSegmentator_, install with `.[segment]`).
+- `radiomics`: extract radiomics features from NIfTI volumes and masks (requires _pyRadiomics_, install with `.[radiomics]).
 
 Get help:
 
@@ -188,6 +189,27 @@ imperandi radiomics \
   --csv_path_out /path/to/output/nifti_index_radiomics.csv
 ```
 
+Extract radiomics with explicit PyRadiomics YAML settings:
+
+```bash
+imperandi radiomics \
+  --csv_path /path/to/output/nifti_index_segmented.csv \
+  --pyradiomics_settings /path/to/Params.yaml \
+  --csv_path_out /path/to/output/nifti_index_radiomics.csv
+```
+
+Use manifest-defined radiomics settings:
+
+```bash
+imperandi radiomics \
+  --csv_path /path/to/output/nifti_index_segmented.csv \
+  --manifest generic \
+  --csv_path_out /path/to/output/nifti_index_radiomics.csv
+```
+
+If both `--manifest` and `--pyradiomics_settings` are provided, IMPERANDI warns and
+prefers manifest `radiomics` settings when that section exists.
+
 ## Core outputs
 
 - `parse`:
@@ -213,6 +235,9 @@ Hook implementations live in:
 - `src/imperandi/datasets_config/hooks/`
 
 You can pass either a manifest name (`generic`, `operandi`) or a custom manifest path.
+
+For radiomics, manifest key `radiomics` can directly contain a PyRadiomics-style
+settings object (same structure as `Params.yaml` content).
 
 ## Performance and reliability notes
 

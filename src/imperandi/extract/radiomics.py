@@ -10,6 +10,7 @@ from tqdm import tqdm
 
 from imperandi.utils.logging import setup_logging
 from imperandi.utils.misc import print_args
+from imperandi.utils.manifest import load_manifest
 from imperandi.utils.checkpoint_cli import add_checkpoint_arguments
 from imperandi.utils.run_state import (
     atomic_write_csv,
@@ -27,6 +28,7 @@ DEFAULT_SETTINGS = {
     "resampledPixelSpacing": [1, 1, 1],
     "resegmentRange": [-150, 250],
 }
+YAML_SUFFIXES = (".yaml", ".yml")
 
 
 def _load_radiomics_dependencies():
@@ -49,8 +51,170 @@ def _load_radiomics_dependencies():
     return sitk, featureextractor
 
 
-def _create_radiomics_extractor(featureextractor_module, settings: Dict[str, Any]):
-    return featureextractor_module.RadiomicsFeatureExtractor(**settings)
+def _create_radiomics_extractors(
+    featureextractor_module,
+    settings: Optional[Dict[str, Any]] = None,
+    *,
+    settings_path: Optional[str] = None,
+    settings_dict: Optional[Dict[str, Any]] = None,
+):
+    mode_count = int(settings is not None) + int(settings_path is not None) + int(
+        settings_dict is not None
+    )
+    if mode_count != 1:
+        raise ValueError(
+            "Exactly one settings source must be provided "
+            "(settings kwargs, settings_path, or settings_dict)."
+        )
+
+    def _new_extractor():
+        if settings_dict is not None:
+            return featureextractor_module.RadiomicsFeatureExtractor(settings_dict)
+        if settings_path is not None:
+            return featureextractor_module.RadiomicsFeatureExtractor(settings_path)
+        return featureextractor_module.RadiomicsFeatureExtractor(**settings)
+
+    extractor_all = _new_extractor()
+
+    extractor_shape = _new_extractor()
+    extractor_shape.disableAllFeatures()
+    extractor_shape.enableFeatureClassByName("shape")
+
+    extractor_non_shape = _new_extractor()
+    extractor_non_shape.disableAllFeatures()
+    for feature_class_name in extractor_non_shape.featureClassNames:
+        if str(feature_class_name).lower() == "shape":
+            continue
+        extractor_non_shape.enableFeatureClassByName(feature_class_name)
+
+    return {
+        "all": extractor_all,
+        "shape": extractor_shape,
+        "non_shape": extractor_non_shape,
+    }
+
+
+def _configure_pyradiomics_output(*, enabled: bool, verbose: bool = False) -> None:
+    pyradiomics_logger = logging.getLogger("radiomics")
+    if enabled:
+        pyradiomics_logger.disabled = False
+        pyradiomics_logger.propagate = True
+        pyradiomics_logger.setLevel(logging.DEBUG if verbose else logging.INFO)
+        logger.info(
+            "PyRadiomics output enabled (level=%s)",
+            "DEBUG" if verbose else "INFO",
+        )
+    else:
+        pyradiomics_logger.setLevel(logging.CRITICAL + 1)
+        pyradiomics_logger.propagate = False
+        pyradiomics_logger.disabled = True
+        logger.info("PyRadiomics output disabled")
+
+    try:
+        import radiomics as pyradiomics
+    except ModuleNotFoundError:
+        return
+
+    if hasattr(pyradiomics, "setVerbosity"):
+        if enabled and verbose:
+            verbosity_level = logging.DEBUG
+        elif enabled:
+            verbosity_level = logging.INFO
+        else:
+            verbosity_level = logging.CRITICAL
+        pyradiomics.setVerbosity(verbosity_level)
+
+
+def _execute_extractor(
+    extractor: Any,
+    image: Any,
+    mask: Any,
+    *,
+    organ: str,
+    extractor_name: str,
+    row_idx: Optional[int] = None,
+) -> Dict[str, Any]:
+    row_label = row_idx if row_idx is not None else "-"
+    logger.debug(
+        "Executing PyRadiomics extractor | row=%s | organ=%s | extractor=%s",
+        row_label,
+        organ,
+        extractor_name,
+    )
+    return extractor.execute(image, mask)
+
+
+def _normalize_pyradiomics_settings_path(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+
+    path = Path(raw)
+    if path.suffix.lower() not in YAML_SUFFIXES:
+        raise ValueError(
+            "Expected a YAML file for --pyradiomics_settings "
+            f"(accepted: {', '.join(YAML_SUFFIXES)}): {path}"
+        )
+    if not path.exists():
+        raise FileNotFoundError(f"PyRadiomics settings YAML file not found: {path}")
+    if not path.is_file():
+        raise ValueError(f"PyRadiomics settings path is not a file: {path}")
+    return str(path.resolve())
+
+
+def _load_manifest_radiomics_settings(
+    manifest_arg: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    if not manifest_arg:
+        return None
+    manifest = load_manifest(
+        manifest_arg,
+        base_path=Path(__file__).resolve().parents[1],
+    )
+    radiomics_settings = manifest.get("radiomics")
+    if radiomics_settings is None:
+        return None
+    if not isinstance(radiomics_settings, dict):
+        raise ValueError(
+            "Manifest radiomics settings must be an object under key 'radiomics'."
+        )
+    return radiomics_settings
+
+
+def _resolve_pyradiomics_settings_source(
+    args: argparse.Namespace,
+) -> tuple[str, Optional[str], Optional[Dict[str, Any]]]:
+    manifest_arg = getattr(args, "manifest", None)
+    cli_settings_path = _normalize_pyradiomics_settings_path(
+        getattr(args, "pyradiomics_settings", None)
+    )
+    manifest_settings: Optional[Dict[str, Any]] = None
+
+    if manifest_arg and cli_settings_path:
+        logger.warning(
+            "Both --manifest and --pyradiomics_settings were provided; "
+            "checking manifest radiomics settings first."
+        )
+    if manifest_arg:
+        manifest_settings = _load_manifest_radiomics_settings(manifest_arg)
+
+    if manifest_settings is not None:
+        if cli_settings_path:
+            logger.warning(
+                "Manifest contains a 'radiomics' settings section; "
+                "preferring manifest settings over --pyradiomics_settings."
+            )
+        logger.info("PyRadiomics settings source: manifest")
+        return "manifest", None, manifest_settings
+
+    if cli_settings_path:
+        logger.info("PyRadiomics settings source: cli_file (%s)", cli_settings_path)
+        return "cli_file", cli_settings_path, None
+
+    logger.info("PyRadiomics settings source: defaults")
+    return "defaults", None, None
 
 
 def add_radiomics_arguments(
@@ -89,6 +253,18 @@ def add_radiomics_arguments(
         action="store_true",
         default=False,
         help="Skip legacy cohort filtering and process all rows.",
+    )
+    parser.add_argument(
+        "--manifest",
+        type=str,
+        default=None,
+        help="Dataset manifest name or path to manifest JSON.",
+    )
+    parser.add_argument(
+        "--pyradiomics_settings",
+        type=str,
+        default=None,
+        help="Path to a PyRadiomics YAML settings file.",
     )
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose logging.")
     add_checkpoint_arguments(
@@ -136,6 +312,12 @@ def normalize_radiomics_args(args: argparse.Namespace) -> argparse.Namespace:
         args.error_csv_path = str(Path(args.error_csv_path))
     else:
         args.error_csv_path = str(csv_path.parent / "radiomics_errors.csv")
+
+    args.pyradiomics_settings = _normalize_pyradiomics_settings_path(
+        getattr(args, "pyradiomics_settings", None)
+    )
+    if getattr(args, "manifest", None) is not None:
+        args.manifest = str(args.manifest)
 
     del args.csv_path_pos
     del args.csv_path_opt
@@ -215,7 +397,16 @@ def filter_df(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def mask_has_voxels(mask, sitk_module) -> bool:
-    return bool(sitk_module.GetArrayViewFromImage(mask).sum() > 0)
+    return bool(_array_sum(sitk_module.GetArrayViewFromImage(mask)) > 0)
+
+
+def _array_sum(values: Any) -> float:
+    if hasattr(values, "sum"):
+        return float(values.sum())
+    try:
+        return float(sum(values))
+    except TypeError:
+        return float(values)
 
 
 def _is_existing_path(value: Any) -> bool:
@@ -226,20 +417,11 @@ def _is_existing_path(value: Any) -> bool:
     return bool(path) and Path(path).exists()
 
 
-def _extract_original_features(
-    result: Dict[str, Any],
-    *,
-    prefix: str,
-    include_shape: bool = True,
-    include_non_shape: bool = True,
-) -> Dict[str, Any]:
+def _project_radiomics_features(result: Dict[str, Any], *, prefix: str) -> Dict[str, Any]:
     features: Dict[str, Any] = {}
     for key, value in result.items():
         skey = str(key)
-        if not skey.startswith("original"):
-            continue
-        is_shape = skey.startswith("original_shape_")
-        if (is_shape and not include_shape) or ((not is_shape) and not include_non_shape):
+        if skey.startswith("diagnostics_"):
             continue
         features[f"{prefix}_{skey}"] = value
     return features
@@ -271,8 +453,9 @@ def extract_radiomics_safe(
     mask_path: Optional[str],
     prefix: str,
     *,
-    extractor,
+    extractors,
     sitk_module,
+    row_idx: Optional[int] = None,
 ) -> Tuple[Dict[str, Any], Optional[str]]:
     if not _is_existing_path(mask_path):
         return {}, f"{prefix} mask path is missing: {mask_path}"
@@ -283,11 +466,18 @@ def extract_radiomics_safe(
             return {}, f"{prefix} mask is empty: {mask_path}"
 
         image = sitk_module.ReadImage(image_path)
-        result = extractor.execute(image, mask_image)
-        features = _extract_original_features(result, prefix=prefix)
+        result = _execute_extractor(
+            extractors["all"],
+            image,
+            mask_image,
+            organ=prefix,
+            extractor_name="all",
+            row_idx=row_idx,
+        )
+        features = _project_radiomics_features(result, prefix=prefix)
         return features, None
     except Exception as exc:
-        return {}, f"Error extracting {prefix} features: {exc}"
+        return {}, f"Error extracting {prefix} features (extractor=all): {exc}"
 
 
 def extract_radiomics_organ_minus_tumor(
@@ -295,9 +485,10 @@ def extract_radiomics_organ_minus_tumor(
     organ_mask_path: Optional[str],
     tumor_mask_path: Optional[str],
     *,
-    extractor,
+    extractors,
     sitk_module,
     prefix: str = "liver",
+    row_idx: Optional[int] = None,
 ) -> Tuple[Dict[str, Any], Optional[str]]:
     if not _is_existing_path(organ_mask_path):
         return {}, f"missing {prefix} mask"
@@ -306,7 +497,7 @@ def extract_radiomics_organ_minus_tumor(
         img = sitk_module.ReadImage(image_path)
         organ = sitk_module.ReadImage(organ_mask_path)
 
-        if sitk_module.GetArrayViewFromImage(organ).sum() == 0:
+        if _array_sum(sitk_module.GetArrayViewFromImage(organ)) == 0:
             return {}, f"empty {prefix} mask"
 
         organ_bin = sitk_module.Cast(
@@ -315,13 +506,27 @@ def extract_radiomics_organ_minus_tumor(
         has_tumor = _is_existing_path(tumor_mask_path)
 
         if not has_tumor:
-            result = extractor.execute(img, organ_bin)
-            return _extract_original_features(result, prefix=prefix), None
+            result = _execute_extractor(
+                extractors["all"],
+                img,
+                organ_bin,
+                organ=prefix,
+                extractor_name="all",
+                row_idx=row_idx,
+            )
+            return _project_radiomics_features(result, prefix=prefix), None
 
         tumor = sitk_module.ReadImage(tumor_mask_path)
-        if sitk_module.GetArrayViewFromImage(tumor).sum() == 0:
-            result = extractor.execute(img, organ_bin)
-            return _extract_original_features(result, prefix=prefix), None
+        if _array_sum(sitk_module.GetArrayViewFromImage(tumor)) == 0:
+            result = _execute_extractor(
+                extractors["all"],
+                img,
+                organ_bin,
+                organ=prefix,
+                extractor_name="all",
+                row_idx=row_idx,
+            )
+            return _project_radiomics_features(result, prefix=prefix), None
 
         tumor = _resample_to_reference_if_needed(tumor, organ, sitk_module)
         tumor_bin = sitk_module.Cast(sitk_module.NotEqual(tumor, 0), sitk_module.sitkUInt8)
@@ -330,26 +535,28 @@ def extract_radiomics_organ_minus_tumor(
             sitk_module.Cast(sitk_module.Not(tumor_bin), sitk_module.sitkUInt8),
         )
 
-        shape_result = extractor.execute(img, organ_bin)
-        features = _extract_original_features(
-            shape_result,
-            prefix=prefix,
-            include_shape=True,
-            include_non_shape=False,
+        shape_result = _execute_extractor(
+            extractors["shape"],
+            img,
+            organ_bin,
+            organ=prefix,
+            extractor_name="shape",
+            row_idx=row_idx,
         )
+        features = _project_radiomics_features(shape_result, prefix=prefix)
 
-        if sitk_module.GetArrayViewFromImage(organ_minus_tumor).sum() == 0:
+        if _array_sum(sitk_module.GetArrayViewFromImage(organ_minus_tumor)) == 0:
             return features, f"{prefix}_minus_tumor mask is empty"
 
-        non_shape_result = extractor.execute(img, organ_minus_tumor)
-        features.update(
-            _extract_original_features(
-                non_shape_result,
-                prefix=prefix,
-                include_shape=False,
-                include_non_shape=True,
-            )
+        non_shape_result = _execute_extractor(
+            extractors["non_shape"],
+            img,
+            organ_minus_tumor,
+            organ=prefix,
+            extractor_name="non_shape",
+            row_idx=row_idx,
         )
+        features.update(_project_radiomics_features(non_shape_result, prefix=prefix))
         return features, None
     except Exception as exc:
         return {}, f"Error extracting {prefix}_minus_tumor: {exc}"
@@ -359,18 +566,62 @@ def _get_mask_columns(df: pd.DataFrame) -> list[str]:
     return [col for col in df.columns if col.startswith("mask_")]
 
 
+def _build_dataset_strategy(mask_columns: list[str]) -> list[str]:
+    strategy: list[str] = []
+    mask_columns_sorted = sorted(set(mask_columns))
+    mask_columns_set = set(mask_columns_sorted)
+
+    for mask_col in mask_columns_sorted:
+        prefix = mask_col.replace("mask_", "", 1)
+        if prefix.endswith("_tumor"):
+            strategy.append(f"{prefix}: all on {mask_col}")
+            continue
+
+        tumor_col = f"{mask_col}_tumor"
+        if tumor_col in mask_columns_set:
+            strategy.append(
+                f"{prefix}: shape on {mask_col}; non_shape on {prefix}_minus_tumor; "
+                f"fallback all on {mask_col} if {tumor_col} missing/empty"
+            )
+        else:
+            strategy.append(f"{prefix}: all on {mask_col} (no paired tumor mask column)")
+
+    return strategy
+
+
+def _log_dataset_strategy(mask_columns: list[str]) -> None:
+    strategy = _build_dataset_strategy(mask_columns)
+    if not strategy:
+        logger.info("Radiomics strategy (dataset): no mask_* columns found")
+        return
+
+    logger.info(
+        "Radiomics strategy (dataset): %d ROI plans detected",
+        len(strategy),
+    )
+    for line in strategy:
+        logger.info("Radiomics strategy (dataset) | %s", line)
+
+
 def _extract_row_features(
     row: pd.Series,
     mask_columns: list[str],
     *,
-    extractor,
+    extractors,
     sitk_module,
+    row_idx: Optional[int] = None,
 ) -> Tuple[Dict[str, Any], list[str]]:
     image_path = row.get("nifti_path")
     features: Dict[str, Any] = {}
     messages: list[str] = []
 
     if not isinstance(image_path, str) or not Path(image_path).exists():
+        row_label = row_idx if row_idx is not None else "-"
+        logger.warning(
+            "Radiomics issue | row=%s | organ=all | CT image path is missing or invalid: %s",
+            row_label,
+            image_path,
+        )
         return {}, [f"CT image path is missing or invalid: {image_path}"]
 
     mask_columns_set = set(mask_columns)
@@ -383,8 +634,9 @@ def _extract_row_features(
                 image_path,
                 mask_path,
                 prefix,
-                extractor=extractor,
+                extractors=extractors,
                 sitk_module=sitk_module,
+                row_idx=row_idx,
             )
         else:
             tumor_col = f"{mask_col}_tumor"
@@ -393,14 +645,30 @@ def _extract_row_features(
                 image_path,
                 mask_path,
                 tumor_path,
-                extractor=extractor,
+                extractors=extractors,
                 sitk_module=sitk_module,
                 prefix=prefix,
+                row_idx=row_idx,
             )
 
         features.update(roi_features)
         if roi_msg:
+            row_label = row_idx if row_idx is not None else "-"
+            logger.warning(
+                "Radiomics issue | row=%s | organ=%s | %s",
+                row_label,
+                prefix,
+                roi_msg,
+            )
             messages.append(roi_msg)
+        else:
+            row_label = row_idx if row_idx is not None else "-"
+            logger.debug(
+                "Radiomics features extracted | row=%s | organ=%s | feature_count=%d",
+                row_label,
+                prefix,
+                len(roi_features),
+            )
 
     return features, messages
 
@@ -439,7 +707,28 @@ def main(args: argparse.Namespace) -> None:
         return
 
     sitk_module, featureextractor_module = _load_radiomics_dependencies()
-    extractor = _create_radiomics_extractor(featureextractor_module, DEFAULT_SETTINGS)
+    _configure_pyradiomics_output(
+        enabled=bool(getattr(args, "verbose", False)),
+        verbose=bool(getattr(args, "verbose", False)),
+    )
+    source_kind, settings_path, settings_dict = _resolve_pyradiomics_settings_source(
+        args
+    )
+    if source_kind == "manifest":
+        extractors = _create_radiomics_extractors(
+            featureextractor_module,
+            settings_dict=settings_dict,
+        )
+    elif source_kind == "cli_file":
+        extractors = _create_radiomics_extractors(
+            featureextractor_module,
+            settings_path=settings_path,
+        )
+    else:
+        extractors = _create_radiomics_extractors(
+            featureextractor_module,
+            DEFAULT_SETTINGS,
+        )
 
     if can_resume and paths.main_checkpoint_path.exists():
         logger.info("Resuming radiomics from checkpoint: %s", paths.main_checkpoint_path)
@@ -457,6 +746,7 @@ def main(args: argparse.Namespace) -> None:
     mask_columns = _get_mask_columns(df)
 
     logger.info("Extracting radiomics from %d rows and ROIs: %s", len(df), mask_columns)
+    _log_dataset_strategy(mask_columns)
     completed_indices: set[int] = set()
     if can_resume:
         completed_indices = {
@@ -485,21 +775,22 @@ def main(args: argparse.Namespace) -> None:
             force=force,
         )
 
-    iterator = df.index.tolist()
-    if args.verbose:
-        iterator = tqdm(iterator, total=len(iterator), desc="Radiomics")
-
-    for idx in iterator:
+    row_indices = [
+        idx
+        for idx in df.index.tolist()
+        if int(df.at[idx, "_source_idx"]) not in completed_indices
+    ]
+    for idx in tqdm(row_indices, total=len(row_indices), desc="Radiomics", unit="row"):
         src_idx = int(df.at[idx, "_source_idx"])
-        if src_idx in completed_indices:
-            continue
+        logger.debug("Processing radiomics row=%s", src_idx)
         row = df.loc[idx]
 
         features, messages = _extract_row_features(
             row,
             mask_columns,
-            extractor=extractor,
+            extractors=extractors,
             sitk_module=sitk_module,
+            row_idx=src_idx,
         )
 
         if messages and "CT image path is missing or invalid" in messages[0]:
