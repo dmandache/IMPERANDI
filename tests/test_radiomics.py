@@ -5,6 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import argparse
+import logging
 import pandas as pd
 
 from imperandi.extract import radiomics as radiomics_module
@@ -31,6 +32,47 @@ def test_normalize_radiomics_args_defaults(tmp_path):
     assert out.error_csv_path == str(csv_path.parent / "radiomics_errors.csv")
     assert not hasattr(out, "csv_path_pos")
     assert not hasattr(out, "csv_path_opt")
+
+
+def test_configure_pyradiomics_output_toggles_logger_state():
+    pyradiomics_logger = logging.getLogger("radiomics")
+    old_disabled = pyradiomics_logger.disabled
+    old_propagate = pyradiomics_logger.propagate
+    old_level = pyradiomics_logger.level
+    try:
+        radiomics_module._configure_pyradiomics_output(enabled=False, verbose=False)
+        assert pyradiomics_logger.disabled is True
+        assert pyradiomics_logger.propagate is False
+
+        radiomics_module._configure_pyradiomics_output(enabled=True, verbose=False)
+        assert pyradiomics_logger.disabled is False
+        assert pyradiomics_logger.propagate is True
+    finally:
+        pyradiomics_logger.disabled = old_disabled
+        pyradiomics_logger.propagate = old_propagate
+        pyradiomics_logger.setLevel(old_level)
+
+
+def test_execute_extractor_logs_organ_and_extractor(caplog):
+    class FakeExtractor:
+        def execute(self, image, mask):
+            return {"original_firstorder_Mean": 1.0}
+
+    caplog.set_level(logging.DEBUG, logger=radiomics_module.__name__)
+    out = radiomics_module._execute_extractor(
+        FakeExtractor(),
+        image="image",
+        mask="mask",
+        organ="liver",
+        extractor_name="shape",
+        row_idx=7,
+    )
+
+    assert out["original_firstorder_Mean"] == 1.0
+    assert (
+        "Executing PyRadiomics extractor | row=7 | organ=liver | extractor=shape"
+        in caplog.text
+    )
 
 
 def test_main_records_missing_image_path_error(tmp_path, monkeypatch):
@@ -67,6 +109,54 @@ def test_main_records_missing_image_path_error(tmp_path, monkeypatch):
     assert len(out_df) == 1
     assert len(err_df) == 1
     assert "missing or invalid" in err_df.loc[0, "error_message"]
+
+
+def test_main_uses_tqdm_even_when_not_verbose(tmp_path, monkeypatch):
+    csv_path = tmp_path / "nifti_index.csv"
+    pd.DataFrame([{"nifti_path": "missing_file.nii.gz"}]).to_csv(csv_path, index=False)
+
+    monkeypatch.setattr(
+        radiomics_module,
+        "_load_radiomics_dependencies",
+        lambda: (object(), object()),
+    )
+    monkeypatch.setattr(
+        radiomics_module,
+        "_create_radiomics_extractors",
+        lambda featureextractor_module, settings: {
+            "all": object(),
+            "shape": object(),
+            "non_shape": object(),
+        },
+    )
+
+    tqdm_calls = {"count": 0, "desc": None, "unit": None}
+
+    def fake_tqdm(it, **kwargs):
+        tqdm_calls["count"] += 1
+        tqdm_calls["desc"] = kwargs.get("desc")
+        tqdm_calls["unit"] = kwargs.get("unit")
+        return it
+
+    monkeypatch.setattr(radiomics_module, "tqdm", fake_tqdm)
+
+    args = argparse.Namespace(
+        csv_path=str(csv_path),
+        csv_path_out=str(tmp_path / "out.csv"),
+        error_csv_path=str(tmp_path / "errors.csv"),
+        skip_filter=True,
+        verbose=False,
+        checkpoint_every_rows=1,
+        checkpoint_every_sec=3600,
+        resume=False,
+        strict_resume=False,
+    )
+
+    radiomics_module.main(args)
+
+    assert tqdm_calls["count"] == 1
+    assert tqdm_calls["desc"] == "Radiomics"
+    assert tqdm_calls["unit"] == "row"
 
 
 def test_main_writes_output_and_error_csv(tmp_path, monkeypatch):
@@ -106,6 +196,7 @@ def test_main_writes_output_and_error_csv(tmp_path, monkeypatch):
         extractors,
         sitk_module,
         prefix,
+        row_idx=None,
     ):
         if Path(image_path).name == "good.nii.gz":
             return {"liver_original_shape_VoxelVolume": 1.0}, None
@@ -285,6 +376,19 @@ def test_create_radiomics_extractors_configures_shape_and_non_shape():
     assert ("enableFeatureClassByName", "firstorder") in non_shape_calls
     assert ("enableFeatureClassByName", "glcm") in non_shape_calls
     assert ("enableFeatureClassByName", "shape") not in non_shape_calls
+
+
+def test_build_dataset_strategy_describes_extractor_plan():
+    strategy = radiomics_module._build_dataset_strategy(
+        ["mask_liver", "mask_liver_tumor", "mask_kidney"]
+    )
+
+    assert "kidney: all on mask_kidney (no paired tumor mask column)" in strategy
+    assert (
+        "liver: shape on mask_liver; non_shape on liver_minus_tumor; "
+        "fallback all on mask_liver if mask_liver_tumor missing/empty"
+    ) in strategy
+    assert "liver_tumor: all on mask_liver_tumor" in strategy
 
 
 def test_extract_radiomics_organ_minus_tumor_uses_shape_and_non_shape_extractors(tmp_path):
