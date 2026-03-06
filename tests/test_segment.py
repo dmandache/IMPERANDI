@@ -72,6 +72,45 @@ def patch_strategy(monkeypatch, **overrides):
     monkeypatch.setattr(mp_utils, "apply_strategy_env", lambda *a, **k: None)
 
 
+def test_normalize_segment_args_accepts_positional_csv_path_out(tmp_path):
+    csv_path = tmp_path / "nifti_index.csv"
+    csv_path.write_text("nifti_path\n")
+    csv_out = tmp_path / "seg_custom.csv"
+
+    args = argparse.Namespace(
+        csv_path_pos=str(csv_path),
+        csv_path_opt=None,
+        csv_path_out_pos=str(csv_out),
+        csv_path_out=None,
+        error_csv_path=None,
+    )
+
+    out = segment_module.normalize_segment_args(args)
+
+    assert out.csv_path == str(csv_path.resolve())
+    assert out.csv_path_out == str(csv_out)
+    assert not hasattr(out, "csv_path_out_pos")
+
+
+def test_normalize_segment_args_prefers_flag_csv_path_out_over_positional(tmp_path):
+    csv_path = tmp_path / "nifti_index.csv"
+    csv_path.write_text("nifti_path\n")
+    csv_out_pos = tmp_path / "seg_pos.csv"
+    csv_out_opt = tmp_path / "seg_opt.csv"
+
+    args = argparse.Namespace(
+        csv_path_pos=str(csv_path),
+        csv_path_opt=None,
+        csv_path_out_pos=str(csv_out_pos),
+        csv_path_out=str(csv_out_opt),
+        error_csv_path=None,
+    )
+
+    out = segment_module.normalize_segment_args(args)
+
+    assert out.csv_path_out == str(csv_out_opt)
+
+
 def test_load_segmentation_config_default():
     cfg = segment_module.load_segmentation_config(
         None, base_path=Path(__file__).resolve().parents[1] / "src" / "imperandi"

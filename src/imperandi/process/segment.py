@@ -711,6 +711,13 @@ def add_segment_arguments(
         help="Path to the input CSV file. Defaults to ./nifti_index.csv.",
     )
     parser.add_argument(
+        "csv_path_out_pos",
+        nargs="?",
+        type=str,
+        default=None,
+        help="Optional output CSV path (positional alternative to --csv_path_out).",
+    )
+    parser.add_argument(
         "--csv_path",
         dest="csv_path_opt",
         type=str,
@@ -791,10 +798,12 @@ def normalize_segment_args(args: argparse.Namespace) -> argparse.Namespace:
 
     args.csv_path = str(csv_path.resolve())
 
-    if not args.csv_path_out:
+    csv_path_out_pos = getattr(args, "csv_path_out_pos", None)
+    csv_out = args.csv_path_out if args.csv_path_out else csv_path_out_pos
+    if not csv_out:
         args.csv_path_out = args.csv_path
     else:
-        args.csv_path_out = str(Path(args.csv_path_out))
+        args.csv_path_out = str(Path(csv_out))
 
     if args.error_csv_path:
         args.error_csv_path = str(Path(args.error_csv_path))
@@ -803,6 +812,8 @@ def normalize_segment_args(args: argparse.Namespace) -> argparse.Namespace:
 
     del args.csv_path_pos
     del args.csv_path_opt
+    if hasattr(args, "csv_path_out_pos"):
+        del args.csv_path_out_pos
 
     return args
 

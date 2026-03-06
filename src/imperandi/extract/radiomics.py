@@ -229,6 +229,13 @@ def add_radiomics_arguments(
         help="Path to input CSV with nifti/mask paths. Defaults to ./nifti_index.csv.",
     )
     parser.add_argument(
+        "csv_path_out_pos",
+        nargs="?",
+        type=str,
+        default=None,
+        help="Optional output CSV path (positional alternative to --csv_path_out).",
+    )
+    parser.add_argument(
         "--csv_path",
         dest="csv_path_opt",
         type=str,
@@ -303,8 +310,10 @@ def normalize_radiomics_args(args: argparse.Namespace) -> argparse.Namespace:
     csv_path = csv_path.resolve()
     args.csv_path = str(csv_path)
 
-    if args.csv_path_out:
-        args.csv_path_out = str(Path(args.csv_path_out))
+    csv_path_out_pos = getattr(args, "csv_path_out_pos", None)
+    csv_out = args.csv_path_out if args.csv_path_out else csv_path_out_pos
+    if csv_out:
+        args.csv_path_out = str(Path(csv_out))
     else:
         args.csv_path_out = str(csv_path.parent / f"{csv_path.stem}_radiomics.csv")
 
@@ -321,6 +330,8 @@ def normalize_radiomics_args(args: argparse.Namespace) -> argparse.Namespace:
 
     del args.csv_path_pos
     del args.csv_path_opt
+    if hasattr(args, "csv_path_out_pos"):
+        del args.csv_path_out_pos
     return args
 
 

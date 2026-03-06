@@ -31,6 +31,7 @@ def test_normalize_clean_args_prefers_optional_csv_path(tmp_path):
         clean.argparse.Namespace(
             csv_path_pos=[str(csv_pos)],
             csv_path_opt=[str(csv_opt)],
+            csv_path_out_pos=None,
             csv_path_out=None,
         )
     )
@@ -39,6 +40,7 @@ def test_normalize_clean_args_prefers_optional_csv_path(tmp_path):
     assert args.csv_path_out.endswith("opt_clean.csv")
     assert not hasattr(args, "csv_path_pos")
     assert not hasattr(args, "csv_path_opt")
+    assert not hasattr(args, "csv_path_out_pos")
 
 
 def test_normalize_clean_args_accepts_positional_only(tmp_path):
@@ -49,6 +51,7 @@ def test_normalize_clean_args_accepts_positional_only(tmp_path):
         clean.argparse.Namespace(
             csv_path_pos=[str(csv_pos)],
             csv_path_opt=None,
+            csv_path_out_pos=None,
             csv_path_out=None,
         )
     )
@@ -65,12 +68,49 @@ def test_normalize_clean_args_uses_out_suffix_for_clean_input(tmp_path):
         clean.argparse.Namespace(
             csv_path_pos=[str(csv_clean)],
             csv_path_opt=None,
+            csv_path_out_pos=None,
             csv_path_out=None,
         )
     )
 
     assert args.csv_path == [str(csv_clean)]
     assert args.csv_path_out.endswith("dicom_index_clean_out.csv")
+
+
+def test_normalize_clean_args_accepts_positional_csv_path_out(tmp_path):
+    csv_in = tmp_path / "input.csv"
+    csv_in.write_text("patient_key\np1\n")
+    csv_out = tmp_path / "clean_out.csv"
+
+    args = clean.normalize_clean_args(
+        clean.argparse.Namespace(
+            csv_path_pos=str(csv_in),
+            csv_path_opt=None,
+            csv_path_out_pos=str(csv_out),
+            csv_path_out=None,
+        )
+    )
+
+    assert args.csv_path == [str(csv_in)]
+    assert args.csv_path_out == str(csv_out)
+
+
+def test_normalize_clean_args_prefers_flag_csv_path_out_over_positional(tmp_path):
+    csv_in = tmp_path / "input.csv"
+    csv_in.write_text("patient_key\np1\n")
+    csv_out_pos = tmp_path / "clean_pos.csv"
+    csv_out_opt = tmp_path / "clean_opt.csv"
+
+    args = clean.normalize_clean_args(
+        clean.argparse.Namespace(
+            csv_path_pos=str(csv_in),
+            csv_path_opt=None,
+            csv_path_out_pos=str(csv_out_pos),
+            csv_path_out=str(csv_out_opt),
+        )
+    )
+
+    assert args.csv_path_out == str(csv_out_opt)
 
 
 def test_uniform_string_and_remove_other_organs_description():

@@ -53,6 +53,53 @@ def test_cli_clean_accepts_optional_csv_path_only(tmp_path):
     assert exit_code == 0
 
 
+def test_cli_clean_accepts_positional_csv_path_and_csv_path_out(tmp_path, capsys):
+    csv_in = tmp_path / "dicom_index.csv"
+    csv_in.write_text("patient_key,study_id,series_id\np1,s1,sr1\n")
+    csv_out = tmp_path / "dicom_index_clean_custom.csv"
+
+    exit_code = cli.main(
+        [
+            "clean",
+            str(csv_in),
+            str(csv_out),
+            "--dry-run",
+        ]
+    )
+
+    output = capsys.readouterr().out.replace("\\\\", "\\")
+    csv_path_out_line = next(
+        line for line in output.splitlines() if line.strip().startswith("csv_path_out")
+    )
+    assert exit_code == 0
+    assert str(csv_out) in csv_path_out_line
+
+
+def test_cli_clean_prefers_flag_csv_path_out_over_positional(tmp_path, capsys):
+    csv_in = tmp_path / "dicom_index.csv"
+    csv_in.write_text("patient_key,study_id,series_id\np1,s1,sr1\n")
+    csv_out_pos = tmp_path / "dicom_index_clean_pos.csv"
+    csv_out_opt = tmp_path / "dicom_index_clean_opt.csv"
+
+    exit_code = cli.main(
+        [
+            "clean",
+            str(csv_in),
+            str(csv_out_pos),
+            "--csv_path_out",
+            str(csv_out_opt),
+            "--dry-run",
+        ]
+    )
+
+    output = capsys.readouterr().out.replace("\\\\", "\\")
+    csv_path_out_line = next(
+        line for line in output.splitlines() if line.strip().startswith("csv_path_out")
+    )
+    assert exit_code == 0
+    assert str(csv_out_opt) in csv_path_out_line
+
+
 def test_cli_ingest_respects_flag_paths(tmp_path, capsys):
     root_opt = tmp_path / "root_opt"
     out_opt = tmp_path / "out_opt"
@@ -90,6 +137,53 @@ def test_cli_phase_accepts_optional_csv_path_only(tmp_path):
     assert exit_code == 0
 
 
+def test_cli_phase_accepts_positional_csv_path_and_csv_path_out(tmp_path, capsys):
+    csv_in = tmp_path / "nifti_index.csv"
+    csv_in.write_text("nifti_path\n")
+    csv_out = tmp_path / "nifti_index_phase_custom.csv"
+
+    exit_code = cli.main(
+        [
+            "phase",
+            str(csv_in),
+            str(csv_out),
+            "--dry-run",
+        ]
+    )
+
+    output = capsys.readouterr().out.replace("\\\\", "\\")
+    csv_path_out_line = next(
+        line for line in output.splitlines() if line.strip().startswith("csv_path_out")
+    )
+    assert exit_code == 0
+    assert str(csv_out) in csv_path_out_line
+
+
+def test_cli_phase_prefers_flag_csv_path_out_over_positional(tmp_path, capsys):
+    csv_in = tmp_path / "nifti_index.csv"
+    csv_in.write_text("nifti_path\n")
+    csv_out_pos = tmp_path / "nifti_index_phase_pos.csv"
+    csv_out_opt = tmp_path / "nifti_index_phase_opt.csv"
+
+    exit_code = cli.main(
+        [
+            "phase",
+            str(csv_in),
+            str(csv_out_pos),
+            "--csv_path_out",
+            str(csv_out_opt),
+            "--dry-run",
+        ]
+    )
+
+    output = capsys.readouterr().out.replace("\\\\", "\\")
+    csv_path_out_line = next(
+        line for line in output.splitlines() if line.strip().startswith("csv_path_out")
+    )
+    assert exit_code == 0
+    assert str(csv_out_opt) in csv_path_out_line
+
+
 def test_cli_radiomics_accepts_optional_csv_path_only(tmp_path):
     csv_in = tmp_path / "nifti_index.csv"
     csv_in.write_text("patient_key,phase,nifti_path\n")
@@ -104,6 +198,53 @@ def test_cli_radiomics_accepts_optional_csv_path_only(tmp_path):
     )
 
     assert exit_code == 0
+
+
+def test_cli_radiomics_accepts_positional_csv_path_and_csv_path_out(tmp_path, capsys):
+    csv_in = tmp_path / "nifti_index.csv"
+    csv_in.write_text("patient_key,phase,nifti_path\n")
+    csv_out = tmp_path / "nifti_index_radiomics_custom.csv"
+
+    exit_code = cli.main(
+        [
+            "radiomics",
+            str(csv_in),
+            str(csv_out),
+            "--dry-run",
+        ]
+    )
+
+    output = capsys.readouterr().out.replace("\\\\", "\\")
+    csv_path_out_line = next(
+        line for line in output.splitlines() if line.strip().startswith("csv_path_out")
+    )
+    assert exit_code == 0
+    assert str(csv_out) in csv_path_out_line
+
+
+def test_cli_radiomics_prefers_flag_csv_path_out_over_positional(tmp_path, capsys):
+    csv_in = tmp_path / "nifti_index.csv"
+    csv_in.write_text("patient_key,phase,nifti_path\n")
+    csv_out_pos = tmp_path / "nifti_index_radiomics_pos.csv"
+    csv_out_opt = tmp_path / "nifti_index_radiomics_opt.csv"
+
+    exit_code = cli.main(
+        [
+            "radiomics",
+            str(csv_in),
+            str(csv_out_pos),
+            "--csv_path_out",
+            str(csv_out_opt),
+            "--dry-run",
+        ]
+    )
+
+    output = capsys.readouterr().out.replace("\\\\", "\\")
+    csv_path_out_line = next(
+        line for line in output.splitlines() if line.strip().startswith("csv_path_out")
+    )
+    assert exit_code == 0
+    assert str(csv_out_opt) in csv_path_out_line
 
 
 def test_cli_radiomics_accepts_pyradiomics_settings_yaml(tmp_path):

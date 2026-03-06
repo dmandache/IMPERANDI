@@ -23,6 +23,7 @@ def test_normalize_radiomics_args_defaults(tmp_path):
     args = argparse.Namespace(
         csv_path_pos=str(csv_path),
         csv_path_opt=None,
+        csv_path_out_pos=None,
         csv_path_out=None,
         error_csv_path=None,
         skip_filter=False,
@@ -40,6 +41,31 @@ def test_normalize_radiomics_args_defaults(tmp_path):
     assert out.pyradiomics_settings is None
     assert not hasattr(out, "csv_path_pos")
     assert not hasattr(out, "csv_path_opt")
+    assert not hasattr(out, "csv_path_out_pos")
+
+
+def test_normalize_radiomics_args_accepts_positional_csv_path_out(tmp_path):
+    csv_path = tmp_path / "nifti_index.csv"
+    csv_path.write_text("nifti_path\n")
+    csv_out = tmp_path / "radiomics_out.csv"
+
+    args = argparse.Namespace(
+        csv_path_pos=str(csv_path),
+        csv_path_opt=None,
+        csv_path_out_pos=str(csv_out),
+        csv_path_out=None,
+        error_csv_path=None,
+        skip_filter=False,
+        manifest=None,
+        pyradiomics_settings=None,
+        verbose=False,
+        dry_run=False,
+    )
+
+    out = radiomics_module.normalize_radiomics_args(args)
+
+    assert out.csv_path_out == str(csv_out)
+    assert not hasattr(out, "csv_path_out_pos")
 
 
 def test_normalize_radiomics_args_validates_pyradiomics_settings_path(tmp_path, monkeypatch):
@@ -52,6 +78,7 @@ def test_normalize_radiomics_args_validates_pyradiomics_settings_path(tmp_path, 
     args = argparse.Namespace(
         csv_path_pos=str(csv_path),
         csv_path_opt=None,
+        csv_path_out_pos=None,
         csv_path_out=None,
         error_csv_path=None,
         skip_filter=False,
@@ -72,6 +99,7 @@ def test_normalize_radiomics_args_rejects_missing_or_non_yaml_settings_path(tmp_
     args_missing = argparse.Namespace(
         csv_path_pos=str(csv_path),
         csv_path_opt=None,
+        csv_path_out_pos=None,
         csv_path_out=None,
         error_csv_path=None,
         skip_filter=False,
@@ -88,6 +116,7 @@ def test_normalize_radiomics_args_rejects_missing_or_non_yaml_settings_path(tmp_
     args_bad_suffix = argparse.Namespace(
         csv_path_pos=str(csv_path),
         csv_path_opt=None,
+        csv_path_out_pos=None,
         csv_path_out=None,
         error_csv_path=None,
         skip_filter=False,

@@ -18,6 +18,7 @@ def test_normalize_phase_args_defaults(tmp_path):
     args = argparse.Namespace(
         csv_path_pos=str(csv_path),
         csv_path_opt=None,
+        csv_path_out_pos=None,
         csv_path_out=None,
         error_csv_path=None,
         totalseg_home_dir=None,
@@ -32,6 +33,51 @@ def test_normalize_phase_args_defaults(tmp_path):
     assert out.error_csv_path == str(csv_path.parent / "phase_errors.csv")
     assert not hasattr(out, "csv_path_pos")
     assert not hasattr(out, "csv_path_opt")
+    assert not hasattr(out, "csv_path_out_pos")
+
+
+def test_normalize_phase_args_accepts_positional_csv_path_out(tmp_path):
+    csv_path = tmp_path / "nifti_index.csv"
+    csv_path.write_text("nifti_path\n")
+    csv_out = tmp_path / "phase_custom.csv"
+
+    args = argparse.Namespace(
+        csv_path_pos=str(csv_path),
+        csv_path_opt=None,
+        csv_path_out_pos=str(csv_out),
+        csv_path_out=None,
+        error_csv_path=None,
+        totalseg_home_dir=None,
+        verbose=False,
+        dry_run=False,
+    )
+
+    out = phase_module.normalize_phase_args(args)
+
+    assert out.csv_path_out == str(csv_out)
+    assert not hasattr(out, "csv_path_out_pos")
+
+
+def test_normalize_phase_args_prefers_flag_csv_path_out(tmp_path):
+    csv_path = tmp_path / "nifti_index.csv"
+    csv_path.write_text("nifti_path\n")
+    csv_out_pos = tmp_path / "phase_pos.csv"
+    csv_out_opt = tmp_path / "phase_opt.csv"
+
+    args = argparse.Namespace(
+        csv_path_pos=str(csv_path),
+        csv_path_opt=None,
+        csv_path_out_pos=str(csv_out_pos),
+        csv_path_out=str(csv_out_opt),
+        error_csv_path=None,
+        totalseg_home_dir=None,
+        verbose=False,
+        dry_run=False,
+    )
+
+    out = phase_module.normalize_phase_args(args)
+
+    assert out.csv_path_out == str(csv_out_opt)
 
 
 def test_process_single_volume_success(tmp_path, monkeypatch):
