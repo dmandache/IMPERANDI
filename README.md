@@ -84,7 +84,7 @@ IMPERANDI ships a single CLI with these subcommands:
 - `convert`: convert indexed DICOM volumes to NIfTI.
 - `segment`: run configurable segmentation on NIfTI volumes (requires _TotalSegmentator_, install with `.[segment]`).
 - `phase`: extract contrast phase metadata from NIfTI volumes (requires _TotalSegmentator_, install with `.[segment]`).
-- `radiomics`: extract radiomics features from NIfTI volumes and masks (requires _pyRadiomics_, install with `.[radiomics]).
+- `radiomics`: extract radiomics features from NIfTI volumes and masks (requires _pyRadiomics_, install with `.[radiomics]`).
 
 Get help:
 
