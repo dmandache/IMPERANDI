@@ -39,5 +39,15 @@
       "fill_holes": true,
       "close": true
     }
+  },
+  "radiomics": {
+    "setting": {
+      "binWidth": 25,
+      "resampledPixelSpacing": [1, 1, 1],
+      "resegmentRange": [-150, 250]
+    },
+    "imageType": {
+      "Original": {}
+    }
   }
 }
