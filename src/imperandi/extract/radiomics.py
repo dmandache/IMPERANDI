@@ -25,8 +25,9 @@ DEFAULT_CHECKPOINT_EVERY_SEC = 350
 
 DEFAULT_SETTINGS = {
     "binWidth": 25,
-    "resampledPixelSpacing": [1, 1, 1],
-    "resegmentRange": [-150, 250],
+    "resampledPixelSpacing": [1, 1, 1], # 1mm isotropic resampling
+    "resegmentRange": [-150, 250],  # typical HU range for soft tissue
+    "correctMask": True, # enable mask correction to ensure valid feature extraction, especially for shape features
 }
 YAML_SUFFIXES = (".yaml", ".yml")
 
