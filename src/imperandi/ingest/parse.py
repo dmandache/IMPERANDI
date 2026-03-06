@@ -13,7 +13,6 @@ from typing import Optional, Union
 
 import pandas as pd
 from tqdm import tqdm
-from pandarallel import pandarallel
 from pydicom import dcmread, config
 
 from imperandi.utils.archive_io import (
@@ -45,7 +44,7 @@ warnings.filterwarnings("ignore")
 logger = logging.getLogger(__name__)
 DEFAULT_CHECKPOINT_EVERY_ROWS = 10_000
 DEFAULT_CHECKPOINT_EVERY_SEC = 350
-PARSE_WORKER_BATCH_SIZE = 2048
+PARSE_WORKER_BATCH_SIZE = 16384
 PARSE_CHECKPOINT_SCHEMA_VERSION = 1
 
 # Make reading tolerant of non-conformant values
@@ -1433,5 +1432,4 @@ if __name__ == "__main__":
         print_args(args)
         raise SystemExit(0)
     setup_logging(verbose=getattr(args, "verbose", False))
-    pandarallel.initialize(progress_bar=args.verbose, nb_workers=args.num_workers)
     main(args)

@@ -5,11 +5,6 @@ import logging
 from pathlib import Path
 from typing import Optional, Sequence
 
-try:
-    from pandarallel import pandarallel
-except ModuleNotFoundError:
-    pandarallel = None
-
 from imperandi.ingest import clean as clean_module
 from imperandi.ingest import parse as parse_module
 from imperandi.process import convert as convert_module
@@ -48,14 +43,6 @@ def _load_segment_module():
             "Install with: pip install -e .[segment]"
         ) from exc
     return segment_module
-
-
-def _ensure_pandarallel() -> None:
-    if pandarallel is None:
-        raise RuntimeError(
-            "The 'parse' and 'ingest' commands require optional dependencies. "
-            "Install with: pip install pandarallel"
-        )
 
 
 def _add_parse_subcommand(subparsers: argparse._SubParsersAction) -> None:
@@ -196,12 +183,6 @@ def _handle_parse(args: argparse.Namespace) -> int:
         logger.info("Dry run: parse")
         print_args(args)
         return 0
-    try:
-        _ensure_pandarallel()
-    except RuntimeError as exc:
-        logger.error("%s", str(exc))
-        return 2
-    pandarallel.initialize(progress_bar=args.verbose, nb_workers=args.num_workers)
     parse_module.main(args)
     return 0
 
@@ -252,12 +233,6 @@ def _handle_ingest(args: argparse.Namespace) -> int:
         logger.info("Dry run: ingest (parse -> clean)")
         print_args(args)
         return 0
-    try:
-        _ensure_pandarallel()
-    except RuntimeError as exc:
-        logger.error("%s", str(exc))
-        return 2
-    pandarallel.initialize(progress_bar=args.verbose, nb_workers=args.num_workers)
     parse_module.main(args)
     manifest = load_manifest(
         args.manifest, base_path=Path(__file__).resolve().parents[0]
