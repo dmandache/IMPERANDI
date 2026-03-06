@@ -259,7 +259,12 @@ def _is_safe_unique_key(df: pd.DataFrame, key: str) -> bool:
     if series.empty:
         return True
     non_null = series.dropna()
-    return bool(non_null.is_unique)
+    try:
+        return bool(non_null.is_unique)
+    except TypeError:
+        # Some columns (e.g. list-valued dicom_path) contain unhashable values.
+        # Treat them as unsafe merge keys so callers can try the next key/fallback path.
+        return False
 
 
 def merge_with_existing_output(

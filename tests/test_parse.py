@@ -225,6 +225,22 @@ def test_get_dicom_paths_supports_glob_root(tmp_path):
     assert set(paths) == {p1, p2}
 
 
+def test_get_dicom_path_entries_are_globally_sorted(tmp_path):
+    root = tmp_path / "dicom_root"
+    (root / "z_site" / "patientB").mkdir(parents=True)
+    (root / "a_site" / "patientA").mkdir(parents=True)
+
+    p1 = root / "z_site" / "patientB" / "img2.dcm"
+    p2 = root / "a_site" / "patientA" / "img1.dcm"
+    p3 = root / "a_site" / "patientA" / "img3.dcm"
+    for p in (p1, p2, p3):
+        p.write_text("")
+
+    entries = parse.get_dicom_path_entries(str(root), archive_max_depth=3)
+    sources = [str(entry["source_uri_or_path"]) for entry in entries]
+    assert sources == sorted(sources)
+
+
 def test_get_dicom_path_entries_supports_archives(tmp_path):
     archive = _make_archive_dataset(tmp_path)
     entries = parse.get_dicom_path_entries(str(archive), archive_max_depth=3)
@@ -444,8 +460,7 @@ def test_build_global_readers_auto_switches(monkeypatch):
     assert state["auto_switched"]
 
 
-def test_process_with_checkpoint_keeps_csv_outputs(tmp_path, monkeypatch):
-    monkeypatch.setattr(pd.Series, "parallel_apply", pd.Series.apply, raising=False)
+def test_process_with_checkpoint_keeps_csv_outputs(tmp_path):
     df_paths = pd.DataFrame(
         {"dicom_path": ["a.dcm", "b.dcm"], "_read_path": ["a.dcm", "b.dcm"]}
     )
@@ -467,12 +482,13 @@ def test_process_with_checkpoint_keeps_csv_outputs(tmp_path, monkeypatch):
     assert (tmp_path / ".dicom_index.parse.checkpoint.csv").exists()
     assert list(tmp_path.glob("dicom_index_*.csv")) == []
     assert len(out) == 2
+    state = json.loads((tmp_path / ".dicom_index.parse.state.json").read_text())
+    assert state["parse_checkpoint_schema"] == parse.PARSE_CHECKPOINT_SCHEMA_VERSION
+    assert state["next_source_idx"] == 2
+    assert state["finished"] is True
 
 
-def test_process_with_checkpoint_preserves_all_empty_columns_per_chunk(
-    tmp_path, monkeypatch
-):
-    monkeypatch.setattr(pd.Series, "parallel_apply", pd.Series.apply, raising=False)
+def test_process_with_checkpoint_preserves_all_empty_columns_per_chunk(tmp_path):
     df_paths = pd.DataFrame({"dicom_path": ["a.dcm", "b.dcm"]})
 
     out = parse.process_with_checkpoint(
@@ -499,7 +515,6 @@ def test_process_with_checkpoint_preserves_all_empty_columns_per_chunk(
 
 
 def test_process_with_checkpoint_reports_file_progress(tmp_path, monkeypatch):
-    monkeypatch.setattr(pd.Series, "parallel_apply", pd.Series.apply, raising=False)
     recorded = {"kwargs": None, "updates": []}
 
     class DummyProgressBar:
@@ -537,7 +552,6 @@ def test_process_with_checkpoint_reports_file_progress(tmp_path, monkeypatch):
 def test_process_with_checkpoint_skips_when_matching_run_already_finished(
     tmp_path, monkeypatch
 ):
-    monkeypatch.setattr(pd.Series, "parallel_apply", pd.Series.apply, raising=False)
     recorded = {"updates": []}
     calls = []
 
@@ -585,6 +599,83 @@ def test_process_with_checkpoint_skips_when_matching_run_already_finished(
     assert len(out) == 3
 
 
+def test_process_with_checkpoint_resumes_from_cursor_state(tmp_path):
+    df_paths = pd.DataFrame({"dicom_path": ["a.dcm", "b.dcm", "c.dcm", "d.dcm"]})
+
+    parse.process_with_checkpoint(
+        df_paths=df_paths,
+        read_func=lambda _: pd.Series({"PatientName": "x"}),
+        checkpoint_every_rows=2,
+        checkpoint_every_sec=3600,
+        resume=False,
+        strict_resume=False,
+        output_dir=tmp_path,
+        final_name="dicom_index.csv",
+    )
+
+    ckpt_path = tmp_path / ".dicom_index.parse.checkpoint.csv"
+    state_path = tmp_path / ".dicom_index.parse.state.json"
+
+    ckpt = pd.read_csv(ckpt_path).iloc[:2].copy()
+    ckpt.to_csv(ckpt_path, index=False)
+
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["next_source_idx"] = 2
+    state["finished"] = False
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    calls = []
+    out = parse.process_with_checkpoint(
+        df_paths=df_paths,
+        read_func=lambda path: calls.append(path) or pd.Series({"PatientName": "x"}),
+        checkpoint_every_rows=2,
+        checkpoint_every_sec=3600,
+        resume=True,
+        strict_resume=False,
+        output_dir=tmp_path,
+        final_name="dicom_index.csv",
+    )
+
+    assert calls == ["c.dcm", "d.dcm"]
+    assert len(out) == 4
+
+
+def test_process_with_checkpoint_ignores_legacy_parse_state(tmp_path):
+    df_paths = pd.DataFrame({"dicom_path": ["a.dcm", "b.dcm"]})
+
+    parse.process_with_checkpoint(
+        df_paths=df_paths,
+        read_func=lambda _: pd.Series({"PatientName": "x"}),
+        checkpoint_every_rows=1,
+        checkpoint_every_sec=3600,
+        resume=False,
+        strict_resume=False,
+        output_dir=tmp_path,
+        final_name="dicom_index.csv",
+    )
+
+    state_path = tmp_path / ".dicom_index.parse.state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state.pop("parse_checkpoint_schema", None)
+    state["finished"] = True
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    calls = []
+    out = parse.process_with_checkpoint(
+        df_paths=df_paths,
+        read_func=lambda path: calls.append(path) or pd.Series({"PatientName": "x"}),
+        checkpoint_every_rows=1,
+        checkpoint_every_sec=3600,
+        resume=True,
+        strict_resume=False,
+        output_dir=tmp_path,
+        final_name="dicom_index.csv",
+    )
+
+    assert calls == ["a.dcm", "b.dcm"]
+    assert len(out) == 2
+
+
 def test_process_with_checkpoint_rejects_non_positive_frequency(tmp_path):
     df_paths = pd.DataFrame({"dicom_path": ["a.dcm"]})
 
@@ -616,10 +707,7 @@ def test_process_with_checkpoint_rejects_non_positive_frequency(tmp_path):
         )
 
 
-def test_process_with_checkpoint_without_checkpoints_writes_only_final(
-    tmp_path, monkeypatch
-):
-    monkeypatch.setattr(pd.Series, "parallel_apply", pd.Series.apply, raising=False)
+def test_process_with_checkpoint_without_checkpoints_writes_only_final(tmp_path):
     df_paths = pd.DataFrame({"dicom_path": ["a.dcm", "b.dcm"]})
 
     out = parse.process_with_checkpoint(

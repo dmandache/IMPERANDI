@@ -1,9 +1,12 @@
-﻿import warnings
+import warnings
 import glob
+import hashlib
 import io
 import json
 import logging
 import os
+import time
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 import argparse
 from typing import Optional, Union
@@ -26,9 +29,14 @@ from imperandi.utils.misc import print_args
 from imperandi.utils.manifest import load_manifest
 from imperandi.utils.checkpoint_cli import add_checkpoint_arguments
 from imperandi.utils.run_state import (
+    STATE_SCHEMA_VERSION,
     atomic_write_csv,
-    CheckpointManager,
-    prepare_resume_context,
+    atomic_write_json,
+    build_checkpoint_paths,
+    compute_args_hash,
+    fingerprint_inputs,
+    load_state,
+    now_epoch,
 )
 from imperandi.datasets_config.defaults import DEFAULT_DICOM_TAGS
 from imperandi.ingest.hook_manifests import apply_id_standardization
@@ -37,9 +45,16 @@ warnings.filterwarnings("ignore")
 logger = logging.getLogger(__name__)
 DEFAULT_CHECKPOINT_EVERY_ROWS = 10_000
 DEFAULT_CHECKPOINT_EVERY_SEC = 350
+PARSE_WORKER_BATCH_SIZE = 2048
+PARSE_CHECKPOINT_SCHEMA_VERSION = 1
 
 # Make reading tolerant of non-conformant values
 config.settings.reading_validation_mode = config.IGNORE  # or config.WARN
+
+_PARSE_WORKER_TAGS: tuple[str, ...] = tuple()
+_PARSE_WORKER_FORCE = False
+_PARSE_WORKER_ARCHIVE_MODE = False
+_PARSE_WORKER_ARCHIVE_MAX_DEPTH = DEFAULT_ARCHIVE_MAX_DEPTH
 
 
 # -------------------------
@@ -717,11 +732,27 @@ def choose_ids(
     # Path-derived patient_key
     # -------------------------
     if relative_path_col in df.columns:
-        rel = df[relative_path_col].map(
-            lambda p: (
-                Path(str(p)) if (not pd.isna(p) and str(p).strip() != "") else Path("")
-            )
+        rel_norm = (
+            df[relative_path_col]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+            .str.replace("\\", "/", regex=False)
+            .str.strip("/")
         )
+        n_parts = rel_norm.str.count("/") + 1
+        n_parts = n_parts.where(rel_norm != "", 0)
+        split = rel_norm.str.split("/", n=3, expand=True)
+
+        def _split_col(position: int) -> pd.Series:
+            if position in split.columns:
+                return split[position]
+            return pd.Series([None] * len(df), index=df.index)
+
+        df["patient_key_path"] = _split_col(0).where(n_parts > 1, None)
+        df["study_path"] = _split_col(1).where(n_parts > 2, None)
+        df["series_path"] = _split_col(2).where(n_parts > 3, None)
+        df["dicom_filename"] = rel_norm.str.rsplit("/", n=1).str[-1].fillna("")
     else:
         if scan_root_col in df.columns:
             scan_roots = df[scan_root_col].astype(str)
@@ -740,10 +771,10 @@ def choose_ids(
             [_relative_to_root(p, r) for p, r in zip(df["dicom_path"], scan_roots)],
             index=df.index,
         )
-    df["patient_key_path"] = rel.map(lambda p: p.parts[0] if len(p.parts) > 1 else None)
-    df["study_path"] = rel.map(lambda p: p.parts[1] if len(p.parts) > 2 else None)
-    df["series_path"] = rel.map(lambda p: p.parts[2] if len(p.parts) > 3 else None)
-    df["dicom_filename"] = rel.map(lambda p: p.name)
+        df["patient_key_path"] = rel.map(lambda p: p.parts[0] if len(p.parts) > 1 else None)
+        df["study_path"] = rel.map(lambda p: p.parts[1] if len(p.parts) > 2 else None)
+        df["series_path"] = rel.map(lambda p: p.parts[2] if len(p.parts) > 3 else None)
+        df["dicom_filename"] = rel.map(lambda p: p.name)
 
     # -------------------------
     # Tag-derived IDs
@@ -797,6 +828,164 @@ def choose_ids(
 # -------------------------
 # Checkpointed processing (for tag read stage)
 # -------------------------
+def _read_selected_values_dict(
+    source,
+    *,
+    tags: list[str],
+    force: bool,
+    archive_mode: bool,
+    archive_max_depth: int,
+) -> dict:
+    try:
+        if archive_mode or is_archive_uri(str(source)):
+            ds = _load_dicom_dataset_archive_aware(
+                source,
+                force=force,
+                specific_tags=tags,
+                archive_max_depth=archive_max_depth,
+            )
+        else:
+            ds = _load_dicom_dataset_standard(
+                source,
+                force=force,
+                specific_tags=tags,
+            )
+        return {tag: _normalize_dicom_value(ds.get(tag)) for tag in tags}
+    except Exception:
+        return {}
+
+
+def _init_parse_worker(
+    tags: tuple[str, ...],
+    force: bool,
+    archive_mode: bool,
+    archive_max_depth: int,
+):
+    global _PARSE_WORKER_TAGS
+    global _PARSE_WORKER_FORCE
+    global _PARSE_WORKER_ARCHIVE_MODE
+    global _PARSE_WORKER_ARCHIVE_MAX_DEPTH
+
+    _PARSE_WORKER_TAGS = tuple(tags)
+    _PARSE_WORKER_FORCE = bool(force)
+    _PARSE_WORKER_ARCHIVE_MODE = bool(archive_mode)
+    _PARSE_WORKER_ARCHIVE_MAX_DEPTH = int(archive_max_depth)
+
+
+def _read_selected_worker(task: tuple[int, object]) -> dict:
+    source_idx, source = task
+    values = _read_selected_values_dict(
+        source,
+        tags=list(_PARSE_WORKER_TAGS),
+        force=_PARSE_WORKER_FORCE,
+        archive_mode=_PARSE_WORKER_ARCHIVE_MODE,
+        archive_max_depth=_PARSE_WORKER_ARCHIVE_MAX_DEPTH,
+    )
+    values["_source_idx"] = int(source_idx)
+    return values
+
+
+def _coerce_header_result_to_dict(value) -> dict:
+    if isinstance(value, pd.Series):
+        return value.to_dict()
+    if isinstance(value, dict):
+        return dict(value)
+    return {}
+
+
+def _lightweight_parse_input_fingerprint(inputs: list[object]) -> list[dict]:
+    canonical = [str(x) for x in inputs]
+    digest = hashlib.sha256()
+    for item in canonical:
+        digest.update(item.encode("utf-8", errors="ignore"))
+        digest.update(b"\0")
+    if canonical:
+        first = canonical[0]
+        last = canonical[-1]
+    else:
+        first = None
+        last = None
+    return [
+        {
+            "mode": "lightweight",
+            "count": len(canonical),
+            "first": first,
+            "last": last,
+            "sha256": digest.hexdigest(),
+        }
+    ]
+
+
+def _parse_state_matches(
+    state: dict | None,
+    *,
+    command: str,
+    args_hash: str,
+    input_fingerprint: list[dict],
+) -> bool:
+    if not isinstance(state, dict):
+        return False
+    return (
+        state.get("schema_version") == STATE_SCHEMA_VERSION
+        and state.get("parse_checkpoint_schema") == PARSE_CHECKPOINT_SCHEMA_VERSION
+        and state.get("command") == command
+        and state.get("args_hash") == args_hash
+        and state.get("input_fingerprint") == input_fingerprint
+    )
+
+
+def _write_parse_state(
+    *,
+    state_path: Path,
+    args_hash: str,
+    input_fingerprint: list[dict],
+    next_source_idx: int,
+    finished: bool,
+) -> None:
+    payload = {
+        "schema_version": STATE_SCHEMA_VERSION,
+        "parse_checkpoint_schema": PARSE_CHECKPOINT_SCHEMA_VERSION,
+        "command": "parse",
+        "args_hash": args_hash,
+        "input_fingerprint": input_fingerprint,
+        "next_source_idx": int(max(0, next_source_idx)),
+        "updated_at_epoch": now_epoch(),
+        "finished": bool(finished),
+    }
+    atomic_write_json(state_path, payload)
+
+
+def _append_checkpoint_rows(path: Path, df: pd.DataFrame) -> None:
+    if df.empty:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_header = not path.exists() or path.stat().st_size == 0
+    with path.open("a", encoding="utf-8", newline="") as handle:
+        df.to_csv(handle, index=False, header=write_header)
+
+
+def _load_checkpoint_columns(path: Path) -> list[str]:
+    if not path.exists() or path.stat().st_size == 0:
+        return []
+    return pd.read_csv(path, nrows=0).columns.tolist()
+
+
+def _series_has_any_true(series: pd.Series) -> bool:
+    if series.empty:
+        return False
+
+    def _to_bool(value) -> bool:
+        if pd.isna(value):
+            return False
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        return str(value).strip().lower() in {"1", "true", "t", "yes", "y"}
+
+    return bool(series.map(_to_bool).any())
+
+
 def process_with_checkpoint(
     df_paths: pd.DataFrame,
     read_func,
@@ -807,119 +996,276 @@ def process_with_checkpoint(
     output_dir: Path,
     final_name: str,
     read_path_col: str = "dicom_path",
+    *,
+    num_workers: int = 1,
+    worker_config: Optional[dict] = None,
+    transform_chunk=None,
+    return_df: bool = True,
+    expected_columns: Optional[list[str]] = None,
+    resume_signature: Optional[dict] = None,
 ):
     """
-    Apply read_func(dicom_path)->Series with unified row-level checkpoint/resume.
+    Apply DICOM header reads in chunked mode with append-only checkpointing.
     """
     if checkpoint_every_rows <= 0:
         raise ValueError("checkpoint_every_rows must be a positive integer.")
     if checkpoint_every_sec <= 0:
         raise ValueError("checkpoint_every_sec must be a positive integer.")
+    if read_path_col not in df_paths.columns:
+        raise KeyError(f"column '{read_path_col}' missing")
 
     cols_to_drop_for_persist = [read_path_col] if read_path_col != "dicom_path" else []
     output_path = output_dir / final_name
     error_path = output_dir / f"{Path(final_name).stem}_errors.csv"
+    paths = build_checkpoint_paths(output_path=output_path, error_path=error_path, command="parse")
+
+    df = df_paths.copy()
+    if "_source_idx" not in df.columns:
+        df["_source_idx"] = pd.RangeIndex(start=0, stop=len(df), step=1, dtype="int64")
+    df = df.sort_values("_source_idx").reset_index(drop=True)
+
+    input_values = df[read_path_col].tolist()
+    input_fingerprint = (
+        fingerprint_inputs(input_values, strict=True)
+        if strict_resume
+        else _lightweight_parse_input_fingerprint(input_values)
+    )
     runtime_args = argparse.Namespace(
+        read_path_col=read_path_col,
+        dataframe_columns=list(df.columns),
+        num_workers=int(num_workers),
+        worker_config=(worker_config or {}),
+        resume_signature=(resume_signature or {}),
         checkpoint_every_rows=checkpoint_every_rows,
         checkpoint_every_sec=checkpoint_every_sec,
         resume=resume,
         strict_resume=strict_resume,
     )
-
-    resume_ctx = prepare_resume_context(
-        args=runtime_args,
-        command="parse",
-        inputs=df_paths[read_path_col].tolist(),
-        output_path=output_path,
-        error_path=error_path,
-        exclude_hash_args=(
+    args_hash = compute_args_hash(
+        runtime_args,
+        exclude_keys=(
             "resume",
             "checkpoint_every_rows",
             "checkpoint_every_sec",
             "strict_resume",
         ),
     )
-    paths = resume_ctx["paths"]
-    state = resume_ctx["state"]
-    can_resume = resume_ctx["can_resume"]
-    already_finished = resume_ctx["already_finished"]
-    ckpt = CheckpointManager(paths=paths, config=resume_ctx["config"])
+
+    state = load_state(paths.state_path)
+    state_is_compatible = bool(resume) and _parse_state_matches(
+        state,
+        command="parse",
+        args_hash=args_hash,
+        input_fingerprint=input_fingerprint,
+    )
+    if bool(resume) and state and not state_is_compatible:
+        logger.info(
+            "Existing parse checkpoint is incompatible with current checkpoint schema/signature; starting fresh."
+        )
+
+    already_finished = (
+        state_is_compatible
+        and bool((state or {}).get("finished"))
+        and output_path.exists()
+    )
+    can_resume = state_is_compatible and paths.main_checkpoint_path.exists()
 
     if already_finished:
         logger.info(
             "Resume enabled and matching parse run already finished; skipping execution."
         )
-        if output_path.exists():
+        if return_df:
             return pd.read_csv(output_path)
-        if paths.main_checkpoint_path.exists():
-            return pd.read_csv(paths.main_checkpoint_path).drop(
-                columns=["_source_idx"], errors="ignore"
-            )
-        return df_paths.copy()
+        return None
 
-    if can_resume and paths.main_checkpoint_path.exists():
-        logger.info("Resuming parse from checkpoint: %s", paths.main_checkpoint_path)
-        df = pd.read_csv(paths.main_checkpoint_path).copy()
+    if not can_resume:
+        for stale in (
+            paths.main_checkpoint_path,
+            paths.error_checkpoint_path,
+            paths.state_path,
+        ):
+            if stale.exists():
+                stale.unlink()
+        next_source_idx = 0
     else:
-        df = df_paths.copy()
-        df["_source_idx"] = df.index.astype(int)
+        next_source_idx = int((state or {}).get("next_source_idx", 0))
+        next_source_idx = max(0, min(next_source_idx, len(df)))
+        logger.info("Resuming parse from source index %s", next_source_idx)
 
-    if "_source_idx" not in df.columns:
-        df["_source_idx"] = df.index.astype(int)
+    requested_workers = max(1, int(num_workers))
+    active_worker_config = worker_config or {}
+    if active_worker_config and "tags" not in active_worker_config:
+        raise ValueError("worker_config must include a 'tags' key when provided.")
 
-    completed_indices: set[int] = set()
-    if can_resume:
-        completed_indices = {
-            int(i)
-            for i in (state or {}).get("completed_indices", [])
-            if isinstance(i, int)
-        }
+    checkpoint_columns = list(expected_columns) if expected_columns else []
+    if can_resume and not checkpoint_columns:
+        checkpoint_columns = _load_checkpoint_columns(paths.main_checkpoint_path)
+    if checkpoint_columns and "_source_idx" not in checkpoint_columns:
+        checkpoint_columns = ["_source_idx", *checkpoint_columns]
 
-    if read_path_col not in df.columns:
-        raise KeyError(f"column '{read_path_col}' missing")
+    chunk_size = max(1, min(PARSE_WORKER_BATCH_SIZE, int(checkpoint_every_rows)))
+    buffer_frames: list[pd.DataFrame] = []
+    buffered_rows = 0
+    pending_next_source_idx = next_source_idx
+    last_flush_at = time.time()
 
-    pending_indices = [
-        i for i in df.index.tolist() if int(df.at[i, "_source_idx"]) not in completed_indices
-    ]
-    total_rows = df.shape[0]
-    with tqdm(total=total_rows, desc="Parse files", unit="file") as pbar:
-        if completed_indices:
-            pbar.update(len(completed_indices))
-        chunk_size = max(1, int(checkpoint_every_rows))
-        for start in range(0, len(pending_indices), chunk_size):
-            chunk_indices = pending_indices[start : start + chunk_size]
-            chunk = df.loc[chunk_indices].copy()
-            tags_chunk = chunk[read_path_col].parallel_apply(read_func)
-            tags_chunk = tags_chunk.replace("", float("NaN")).infer_objects(copy=False)
-            for col in tags_chunk.columns:
-                if col not in df.columns:
-                    df[col] = None
-                df.loc[chunk_indices, col] = tags_chunk[col].values
-            for idx in chunk_indices:
-                completed_indices.add(int(df.at[idx, "_source_idx"]))
-            ckpt.mark_processed(len(chunk_indices))
-            ckpt.flush(
-                main_df=df,
-                error_df=pd.DataFrame(),
-                completed_indices=completed_indices,
-                force=False,
-            )
-            pbar.update(len(chunk_indices))
+    def _flush_buffer(force_state: bool = False):
+        nonlocal buffer_frames, buffered_rows, checkpoint_columns, last_flush_at
+        if not buffer_frames and not force_state:
+            return
 
-    ckpt.flush(
-        main_df=df,
-        error_df=pd.DataFrame(),
-        completed_indices=completed_indices,
-        force=True,
+        if buffer_frames:
+            flush_df = pd.concat(buffer_frames, ignore_index=True)
+            if "_source_idx" not in flush_df.columns:
+                raise KeyError("internal error: _source_idx missing from flush dataframe")
+
+            if not checkpoint_columns:
+                checkpoint_columns = flush_df.columns.tolist()
+            extra_cols = [c for c in flush_df.columns if c not in checkpoint_columns]
+            if extra_cols:
+                checkpoint_columns = [*checkpoint_columns, *extra_cols]
+                if paths.main_checkpoint_path.exists():
+                    existing = pd.read_csv(paths.main_checkpoint_path)
+                    existing = existing.reindex(columns=checkpoint_columns, fill_value=None)
+                    atomic_write_csv(existing, paths.main_checkpoint_path, index=False)
+
+            flush_df = flush_df.reindex(columns=checkpoint_columns, fill_value=None)
+            _append_checkpoint_rows(paths.main_checkpoint_path, flush_df)
+            buffer_frames = []
+            buffered_rows = 0
+
+        _write_parse_state(
+            state_path=paths.state_path,
+            args_hash=args_hash,
+            input_fingerprint=input_fingerprint,
+            next_source_idx=pending_next_source_idx,
+            finished=False,
+        )
+        last_flush_at = time.time()
+
+    parse_executor = None
+    if active_worker_config and requested_workers > 1:
+        parse_executor = ProcessPoolExecutor(
+            max_workers=requested_workers,
+            initializer=_init_parse_worker,
+            initargs=(
+                tuple(active_worker_config.get("tags", [])),
+                bool(active_worker_config.get("force", False)),
+                bool(active_worker_config.get("archive_mode", False)),
+                int(active_worker_config.get("archive_max_depth", DEFAULT_ARCHIVE_MAX_DEPTH)),
+            ),
+        )
+
+    total_rows = len(df)
+    try:
+        with tqdm(total=total_rows, desc="Parse files", unit="file") as pbar:
+            if next_source_idx > 0:
+                pbar.update(next_source_idx)
+
+            for start in range(next_source_idx, total_rows, chunk_size):
+                end = min(total_rows, start + chunk_size)
+                chunk = df.iloc[start:end].copy()
+                tasks = [
+                    (int(src_idx), source)
+                    for src_idx, source in zip(
+                        chunk["_source_idx"].tolist(), chunk[read_path_col].tolist()
+                    )
+                ]
+                if active_worker_config:
+                    if parse_executor is not None:
+                        map_chunk_size = max(1, len(tasks) // (requested_workers * 4))
+                        records = list(
+                            parse_executor.map(
+                                _read_selected_worker,
+                                tasks,
+                                chunksize=map_chunk_size,
+                            )
+                        )
+                    else:
+                        records = []
+                        for source_idx, source in tasks:
+                            row = _read_selected_values_dict(
+                                source,
+                                tags=list(active_worker_config.get("tags", [])),
+                                force=bool(active_worker_config.get("force", False)),
+                                archive_mode=bool(active_worker_config.get("archive_mode", False)),
+                                archive_max_depth=int(
+                                    active_worker_config.get(
+                                        "archive_max_depth",
+                                        DEFAULT_ARCHIVE_MAX_DEPTH,
+                                    )
+                                ),
+                            )
+                            row["_source_idx"] = int(source_idx)
+                            records.append(row)
+                else:
+                    if read_func is None:
+                        raise ValueError(
+                            "read_func is required when worker_config is not provided."
+                        )
+                    records = []
+                    for source_idx, source in tasks:
+                        row = _coerce_header_result_to_dict(read_func(source))
+                        row["_source_idx"] = int(source_idx)
+                        records.append(row)
+
+                tags_chunk = pd.DataFrame.from_records(records)
+                chunk_out = chunk.merge(tags_chunk, on="_source_idx", how="left")
+                chunk_out = chunk_out.replace("", pd.NA).infer_objects(copy=False)
+                if transform_chunk is not None:
+                    chunk_out = transform_chunk(chunk_out)
+                    if "_source_idx" not in chunk_out.columns:
+                        raise KeyError(
+                            "transform_chunk must preserve '_source_idx' for checkpoint dedupe."
+                        )
+
+                buffer_frames.append(chunk_out)
+                buffered_rows += len(chunk_out)
+                pending_next_source_idx = end
+
+                now = time.time()
+                if (
+                    buffered_rows >= checkpoint_every_rows
+                    or (now - last_flush_at) >= checkpoint_every_sec
+                ):
+                    _flush_buffer(force_state=False)
+
+                pbar.update(len(chunk))
+    finally:
+        if parse_executor is not None:
+            parse_executor.shutdown(wait=True)
+
+    _flush_buffer(force_state=True)
+
+    if paths.main_checkpoint_path.exists():
+        out = pd.read_csv(paths.main_checkpoint_path)
+    else:
+        out = df.copy()
+    if "_source_idx" in out.columns:
+        out = (
+            out.drop_duplicates(subset=["_source_idx"], keep="last")
+            .sort_values("_source_idx")
+            .reset_index(drop=True)
+        )
+
+    out = out.drop(columns=["_source_idx"], errors="ignore")
+    out = out.drop(columns=cols_to_drop_for_persist, errors="ignore")
+    if "patient_key_std_failed" in out.columns and not _series_has_any_true(
+        out["patient_key_std_failed"]
+    ):
+        out = out.drop(columns=["patient_key_std_failed"], errors="ignore")
+
+    atomic_write_csv(out, output_path, index=False)
+    _write_parse_state(
+        state_path=paths.state_path,
+        args_hash=args_hash,
+        input_fingerprint=input_fingerprint,
+        next_source_idx=len(df),
+        finished=True,
     )
-    out = df.drop(columns=["_source_idx"], errors="ignore")
-    atomic_write_csv(
-        out.drop(columns=cols_to_drop_for_persist, errors="ignore"),
-        output_path,
-        index=False,
-    )
-    ckpt.finalize_state(completed_indices=completed_indices)
-    return out
+    if return_df:
+        return out
+    return None
 
 
 # -------------------------
@@ -974,16 +1320,68 @@ def main(args):
         len(effective_tags),
         user_tags or "none",
     )
-    read_selected_func, read_full_func, archive_state = build_global_readers(
+    _, read_full_func, _ = build_global_readers(
         initial_archive_mode=archive_mode,
         tags=effective_tags,
         force=args.force_dicom_read,
         archive_max_depth=args.archive_max_depth,
     )
 
-    df = process_with_checkpoint(
+    if (not archive_mode) and any(is_archive_uri(str(p)) for p in df["dicom_path"].tolist()):
+        logger.info(
+            "[archive][detect] archive URI encountered in discovered sources; archive-aware reads will be used per file."
+        )
+
+    def _transform_parse_chunk(chunk_df: pd.DataFrame) -> pd.DataFrame:
+        out = choose_ids(
+            df=chunk_df,
+            root_path=Path(root_path),
+            id_source=args.id_source,
+            patient_tag=args.patient_key_from,
+            study_tag=args.study_id_from,
+            series_tag=args.series_id_from,
+        )
+        out = apply_id_standardization(out, manifest, logger=logger)
+        if "patient_key_std_failed" not in out.columns:
+            out["patient_key_std_failed"] = False
+        else:
+            out["patient_key_std_failed"] = out["patient_key_std_failed"].fillna(False)
+        return out
+
+    schema_seed = pd.DataFrame(
+        columns=[
+            "_source_idx",
+            "dicom_path",
+            "_scan_root",
+            "_relative_path",
+            *effective_tags,
+        ]
+    )
+    schema_seed = _transform_parse_chunk(schema_seed)
+    expected_columns = list(dict.fromkeys(schema_seed.columns.tolist()))
+    if "patient_key_std_failed" not in expected_columns:
+        expected_columns.append("patient_key_std_failed")
+
+    worker_config = {
+        "tags": effective_tags,
+        "force": bool(args.force_dicom_read),
+        "archive_mode": bool(archive_mode),
+        "archive_max_depth": int(args.archive_max_depth),
+    }
+    resume_signature = {
+        "effective_tags": effective_tags,
+        "force_dicom_read": bool(args.force_dicom_read),
+        "archive_mode": bool(archive_mode),
+        "archive_max_depth": int(args.archive_max_depth),
+        "id_source": args.id_source,
+        "patient_key_from": args.patient_key_from,
+        "study_id_from": args.study_id_from,
+        "series_id_from": args.series_id_from,
+        "manifest": args.manifest,
+    }
+    process_with_checkpoint(
         df_paths=df,
-        read_func=read_selected_func,
+        read_func=None,
         checkpoint_every_rows=args.checkpoint_every_rows,
         checkpoint_every_sec=args.checkpoint_every_sec,
         resume=bool(args.resume),
@@ -991,43 +1389,37 @@ def main(args):
         output_dir=output_dir,
         final_name="dicom_index.csv",
         read_path_col="dicom_path",
+        num_workers=int(args.num_workers),
+        worker_config=worker_config,
+        transform_chunk=_transform_parse_chunk,
+        return_df=False,
+        expected_columns=expected_columns,
+        resume_signature=resume_signature,
     )
 
+    out_final = output_dir / "dicom_index.csv"
     if args.snapshot_tags:
+        snapshot_source = pd.read_csv(
+            out_final,
+            usecols=["dicom_path", args.series_id_from],
+        )
+        snapshot_source = snapshot_source.merge(
+            df[["dicom_path", "_scan_root", "_relative_path"]],
+            on="dicom_path",
+            how="left",
+        )
+        snapshot_source["_read_path"] = snapshot_source["dicom_path"]
         snapshot_path = output_dir / "dicom_tags_snapshot.ndjson"
         written = write_dicom_tags_snapshot(
-            df=df,
+            df=snapshot_source,
             output_path=snapshot_path,
             sample_size=args.snapshot_sample_size,
             seed=args.snapshot_seed,
             series_col=args.series_id_from,
-            read_path_col="dicom_path",
+            read_path_col="_read_path",
             read_full_func=read_full_func,
         )
         logger.info("Saved tag snapshot: %s (records=%s)", snapshot_path, written)
-
-    if archive_state.get("auto_switched"):
-        logger.info(
-            "[archive][detect] runtime auto-switch applied; parse finished in archive-aware mode."
-        )
-
-    logger.info("After tag extraction: %s columns=%s", df.shape, len(df.columns))
-
-    # 3) compute IDs from tags/path using already-read tag columns
-    df = choose_ids(
-        df=df,
-        root_path=Path(root_path),
-        id_source=args.id_source,
-        patient_tag=args.patient_key_from,
-        study_tag=args.study_id_from,
-        series_tag=args.series_id_from,
-    )
-    df = apply_id_standardization(df, manifest, logger=logger)
-    #df = apply_derived_columns(df, manifest)
-
-    # 4) output final df
-    out_final = output_dir / "dicom_index.csv"
-    df.to_csv(out_final, index=False)
     logger.info("Saved final index: %s", out_final)
     logger.info("Parsing done ✔")
 

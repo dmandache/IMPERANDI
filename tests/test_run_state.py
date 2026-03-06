@@ -326,3 +326,21 @@ def test_merge_with_existing_output_duplicate_key_uses_index_fallback(tmp_path):
         preferred_keys=["nifti_path"],
     )
     assert out["foreign_col"].tolist() == ["keep-1", "keep-2"]
+
+
+def test_merge_with_existing_output_unhashable_key_uses_index_fallback(tmp_path):
+    output = tmp_path / "out.csv"
+    pd.DataFrame({"foreign_col": ["keep-a", "keep-b"]}).to_csv(output, index=False)
+    new_df = pd.DataFrame(
+        {
+            "dicom_path": [["a.dcm", "b.dcm"], ["c.dcm", "d.dcm"]],
+            "local_col": [1, 2],
+        }
+    )
+
+    out = merge_with_existing_output(
+        new_df,
+        output,
+        preferred_keys=["dicom_path"],
+    )
+    assert out["foreign_col"].tolist() == ["keep-a", "keep-b"]
