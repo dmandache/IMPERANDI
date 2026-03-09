@@ -3,6 +3,7 @@ import io
 import tarfile
 import zipfile
 import argparse
+import logging
 from pathlib import Path
 
 # Ensure src/ is on sys.path for imports
@@ -27,6 +28,40 @@ def test_convert_list_str_to_list_invalid():
     s = "not a list"
     out = convert_module.convert_list_str_to_list(s)
     assert out == s
+
+
+@pytest.mark.parametrize(
+    ("base_level", "expected_level"),
+    [
+        (logging.CRITICAL, logging.ERROR),
+        (logging.ERROR, logging.WARNING),
+        (logging.WARNING, logging.INFO),
+        (logging.INFO, logging.DEBUG),
+        (logging.DEBUG, logging.DEBUG),
+        (logging.NOTSET, logging.DEBUG),
+    ],
+)
+def test_lower_log_level_one_step(base_level, expected_level):
+    assert convert_module._lower_log_level_one_step(base_level) == expected_level
+
+
+def test_configure_dicom2nifti_convert_logger_one_level_lower():
+    base_logger = logging.getLogger("imperandi.process.convert.test_base")
+    target_logger = logging.getLogger("dicom2nifti.convert_dicom")
+    old_base_level = base_logger.level
+    old_target_level = target_logger.level
+
+    try:
+        base_logger.setLevel(logging.INFO)
+        convert_module._configure_dicom2nifti_convert_logger(base_logger)
+        assert target_logger.level == logging.DEBUG
+
+        base_logger.setLevel(logging.WARNING)
+        convert_module._configure_dicom2nifti_convert_logger(base_logger)
+        assert target_logger.level == logging.INFO
+    finally:
+        base_logger.setLevel(old_base_level)
+        target_logger.setLevel(old_target_level)
 
 
 def make_series(tmp_path, output_dir, create_nifti=False):
