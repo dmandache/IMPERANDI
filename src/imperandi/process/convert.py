@@ -31,7 +31,25 @@ from imperandi.utils.run_state import (
 
 logger = logging.getLogger(__name__)
 DEFAULT_CHECKPOINT_EVERY_ROWS = 50
-DEFAULT_CHECKPOINT_EVERY_SEC = 350
+DEFAULT_CHECKPOINT_EVERY_SEC = 5 * 60 # 5 minutes
+
+
+def _lower_log_level_one_step(level: int) -> int:
+    if level >= logging.CRITICAL:
+        return logging.ERROR
+    if level >= logging.ERROR:
+        return logging.WARNING
+    if level >= logging.WARNING:
+        return logging.INFO
+    if level >= logging.INFO:
+        return logging.DEBUG
+    return logging.DEBUG
+
+
+def _configure_dicom2nifti_convert_logger(base_logger: logging.Logger) -> None:
+    base_level = base_logger.getEffectiveLevel()
+    dicom2nifti_level = _lower_log_level_one_step(base_level)
+    logging.getLogger("dicom2nifti.convert_dicom").setLevel(dicom2nifti_level)
 
 
 # Function to parse command-line arguments
@@ -331,6 +349,7 @@ def process_single_volume(k, row, output_dir, verbose, return_status=False):
               "converted", "skipped", or "failed".
     """
     setup_logging(verbose=verbose)
+    _configure_dicom2nifti_convert_logger(logger)
 
     def _result(export_path, error_row, status):
         if return_status:

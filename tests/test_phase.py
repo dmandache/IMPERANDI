@@ -194,6 +194,88 @@ def test_main_resume_skips_completed_rows(tmp_path, monkeypatch):
     assert extractor_loads["count"] == 1
 
 
+def test_main_skips_rows_with_existing_totalseg_phase_when_not_forced(
+    tmp_path, monkeypatch
+):
+    nifti = tmp_path / "valid.nii.gz"
+    nifti.write_text("nifti")
+    csv_path = tmp_path / "nifti_index.csv"
+    pd.DataFrame(
+        [{"nifti_path": str(nifti), "totalseg_phase": "portal"}]
+    ).to_csv(csv_path, index=False)
+
+    calls = {"count": 0}
+    monkeypatch.setattr(phase_module.nib, "load", lambda _: object())
+    monkeypatch.setattr(
+        phase_module,
+        "_load_phase_extractor",
+        lambda: (lambda _, quiet=True: {"phase": "arterial"}),
+    )
+
+    def fake_process_single_volume(idx, row, *, phase_extractor, verbose=False):
+        calls["count"] += 1
+        return idx, {"totalseg_phase": "arterial"}, None
+
+    monkeypatch.setattr(phase_module, "process_single_volume", fake_process_single_volume)
+
+    args = argparse.Namespace(
+        csv_path=str(csv_path),
+        csv_path_out=str(tmp_path / "out.csv"),
+        error_csv_path=str(tmp_path / "errors.csv"),
+        verbose=False,
+        force=False,
+        checkpoint_every_rows=1,
+        checkpoint_every_sec=3600,
+        resume=False,
+        strict_resume=False,
+    )
+    phase_module.main(args)
+
+    assert calls["count"] == 0
+    out_df = pd.read_csv(args.csv_path_out)
+    assert out_df.loc[0, "totalseg_phase"] == "portal"
+
+
+def test_main_force_recomputes_existing_totalseg_phase(tmp_path, monkeypatch):
+    nifti = tmp_path / "valid.nii.gz"
+    nifti.write_text("nifti")
+    csv_path = tmp_path / "nifti_index.csv"
+    pd.DataFrame(
+        [{"nifti_path": str(nifti), "totalseg_phase": "portal"}]
+    ).to_csv(csv_path, index=False)
+
+    calls = {"count": 0}
+    monkeypatch.setattr(phase_module.nib, "load", lambda _: object())
+    monkeypatch.setattr(
+        phase_module,
+        "_load_phase_extractor",
+        lambda: (lambda _, quiet=True: {"phase": "arterial"}),
+    )
+
+    def fake_process_single_volume(idx, row, *, phase_extractor, verbose=False):
+        calls["count"] += 1
+        return idx, {"totalseg_phase": "arterial"}, None
+
+    monkeypatch.setattr(phase_module, "process_single_volume", fake_process_single_volume)
+
+    args = argparse.Namespace(
+        csv_path=str(csv_path),
+        csv_path_out=str(tmp_path / "out.csv"),
+        error_csv_path=str(tmp_path / "errors.csv"),
+        verbose=False,
+        force=True,
+        checkpoint_every_rows=1,
+        checkpoint_every_sec=3600,
+        resume=False,
+        strict_resume=False,
+    )
+    phase_module.main(args)
+
+    assert calls["count"] == 1
+    out_df = pd.read_csv(args.csv_path_out)
+    assert out_df.loc[0, "totalseg_phase"] == "arterial"
+
+
 def test_main_preserves_foreign_columns_from_existing_output(tmp_path, monkeypatch):
     nifti = tmp_path / "valid.nii.gz"
     nifti.write_text("nifti")
