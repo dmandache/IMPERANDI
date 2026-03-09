@@ -45,6 +45,9 @@ logger = logging.getLogger(__name__)
 DEFAULT_CHECKPOINT_EVERY_ROWS = 10_000
 DEFAULT_CHECKPOINT_EVERY_SEC = 5 * 60  # 5 minutes
 
+PARSE_WORKER_BATCH_SIZE = 16384
+PARSE_CHECKPOINT_SCHEMA_VERSION = 1
+
 # Make reading tolerant of non-conformant values
 config.settings.reading_validation_mode = config.IGNORE  # or config.WARN
 
