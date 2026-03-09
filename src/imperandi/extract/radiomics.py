@@ -21,7 +21,7 @@ from imperandi.utils.run_state import (
 
 logger = logging.getLogger(__name__)
 DEFAULT_CHECKPOINT_EVERY_ROWS = 50
-DEFAULT_CHECKPOINT_EVERY_SEC = 350
+DEFAULT_CHECKPOINT_EVERY_SEC = 5 * 60
 
 DEFAULT_SETTINGS = {
     "binWidth": 25,
