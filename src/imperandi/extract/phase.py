@@ -65,6 +65,12 @@ def add_phase_arguments(
         default=None,
         help="CSV path for failed rows only (default: <csv_dir>/phase_errors.csv).",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        default=False,
+        help="Recompute phase even when `totalseg_phase` is already populated.",
+    )
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose logging")
     add_checkpoint_arguments(
         parser,
@@ -122,6 +128,14 @@ def parse_arguments() -> argparse.Namespace:
     args = normalize_phase_args(args)
     logger.info("🚀 Running %s script with arguments: %s", Path(__file__).name, args)
     return args
+
+
+def _has_populated_value(value: Any) -> bool:
+    if pd.isna(value):
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    return True
 
 
 def process_single_volume(
@@ -201,6 +215,7 @@ def main(args: argparse.Namespace) -> None:
 
     errors_by_idx: Dict[int, Dict[str, Any]] = {}
     completed_indices: set[int] = set()
+    force = bool(getattr(args, "force", False))
     if can_resume:
         completed_indices = {
             int(i)
@@ -215,6 +230,22 @@ def main(args: argparse.Namespace) -> None:
                         errors_by_idx[int(row["_source_idx"])] = row.to_dict()
                     except Exception:
                         pass
+
+    if not force and "totalseg_phase" in df.columns:
+        prefilled_indices = {
+            int(df.at[idx, "_source_idx"])
+            for idx in df.index
+            if _has_populated_value(df.at[idx, "totalseg_phase"])
+        }
+        newly_completed = prefilled_indices - completed_indices
+        if newly_completed:
+            completed_indices.update(prefilled_indices)
+            for source_idx in newly_completed:
+                errors_by_idx.pop(source_idx, None)
+            logger.info(
+                "Skipping %d row(s) with existing totalseg_phase (use --force to recompute)",
+                len(newly_completed),
+            )
 
     def _checkpoint_write(*, force: bool = False) -> None:
         err_df = (

@@ -31,7 +31,7 @@ from imperandi.utils.run_state import (
 
 logger = logging.getLogger(__name__)
 DEFAULT_CHECKPOINT_EVERY_ROWS = 50
-DEFAULT_CHECKPOINT_EVERY_SEC = 5 * 60 # 5 minutesS
+DEFAULT_CHECKPOINT_EVERY_SEC = 5 * 60 # 5 minutes
 
 
 def _lower_log_level_one_step(level: int) -> int:
