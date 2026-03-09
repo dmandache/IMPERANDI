@@ -1058,6 +1058,7 @@ def test_main_force_shutdown_terminates_and_joins_workers(tmp_path, monkeypatch)
     class DummyPool:
         last_process = None
         last_manager = None
+        shutdown_calls = []
 
         def __init__(self, max_workers=None, mp_context=None):
             proc = DummyProcess()
@@ -1071,6 +1072,7 @@ def test_main_force_shutdown_terminates_and_joins_workers(tmp_path, monkeypatch)
             return HangingFuture()
 
         def shutdown(self, wait=False, cancel_futures=True):
+            DummyPool.shutdown_calls.append((wait, cancel_futures))
             return None
 
     current = {"t": 0.0}
@@ -1102,6 +1104,8 @@ def test_main_force_shutdown_terminates_and_joins_workers(tmp_path, monkeypatch)
     assert len(DummyPool.last_process.join_calls) >= 1
     assert DummyPool.last_manager is not None
     assert DummyPool.last_manager.join_calls
+    assert (False, True) in DummyPool.shutdown_calls
+    assert (True, True) in DummyPool.shutdown_calls
 
 
 def test_main_recycles_executor_by_recycle_every(tmp_path, monkeypatch):

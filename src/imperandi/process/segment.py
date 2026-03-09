@@ -1123,6 +1123,13 @@ def main(args: argparse.Namespace) -> None:
                         manager_thread.join(timeout=3.0)
                     except Exception:
                         pass
+
+                # Finalize executor internals so atexit does not keep waiting on
+                # orphaned manager resources after forced worker termination.
+                try:
+                    pool.shutdown(wait=True, cancel_futures=True)
+                except Exception:
+                    pass
                 return
             # Graceful shutdown prevents collateral damage to interpreter state.
             pool.shutdown(wait=True, cancel_futures=False)
@@ -1327,8 +1334,8 @@ def main(args: argparse.Namespace) -> None:
         except Exception:
             logger.debug("report_volumes() failed – continuing")
 
-    logger.info("Segmentation done ✔")
     ckpt.finalize_state(completed_indices=completed_indices)
+    logger.info("Segmentation done ✔")
 
     return
 
