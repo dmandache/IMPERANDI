@@ -32,6 +32,10 @@ segment = [
   "SimpleITK"
 ]
 
+register = [
+  "SimpleITK"
+]
+
 radiomics = [
   "pywavelets",
   "pyradiomics@git+https://github.com/radiomics/pyradiomics.git",   # because 3.1.0 sdist metadata is broken on PyPI right now
@@ -47,7 +51,7 @@ dev = [
   "ipywidgets"
 ]
 
-all = ["imperandi[dev,segment,radiomics]"]
+all = ["imperandi[dev,segment,radiomics,register]"]
 
 [project.scripts]
 imperandi = "imperandi.cli:main"

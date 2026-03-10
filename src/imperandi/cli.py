@@ -34,6 +34,20 @@ def _load_radiomics_module():
     return radiomics_module
 
 
+def _load_register_population_module():
+    from imperandi.process import register_population as register_population_module
+
+    return register_population_module
+
+
+def _load_register_intra_patient_module():
+    from imperandi.process import (
+        register_intra_patient as register_intra_patient_module,
+    )
+
+    return register_intra_patient_module
+
+
 def _load_segment_module():
     try:
         from imperandi.process import segment as segment_module
@@ -119,6 +133,30 @@ def _add_radiomics_subcommand(subparsers: argparse._SubParsersAction) -> None:
     parser.set_defaults(_handler=_handle_radiomics)
 
 
+def _add_register_population_subcommand(
+    subparsers: argparse._SubParsersAction,
+) -> None:
+    parser = subparsers.add_parser(
+        "register-population",
+        help="Rigidly align a cohort to a population organ template.",
+    )
+    register_population_module = _load_register_population_module()
+    register_population_module.add_register_population_arguments(parser)
+    parser.set_defaults(_handler=_handle_register_population)
+
+
+def _add_register_intra_patient_subcommand(
+    subparsers: argparse._SubParsersAction,
+) -> None:
+    parser = subparsers.add_parser(
+        "register-intra-patient",
+        help="Rigidly + elastically align volumes within each patient.",
+    )
+    register_intra_patient_module = _load_register_intra_patient_module()
+    register_intra_patient_module.add_register_intra_patient_arguments(parser)
+    parser.set_defaults(_handler=_handle_register_intra_patient)
+
+
 def _add_segment_subcommand(subparsers: argparse._SubParsersAction) -> None:
     parser = subparsers.add_parser(
         "segment",
@@ -171,6 +209,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_convert_subcommand(subparsers)
     _add_phase_subcommand(subparsers)
     _add_radiomics_subcommand(subparsers)
+    _add_register_population_subcommand(subparsers)
+    _add_register_intra_patient_subcommand(subparsers)
     _add_segment_subcommand(subparsers)
 
     return parser
@@ -289,6 +329,44 @@ def _handle_radiomics(args: argparse.Namespace) -> int:
         return 0
     try:
         radiomics_module.main(args)
+    except RuntimeError as exc:
+        message = str(exc)
+        if "requires optional dependencies" in message:
+            logger.error("%s", message)
+            return 2
+        raise
+    return 0
+
+
+def _handle_register_population(args: argparse.Namespace) -> int:
+    register_population_module = _load_register_population_module()
+    args = register_population_module.normalize_register_population_args(args)
+    _log_script_namespace(register_population_module.__file__, args)
+    if args.dry_run:
+        logger.info("Dry run: register-population")
+        print_args(args)
+        return 0
+    try:
+        register_population_module.main(args)
+    except RuntimeError as exc:
+        message = str(exc)
+        if "requires optional dependencies" in message:
+            logger.error("%s", message)
+            return 2
+        raise
+    return 0
+
+
+def _handle_register_intra_patient(args: argparse.Namespace) -> int:
+    register_intra_patient_module = _load_register_intra_patient_module()
+    args = register_intra_patient_module.normalize_register_intra_patient_args(args)
+    _log_script_namespace(register_intra_patient_module.__file__, args)
+    if args.dry_run:
+        logger.info("Dry run: register-intra-patient")
+        print_args(args)
+        return 0
+    try:
+        register_intra_patient_module.main(args)
     except RuntimeError as exc:
         message = str(exc)
         if "requires optional dependencies" in message:

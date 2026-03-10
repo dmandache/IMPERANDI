@@ -325,6 +325,180 @@ def test_cli_radiomics_accepts_repeatable_filter_flags(tmp_path, capsys):
     assert "'followup_months': ['0', '3']" in filters_line
 
 
+def test_cli_register_population_accepts_optional_csv_path_only(tmp_path):
+    csv_in = tmp_path / "nifti_index.csv"
+    csv_in.write_text("nifti_path,mask_liver\n")
+
+    exit_code = cli.main(
+        [
+            "register-population",
+            "--csv_path",
+            str(csv_in),
+            "--output_dir",
+            str(tmp_path / "registered"),
+            "--dry-run",
+        ]
+    )
+
+    assert exit_code == 0
+
+
+def test_cli_register_population_accepts_positional_csv_path_and_csv_path_out(
+    tmp_path, capsys
+):
+    csv_in = tmp_path / "nifti_index.csv"
+    csv_in.write_text("nifti_path,mask_liver\n")
+    csv_out = tmp_path / "nifti_index_registered_population_custom.csv"
+
+    exit_code = cli.main(
+        [
+            "register-population",
+            str(csv_in),
+            str(csv_out),
+            "--output_dir",
+            str(tmp_path / "registered"),
+            "--dry-run",
+        ]
+    )
+
+    output = capsys.readouterr().out.replace("\\\\", "\\")
+    csv_path_out_line = next(
+        line for line in output.splitlines() if line.strip().startswith("csv_path_out")
+    )
+    assert exit_code == 0
+    assert str(csv_out) in csv_path_out_line
+
+
+def test_cli_register_population_prefers_flag_csv_path_out_over_positional(
+    tmp_path, capsys
+):
+    csv_in = tmp_path / "nifti_index.csv"
+    csv_in.write_text("nifti_path,mask_liver\n")
+    csv_out_pos = tmp_path / "nifti_index_registered_population_pos.csv"
+    csv_out_opt = tmp_path / "nifti_index_registered_population_opt.csv"
+
+    exit_code = cli.main(
+        [
+            "register-population",
+            str(csv_in),
+            str(csv_out_pos),
+            "--csv_path_out",
+            str(csv_out_opt),
+            "--output_dir",
+            str(tmp_path / "registered"),
+            "--dry-run",
+        ]
+    )
+
+    output = capsys.readouterr().out.replace("\\\\", "\\")
+    csv_path_out_line = next(
+        line for line in output.splitlines() if line.strip().startswith("csv_path_out")
+    )
+    assert exit_code == 0
+    assert str(csv_out_opt) in csv_path_out_line
+
+
+def test_cli_register_population_accepts_save_registered_outputs_flag(
+    tmp_path, capsys
+):
+    csv_in = tmp_path / "nifti_index.csv"
+    csv_in.write_text("nifti_path,mask_liver\n")
+
+    exit_code = cli.main(
+        [
+            "register-population",
+            "--csv_path",
+            str(csv_in),
+            "--output_dir",
+            str(tmp_path / "registered"),
+            "--save_registered_outputs",
+            "--dry-run",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    save_line = next(
+        line
+        for line in output.splitlines()
+        if line.strip().startswith("save_registered_outputs")
+    )
+    assert exit_code == 0
+    assert save_line.strip().endswith("True")
+
+
+def test_cli_register_intra_patient_accepts_optional_csv_path_only(tmp_path):
+    csv_in = tmp_path / "nifti_index.csv"
+    csv_in.write_text("patient_key,nifti_path,mask_liver\n")
+
+    exit_code = cli.main(
+        [
+            "register-intra-patient",
+            "--csv_path",
+            str(csv_in),
+            "--output_dir",
+            str(tmp_path / "registered"),
+            "--dry-run",
+        ]
+    )
+
+    assert exit_code == 0
+
+
+def test_cli_register_intra_patient_accepts_positional_csv_path_and_csv_path_out(
+    tmp_path, capsys
+):
+    csv_in = tmp_path / "nifti_index.csv"
+    csv_in.write_text("patient_key,nifti_path,mask_liver\n")
+    csv_out = tmp_path / "nifti_index_registered_intra_patient_custom.csv"
+
+    exit_code = cli.main(
+        [
+            "register-intra-patient",
+            str(csv_in),
+            str(csv_out),
+            "--output_dir",
+            str(tmp_path / "registered"),
+            "--dry-run",
+        ]
+    )
+
+    output = capsys.readouterr().out.replace("\\\\", "\\")
+    csv_path_out_line = next(
+        line for line in output.splitlines() if line.strip().startswith("csv_path_out")
+    )
+    assert exit_code == 0
+    assert str(csv_out) in csv_path_out_line
+
+
+def test_cli_register_intra_patient_prefers_flag_csv_path_out_over_positional(
+    tmp_path, capsys
+):
+    csv_in = tmp_path / "nifti_index.csv"
+    csv_in.write_text("patient_key,nifti_path,mask_liver\n")
+    csv_out_pos = tmp_path / "nifti_index_registered_intra_patient_pos.csv"
+    csv_out_opt = tmp_path / "nifti_index_registered_intra_patient_opt.csv"
+
+    exit_code = cli.main(
+        [
+            "register-intra-patient",
+            str(csv_in),
+            str(csv_out_pos),
+            "--csv_path_out",
+            str(csv_out_opt),
+            "--output_dir",
+            str(tmp_path / "registered"),
+            "--dry-run",
+        ]
+    )
+
+    output = capsys.readouterr().out.replace("\\\\", "\\")
+    csv_path_out_line = next(
+        line for line in output.splitlines() if line.strip().startswith("csv_path_out")
+    )
+    assert exit_code == 0
+    assert str(csv_out_opt) in csv_path_out_line
+
+
 def test_cli_parse_accepts_snapshot_flags(tmp_path):
     root_opt = tmp_path / "root_opt"
     out_opt = tmp_path / "out_opt"
