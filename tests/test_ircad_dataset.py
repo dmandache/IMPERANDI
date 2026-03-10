@@ -40,7 +40,7 @@ def _build_parse_args(root_path: Path, output_dir: Path) -> argparse.Namespace:
     return argparse.Namespace(
         root_path=str(root_path),
         output_dir=str(output_dir),
-        manifest=None,
+        manifest="generic",
         tags="",
         force_dicom_read=False,
         id_source="auto",
