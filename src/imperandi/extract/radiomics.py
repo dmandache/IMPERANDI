@@ -181,7 +181,85 @@ def _load_manifest_radiomics_settings(
         raise ValueError(
             "Manifest radiomics settings must be an object under key 'radiomics'."
         )
-    return radiomics_settings
+    pyradiomics_settings = radiomics_settings.get("pyradiomics")
+    if pyradiomics_settings is None:
+        return None
+    if not isinstance(pyradiomics_settings, dict):
+        raise ValueError(
+            "Manifest radiomics.pyradiomics settings must be an object."
+        )
+    return pyradiomics_settings
+
+
+def _normalize_cli_filters(filter_args: Optional[list[str]]) -> dict[str, list[str]]:
+    if not filter_args:
+        return {}
+
+    normalized: dict[str, list[str]] = {}
+    for raw_filter in filter_args:
+        if raw_filter.count("=") != 1:
+            raise ValueError(
+                "Invalid --filter value. Expected exactly one '=' in "
+                f"{raw_filter!r}."
+            )
+
+        column, raw_values = raw_filter.split("=", 1)
+        column = column.strip()
+        if not column:
+            raise ValueError(
+                f"Invalid --filter value {raw_filter!r}: column name is empty."
+            )
+
+        values = [value.strip() for value in raw_values.split(",") if value.strip()]
+        if not values:
+            raise ValueError(
+                f"Invalid --filter value {raw_filter!r}: at least one value is required."
+            )
+        normalized[column] = values
+
+    return normalized
+
+
+def _load_manifest_radiomics_filters(
+    manifest_arg: Optional[str],
+) -> dict[str, list[Any]]:
+    if not manifest_arg:
+        return {}
+
+    manifest = load_manifest(
+        manifest_arg,
+        base_path=Path(__file__).resolve().parents[1],
+    )
+    radiomics_settings = manifest.get("radiomics")
+    if radiomics_settings is None:
+        return {}
+    if not isinstance(radiomics_settings, dict):
+        raise ValueError(
+            "Manifest radiomics settings must be an object under key 'radiomics'."
+        )
+
+    raw_filters = radiomics_settings.get("filters")
+    if raw_filters is None:
+        return {}
+    if not isinstance(raw_filters, dict):
+        raise ValueError("Manifest radiomics.filters must be an object.")
+
+    normalized: dict[str, list[Any]] = {}
+    for column, values in raw_filters.items():
+        column_name = str(column).strip()
+        if not column_name:
+            raise ValueError("Manifest radiomics.filters contains an empty column name.")
+        if not isinstance(values, list):
+            raise ValueError(
+                f"Manifest radiomics.filters[{column_name!r}] must be a list."
+            )
+        if not values:
+            raise ValueError(
+                f"Manifest radiomics.filters[{column_name!r}] must not be empty."
+            )
+        normalized[column_name] = values
+
+    return normalized
 
 
 def _resolve_pyradiomics_settings_source(
@@ -204,7 +282,7 @@ def _resolve_pyradiomics_settings_source(
     if manifest_settings is not None:
         if cli_settings_path:
             logger.warning(
-                "Manifest contains a 'radiomics' settings section; "
+                "Manifest contains a 'radiomics.pyradiomics' settings section; "
                 "preferring manifest settings over --pyradiomics_settings."
             )
         logger.info("PyRadiomics settings source: manifest")
@@ -216,6 +294,61 @@ def _resolve_pyradiomics_settings_source(
 
     logger.info("PyRadiomics settings source: defaults")
     return "defaults", None, None
+
+
+def _resolve_radiomics_filters(args: argparse.Namespace) -> dict[str, list[Any]]:
+    if getattr(args, "skip_filter", False):
+        logger.info("Radiomics row filters skipped via --skip_filter")
+        return {}
+
+    cli_filters = getattr(args, "filters", {}) or {}
+    manifest_filters = _load_manifest_radiomics_filters(getattr(args, "manifest", None))
+    effective_filters = dict(cli_filters)
+
+    if manifest_filters:
+        overlapping_columns = sorted(set(cli_filters) & set(manifest_filters))
+        for column in overlapping_columns:
+            logger.info(
+                "Manifest radiomics filter overrides CLI filter for column '%s'",
+                column,
+            )
+        effective_filters.update(manifest_filters)
+
+    if effective_filters:
+        logger.info("Radiomics row filters resolved: %s", effective_filters)
+    else:
+        logger.info("Radiomics row filters resolved: none")
+    return effective_filters
+
+
+def _apply_explicit_filters(
+    df: pd.DataFrame,
+    filters: dict[str, list[Any]],
+) -> pd.DataFrame:
+    if not filters:
+        logger.info("No radiomics row filters applied; keeping %d rows", len(df))
+        return df
+
+    missing_columns = [column for column in filters if column not in df.columns]
+    if missing_columns:
+        raise ValueError(
+            "Radiomics filter column(s) missing from input CSV: "
+            + ", ".join(sorted(missing_columns))
+        )
+
+    filtered = df.copy()
+    logger.info("Applying radiomics row filters to %d rows", len(filtered))
+    for column, allowed_values in filters.items():
+        before_count = len(filtered)
+        filtered = filtered[filtered[column].isin(allowed_values)]
+        logger.info(
+            "Radiomics filter applied | column=%s | values=%s | rows=%d -> %d",
+            column,
+            allowed_values,
+            before_count,
+            len(filtered),
+        )
+    return filtered
 
 
 def add_radiomics_arguments(
@@ -260,7 +393,17 @@ def add_radiomics_arguments(
         "--skip_filter",
         action="store_true",
         default=False,
-        help="Skip legacy cohort filtering and process all rows.",
+        help="Skip explicit row filters from CLI and manifest and process all rows.",
+    )
+    parser.add_argument(
+        "--filter",
+        dest="filter_args",
+        action="append",
+        default=None,
+        help=(
+            "Filter rows by column values using column=value1,value2 syntax. "
+            "Repeat to combine filters across columns."
+        ),
     )
     parser.add_argument(
         "--manifest",
@@ -326,11 +469,14 @@ def normalize_radiomics_args(args: argparse.Namespace) -> argparse.Namespace:
     args.pyradiomics_settings = _normalize_pyradiomics_settings_path(
         getattr(args, "pyradiomics_settings", None)
     )
+    args.filters = _normalize_cli_filters(getattr(args, "filter_args", None))
     if getattr(args, "manifest", None) is not None:
         args.manifest = str(args.manifest)
 
     del args.csv_path_pos
     del args.csv_path_opt
+    if hasattr(args, "filter_args"):
+        del args.filter_args
     if hasattr(args, "csv_path_out_pos"):
         del args.csv_path_out_pos
     return args
@@ -342,70 +488,6 @@ def parse_arguments() -> argparse.Namespace:
     args = normalize_radiomics_args(args)
     logger.info("🚀 Running %s with args: %s", Path(__file__).name, args)
     return args
-
-
-def get_patients_with_complete_exams(df: pd.DataFrame):
-    unique_combos = (
-        df[["patient_key", "followup_months", "phase"]].dropna().drop_duplicates()
-    )
-
-    all_months = unique_combos["followup_months"].unique()
-    all_phases = unique_combos["phase"].unique()
-    all_combos = pd.MultiIndex.from_product(
-        [all_months, all_phases], names=["followup_months", "phase"]
-    )
-
-    combo_counts = (
-        unique_combos.groupby("patient_key")
-        .apply(lambda g: pd.MultiIndex.from_frame(g[["followup_months", "phase"]]))
-        .apply(set)
-        .reset_index(name="combos")
-    )
-
-    full_set = set(all_combos)
-    combo_counts["has_all_combinations"] = combo_counts["combos"].apply(
-        lambda combos: combos == full_set
-    )
-
-    return combo_counts[combo_counts["has_all_combinations"]].patient_key.unique()
-
-
-def filter_df(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-
-    if "followup_months" in df.columns:
-        df = df[df["followup_months"].isin([0, 3])]
-
-    if "phase" in df.columns:
-        df = df[df["phase"].isin(["arteriel", "portal"])]
-
-    if "accord_progression_6mois" in df.columns:
-        df = df[df["accord_progression_6mois"].isin(["Non", "Oui"])]
-
-    if "6m_global_progresssion" in df.columns:
-        df = df[df["6m_global_progresssion"].isin(["NP", "P"])]
-    elif "progression_group_bin" in df.columns:
-        df = df[~df["progression_group_bin"].isna()]
-
-    if all(
-        col in df.columns
-        for col in ["patient_key", "date", "phase", "liver_gaussian_noise"]
-    ):
-        df = df.loc[
-            df.groupby(["patient_key", "date", "phase"])[
-                "liver_gaussian_noise"
-            ].idxmin()
-        ].reset_index(drop=True)
-
-    if (
-        "patient_key" in df.columns
-        and "followup_months" in df.columns
-        and "phase" in df.columns
-    ):
-        patients_complete_exams = get_patients_with_complete_exams(df)
-        df = df[df["patient_key"].isin(patients_complete_exams)]
-
-    return df
 
 
 def mask_has_voxels(mask, sitk_module) -> bool:
@@ -753,8 +835,8 @@ def main(args: argparse.Namespace) -> None:
 
     if "nifti_path" not in df.columns:
         raise KeyError("column 'nifti_path' missing")
-    if not args.skip_filter:
-        df = filter_df(df)
+    effective_filters = _resolve_radiomics_filters(args)
+    df = _apply_explicit_filters(df, effective_filters)
     mask_columns = _get_mask_columns(df)
 
     logger.info("Extracting radiomics from %d rows and ROIs: %s", len(df), mask_columns)

@@ -267,7 +267,7 @@ def test_cli_radiomics_accepts_pyradiomics_settings_yaml(tmp_path):
     assert exit_code == 0
 
 
-def test_cli_radiomics_accepts_manifest_with_direct_radiomics_object(tmp_path):
+def test_cli_radiomics_accepts_manifest_with_pyradiomics_block(tmp_path):
     csv_in = tmp_path / "nifti_index.csv"
     csv_in.write_text("patient_key,phase,nifti_path\n")
     manifest_path = tmp_path / "manifest.json"
@@ -276,8 +276,10 @@ def test_cli_radiomics_accepts_manifest_with_direct_radiomics_object(tmp_path):
             {
                 "dataset_name": "tmp",
                 "radiomics": {
-                    "setting": {"binWidth": 17},
-                    "imageType": {"Original": {}},
+                    "pyradiomics": {
+                        "setting": {"binWidth": 17},
+                        "imageType": {"Original": {}},
+                    },
                 },
             }
         )
@@ -295,6 +297,32 @@ def test_cli_radiomics_accepts_manifest_with_direct_radiomics_object(tmp_path):
     )
 
     assert exit_code == 0
+
+
+def test_cli_radiomics_accepts_repeatable_filter_flags(tmp_path, capsys):
+    csv_in = tmp_path / "nifti_index.csv"
+    csv_in.write_text("patient_key,phase,nifti_path\n")
+
+    exit_code = cli.main(
+        [
+            "radiomics",
+            "--csv_path",
+            str(csv_in),
+            "--filter",
+            "phase=portal,arteriel",
+            "--filter",
+            "followup_months=0,3",
+            "--dry-run",
+        ]
+    )
+
+    output = capsys.readouterr().out.replace("\\\\", "\\")
+    filters_line = next(
+        line for line in output.splitlines() if line.strip().startswith("filters")
+    )
+    assert exit_code == 0
+    assert "'phase': ['portal', 'arteriel']" in filters_line
+    assert "'followup_months': ['0', '3']" in filters_line
 
 
 def test_cli_parse_accepts_snapshot_flags(tmp_path):

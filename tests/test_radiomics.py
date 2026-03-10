@@ -27,6 +27,7 @@ def test_normalize_radiomics_args_defaults(tmp_path):
         csv_path_out=None,
         error_csv_path=None,
         skip_filter=False,
+        filter_args=None,
         manifest=None,
         pyradiomics_settings=None,
         verbose=False,
@@ -39,6 +40,7 @@ def test_normalize_radiomics_args_defaults(tmp_path):
     assert out.csv_path_out == str(csv_path.parent / "nifti_index_radiomics.csv")
     assert out.error_csv_path == str(csv_path.parent / "radiomics_errors.csv")
     assert out.pyradiomics_settings is None
+    assert out.filters == {}
     assert not hasattr(out, "csv_path_pos")
     assert not hasattr(out, "csv_path_opt")
     assert not hasattr(out, "csv_path_out_pos")
@@ -56,6 +58,7 @@ def test_normalize_radiomics_args_accepts_positional_csv_path_out(tmp_path):
         csv_path_out=None,
         error_csv_path=None,
         skip_filter=False,
+        filter_args=None,
         manifest=None,
         pyradiomics_settings=None,
         verbose=False,
@@ -82,6 +85,7 @@ def test_normalize_radiomics_args_validates_pyradiomics_settings_path(tmp_path, 
         csv_path_out=None,
         error_csv_path=None,
         skip_filter=False,
+        filter_args=None,
         manifest=None,
         pyradiomics_settings="params.yaml",
         verbose=False,
@@ -103,6 +107,7 @@ def test_normalize_radiomics_args_rejects_missing_or_non_yaml_settings_path(tmp_
         csv_path_out=None,
         error_csv_path=None,
         skip_filter=False,
+        filter_args=None,
         manifest=None,
         pyradiomics_settings=str(tmp_path / "missing.yaml"),
         verbose=False,
@@ -120,6 +125,7 @@ def test_normalize_radiomics_args_rejects_missing_or_non_yaml_settings_path(tmp_
         csv_path_out=None,
         error_csv_path=None,
         skip_filter=False,
+        filter_args=None,
         manifest=None,
         pyradiomics_settings=str(bad_path),
         verbose=False,
@@ -137,7 +143,9 @@ def test_resolve_pyradiomics_settings_source_prefers_manifest_and_warns_twice(
     monkeypatch.setattr(
         radiomics_module,
         "load_manifest",
-        lambda *args, **kwargs: {"radiomics": {"setting": {"binWidth": 9}}},
+        lambda *args, **kwargs: {
+            "radiomics": {"pyradiomics": {"setting": {"binWidth": 9}}}
+        },
     )
 
     args = argparse.Namespace(
@@ -190,6 +198,131 @@ def test_resolve_pyradiomics_settings_source_uses_cli_file_when_manifest_has_no_
     ]
     assert len(warnings) == 1
     assert "Both --manifest and --pyradiomics_settings were provided" in warnings[0]
+
+
+def test_normalize_radiomics_args_parses_filters(tmp_path):
+    csv_path = tmp_path / "nifti_index.csv"
+    csv_path.write_text("nifti_path\n")
+
+    args = argparse.Namespace(
+        csv_path_pos=str(csv_path),
+        csv_path_opt=None,
+        csv_path_out_pos=None,
+        csv_path_out=None,
+        error_csv_path=None,
+        skip_filter=False,
+        filter_args=["phase=portal,arteriel", "followup_months=0,3"],
+        manifest=None,
+        pyradiomics_settings=None,
+        verbose=False,
+        dry_run=False,
+    )
+
+    out = radiomics_module.normalize_radiomics_args(args)
+
+    assert out.filters == {
+        "phase": ["portal", "arteriel"],
+        "followup_months": ["0", "3"],
+    }
+    assert not hasattr(out, "filter_args")
+
+
+@pytest.mark.parametrize(
+    "raw_filter, expected_message",
+    [
+        ("phase", "exactly one '='"),
+        (" =portal", "column name is empty"),
+        ("phase=,", "at least one value is required"),
+    ],
+)
+def test_normalize_radiomics_args_rejects_invalid_filters(
+    tmp_path, raw_filter, expected_message
+):
+    csv_path = tmp_path / "nifti_index.csv"
+    csv_path.write_text("nifti_path\n")
+
+    args = argparse.Namespace(
+        csv_path_pos=str(csv_path),
+        csv_path_opt=None,
+        csv_path_out_pos=None,
+        csv_path_out=None,
+        error_csv_path=None,
+        skip_filter=False,
+        filter_args=[raw_filter],
+        manifest=None,
+        pyradiomics_settings=None,
+        verbose=False,
+        dry_run=False,
+    )
+
+    with pytest.raises(ValueError, match=expected_message):
+        radiomics_module.normalize_radiomics_args(args)
+
+
+def test_resolve_radiomics_filters_prefers_manifest_for_same_column(
+    tmp_path, monkeypatch
+):
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        '{"radiomics": {"filters": {"phase": ["portal"], "site": ["A"]}}}'
+    )
+    args = argparse.Namespace(
+        skip_filter=False,
+        filters={"phase": ["arteriel"], "followup_months": ["0", "3"]},
+        manifest=str(manifest_path),
+    )
+
+    filters = radiomics_module._resolve_radiomics_filters(args)
+
+    assert filters == {
+        "phase": ["portal"],
+        "followup_months": ["0", "3"],
+        "site": ["A"],
+    }
+
+
+def test_resolve_radiomics_filters_skip_filter_bypasses_manifest_and_cli(tmp_path):
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text('{"radiomics": {"filters": {"phase": ["portal"]}}}')
+    args = argparse.Namespace(
+        skip_filter=True,
+        filters={"phase": ["arteriel"]},
+        manifest=str(manifest_path),
+    )
+
+    assert radiomics_module._resolve_radiomics_filters(args) == {}
+
+
+def test_apply_explicit_filters_requires_existing_columns():
+    df = pd.DataFrame([{"phase": "portal"}])
+
+    with pytest.raises(ValueError, match="missing from input CSV"):
+        radiomics_module._apply_explicit_filters(df, {"site": ["A"]})
+
+
+def test_apply_explicit_filters_keeps_rows_when_no_filters():
+    df = pd.DataFrame([{"phase": "mixte"}, {"phase": "portal"}])
+
+    out = radiomics_module._apply_explicit_filters(df, {})
+
+    pd.testing.assert_frame_equal(out, df)
+
+
+def test_apply_explicit_filters_uses_and_semantics_and_preserves_order():
+    df = pd.DataFrame(
+        [
+            {"phase": "portal", "followup_months": 3, "row_id": "keep-1"},
+            {"phase": "arteriel", "followup_months": 0, "row_id": "drop"},
+            {"phase": "portal", "followup_months": 0, "row_id": "keep-2"},
+        ]
+    )
+
+    out = radiomics_module._apply_explicit_filters(
+        df,
+        {"phase": ["portal"], "followup_months": [0, 3]},
+    )
+
+    assert out["row_id"].tolist() == ["keep-1", "keep-2"]
 
 
 def test_configure_pyradiomics_output_toggles_logger_state():
@@ -253,6 +386,8 @@ def test_main_records_missing_image_path_error(tmp_path, monkeypatch):
         csv_path_out=str(tmp_path / "out.csv"),
         error_csv_path=str(tmp_path / "errors.csv"),
         skip_filter=True,
+        filters={},
+        manifest=None,
         verbose=False,
         checkpoint_every_rows=1,
         checkpoint_every_sec=3600,
@@ -299,6 +434,8 @@ def test_main_uses_tqdm_even_when_not_verbose(tmp_path, monkeypatch):
         csv_path_out=str(tmp_path / "out.csv"),
         error_csv_path=str(tmp_path / "errors.csv"),
         skip_filter=True,
+        filters={},
+        manifest=None,
         verbose=False,
         checkpoint_every_rows=1,
         checkpoint_every_sec=3600,
@@ -368,6 +505,8 @@ def test_main_writes_output_and_error_csv(tmp_path, monkeypatch):
         csv_path_out=str(tmp_path / "out.csv"),
         error_csv_path=str(tmp_path / "errors.csv"),
         skip_filter=True,
+        filters={},
+        manifest=None,
         verbose=False,
     )
 
@@ -417,6 +556,8 @@ def test_main_resume_skips_completed_rows(tmp_path, monkeypatch):
         csv_path_out=str(tmp_path / "out.csv"),
         error_csv_path=str(tmp_path / "errors.csv"),
         skip_filter=True,
+        filters={},
+        manifest=None,
         verbose=False,
         checkpoint_every_rows=1,
         checkpoint_every_sec=3600,
@@ -471,6 +612,8 @@ def test_main_preserves_foreign_columns_from_existing_output(tmp_path, monkeypat
         csv_path_out=str(out_path),
         error_csv_path=str(tmp_path / "errors.csv"),
         skip_filter=True,
+        filters={},
+        manifest=None,
         verbose=False,
         checkpoint_every_rows=1,
         checkpoint_every_sec=3600,
@@ -482,6 +625,130 @@ def test_main_preserves_foreign_columns_from_existing_output(tmp_path, monkeypat
     out_df = pd.read_csv(out_path)
     assert "foreign_col" in out_df.columns
     assert out_df.loc[0, "foreign_col"] == "keep"
+
+
+def test_main_does_not_filter_phase_by_default(tmp_path, monkeypatch):
+    nifti_a = tmp_path / "mixte.nii.gz"
+    nifti_b = tmp_path / "portal.nii.gz"
+    mask_a = tmp_path / "mixte_mask.nii.gz"
+    mask_b = tmp_path / "portal_mask.nii.gz"
+    for path in (nifti_a, nifti_b, mask_a, mask_b):
+        path.write_text("x")
+
+    csv_path = tmp_path / "nifti_index.csv"
+    pd.DataFrame(
+        [
+            {"nifti_path": str(nifti_a), "mask_liver": str(mask_a), "phase": "mixte"},
+            {"nifti_path": str(nifti_b), "mask_liver": str(mask_b), "phase": "portal"},
+        ]
+    ).to_csv(csv_path, index=False)
+
+    monkeypatch.setattr(
+        radiomics_module,
+        "_load_radiomics_dependencies",
+        lambda: (object(), object()),
+    )
+    monkeypatch.setattr(
+        radiomics_module,
+        "_create_radiomics_extractors",
+        _fake_extractors_factory,
+    )
+    monkeypatch.setattr(
+        radiomics_module,
+        "extract_radiomics_organ_minus_tumor",
+        lambda *a, **k: ({"liver_original_shape_VoxelVolume": 1.0}, None),
+    )
+    monkeypatch.setattr(
+        radiomics_module, "extract_radiomics_safe", lambda *a, **k: ({}, None)
+    )
+
+    args = argparse.Namespace(
+        csv_path=str(csv_path),
+        csv_path_out=str(tmp_path / "out.csv"),
+        error_csv_path=str(tmp_path / "errors.csv"),
+        skip_filter=False,
+        filters={},
+        manifest=None,
+        verbose=False,
+    )
+
+    radiomics_module.main(args)
+
+    out_df = pd.read_csv(args.csv_path_out)
+    assert sorted(out_df["phase"].tolist()) == ["mixte", "portal"]
+
+
+def test_main_applies_explicit_filters_from_manifest_and_cli(tmp_path, monkeypatch):
+    nifti_a = tmp_path / "a.nii.gz"
+    nifti_b = tmp_path / "b.nii.gz"
+    nifti_c = tmp_path / "c.nii.gz"
+    mask_a = tmp_path / "a_mask.nii.gz"
+    mask_b = tmp_path / "b_mask.nii.gz"
+    mask_c = tmp_path / "c_mask.nii.gz"
+    for path in (nifti_a, nifti_b, nifti_c, mask_a, mask_b, mask_c):
+        path.write_text("x")
+
+    csv_path = tmp_path / "nifti_index.csv"
+    pd.DataFrame(
+        [
+            {
+                "nifti_path": str(nifti_a),
+                "mask_liver": str(mask_a),
+                "phase": "portal",
+                "followup_months": 0,
+            },
+            {
+                "nifti_path": str(nifti_b),
+                "mask_liver": str(mask_b),
+                "phase": "arteriel",
+                "followup_months": 0,
+            },
+            {
+                "nifti_path": str(nifti_c),
+                "mask_liver": str(mask_c),
+                "phase": "portal",
+                "followup_months": 3,
+            },
+        ]
+    ).to_csv(csv_path, index=False)
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        '{"radiomics": {"filters": {"phase": ["portal"]}}}'
+    )
+
+    monkeypatch.setattr(
+        radiomics_module,
+        "_load_radiomics_dependencies",
+        lambda: (object(), object()),
+    )
+    monkeypatch.setattr(
+        radiomics_module,
+        "_create_radiomics_extractors",
+        _fake_extractors_factory,
+    )
+    monkeypatch.setattr(
+        radiomics_module,
+        "extract_radiomics_organ_minus_tumor",
+        lambda *a, **k: ({"liver_original_shape_VoxelVolume": 1.0}, None),
+    )
+    monkeypatch.setattr(
+        radiomics_module, "extract_radiomics_safe", lambda *a, **k: ({}, None)
+    )
+
+    args = argparse.Namespace(
+        csv_path=str(csv_path),
+        csv_path_out=str(tmp_path / "out.csv"),
+        error_csv_path=str(tmp_path / "errors.csv"),
+        skip_filter=False,
+        filters={"phase": ["arteriel"], "followup_months": ["0"]},
+        manifest=str(manifest_path),
+        verbose=False,
+    )
+
+    radiomics_module.main(args)
+
+    out_df = pd.read_csv(args.csv_path_out)
+    assert out_df["nifti_path"].tolist() == [str(nifti_a)]
 
 
 def test_project_radiomics_features_keeps_non_original_and_drops_diagnostics():

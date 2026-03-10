@@ -41,14 +41,19 @@
     }
   },
   "radiomics": {
-    "setting": {
-      "binWidth": 25,
-      "resampledPixelSpacing": [1, 1, 1],
-      "resegmentRange": [-150, 250],
-      "correctMask": true
+    "pyradiomics": {
+      "setting": {
+        "binWidth": 25,
+        "resampledPixelSpacing": [1, 1, 1],
+        "resegmentRange": [-150, 250],
+        "correctMask": true
+      },
+      "imageType": {
+        "Original": {}
+      }
     },
-    "imageType": {
-      "Original": {}
+    "filters": {
+      "phase": ["arteriel", "portal"]
     }
   }
 }
