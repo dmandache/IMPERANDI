@@ -740,7 +740,7 @@ def test_main_applies_explicit_filters_from_manifest_and_cli(tmp_path, monkeypat
         csv_path_out=str(tmp_path / "out.csv"),
         error_csv_path=str(tmp_path / "errors.csv"),
         skip_filter=False,
-        filters={"phase": ["arteriel"], "followup_months": ["0"]},
+        filters={"phase": ["arteriel"], "followup_months": [0]},
         manifest=str(manifest_path),
         verbose=False,
     )
