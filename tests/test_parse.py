@@ -12,7 +12,7 @@ import pandas as pd
 import pytest
 
 from imperandi.ingest import parse
-from imperandi.ingest import hook_manifests
+from imperandi.ingest import apply_hook_manifests
 
 
 def _make_archive_dataset(root: Path) -> Path:
@@ -307,12 +307,12 @@ def test_apply_id_standardization_monkeypatched_hook(monkeypatch):
             return None
         return v.upper()
 
-    monkeypatch.setattr(hook_manifests, "resolve_hook", lambda _cfg: hook)
+    monkeypatch.setattr(apply_hook_manifests, "resolve_hook", lambda _cfg: hook)
 
-    out = hook_manifests.apply_id_standardization(
+    out = apply_hook_manifests.apply_id_standardization(
         df.copy(),
         manifest={"id_standardization": {"dummy": True}},
-        hook_resolver=hook_manifests.resolve_hook,
+        hook_resolver=apply_hook_manifests.resolve_hook,
         logger=parse.logger,
     )
 
@@ -331,13 +331,13 @@ def test_apply_id_standardization_monkeypatched_hook(monkeypatch):
 def test_adds_new_columns(monkeypatch):
     df = pd.DataFrame({"value": [1, 2]})
     monkeypatch.setattr(
-        hook_manifests,
+        apply_hook_manifests,
         "resolve_hook",
         lambda d: (lambda x: {"double": x * 2, "is_odd": x % 2 == 1}),
     )
     manifest = {"derived_columns": [{"from_column": "value"}]}
-    out = hook_manifests.apply_derived_columns(
-        df.copy(), manifest, hook_resolver=hook_manifests.resolve_hook
+    out = apply_hook_manifests.apply_derived_columns(
+        df.copy(), manifest, hook_resolver=apply_hook_manifests.resolve_hook
     )
     assert "double" in out.columns and "is_odd" in out.columns
     assert out["double"].tolist() == [2, 4]
@@ -347,11 +347,11 @@ def test_adds_new_columns(monkeypatch):
 def test_missing_only_does_not_overwrite(monkeypatch):
     df = pd.DataFrame({"value": [1, 2], "double": [99, 99]})
     monkeypatch.setattr(
-        hook_manifests, "resolve_hook", lambda d: (lambda x: {"double": x * 2})
+        apply_hook_manifests, "resolve_hook", lambda d: (lambda x: {"double": x * 2})
     )
     manifest = {"derived_columns": [{"from_column": "value"}]}
-    out = hook_manifests.apply_derived_columns(
-        df.copy(), manifest, hook_resolver=hook_manifests.resolve_hook
+    out = apply_hook_manifests.apply_derived_columns(
+        df.copy(), manifest, hook_resolver=apply_hook_manifests.resolve_hook
     )
     # default join_mode is 'missing_only' -> existing 'double' stays unchanged
     assert out["double"].tolist() == [99, 99]
@@ -360,18 +360,18 @@ def test_missing_only_does_not_overwrite(monkeypatch):
 def test_overwrite_replaces_columns(monkeypatch):
     df = pd.DataFrame({"value": [1, 2], "double": [99, 99]})
     monkeypatch.setattr(
-        hook_manifests, "resolve_hook", lambda d: (lambda x: {"double": x * 2})
+        apply_hook_manifests, "resolve_hook", lambda d: (lambda x: {"double": x * 2})
     )
     manifest = {"derived_columns": [{"from_column": "value", "join_mode": "overwrite"}]}
-    out = hook_manifests.apply_derived_columns(
-        df.copy(), manifest, hook_resolver=hook_manifests.resolve_hook
+    out = apply_hook_manifests.apply_derived_columns(
+        df.copy(), manifest, hook_resolver=apply_hook_manifests.resolve_hook
     )
     assert out["double"].tolist() == [2, 4]
 
 
 def test_noop_when_no_derived_columns():
     df = pd.DataFrame({"a": [1]})
-    out = hook_manifests.apply_derived_columns(df.copy(), {})
+    out = apply_hook_manifests.apply_derived_columns(df.copy(), {})
     assert out.equals(df)
 
 

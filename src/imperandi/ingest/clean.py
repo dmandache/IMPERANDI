@@ -16,7 +16,7 @@ from imperandi.utils.geometry import (
     classify_plane_from_iop,
     standardize_iop,
 )
-from imperandi.ingest.hook_manifests import (
+from imperandi.ingest.apply_hook_manifests import (
     apply_id_standardization,
     apply_derived_columns,
 )
