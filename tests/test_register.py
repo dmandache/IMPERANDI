@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import argparse
 
 import pandas as pd
+import pytest
 
 from imperandi.process import _registration_common as reg_common
 from imperandi.process import register_intra_patient as intra_module
@@ -28,6 +29,9 @@ def test_normalize_register_population_args_defaults(tmp_path):
         organ="liver",
         mask_column=None,
         template_sample_size=128,
+        template_mode="mean_shape",
+        template_source_idx=None,
+        principal_vectors=None,
         template_seed=0,
         num_workers=2,
         pad_mm=25.0,
@@ -47,6 +51,78 @@ def test_normalize_register_population_args_defaults(tmp_path):
     )
     assert out.log_csv_path == str(csv_path.parent / "register_population_log.csv")
     assert out.mask_column == "mask_liver"
+    assert out.template_mode == "mean_shape"
+    assert out.template_source_idx is None
+    assert out.principal_vectors is None
+
+
+def test_normalize_register_population_args_parses_principal_vectors(tmp_path):
+    csv_path = tmp_path / "nifti_index.csv"
+    csv_path.write_text("nifti_path,mask_liver\n")
+
+    args = argparse.Namespace(
+        csv_path_pos=str(csv_path),
+        csv_path_opt=None,
+        csv_path_out_pos=None,
+        csv_path_out=None,
+        output_dir=str(tmp_path / "registered"),
+        error_csv_path=None,
+        log_csv_path=None,
+        organ="liver",
+        mask_column=None,
+        template_sample_size=8,
+        template_mode="principal_vectors",
+        template_source_idx=None,
+        principal_vectors="1,0,0,0,1,0,0,0,1",
+        template_seed=0,
+        num_workers=2,
+        pad_mm=25.0,
+        save_registered_outputs=False,
+        verbose=False,
+        dry_run=False,
+    )
+
+    out = population_module.normalize_register_population_args(args)
+
+    assert out.template_mode == "principal_vectors"
+    assert out.principal_vectors == [
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+    ]
+
+
+def test_normalize_register_population_args_rejects_incompatible_template_source_idx(
+    tmp_path,
+):
+    csv_path = tmp_path / "nifti_index.csv"
+    csv_path.write_text("nifti_path,mask_liver\n")
+
+    args = argparse.Namespace(
+        csv_path_pos=str(csv_path),
+        csv_path_opt=None,
+        csv_path_out_pos=None,
+        csv_path_out=None,
+        output_dir=str(tmp_path / "registered"),
+        error_csv_path=None,
+        log_csv_path=None,
+        organ="liver",
+        mask_column=None,
+        template_sample_size=8,
+        template_mode="mean_shape",
+        template_source_idx=0,
+        principal_vectors=None,
+        template_seed=0,
+        num_workers=2,
+        pad_mm=25.0,
+        save_registered_outputs=False,
+        verbose=False,
+        dry_run=False,
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        population_module.normalize_register_population_args(args)
+    assert "--template_source_idx is only supported" in str(exc_info.value)
 
 
 def test_normalize_register_intra_patient_args_defaults(tmp_path):
@@ -127,6 +203,62 @@ def test_sample_valid_rows_for_template_is_deterministic(tmp_path, monkeypatch):
     assert [row["source_idx"] for row in sampled_a] == [
         row["source_idx"] for row in sampled_b
     ]
+
+
+def test_compute_mean_metrics():
+    metrics = [
+        {
+            "volume_ml": 100.0,
+            "bbox_x_mm": 10.0,
+            "bbox_y_mm": 20.0,
+            "bbox_z_mm": 30.0,
+        },
+        {
+            "volume_ml": 300.0,
+            "bbox_x_mm": 30.0,
+            "bbox_y_mm": 40.0,
+            "bbox_z_mm": 50.0,
+        },
+    ]
+
+    out = reg_common.compute_mean_metrics(metrics)
+
+    assert out == {
+        "volume_ml": 200.0,
+        "bbox_x_mm": 20.0,
+        "bbox_y_mm": 30.0,
+        "bbox_z_mm": 40.0,
+    }
+
+
+def test_build_output_path_uses_scan_and_prefixless_mask_names(tmp_path):
+    row_dir = tmp_path / "rows" / "0"
+
+    nifti_out = reg_common.build_output_path(
+        row_dir,
+        column_name="nifti_path",
+        source_path="scan_source.nii.gz",
+    )
+    liver_out = reg_common.build_output_path(
+        row_dir,
+        column_name="mask_liver",
+        source_path="mask_source.nii.gz",
+    )
+    tumor_out = reg_common.build_output_path(
+        row_dir,
+        column_name="mask_liver_tumor",
+        source_path="mask_source.nii.gz",
+    )
+    passthrough_out = reg_common.build_output_path(
+        row_dir,
+        column_name="nifti_preview",
+        source_path="preview.nii.gz",
+    )
+
+    assert nifti_out == row_dir / "scan.nii.gz"
+    assert liver_out == row_dir / "liver.nii.gz"
+    assert tumor_out == row_dir / "liver_tumor.nii.gz"
+    assert passthrough_out == row_dir / "nifti_preview.nii.gz"
 
 
 def test_select_anchor_row_prefers_portal_phase(tmp_path):
@@ -356,7 +488,11 @@ def test_register_population_main_rewrites_paths_when_save_enabled(
         row_dir.mkdir(parents=True, exist_ok=True)
         rewritten = {}
         for column in ("nifti_path", "mask_liver", "mask_liver_tumor"):
-            out_path = row_dir / f"{column}.nii.gz"
+            out_path = reg_common.build_output_path(
+                row_dir,
+                column_name=column,
+                source_path=str(row[column]),
+            )
             out_path.write_text(column)
             rewritten[column] = str(out_path)
         return {
@@ -401,9 +537,9 @@ def test_register_population_main_rewrites_paths_when_save_enabled(
     population_module.main(args)
 
     out_df = pd.read_csv(args.csv_path_out)
-    assert out_df.loc[0, "nifti_path"].endswith("/rows/0/nifti_path.nii.gz")
-    assert out_df.loc[0, "mask_liver"].endswith("/rows/0/mask_liver.nii.gz")
-    assert out_df.loc[0, "mask_liver_tumor"].endswith("/rows/0/mask_liver_tumor.nii.gz")
+    assert Path(out_df.loc[0, "nifti_path"]).name == "scan.nii.gz"
+    assert Path(out_df.loc[0, "mask_liver"]).name == "liver.nii.gz"
+    assert Path(out_df.loc[0, "mask_liver_tumor"]).name == "liver_tumor.nii.gz"
     assert Path(out_df.loc[0, "nifti_path"]).exists()
 
 
@@ -486,6 +622,78 @@ def test_register_population_main_resume_skips_completed_rows(tmp_path, monkeypa
     assert counts["rows"] == 1
 
 
+def test_register_population_row_principal_vectors_mode(tmp_path, monkeypatch):
+    nifti = tmp_path / "a.nii.gz"
+    mask = tmp_path / "a_mask.nii.gz"
+    nifti.write_text("x")
+    mask.write_text("x")
+
+    class FakeSitk:
+        sitkNearestNeighbor = 0
+        sitkUInt8 = 1
+        sitkFloat32 = 2
+
+    monkeypatch.setattr(population_module.reg_common, "_load_register_dependencies", lambda: FakeSitk)
+    monkeypatch.setattr(population_module.reg_common, "read_image", lambda *args, **kwargs: "img")
+    monkeypatch.setattr(population_module.reg_common, "read_binary_mask", lambda *args, **kwargs: "mask")
+
+    calls = {"dice": 0, "rigid": 0}
+
+    def fake_dice(*args, **kwargs):
+        calls["dice"] += 1
+        return 0.5 if calls["dice"] == 1 else 0.9
+
+    def fake_rigid(*args, **kwargs):
+        calls["rigid"] += 1
+        raise AssertionError("rigid registration must not be called in principal_vectors mode")
+
+    monkeypatch.setattr(population_module.reg_common, "dice_coeff", fake_dice)
+    monkeypatch.setattr(population_module.reg_common, "rigid_register_mask_pair", fake_rigid)
+    monkeypatch.setattr(
+        population_module,
+        "_mask_principal_frame",
+        lambda *args, **kwargs: {
+            "centroid_mm": [0.0, 0.0, 0.0],
+            "axes": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        },
+    )
+    monkeypatch.setattr(population_module, "_principal_frame_transform", lambda *args, **kwargs: "tx")
+    monkeypatch.setattr(
+        population_module.reg_common,
+        "transform_to_flat_3x4",
+        lambda tx: {column: 0.0 for column in reg_common.POPULATION_MATRIX_COLUMNS},
+    )
+
+    args = argparse.Namespace(
+        mask_column="mask_liver",
+        save_registered_outputs=False,
+        output_dir=str(tmp_path / "registered"),
+        template_mode="principal_vectors",
+    )
+    template_info = {
+        "template_source_idx": 0,
+        "reference_image_path": str(nifti),
+        "mask_path": str(mask),
+        "principal_reference": {
+            "centroid_mm": [0.0, 0.0, 0.0],
+            "axes": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        },
+    }
+    row = {"_source_idx": 0, "nifti_path": str(nifti), "mask_liver": str(mask)}
+
+    result = population_module._register_population_row(
+        row,
+        template_info=template_info,
+        args=args,
+        path_columns=["nifti_path", "mask_liver"],
+    )
+
+    assert result["error_message"] is None
+    assert result["updates"]["population_register_stage"] == "principal_vectors"
+    assert result["updates"]["population_register_template_mode"] == "principal_vectors"
+    assert calls["rigid"] == 0
+
+
 def test_register_intra_patient_main_rewrites_paths(tmp_path, monkeypatch):
     nifti_a = tmp_path / "a.nii.gz"
     mask_a = tmp_path / "a_mask.nii.gz"
@@ -527,11 +735,19 @@ def test_register_intra_patient_main_rewrites_paths(tmp_path, monkeypatch):
             row_dir.mkdir(parents=True, exist_ok=True)
             rewritten = {}
             for column in ("nifti_path", "mask_liver"):
-                out_path = row_dir / f"{column}.nii.gz"
+                out_path = reg_common.build_output_path(
+                    row_dir,
+                    column_name=column,
+                    source_path=str(row[column]),
+                )
                 out_path.write_text(column)
                 rewritten[column] = str(out_path)
             if source_idx == 1:
-                out_path = row_dir / "mask_liver_tumor.nii.gz"
+                out_path = reg_common.build_output_path(
+                    row_dir,
+                    column_name="mask_liver_tumor",
+                    source_path=str(row["mask_liver_tumor"]),
+                )
                 out_path.write_text("tumor")
                 rewritten["mask_liver_tumor"] = str(out_path)
             results.append(
@@ -577,8 +793,8 @@ def test_register_intra_patient_main_rewrites_paths(tmp_path, monkeypatch):
     intra_module.main(args)
 
     out_df = pd.read_csv(args.csv_path_out)
-    assert out_df.loc[0, "nifti_path"].endswith("/rows/0/nifti_path.nii.gz")
-    assert out_df.loc[1, "mask_liver_tumor"].endswith("/rows/1/mask_liver_tumor.nii.gz")
+    assert Path(out_df.loc[0, "nifti_path"]).name == "scan.nii.gz"
+    assert Path(out_df.loc[1, "mask_liver_tumor"]).name == "liver_tumor.nii.gz"
     assert out_df.loc[1, "intra_register_stage"] == "bspline"
     assert Path(out_df.loc[0, "nifti_path"]).exists()
 
@@ -658,8 +874,16 @@ def test_register_intra_patient_main_resume_skips_completed_rows(
         source_idx = int(patient_df.iloc[0]["_source_idx"])
         row_dir = Path(args.output_dir) / "rows" / str(source_idx)
         row_dir.mkdir(parents=True, exist_ok=True)
-        out_path = row_dir / "nifti_path.nii.gz"
-        mask_path = row_dir / "mask_liver.nii.gz"
+        out_path = reg_common.build_output_path(
+            row_dir,
+            column_name="nifti_path",
+            source_path=str(patient_df.iloc[0]["nifti_path"]),
+        )
+        mask_path = reg_common.build_output_path(
+            row_dir,
+            column_name="mask_liver",
+            source_path=str(patient_df.iloc[0]["mask_liver"]),
+        )
         out_path.write_text("nifti")
         mask_path.write_text("mask")
         return [

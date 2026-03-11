@@ -16,7 +16,7 @@ DEFAULT_PAD_MM = 25.0
 DEFAULT_BSPLINE_CTRL_SPACING_MM = 90.0
 DEFAULT_BAND_MM = 15.0
 DEFAULT_TEMPLATE_SAMPLE_SIZE = 128
-DEFAULT_TEMPLATE_SEED = 0
+DEFAULT_TEMPLATE_SEED = 42
 DEFAULT_NUM_WORKERS = 2
 
 POPULATION_MATRIX_COLUMNS = [
@@ -95,8 +95,17 @@ def build_output_path(
     column_name: str,
     source_path: str | None,
 ) -> Path:
+    if column_name == "nifti_path":
+        output_stem = "scan"
+    elif column_name.startswith("mask_"):
+        # Persist masks as organ names (for example mask_liver -> liver).
+        output_stem = column_name[len("mask_") :]
+        if not output_stem:
+            output_stem = column_name
+    else:
+        output_stem = column_name
     suffix = infer_nifti_suffix(source_path)
-    return Path(row_dir) / f"{column_name}{suffix}"
+    return Path(row_dir) / f"{output_stem}{suffix}"
 
 
 def normalize_phase_value(value: Any) -> str | None:
@@ -481,6 +490,31 @@ def choose_median_exemplar(metric_rows: list[dict[str, Any]]) -> dict[str, Any]:
     distances = np.linalg.norm(features - medians[None, :], axis=1)
     best_index = int(np.argmin(distances))
     return metric_rows[best_index]
+
+
+def compute_mean_metrics(metric_rows: list[dict[str, Any]]) -> dict[str, float]:
+    if not metric_rows:
+        raise ValueError("metric_rows must not be empty")
+
+    features = np.asarray(
+        [
+            [
+                float(row["volume_ml"]),
+                float(row["bbox_x_mm"]),
+                float(row["bbox_y_mm"]),
+                float(row["bbox_z_mm"]),
+            ]
+            for row in metric_rows
+        ],
+        dtype=float,
+    )
+    means = np.mean(features, axis=0)
+    return {
+        "volume_ml": float(means[0]),
+        "bbox_x_mm": float(means[1]),
+        "bbox_y_mm": float(means[2]),
+        "bbox_z_mm": float(means[3]),
+    }
 
 
 def sample_valid_rows_for_template(

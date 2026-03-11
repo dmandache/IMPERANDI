@@ -426,6 +426,39 @@ def test_cli_register_population_accepts_save_registered_outputs_flag(
     assert save_line.strip().endswith("True")
 
 
+def test_cli_register_population_accepts_principal_vectors_mode(tmp_path, capsys):
+    csv_in = tmp_path / "nifti_index.csv"
+    csv_in.write_text("nifti_path,mask_liver\n")
+
+    exit_code = cli.main(
+        [
+            "register-population",
+            "--csv_path",
+            str(csv_in),
+            "--output_dir",
+            str(tmp_path / "registered"),
+            "--template_mode",
+            "principal_vectors",
+            "--principal_vectors",
+            "1,0,0,0,1,0,0,0,1",
+            "--dry-run",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    mode_line = next(
+        line for line in output.splitlines() if line.strip().startswith("template_mode")
+    )
+    vectors_line = next(
+        line
+        for line in output.splitlines()
+        if line.strip().startswith("principal_vectors")
+    )
+    assert exit_code == 0
+    assert mode_line.strip().endswith("principal_vectors")
+    assert "[[1.0, 0.0, 0.0]," in vectors_line
+
+
 def test_cli_register_intra_patient_accepts_optional_csv_path_only(tmp_path):
     csv_in = tmp_path / "nifti_index.csv"
     csv_in.write_text("patient_key,nifti_path,mask_liver\n")
