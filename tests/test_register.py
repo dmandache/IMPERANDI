@@ -5,7 +5,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import argparse
+import json
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -123,6 +125,164 @@ def test_normalize_register_population_args_rejects_incompatible_template_source
     with pytest.raises(ValueError) as exc_info:
         population_module.normalize_register_population_args(args)
     assert "--template_source_idx is only supported" in str(exc_info.value)
+
+
+def test_default_principal_vectors_for_liver():
+    out = population_module._default_principal_vectors_for_organ("liver")
+    assert out is not None
+    expected = population_module._canonicalize_eigen_axes(
+        np.asarray(
+            population_module.DEFAULT_ORGAN_PRINCIPAL_VECTORS["liver"],
+            dtype=float,
+        )
+    )
+    np.testing.assert_allclose(out, expected)
+
+
+def test_principal_frame_transform_aligns_permuted_axes():
+    class FakeTx:
+        def __init__(self):
+            self.matrix = None
+            self.translation = None
+
+        def SetMatrix(self, matrix):
+            self.matrix = matrix
+
+        def SetTranslation(self, translation):
+            self.translation = translation
+
+    class FakeSitk:
+        def AffineTransform(self, dim):
+            assert dim == 3
+            return FakeTx()
+
+    tx = population_module._principal_frame_transform(
+        moving_frame={
+            "centroid_mm": [0.0, 0.0, 0.0],
+            "axes": [
+                [0.0, 1.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 0.0, -1.0],
+            ],
+        },
+        reference_frame={
+            "centroid_mm": [0.0, 0.0, 0.0],
+            "axes": [
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+        },
+        sitk_module=FakeSitk(),
+    )
+
+    np.testing.assert_allclose(np.asarray(tx.matrix, dtype=float).reshape(3, 3), np.eye(3))
+    np.testing.assert_allclose(np.asarray(tx.translation, dtype=float), np.zeros(3))
+
+
+def test_project_to_rotation_preserves_existing_rotation():
+    rotation = np.asarray(
+        [
+            [0.0, 1.0, 0.0],
+            [-1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=float,
+    )
+    out = population_module._project_to_rotation(rotation)
+    np.testing.assert_allclose(out, rotation)
+
+
+def test_match_eigenvector_basis_keeps_positive_axis_alignment():
+    reference = np.asarray(
+        [
+            [0.80193, 0.592863, 0.07363],
+            [0.342035, -0.556673, 0.757052],
+            [0.489816, -0.581918, -0.649193],
+        ],
+        dtype=float,
+    )
+    moving = np.asarray(
+        [
+            [-0.585992, 0.807823, 0.063527],
+            [0.558565, 0.345895, 0.753898],
+            [0.587042, 0.477262, -0.653913],
+        ],
+        dtype=float,
+    )
+    matched = population_module._match_eigenvector_basis(reference, moving)
+    diagonal = np.diag(reference.T @ matched)
+    assert np.all(diagonal > 0.0)
+
+
+def test_build_principal_vectors_template_uses_default_liver_vectors(
+    tmp_path, monkeypatch
+):
+    sample_rows = [
+        {
+            "source_idx": 0,
+            "nifti_path": str(tmp_path / "scan.nii.gz"),
+            "mask_path": str(tmp_path / "mask.nii.gz"),
+        }
+    ]
+    exemplar = sample_rows[0]
+
+    monkeypatch.setattr(
+        population_module,
+        "_sampled_rows_or_error",
+        lambda *args, **kwargs: sample_rows,
+    )
+    monkeypatch.setattr(population_module.reg_common, "choose_median_exemplar", lambda rows: exemplar)
+    monkeypatch.setattr(population_module.reg_common, "read_image", lambda *args, **kwargs: "img")
+    monkeypatch.setattr(
+        population_module.reg_common,
+        "read_binary_mask",
+        lambda *args, **kwargs: "mask",
+    )
+    monkeypatch.setattr(population_module.reg_common, "write_image", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        population_module,
+        "_mask_principal_frame",
+        lambda *args, **kwargs: {
+            "centroid_mm": np.asarray([0.0, 0.0, 0.0]),
+            "axes": np.eye(3),
+        },
+    )
+    monkeypatch.setattr(
+        population_module,
+        "_compute_average_shape_principal_frame",
+        lambda *args, **kwargs: (
+            {"centroid_mm": np.asarray([1.0, 2.0, 3.0]), "axes": np.eye(3)},
+            1,
+        ),
+    )
+
+    args = argparse.Namespace(
+        output_dir=str(tmp_path / "registered"),
+        mask_column="mask_liver",
+        principal_vectors=None,
+        organ="liver",
+        template_seed=0,
+        template_sample_size=1,
+    )
+    out = population_module._build_principal_vectors_template(
+        pd.DataFrame([{"_source_idx": 0}]),
+        args=args,
+        sitk_module=object(),
+    )
+
+    expected_axes = population_module._canonicalize_eigen_axes(
+        np.asarray(
+            population_module.DEFAULT_ORGAN_PRINCIPAL_VECTORS["liver"],
+            dtype=float,
+        )
+    )
+    np.testing.assert_allclose(
+        np.asarray(out["principal_reference"]["axes"], dtype=float),
+        expected_axes,
+    )
+    payload = json.loads(Path(out["principal_vectors_path"]).read_text(encoding="utf-8"))
+    assert payload["source"] == "default_liver"
 
 
 def test_normalize_register_intra_patient_args_defaults(tmp_path):
@@ -329,6 +489,112 @@ def test_select_anchor_row_falls_back_to_totalseg_phase(tmp_path):
     selected = intra_module._select_anchor_row(df, mask_column="mask_liver")
 
     assert selected["_source_idx"] == 1
+
+
+def test_process_patient_group_returns_anchor_error_when_anchor_inputs_unreadable(
+    tmp_path, monkeypatch
+):
+    nifti = tmp_path / "a.nii.gz"
+    mask = tmp_path / "a_mask.nii.gz"
+    for path in (nifti, mask):
+        path.write_text("x")
+
+    df = pd.DataFrame(
+        [
+            {
+                "_source_idx": 0,
+                "patient_key": "p1",
+                "phase": "portal",
+                "nifti_path": str(nifti),
+                "mask_liver": str(mask),
+            }
+        ]
+    )
+
+    monkeypatch.setattr(intra_module.reg_common, "_load_register_dependencies", lambda: object())
+    monkeypatch.setattr(
+        intra_module.reg_common,
+        "copy_row_files",
+        lambda *args, **kwargs: {"nifti_path": "copied_scan.nii.gz", "mask_liver": "copied_mask.nii.gz"},
+    )
+    monkeypatch.setattr(
+        intra_module.reg_common,
+        "read_image",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("bad anchor image")),
+    )
+
+    args = argparse.Namespace(
+        output_dir=str(tmp_path / "registered"),
+        mask_column="mask_liver",
+        band_mm=15.0,
+        bspline_ctrl_spacing_mm=90.0,
+    )
+    out = intra_module._process_patient_group(
+        df,
+        pending_source_indices={0},
+        args=args,
+        path_columns=["nifti_path", "mask_liver"],
+    )
+
+    assert len(out) == 1
+    assert out[0]["source_idx"] == 0
+    assert out[0]["updates"]["intra_register_status"] == "error"
+    assert out[0]["updates"]["intra_register_stage"] == "anchor"
+    assert "anchor inputs are not readable" in out[0]["error_message"]
+
+
+def test_register_intra_patient_main_keeps_state_resumable_when_rows_unprocessed(
+    tmp_path, monkeypatch
+):
+    nifti = tmp_path / "a.nii.gz"
+    mask = tmp_path / "a_mask.nii.gz"
+    for path in (nifti, mask):
+        path.write_text("x")
+
+    csv_path = tmp_path / "nifti_index.csv"
+    pd.DataFrame(
+        [{"patient_key": "p1", "phase": "portal", "nifti_path": str(nifti), "mask_liver": str(mask)}]
+    ).to_csv(csv_path, index=False)
+
+    monkeypatch.setattr(intra_module.reg_common, "_load_register_dependencies", lambda: object())
+    calls = {"groups": 0}
+
+    def fake_process_group(patient_df, *, pending_source_indices, args, path_columns):
+        calls["groups"] += 1
+        return []
+
+    monkeypatch.setattr(intra_module, "_process_patient_group", fake_process_group)
+
+    args = argparse.Namespace(
+        csv_path=str(csv_path),
+        csv_path_out=str(tmp_path / "out.csv"),
+        output_dir=str(tmp_path / "registered"),
+        error_csv_path=str(tmp_path / "errors.csv"),
+        log_csv_path=str(tmp_path / "log.csv"),
+        organ="liver",
+        mask_column="mask_liver",
+        num_workers=1,
+        pad_mm=25.0,
+        band_mm=15.0,
+        bspline_ctrl_spacing_mm=90.0,
+        verbose=False,
+        checkpoint_every_rows=1,
+        checkpoint_every_sec=3600,
+        resume=False,
+        strict_resume=False,
+    )
+
+    intra_module.main(args)
+    assert calls["groups"] == 1
+
+    state_path = Path(args.csv_path_out).parent / ".out.register_intra_patient.state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert not bool(state.get("finished"))
+    assert state.get("completed_indices") == []
+
+    args.resume = True
+    intra_module.main(args)
+    assert calls["groups"] == 2
 
 
 def test_register_population_main_keeps_paths_unchanged_without_save(

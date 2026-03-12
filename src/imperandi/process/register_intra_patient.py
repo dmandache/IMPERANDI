@@ -385,7 +385,6 @@ def _process_patient_group(
             )
             for _, row in patient_df.iterrows()
             if int(row["_source_idx"]) in pending_source_indices
-            and int(row["_source_idx"]) != anchor_source_idx
         ]
 
     for _, row_series in patient_df.iterrows():
@@ -727,7 +726,21 @@ def main(args: argparse.Namespace) -> None:
         atomic_write_csv(df_err, args.error_csv_path, index=False)
         logger.warning("%d rows failed -> %s", len(df_err), args.error_csv_path)
 
-    ckpt.finalize_state(completed_indices=completed_indices)
+    expected_source_indices = {
+        int(source_idx) for source_idx in df["_source_idx"].tolist()
+    }
+    missing_source_indices = sorted(expected_source_indices - completed_indices)
+    if missing_source_indices:
+        logger.warning(
+            (
+                "Intra-patient run ended with %d unprocessed rows; "
+                "state left resumable (missing source_idx examples: %s)"
+            ),
+            len(missing_source_indices),
+            missing_source_indices[:10],
+        )
+    else:
+        ckpt.finalize_state(completed_indices=completed_indices)
     logger.info("Intra-patient registration done")
 
 

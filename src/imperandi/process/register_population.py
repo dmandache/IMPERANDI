@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -33,6 +34,13 @@ TEMPLATE_MODE_CHOICES = (
     TEMPLATE_MODE_PRINCIPAL_VECTORS,
 )
 DEFAULT_TEMPLATE_MODE = TEMPLATE_MODE_MEAN_SHAPE
+DEFAULT_ORGAN_PRINCIPAL_VECTORS: dict[str, list[list[float]]] = {
+    "liver": [
+        [-0.83771703, 0.52332983, 0.15606429],
+        [0.52885744, 0.70617388, 0.4707741],
+        [-0.13616161, -0.47691124, 0.86834076],
+    ]
+}
 
 
 def add_register_population_arguments(
@@ -130,7 +138,9 @@ def add_register_population_arguments(
         help=(
             "Optional target principal axes for --template_mode principal_vectors, "
             "formatted as 9 comma-separated floats "
-            "(v1x,v1y,v1z,v2x,v2y,v2z,v3x,v3y,v3z)."
+            "(v1x,v1y,v1z,v2x,v2y,v2z,v3x,v3y,v3z). "
+            "If omitted, liver uses built-in default vectors; other organs use "
+            "population average-shape eigenvectors."
         ),
     )
     parser.add_argument(
@@ -308,7 +318,7 @@ def _parse_principal_vectors(value: Any) -> list[list[float]] | None:
             raise ValueError(
                 "--principal_vectors must be a 3x3 matrix or 9 comma-separated floats"
             )
-    matrix = _project_to_rotation(matrix)
+    matrix = _canonicalize_eigen_axes(matrix)
     return matrix.tolist()
 
 
@@ -330,6 +340,11 @@ def _project_to_rotation(matrix: np.ndarray) -> np.ndarray:
     if np.linalg.det(rotation) < 0:
         u[:, -1] *= -1.0
         rotation = u @ vt
+    return rotation
+
+
+def _canonicalize_eigen_axes(matrix: np.ndarray) -> np.ndarray:
+    rotation = _project_to_rotation(matrix)
     for axis_index in range(3):
         col = rotation[:, axis_index]
         anchor = int(np.argmax(np.abs(col)))
@@ -338,6 +353,54 @@ def _project_to_rotation(matrix: np.ndarray) -> np.ndarray:
     if np.linalg.det(rotation) < 0:
         rotation[:, -1] *= -1.0
     return rotation
+
+
+def _best_eigenvector_permutation(
+    reference_axes: np.ndarray,
+    moving_axes: np.ndarray,
+) -> tuple[int, int, int]:
+    reference_axes = np.asarray(reference_axes, dtype=float)
+    moving_axes = np.asarray(moving_axes, dtype=float)
+    if reference_axes.shape != (3, 3) or moving_axes.shape != (3, 3):
+        raise ValueError("Expected 3x3 axes matrices")
+    best_perm: tuple[int, int, int] = (0, 1, 2)
+    best_score = -np.inf
+    for perm in itertools.permutations(range(3)):
+        score = 0.0
+        for axis_index in range(3):
+            ref_axis = reference_axes[:, axis_index]
+            moving_axis = moving_axes[:, perm[axis_index]]
+            ref_norm = float(np.linalg.norm(ref_axis))
+            moving_norm = float(np.linalg.norm(moving_axis))
+            if ref_norm <= 0.0 or moving_norm <= 0.0:
+                continue
+            score += abs(float(np.dot(ref_axis, moving_axis)) / (ref_norm * moving_norm))
+        if score > best_score:
+            best_score = score
+            best_perm = (int(perm[0]), int(perm[1]), int(perm[2]))
+    return best_perm
+
+
+def _match_eigenvector_basis(
+    reference_axes: np.ndarray,
+    moving_axes: np.ndarray,
+) -> np.ndarray:
+    reference_axes = np.asarray(reference_axes, dtype=float)
+    moving_axes = np.asarray(moving_axes, dtype=float)
+    perm = _best_eigenvector_permutation(reference_axes, moving_axes)
+    matched = moving_axes[:, list(perm)].copy()
+    for axis_index in range(3):
+        if float(np.dot(reference_axes[:, axis_index], matched[:, axis_index])) < 0.0:
+            matched[:, axis_index] *= -1.0
+    return _project_to_rotation(matched)
+
+
+def _default_principal_vectors_for_organ(organ: str) -> np.ndarray | None:
+    key = str(organ or "").strip().lower()
+    matrix = DEFAULT_ORGAN_PRINCIPAL_VECTORS.get(key)
+    if matrix is None:
+        return None
+    return _canonicalize_eigen_axes(np.asarray(matrix, dtype=float))
 
 
 def _mask_physical_points(mask, *, sitk_module) -> np.ndarray:
@@ -362,7 +425,7 @@ def _mask_principal_frame(mask, *, sitk_module) -> dict[str, np.ndarray]:
     eigenvalues, eigenvectors = np.linalg.eigh(covariance)
     order = np.argsort(eigenvalues)[::-1]
     axes = eigenvectors[:, order]
-    axes = _project_to_rotation(axes)
+    axes = _canonicalize_eigen_axes(axes)
     return {
         "centroid_mm": centroid.astype(float),
         "axes": axes.astype(float),
@@ -384,15 +447,15 @@ def _reference_from_sampled_frames(
     aligned_axes: list[np.ndarray] = []
     centroids: list[np.ndarray] = []
     for frame in frames:
-        axes = np.asarray(frame["axes"], dtype=float).copy()
-        for axis_index in range(3):
-            if float(np.dot(axes[:, axis_index], anchor_axes[:, axis_index])) < 0.0:
-                axes[:, axis_index] *= -1.0
+        axes = _match_eigenvector_basis(
+            anchor_axes,
+            np.asarray(frame["axes"], dtype=float),
+        )
         aligned_axes.append(axes)
         centroids.append(np.asarray(frame["centroid_mm"], dtype=float))
 
     mean_axes = np.mean(np.stack(aligned_axes, axis=0), axis=0)
-    mean_axes = _project_to_rotation(mean_axes)
+    mean_axes = _canonicalize_eigen_axes(mean_axes)
     centroid = np.median(np.stack(centroids, axis=0), axis=0)
     return {
         "centroid_mm": centroid.astype(float),
@@ -411,6 +474,7 @@ def _principal_frame_transform(
     reference_axes = np.asarray(reference_frame["axes"], dtype=float)
     reference_center = np.asarray(reference_frame["centroid_mm"], dtype=float)
 
+    moving_axes = _match_eigenvector_basis(reference_axes, moving_axes)
     rotation = reference_axes @ moving_axes.T
     rotation = _project_to_rotation(rotation)
     translation = reference_center - rotation @ moving_center
@@ -620,6 +684,68 @@ def _build_mean_shape_template(
     }
 
 
+def _compute_average_shape_principal_frame(
+    sampled_rows: list[dict[str, Any]],
+    *,
+    exemplar: dict[str, Any],
+    exemplar_image,
+    exemplar_mask,
+    sitk_module,
+) -> tuple[dict[str, np.ndarray], int]:
+    aligned_arrays = [
+        sitk_module.GetArrayFromImage(
+            sitk_module.Cast(exemplar_mask > 0, sitk_module.sitkFloat32)
+        )
+    ]
+    for sampled in sampled_rows:
+        if int(sampled["source_idx"]) == int(exemplar["source_idx"]):
+            continue
+        try:
+            moving_mask = reg_common.read_binary_mask(
+                sampled["mask_path"],
+                sitk_module=sitk_module,
+            )
+            rigid_tx = reg_common.rigid_register_mask_pair(
+                fixed_mask=exemplar_mask,
+                moving_mask=moving_mask,
+                sitk_module=sitk_module,
+            )
+            aligned_mask = reg_common.resample_like(
+                exemplar_image,
+                moving_mask,
+                tx=rigid_tx,
+                interp=sitk_module.sitkNearestNeighbor,
+                default=0,
+                pixel_id=sitk_module.sitkUInt8,
+                sitk_module=sitk_module,
+            )
+            aligned_arrays.append(
+                sitk_module.GetArrayFromImage(
+                    sitk_module.Cast(aligned_mask > 0, sitk_module.sitkFloat32)
+                )
+            )
+        except Exception as exc:
+            logger.warning(
+                "Skipping average-shape principal frame row %s after registration error: %s",
+                sampled["source_idx"],
+                exc,
+            )
+    mean_array = np.mean(np.stack(aligned_arrays, axis=0), axis=0).astype(np.float32)
+    mean_image = reg_common.image_from_array_like(
+        mean_array,
+        reference_image=exemplar_image,
+        sitk_module=sitk_module,
+        cast_to=sitk_module.sitkFloat32,
+    )
+    mean_mask = reg_common.threshold_to_largest_component(
+        mean_image,
+        reference_image=exemplar_image,
+        threshold=0.5,
+        sitk_module=sitk_module,
+    )
+    return _mask_principal_frame(mean_mask, sitk_module=sitk_module), len(aligned_arrays)
+
+
 def _build_principal_vectors_template(
     df: pd.DataFrame,
     *,
@@ -653,12 +779,38 @@ def _build_principal_vectors_template(
         raise RuntimeError("Unable to infer principal vectors from sampled masks.")
 
     reference = _reference_from_sampled_frames(frames)
+    vectors_source = "sampled"
+    derived_from_rows = len(frames)
+    try:
+        average_frame, average_rows = _compute_average_shape_principal_frame(
+            sampled_rows,
+            exemplar=exemplar,
+            exemplar_image=exemplar_image,
+            exemplar_mask=exemplar_mask,
+            sitk_module=sitk_module,
+        )
+        reference["centroid_mm"] = np.asarray(average_frame["centroid_mm"], dtype=float)
+        reference["axes"] = np.asarray(average_frame["axes"], dtype=float)
+        vectors_source = "average_shape"
+        derived_from_rows = int(average_rows)
+    except Exception as exc:
+        logger.warning(
+            "Falling back to sampled principal frames after average-shape failure: %s",
+            exc,
+        )
+
     provided_principal_vectors = _parse_principal_vectors(
         getattr(args, "principal_vectors", None)
     )
     if provided_principal_vectors is not None:
         provided_axes = np.asarray(provided_principal_vectors, dtype=float)
-        reference["axes"] = _project_to_rotation(provided_axes)
+        reference["axes"] = _canonicalize_eigen_axes(provided_axes)
+        vectors_source = "user"
+    elif (
+        default_axes := _default_principal_vectors_for_organ(getattr(args, "organ", ""))
+    ) is not None:
+        reference["axes"] = default_axes
+        vectors_source = f"default_{str(args.organ).strip().lower()}"
 
     paths = _template_paths(args)
     reg_common.write_image(
@@ -674,8 +826,8 @@ def _build_principal_vectors_template(
     payload = {
         "centroid_mm": reference["centroid_mm"].astype(float).tolist(),
         "axes": reference["axes"].astype(float).tolist(),
-        "derived_from_rows": len(frames),
-        "source": "user" if provided_principal_vectors is not None else "sampled",
+        "derived_from_rows": derived_from_rows,
+        "source": vectors_source,
     }
     paths["template_dir"].mkdir(parents=True, exist_ok=True)
     paths["principal_vectors_path"].write_text(
