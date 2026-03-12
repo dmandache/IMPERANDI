@@ -94,6 +94,46 @@ def test_normalize_register_population_args_parses_principal_vectors(tmp_path):
     ]
 
 
+def test_normalize_register_population_args_enables_save_when_normalize(tmp_path):
+    csv_path = tmp_path / "nifti_index.csv"
+    csv_path.write_text("nifti_path,mask_liver\n")
+
+    args = argparse.Namespace(
+        csv_path_pos=str(csv_path),
+        csv_path_opt=None,
+        csv_path_out_pos=None,
+        csv_path_out=None,
+        output_dir=str(tmp_path / "registered"),
+        error_csv_path=None,
+        log_csv_path=None,
+        organ="liver",
+        mask_column=None,
+        template_sample_size=8,
+        template_mode="mean_shape",
+        template_source_idx=None,
+        principal_vectors=None,
+        template_seed=0,
+        num_workers=2,
+        pad_mm=25.0,
+        save_registered_outputs=False,
+        normalize_registered_outputs=True,
+        normalize_crop_mode="margin",
+        normalize_margin_mm=10.0,
+        normalize_without_background=False,
+        normalize_spacing="1.5,1.5,1.5",
+        normalize_orientation="LPS",
+        disable_normalize_center_organ=False,
+        verbose=False,
+        dry_run=False,
+    )
+
+    out = population_module.normalize_register_population_args(args)
+
+    assert out.normalize_registered_outputs is True
+    assert out.save_registered_outputs is True
+    assert out.normalize_spacing == (1.5, 1.5, 1.5)
+
+
 def test_normalize_register_population_args_rejects_incompatible_template_source_idx(
     tmp_path,
 ):

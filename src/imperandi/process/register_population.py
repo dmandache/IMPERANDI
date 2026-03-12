@@ -13,6 +13,12 @@ import pandas as pd
 from tqdm import tqdm
 
 from imperandi.process import _registration_common as reg_common
+from imperandi.process.registration import (
+    OrganNormalizeConfig,
+    normalize_image_and_masks,
+    parse_spacing_csv_value,
+    save_transform_artifacts,
+)
 from imperandi.utils.checkpoint_cli import add_checkpoint_arguments
 from imperandi.utils.misc import print_args
 from imperandi.utils.run_state import (
@@ -167,6 +173,55 @@ def add_register_population_arguments(
         default=False,
         help="Also resample and save registered images and masks and rewrite their paths in the output CSV.",
     )
+    parser.add_argument(
+        "--normalize_registered_outputs",
+        action="store_true",
+        default=False,
+        help=(
+            "Apply organ extraction + geometry normalization to registered outputs "
+            "for downstream inter-patient comparability."
+        ),
+    )
+    parser.add_argument(
+        "--normalize_crop_mode",
+        type=str,
+        default="margin",
+        choices=["tight", "margin", "full"],
+        help="Organ extraction mode used during normalization.",
+    )
+    parser.add_argument(
+        "--normalize_margin_mm",
+        type=float,
+        default=10.0,
+        help="Organ crop margin in mm when --normalize_crop_mode=margin.",
+    )
+    parser.add_argument(
+        "--normalize_without_background",
+        action="store_true",
+        default=False,
+        help="Remove background outside organ support during normalization.",
+    )
+    parser.add_argument(
+        "--normalize_spacing",
+        type=str,
+        default=None,
+        help=(
+            "Target spacing as sx,sy,sz (for example 1.5,1.5,1.5). "
+            "Defaults to template spacing when normalization is enabled."
+        ),
+    )
+    parser.add_argument(
+        "--normalize_orientation",
+        type=str,
+        default="LPS",
+        help="Target canonical orientation during normalization (default: LPS).",
+    )
+    parser.add_argument(
+        "--disable_normalize_center_organ",
+        action="store_true",
+        default=False,
+        help="Disable organ-centering origin adjustment in normalized outputs.",
+    )
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose logging.")
     add_checkpoint_arguments(
         parser,
@@ -215,6 +270,28 @@ def normalize_register_population_args(args: argparse.Namespace) -> argparse.Nam
     args.template_seed = int(args.template_seed)
     args.num_workers = max(1, int(args.num_workers))
     args.pad_mm = float(args.pad_mm)
+    args.normalize_crop_mode = str(
+        getattr(args, "normalize_crop_mode", "margin")
+    ).strip().lower()
+    args.normalize_margin_mm = float(getattr(args, "normalize_margin_mm", 10.0))
+    if args.normalize_margin_mm < 0.0:
+        raise ValueError("--normalize_margin_mm must be >= 0")
+    args.normalize_without_background = bool(
+        getattr(args, "normalize_without_background", False)
+    )
+    args.normalize_spacing = parse_spacing_csv_value(
+        getattr(args, "normalize_spacing", None)
+    )
+    raw_orientation = str(getattr(args, "normalize_orientation", "")).strip()
+    args.normalize_orientation = raw_orientation if raw_orientation else None
+    args.disable_normalize_center_organ = bool(
+        getattr(args, "disable_normalize_center_organ", False)
+    )
+    args.normalize_registered_outputs = bool(
+        getattr(args, "normalize_registered_outputs", False)
+    )
+    if args.normalize_registered_outputs:
+        args.save_registered_outputs = True
     args.template_mode = str(
         getattr(args, "template_mode", DEFAULT_TEMPLATE_MODE)
     ).strip().lower()
@@ -886,10 +963,32 @@ def _row_log_columns() -> list[str]:
         "population_register_stage",
         "population_register_dice_before",
         "population_register_dice_after",
+        "population_register_transform_path",
+        "population_register_transform_metadata_path",
+        "population_normalization_applied",
+        "population_normalization_metadata_path",
         "population_register_status",
         "population_register_error_message",
         *reg_common.POPULATION_MATRIX_COLUMNS,
     ]
+
+
+def _normalization_config_for_row(
+    *,
+    args: argparse.Namespace,
+    template_image,
+) -> OrganNormalizeConfig:
+    spacing = getattr(args, "normalize_spacing", None)
+    if spacing is None and bool(getattr(args, "normalize_registered_outputs", False)):
+        spacing = tuple(float(v) for v in template_image.GetSpacing())
+    return OrganNormalizeConfig(
+        crop_mode=str(getattr(args, "normalize_crop_mode", "margin")),
+        margin_mm=float(getattr(args, "normalize_margin_mm", 10.0)),
+        keep_background=not bool(getattr(args, "normalize_without_background", False)),
+        spacing=spacing,
+        orientation=getattr(args, "normalize_orientation", "LPS"),
+        center_organ=not bool(getattr(args, "disable_normalize_center_organ", False)),
+    )
 
 
 def _register_population_row(
@@ -914,6 +1013,10 @@ def _register_population_row(
         "population_register_template_mode": template_mode,
         "population_register_mask_column": args.mask_column,
         "population_register_stage": stage,
+        "population_register_transform_path": None,
+        "population_register_transform_metadata_path": None,
+        "population_normalization_applied": False,
+        "population_normalization_metadata_path": None,
         "population_register_status": "error",
         "population_register_error_message": None,
     }
@@ -997,6 +1100,7 @@ def _register_population_row(
             sitk_module=sitk_module,
             tx=rigid_tx,
         )
+        row_dir = reg_common.build_row_output_dir(args.output_dir, source_idx)
         updates = {
             **base_updates,
             **reg_common.transform_to_flat_3x4(rigid_tx),
@@ -1006,7 +1110,6 @@ def _register_population_row(
             "population_register_error_message": None,
         }
         if args.save_registered_outputs:
-            row_dir = reg_common.build_row_output_dir(args.output_dir, source_idx)
             rewritten_paths = reg_common.warp_row_files(
                 row,
                 row_dir=row_dir,
@@ -1016,6 +1119,128 @@ def _register_population_row(
                 sitk_module=sitk_module,
             )
             updates.update(rewritten_paths)
+            tx_artifact = save_transform_artifacts(
+                row_dir=row_dir,
+                transform=rigid_tx,
+                sitk_module=sitk_module,
+                prefix=f"population_{source_idx}_to_template",
+                metadata={
+                    "source_idx": int(source_idx),
+                    "template_source_idx": int(template_info["template_source_idx"]),
+                    "template_mode": template_mode,
+                    "stage": stage,
+                    "dice_before": float(dice_before),
+                    "dice_after": float(dice_after),
+                },
+            )
+            updates.update(
+                {
+                    "population_register_transform_path": tx_artifact.transform_path,
+                    "population_register_transform_metadata_path": (
+                        tx_artifact.metadata_path
+                    ),
+                }
+            )
+
+            if bool(getattr(args, "normalize_registered_outputs", False)):
+                normalized_dir = row_dir / "normalized"
+                warped_image = reg_common.read_image(
+                    str(rewritten_paths["nifti_path"]),
+                    sitk_module,
+                )
+                warped_organ_mask = reg_common.read_binary_mask(
+                    str(rewritten_paths[args.mask_column]),
+                    reference_image=warped_image,
+                    sitk_module=sitk_module,
+                )
+                extra_masks: dict[str, Any] = {}
+                for column_name in path_columns:
+                    if column_name == "nifti_path" or column_name == args.mask_column:
+                        continue
+                    warped_path = rewritten_paths.get(column_name)
+                    if not reg_common._is_existing_path(warped_path):
+                        continue
+                    extra_masks[column_name] = reg_common.read_binary_mask(
+                        str(warped_path),
+                        reference_image=warped_image,
+                        sitk_module=sitk_module,
+                    )
+                normalize_cfg = _normalization_config_for_row(
+                    args=args,
+                    template_image=template_image,
+                )
+                (
+                    normalized_image,
+                    normalized_organ_mask,
+                    normalized_extra_masks,
+                    normalize_metadata,
+                ) = normalize_image_and_masks(
+                    image=warped_image,
+                    organ_mask=warped_organ_mask,
+                    masks_by_name=extra_masks,
+                    config=normalize_cfg,
+                    sitk_module=sitk_module,
+                )
+                normalized_dir.mkdir(parents=True, exist_ok=True)
+                normalized_paths: dict[str, str] = {}
+                image_out = reg_common.build_output_path(
+                    normalized_dir,
+                    column_name="nifti_path",
+                    source_path=rewritten_paths.get("nifti_path"),
+                )
+                reg_common.write_image(
+                    normalized_image,
+                    image_out,
+                    sitk_module=sitk_module,
+                )
+                normalized_paths["nifti_path"] = str(image_out)
+                organ_out = reg_common.build_output_path(
+                    normalized_dir,
+                    column_name=args.mask_column,
+                    source_path=rewritten_paths.get(args.mask_column),
+                )
+                reg_common.write_image(
+                    normalized_organ_mask,
+                    organ_out,
+                    sitk_module=sitk_module,
+                )
+                normalized_paths[args.mask_column] = str(organ_out)
+                for column_name, mask_image in normalized_extra_masks.items():
+                    out_path = reg_common.build_output_path(
+                        normalized_dir,
+                        column_name=column_name,
+                        source_path=rewritten_paths.get(column_name),
+                    )
+                    reg_common.write_image(
+                        mask_image,
+                        out_path,
+                        sitk_module=sitk_module,
+                    )
+                    normalized_paths[column_name] = str(out_path)
+                normalization_metadata_path = normalized_dir / "normalization.json"
+                normalization_metadata_path.write_text(
+                    json.dumps(
+                        {
+                            "source_idx": int(source_idx),
+                            "template_source_idx": int(template_info["template_source_idx"]),
+                            "normalize_config": normalize_metadata,
+                            "normalized_paths": normalized_paths,
+                        },
+                        indent=2,
+                        sort_keys=True,
+                        ensure_ascii=True,
+                    ),
+                    encoding="utf-8",
+                )
+                updates.update(normalized_paths)
+                updates.update(
+                    {
+                        "population_normalization_applied": True,
+                        "population_normalization_metadata_path": str(
+                            normalization_metadata_path
+                        ),
+                    }
+                )
         logger.debug(
             "Row source_idx=%s registered successfully (mode=%s, dice_before=%.4f, dice_after=%.4f).",
             source_idx,
@@ -1081,6 +1306,26 @@ def _template_state_payload(
         payload["template_mean_metrics"] = template_info["template_mean_metrics"]
     if template_info.get("template_reference_kind"):
         payload["template_reference_kind"] = template_info["template_reference_kind"]
+    payload["save_registered_outputs"] = bool(
+        getattr(args, "save_registered_outputs", False)
+    )
+    payload["normalize_registered_outputs"] = bool(
+        getattr(args, "normalize_registered_outputs", False)
+    )
+    payload["normalize_crop_mode"] = str(getattr(args, "normalize_crop_mode", "margin"))
+    payload["normalize_margin_mm"] = float(getattr(args, "normalize_margin_mm", 10.0))
+    payload["normalize_without_background"] = bool(
+        getattr(args, "normalize_without_background", False)
+    )
+    payload["normalize_spacing"] = (
+        list(getattr(args, "normalize_spacing", None))
+        if getattr(args, "normalize_spacing", None) is not None
+        else None
+    )
+    payload["normalize_orientation"] = getattr(args, "normalize_orientation", None)
+    payload["disable_normalize_center_organ"] = bool(
+        getattr(args, "disable_normalize_center_organ", False)
+    )
     return payload
 
 

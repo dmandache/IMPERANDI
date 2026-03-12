@@ -532,6 +532,24 @@ def test_cli_register_intra_patient_prefers_flag_csv_path_out_over_positional(
     assert str(csv_out_opt) in csv_path_out_line
 
 
+def test_cli_register_tumor_consensus_accepts_optional_csv_path_only(tmp_path):
+    csv_in = tmp_path / "nifti_index.csv"
+    csv_in.write_text("patient_key,visit_order,phase,nifti_path,mask_liver_tumor\n")
+
+    exit_code = cli.main(
+        [
+            "register-tumor-consensus",
+            "--csv_path",
+            str(csv_in),
+            "--output_dir",
+            str(tmp_path / "registered"),
+            "--dry-run",
+        ]
+    )
+
+    assert exit_code == 0
+
+
 def test_cli_parse_accepts_snapshot_flags(tmp_path):
     root_opt = tmp_path / "root_opt"
     out_opt = tmp_path / "out_opt"

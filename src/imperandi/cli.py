@@ -48,6 +48,14 @@ def _load_register_intra_patient_module():
     return register_intra_patient_module
 
 
+def _load_register_tumor_consensus_module():
+    from imperandi.process import (
+        register_tumor_consensus as register_tumor_consensus_module,
+    )
+
+    return register_tumor_consensus_module
+
+
 def _load_segment_module():
     try:
         from imperandi.process import segment as segment_module
@@ -157,6 +165,18 @@ def _add_register_intra_patient_subcommand(
     parser.set_defaults(_handler=_handle_register_intra_patient)
 
 
+def _add_register_tumor_consensus_subcommand(
+    subparsers: argparse._SubParsersAction,
+) -> None:
+    parser = subparsers.add_parser(
+        "register-tumor-consensus",
+        help="Build per-visit tumor consensus and run longitudinal consistency audit.",
+    )
+    register_tumor_consensus_module = _load_register_tumor_consensus_module()
+    register_tumor_consensus_module.add_register_tumor_consensus_arguments(parser)
+    parser.set_defaults(_handler=_handle_register_tumor_consensus)
+
+
 def _add_segment_subcommand(subparsers: argparse._SubParsersAction) -> None:
     parser = subparsers.add_parser(
         "segment",
@@ -211,6 +231,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_radiomics_subcommand(subparsers)
     _add_register_population_subcommand(subparsers)
     _add_register_intra_patient_subcommand(subparsers)
+    _add_register_tumor_consensus_subcommand(subparsers)
     _add_segment_subcommand(subparsers)
 
     return parser
@@ -367,6 +388,25 @@ def _handle_register_intra_patient(args: argparse.Namespace) -> int:
         return 0
     try:
         register_intra_patient_module.main(args)
+    except RuntimeError as exc:
+        message = str(exc)
+        if "requires optional dependencies" in message:
+            logger.error("%s", message)
+            return 2
+        raise
+    return 0
+
+
+def _handle_register_tumor_consensus(args: argparse.Namespace) -> int:
+    register_tumor_consensus_module = _load_register_tumor_consensus_module()
+    args = register_tumor_consensus_module.normalize_register_tumor_consensus_args(args)
+    _log_script_namespace(register_tumor_consensus_module.__file__, args)
+    if args.dry_run:
+        logger.info("Dry run: register-tumor-consensus")
+        print_args(args)
+        return 0
+    try:
+        register_tumor_consensus_module.main(args)
     except RuntimeError as exc:
         message = str(exc)
         if "requires optional dependencies" in message:

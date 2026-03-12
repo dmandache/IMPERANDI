@@ -10,6 +10,11 @@ import pandas as pd
 from tqdm import tqdm
 
 from imperandi.process import _registration_common as reg_common
+from imperandi.process.registration import (
+    GroupingKeys,
+    build_intra_patient_tasks,
+    save_transform_artifacts,
+)
 from imperandi.utils.checkpoint_cli import add_checkpoint_arguments
 from imperandi.utils.misc import print_args
 from imperandi.utils.run_state import (
@@ -83,6 +88,34 @@ def add_register_intra_patient_arguments(
         help="Explicit organ mask column to use instead of the default mask_<organ>.",
     )
     parser.add_argument(
+        "--grouping_patient_column",
+        type=str,
+        default="patient_key",
+        help="Patient grouping column.",
+    )
+    parser.add_argument(
+        "--grouping_visit_column",
+        type=str,
+        default="visit_order",
+        help="Visit/timepoint grouping column.",
+    )
+    parser.add_argument(
+        "--grouping_phase_column",
+        type=str,
+        default="phase",
+        help="Phase column used for reference selection.",
+    )
+    parser.add_argument(
+        "--intra_mode",
+        type=str,
+        default="auto",
+        choices=["auto", "multiphasic", "longitudinal"],
+        help=(
+            "Task mode: auto (detect), multiphasic (within visit), "
+            "or longitudinal (across visits)."
+        ),
+    )
+    parser.add_argument(
         "--num_workers",
         type=int,
         default=reg_common.DEFAULT_NUM_WORKERS,
@@ -147,6 +180,20 @@ def normalize_register_intra_patient_args(args: argparse.Namespace) -> argparse.
         organ=args.organ,
         mask_column=args.mask_column,
     )
+    args.grouping_patient_column = str(
+        getattr(args, "grouping_patient_column", "patient_key")
+    ).strip()
+    args.grouping_visit_column = str(
+        getattr(args, "grouping_visit_column", "visit_order")
+    ).strip()
+    args.grouping_phase_column = str(
+        getattr(args, "grouping_phase_column", "phase")
+    ).strip()
+    args.intra_mode = str(getattr(args, "intra_mode", "auto")).strip().lower()
+    if args.intra_mode not in {"auto", "multiphasic", "longitudinal"}:
+        raise ValueError(
+            "--intra_mode must be one of: auto, multiphasic, longitudinal"
+        )
     args.num_workers = max(1, int(args.num_workers))
     args.pad_mm = float(args.pad_mm)
     args.band_mm = float(args.band_mm)
@@ -190,12 +237,17 @@ def _build_intra_log_columns() -> list[str]:
     return [
         "_source_idx",
         "patient_key",
+        "intra_register_mode",
+        "intra_register_task_kind",
+        "intra_register_reference_source_idx",
         "intra_register_anchor_source_idx",
         "intra_register_anchor_phase",
         "intra_register_stage",
         "intra_register_dice_before",
         "intra_register_dice_after_rigid",
         "intra_register_dice_after_elastic",
+        "intra_register_transform_path",
+        "intra_register_transform_metadata_path",
         "intra_register_status",
         "intra_register_error_message",
     ]
@@ -267,15 +319,21 @@ def _build_anchor_success_updates(
     anchor_source_idx: int,
     anchor_phase: str | None,
     copied_paths: dict[str, str],
+    resolved_mode: str,
 ) -> dict[str, Any]:
     return {
         **copied_paths,
+        "intra_register_mode": resolved_mode,
+        "intra_register_task_kind": "anchor",
+        "intra_register_reference_source_idx": anchor_source_idx,
         "intra_register_anchor_source_idx": anchor_source_idx,
         "intra_register_anchor_phase": anchor_phase,
         "intra_register_stage": "anchor",
         "intra_register_dice_before": 1.0,
         "intra_register_dice_after_rigid": 1.0,
         "intra_register_dice_after_elastic": 1.0,
+        "intra_register_transform_path": None,
+        "intra_register_transform_metadata_path": None,
         "intra_register_status": "ok",
         "intra_register_error_message": None,
     }
@@ -286,15 +344,23 @@ def _build_error_result(
     source_idx: int,
     anchor_source_idx: int | None,
     anchor_phase: str | None,
+    resolved_mode: str | None,
+    task_kind: str | None,
+    reference_source_idx: int | None,
     stage: str,
     error_message: str,
 ) -> dict[str, Any]:
     return {
         "source_idx": int(source_idx),
         "updates": {
+            "intra_register_mode": resolved_mode,
+            "intra_register_task_kind": task_kind,
+            "intra_register_reference_source_idx": reference_source_idx,
             "intra_register_anchor_source_idx": anchor_source_idx,
             "intra_register_anchor_phase": anchor_phase,
             "intra_register_stage": stage,
+            "intra_register_transform_path": None,
+            "intra_register_transform_metadata_path": None,
             "intra_register_status": "error",
             "intra_register_error_message": error_message,
         },
@@ -310,13 +376,31 @@ def _process_patient_group(
     path_columns: list[str],
 ) -> list[dict[str, Any]]:
     sitk_module = reg_common._load_register_dependencies()
-    anchor = _select_anchor_row(patient_df, mask_column=args.mask_column)
-    if anchor is None:
+    patient_column = str(getattr(args, "grouping_patient_column", "patient_key"))
+    visit_column = str(getattr(args, "grouping_visit_column", "visit_order"))
+    phase_column = str(getattr(args, "grouping_phase_column", "phase"))
+    keys = GroupingKeys(
+        patient=patient_column,
+        visit=visit_column,
+        phase=phase_column,
+    )
+    tasks, anchor_source_indices, resolved_mode = build_intra_patient_tasks(
+        patient_df,
+        keys=keys,
+        pending_source_indices=pending_source_indices,
+        mask_column=args.mask_column,
+        mode=getattr(args, "intra_mode", "auto"),
+    )
+
+    if not anchor_source_indices and not tasks:
         return [
             _build_error_result(
                 source_idx=int(row["_source_idx"]),
                 anchor_source_idx=None,
                 anchor_phase=None,
+                resolved_mode=resolved_mode,
+                task_kind=None,
+                reference_source_idx=None,
                 stage="anchor",
                 error_message=(
                     f"no valid anchor row found for patient using {args.mask_column}"
@@ -326,95 +410,153 @@ def _process_patient_group(
             if int(row["_source_idx"]) in pending_source_indices
         ]
 
-    anchor_source_idx = int(anchor["_source_idx"])
-    anchor_phase = reg_common.infer_phase_from_row(anchor)
-    anchor_working = dict(anchor)
-    results: list[dict[str, Any]] = []
+    row_by_source_idx = {
+        int(row["_source_idx"]): row.to_dict()
+        for _, row in patient_df.iterrows()
+    }
+    primary_anchor_source_idx = (
+        min(anchor_source_indices) if anchor_source_indices else tasks[0].reference_source_idx
+    )
+    primary_anchor_phase = reg_common.infer_phase_from_row(
+        row_by_source_idx.get(primary_anchor_source_idx, {})
+    )
 
-    if anchor_source_idx in pending_source_indices:
-        try:
+    results: list[dict[str, Any]] = []
+    processed_sources: set[int] = set()
+    anchor_cache: dict[int, tuple[dict[str, Any], Any, Any, str | None]] = {}
+    emitted_anchor_success: set[int] = set()
+
+    def _ensure_anchor(anchor_source_idx: int) -> tuple[dict[str, Any], Any, Any, str | None]:
+        if anchor_source_idx in anchor_cache:
+            return anchor_cache[anchor_source_idx]
+
+        anchor_row = row_by_source_idx.get(anchor_source_idx)
+        if anchor_row is None:
+            raise RuntimeError(f"anchor source_idx not found: {anchor_source_idx}")
+        anchor_phase = reg_common.infer_phase_from_row(anchor_row)
+        anchor_working = dict(anchor_row)
+        row_dir = reg_common.build_row_output_dir(args.output_dir, anchor_source_idx)
+
+        if anchor_source_idx in pending_source_indices and anchor_source_idx not in emitted_anchor_success:
             copied_paths = reg_common.copy_row_files(
                 anchor_working,
-                row_dir=reg_common.build_row_output_dir(args.output_dir, anchor_source_idx),
+                row_dir=row_dir,
                 path_columns=path_columns,
             )
             if not copied_paths.get("nifti_path") or not copied_paths.get(args.mask_column):
                 raise RuntimeError("failed to copy anchor nifti or organ mask")
             anchor_working.update(copied_paths)
+            identity_artifact = save_transform_artifacts(
+                row_dir=row_dir,
+                transform=reg_common.identity_transform(sitk_module),
+                sitk_module=sitk_module,
+                prefix=f"intra_{anchor_source_idx}_to_{anchor_source_idx}",
+                metadata={
+                    "task_kind": "anchor",
+                    "mode": resolved_mode,
+                    "reference_source_idx": int(anchor_source_idx),
+                    "moving_source_idx": int(anchor_source_idx),
+                    "stage": "anchor",
+                },
+            )
+            anchor_updates = _build_anchor_success_updates(
+                anchor_source_idx=anchor_source_idx,
+                anchor_phase=anchor_phase,
+                copied_paths=copied_paths,
+                resolved_mode=resolved_mode,
+            )
+            anchor_updates.update(
+                {
+                    "intra_register_transform_path": identity_artifact.transform_path,
+                    "intra_register_transform_metadata_path": (
+                        identity_artifact.metadata_path
+                    ),
+                }
+            )
             results.append(
                 {
                     "source_idx": anchor_source_idx,
-                    "updates": _build_anchor_success_updates(
-                        anchor_source_idx=anchor_source_idx,
-                        anchor_phase=anchor_phase,
-                        copied_paths=copied_paths,
-                    ),
+                    "updates": anchor_updates,
                     "error_message": None,
                 }
             )
-        except Exception as exc:
-            error_message = f"anchor copy failed: {exc}"
-            return [
-                _build_error_result(
-                    source_idx=int(row["_source_idx"]),
-                    anchor_source_idx=anchor_source_idx,
-                    anchor_phase=anchor_phase,
-                    stage="anchor",
-                    error_message=error_message,
-                )
-                for _, row in patient_df.iterrows()
-                if int(row["_source_idx"]) in pending_source_indices
-            ]
+            processed_sources.add(anchor_source_idx)
+            emitted_anchor_success.add(anchor_source_idx)
 
-    try:
         fixed_image = reg_common.read_image(str(anchor_working["nifti_path"]), sitk_module)
         fixed_mask = reg_common.read_binary_mask(
             str(anchor_working[args.mask_column]),
             reference_image=fixed_image,
             sitk_module=sitk_module,
         )
-    except Exception as exc:
-        error_message = f"anchor inputs are not readable: {exc}"
-        return [
-            _build_error_result(
-                source_idx=int(row["_source_idx"]),
-                anchor_source_idx=anchor_source_idx,
-                anchor_phase=anchor_phase,
-                stage="anchor",
-                error_message=error_message,
-            )
-            for _, row in patient_df.iterrows()
-            if int(row["_source_idx"]) in pending_source_indices
-        ]
+        anchor_cache[anchor_source_idx] = (
+            anchor_working,
+            fixed_image,
+            fixed_mask,
+            anchor_phase,
+        )
+        return anchor_cache[anchor_source_idx]
 
-    for _, row_series in patient_df.iterrows():
-        row = row_series.to_dict()
-        source_idx = int(row["_source_idx"])
-        if source_idx not in pending_source_indices or source_idx == anchor_source_idx:
+    for task in tasks:
+        source_idx = int(task.moving_source_idx)
+        if source_idx not in pending_source_indices:
             continue
+        reference_source_idx = int(task.reference_source_idx)
+        try:
+            (
+                _anchor_row,
+                fixed_image,
+                fixed_mask,
+                reference_phase,
+            ) = _ensure_anchor(reference_source_idx)
+        except Exception as exc:
+            results.append(
+                _build_error_result(
+                    source_idx=source_idx,
+                    anchor_source_idx=primary_anchor_source_idx,
+                    anchor_phase=primary_anchor_phase,
+                    resolved_mode=resolved_mode,
+                    task_kind=str(task.task_kind),
+                    reference_source_idx=reference_source_idx,
+                    stage="anchor",
+                    error_message=f"anchor inputs are not readable: {exc}",
+                )
+            )
+            processed_sources.add(source_idx)
+            continue
+
+        row = row_by_source_idx.get(source_idx, task.moving_row)
         nifti_path = row.get("nifti_path")
         mask_path = row.get(args.mask_column)
         if not reg_common._is_existing_path(nifti_path):
             results.append(
                 _build_error_result(
                     source_idx=source_idx,
-                    anchor_source_idx=anchor_source_idx,
-                    anchor_phase=anchor_phase,
+                    anchor_source_idx=reference_source_idx,
+                    anchor_phase=reference_phase,
+                    resolved_mode=resolved_mode,
+                    task_kind=str(task.task_kind),
+                    reference_source_idx=reference_source_idx,
                     stage="rigid",
                     error_message=f"invalid nifti_path: {nifti_path}",
                 )
             )
+            processed_sources.add(source_idx)
             continue
         if not reg_common._is_existing_path(mask_path):
             results.append(
                 _build_error_result(
                     source_idx=source_idx,
-                    anchor_source_idx=anchor_source_idx,
-                    anchor_phase=anchor_phase,
+                    anchor_source_idx=reference_source_idx,
+                    anchor_phase=reference_phase,
+                    resolved_mode=resolved_mode,
+                    task_kind=str(task.task_kind),
+                    reference_source_idx=reference_source_idx,
                     stage="rigid",
                     error_message=f"invalid {args.mask_column}: {mask_path}",
                 )
             )
+            processed_sources.add(source_idx)
             continue
 
         try:
@@ -467,41 +609,116 @@ def _process_patient_group(
                     exc,
                 )
 
+            row_dir = reg_common.build_row_output_dir(args.output_dir, source_idx)
             rewritten_paths = reg_common.warp_row_files(
                 row,
-                row_dir=reg_common.build_row_output_dir(args.output_dir, source_idx),
+                row_dir=row_dir,
                 path_columns=path_columns,
                 reference_image=fixed_image,
                 transform=final_tx,
                 sitk_module=sitk_module,
+            )
+            tx_artifact = save_transform_artifacts(
+                row_dir=row_dir,
+                transform=final_tx,
+                sitk_module=sitk_module,
+                prefix=f"intra_{source_idx}_to_{reference_source_idx}",
+                metadata={
+                    "task_kind": str(task.task_kind),
+                    "mode": resolved_mode,
+                    "reference_source_idx": int(reference_source_idx),
+                    "moving_source_idx": int(source_idx),
+                    "stage": final_stage,
+                    "dice_before": float(dice_before),
+                    "dice_after_rigid": float(dice_after_rigid),
+                    "dice_after_elastic": (
+                        None if dice_after_elastic is None else float(dice_after_elastic)
+                    ),
+                },
             )
             results.append(
                 {
                     "source_idx": source_idx,
                     "updates": {
                         **rewritten_paths,
-                        "intra_register_anchor_source_idx": anchor_source_idx,
-                        "intra_register_anchor_phase": anchor_phase,
+                        "intra_register_mode": resolved_mode,
+                        "intra_register_task_kind": str(task.task_kind),
+                        "intra_register_reference_source_idx": int(reference_source_idx),
+                        "intra_register_anchor_source_idx": int(reference_source_idx),
+                        "intra_register_anchor_phase": reference_phase,
                         "intra_register_stage": final_stage,
-                        "intra_register_dice_before": dice_before,
-                        "intra_register_dice_after_rigid": dice_after_rigid,
-                        "intra_register_dice_after_elastic": dice_after_elastic,
+                        "intra_register_dice_before": float(dice_before),
+                        "intra_register_dice_after_rigid": float(dice_after_rigid),
+                        "intra_register_dice_after_elastic": (
+                            None
+                            if dice_after_elastic is None
+                            else float(dice_after_elastic)
+                        ),
+                        "intra_register_transform_path": tx_artifact.transform_path,
+                        "intra_register_transform_metadata_path": (
+                            tx_artifact.metadata_path
+                        ),
                         "intra_register_status": "ok",
                         "intra_register_error_message": None,
                     },
                     "error_message": None,
                 }
             )
+            processed_sources.add(source_idx)
         except Exception as exc:
             results.append(
                 _build_error_result(
                     source_idx=source_idx,
-                    anchor_source_idx=anchor_source_idx,
-                    anchor_phase=anchor_phase,
+                    anchor_source_idx=reference_source_idx,
+                    anchor_phase=reference_phase,
+                    resolved_mode=resolved_mode,
+                    task_kind=str(task.task_kind),
+                    reference_source_idx=reference_source_idx,
                     stage="rigid",
                     error_message=str(exc),
                 )
             )
+            processed_sources.add(source_idx)
+
+    for anchor_source_idx in sorted(anchor_source_indices):
+        if anchor_source_idx not in pending_source_indices:
+            continue
+        if anchor_source_idx in processed_sources:
+            continue
+        try:
+            _ensure_anchor(anchor_source_idx)
+        except Exception as exc:
+            results.append(
+                _build_error_result(
+                    source_idx=anchor_source_idx,
+                    anchor_source_idx=anchor_source_idx,
+                    anchor_phase=reg_common.infer_phase_from_row(
+                        row_by_source_idx.get(anchor_source_idx, {})
+                    ),
+                    resolved_mode=resolved_mode,
+                    task_kind="anchor",
+                    reference_source_idx=anchor_source_idx,
+                    stage="anchor",
+                    error_message=f"anchor inputs are not readable: {exc}",
+                )
+            )
+            processed_sources.add(anchor_source_idx)
+
+    for source_idx in sorted(pending_source_indices):
+        if source_idx in processed_sources:
+            continue
+        results.append(
+            _build_error_result(
+                source_idx=source_idx,
+                anchor_source_idx=primary_anchor_source_idx,
+                anchor_phase=primary_anchor_phase,
+                resolved_mode=resolved_mode,
+                task_kind=None,
+                reference_source_idx=None,
+                stage="task_build",
+                error_message="no registration task could be built for this row",
+            )
+        )
 
     return results
 
@@ -575,8 +792,9 @@ def main(args: argparse.Namespace) -> None:
         df["_source_idx"] = df.index.astype(int)
     if "_source_idx" not in df.columns:
         df["_source_idx"] = df.index.astype(int)
-    if "patient_key" not in df.columns:
-        raise KeyError("column 'patient_key' missing")
+    patient_column = str(getattr(args, "grouping_patient_column", "patient_key"))
+    if patient_column not in df.columns:
+        raise KeyError(f"column '{patient_column}' missing")
     if "nifti_path" not in df.columns:
         raise KeyError("column 'nifti_path' missing")
     if args.mask_column not in df.columns:
@@ -621,16 +839,19 @@ def main(args: argparse.Namespace) -> None:
     missing_patient_indices = [
         idx
         for idx in pending_indices
-        if pd.isna(df.at[idx, "patient_key"])
-        or not str(df.at[idx, "patient_key"]).strip()
+        if pd.isna(df.at[idx, patient_column])
+        or not str(df.at[idx, patient_column]).strip()
     ]
     for idx in missing_patient_indices:
         result = _build_error_result(
             source_idx=int(df.at[idx, "_source_idx"]),
             anchor_source_idx=None,
             anchor_phase=None,
+            resolved_mode=str(getattr(args, "intra_mode", "auto")),
+            task_kind=None,
+            reference_source_idx=None,
             stage="anchor",
-            error_message="missing patient_key value",
+            error_message=f"missing {patient_column} value",
         )
         _apply_row_result(df, idx, result=result, errors_by_idx=errors_by_idx)
         completed_indices.add(int(df.at[idx, "_source_idx"]))
@@ -644,7 +865,7 @@ def main(args: argparse.Namespace) -> None:
     }
     group_payloads: list[tuple[pd.DataFrame, set[int]]] = []
     if pending_source_indices:
-        for _, patient_df in df.groupby("patient_key", sort=False):
+        for _, patient_df in df.groupby(patient_column, sort=False):
             group_pending = {
                 int(source_idx)
                 for source_idx in patient_df["_source_idx"].tolist()
@@ -709,7 +930,7 @@ def main(args: argparse.Namespace) -> None:
     df_out = merge_with_existing_output(
         df_out,
         args.csv_path_out,
-        preferred_keys=["patient_key", "nifti_path"],
+        preferred_keys=[patient_column, "nifti_path"],
         strict=True,
     )
     atomic_write_csv(df_out, args.csv_path_out, index=False)
