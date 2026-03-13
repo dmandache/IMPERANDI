@@ -64,14 +64,7 @@ def _choose_reference_row(
         phase_rank = 0 if phase_value == "portal" else 1
         ranked.append((phase_rank, int(row.get("_source_idx", -1)), row))
     ranked.sort(key=lambda item: (item[0], item[1]))
-    reference = ranked[0][2]
-    logger.debug(
-        "Selected consensus reference source_idx=%s phase=%s from %d rows.",
-        int(reference.get("_source_idx", -1)),
-        reg_common.normalize_phase_value(reference.get(phase_column)),
-        len(rows),
-    )
-    return reference
+    return ranked[0][2]
 
 
 def _apply_consensus_rule(
@@ -403,16 +396,6 @@ def build_visit_consensus(
         consensus_array,
         reference_image=reference_image,
         sitk_module=sitk_module,
-    )
-    logger.debug(
-        (
-            "Built visit consensus for patient=%s visit=%s "
-            "(aligned_mask_count=%d, component_count=%d)."
-        ),
-        patient_key,
-        visit_key,
-        len(aligned_arrays),
-        len(components),
     )
     return ConsensusVisitResult(
         patient_key=str(patient_key),

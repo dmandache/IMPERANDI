@@ -364,7 +364,6 @@ def main(args: argparse.Namespace) -> None:
     grouped = list(
         df.groupby([args.patient_column, args.visit_column], sort=False, dropna=False)
     )
-    logger.debug("Prepared %d patient/visit groups for tumor consensus.", len(grouped))
     for (patient_value, visit_value), group_df in tqdm(
         grouped,
         total=len(grouped),
@@ -375,12 +374,6 @@ def main(args: argparse.Namespace) -> None:
         visit_key = str(visit_value)
         rows = [row for _, row in group_df.iterrows()]
         rows_dict = [row.to_dict() for row in rows]
-        logger.debug(
-            "Processing tumor consensus for patient=%s visit=%s with %d rows.",
-            patient_key,
-            visit_key,
-            len(rows_dict),
-        )
         try:
             result = build_visit_consensus(
                 rows_dict,

@@ -6,6 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import argparse
 import json
+import logging
 
 import numpy as np
 import pandas as pd
@@ -583,6 +584,128 @@ def test_process_patient_group_returns_anchor_error_when_anchor_inputs_unreadabl
     assert "anchor inputs are not readable" in out[0]["error_message"]
 
 
+def test_process_patient_group_debug_logging_keeps_only_milestones(
+    tmp_path, monkeypatch, caplog
+):
+    nifti_a = tmp_path / "a.nii.gz"
+    mask_a = tmp_path / "a_mask.nii.gz"
+    nifti_b = tmp_path / "b.nii.gz"
+    mask_b = tmp_path / "b_mask.nii.gz"
+    for path in (nifti_a, mask_a, nifti_b, mask_b):
+        path.write_text("x")
+
+    df = pd.DataFrame(
+        [
+            {
+                "_source_idx": 0,
+                "patient_key": "p1",
+                "phase": "portal",
+                "visit_order": 0,
+                "nifti_path": str(nifti_a),
+                "mask_liver": str(mask_a),
+            },
+            {
+                "_source_idx": 1,
+                "patient_key": "p1",
+                "phase": "arteriel",
+                "visit_order": 1,
+                "nifti_path": str(nifti_b),
+                "mask_liver": str(mask_b),
+            },
+        ]
+    )
+
+    monkeypatch.setattr(intra_module.reg_common, "_load_register_dependencies", lambda: object())
+    monkeypatch.setattr(intra_module.reg_common, "identity_transform", lambda *_args, **_kwargs: "identity")
+    monkeypatch.setattr(
+        intra_module.reg_common,
+        "copy_row_files",
+        lambda row, *, row_dir, path_columns: {
+            column: str(
+                reg_common.build_output_path(
+                    row_dir,
+                    column_name=column,
+                    source_path=row.get(column),
+                )
+            )
+            for column in path_columns
+            if row.get(column)
+        },
+    )
+    monkeypatch.setattr(intra_module.reg_common, "read_image", lambda *args, **kwargs: "image")
+    monkeypatch.setattr(intra_module.reg_common, "read_binary_mask", lambda *args, **kwargs: "mask")
+    monkeypatch.setattr(intra_module.reg_common, "rigid_register_mask_pair", lambda *args, **kwargs: "rigid")
+    monkeypatch.setattr(
+        intra_module.reg_common,
+        "bspline_register_mask_pair",
+        lambda *args, **kwargs: "elastic",
+    )
+
+    def fake_dice(*args, **kwargs):
+        tx = kwargs.get("tx")
+        if tx == "rigid":
+            return 0.8
+        if tx == "elastic":
+            return 0.9
+        return 0.5
+
+    monkeypatch.setattr(intra_module.reg_common, "dice_coeff", fake_dice)
+    monkeypatch.setattr(
+        intra_module.reg_common,
+        "warp_row_files",
+        lambda row, *, row_dir, path_columns, **kwargs: {
+            column: str(
+                reg_common.build_output_path(
+                    row_dir,
+                    column_name=column,
+                    source_path=row.get(column),
+                )
+            )
+            for column in path_columns
+            if row.get(column)
+        },
+    )
+    monkeypatch.setattr(
+        intra_module,
+        "save_transform_artifacts",
+        lambda **kwargs: argparse.Namespace(
+            transform_path="transform.tfm",
+            metadata_path="transform.json",
+        ),
+    )
+
+    args = argparse.Namespace(
+        output_dir=str(tmp_path / "registered"),
+        mask_column="mask_liver",
+        band_mm=15.0,
+        bspline_ctrl_spacing_mm=90.0,
+        intra_mode="longitudinal",
+    )
+
+    with caplog.at_level(logging.DEBUG):
+        out = intra_module._process_patient_group(
+            df,
+            pending_source_indices={0, 1},
+            args=args,
+            path_columns=["nifti_path", "mask_liver"],
+        )
+
+    debug_messages = [record.getMessage() for record in caplog.records if record.levelno == logging.DEBUG]
+
+    assert len(out) == 2
+    assert sum("Planned intra-patient work" in msg for msg in debug_messages) == 1
+    assert not any("Starting intra-patient task processing" in msg for msg in debug_messages)
+    assert not any("Intra task builder resolved" in msg for msg in debug_messages)
+    assert not any("Running intra task" in msg for msg in debug_messages)
+    assert not any("Intra elastic stage" in msg for msg in debug_messages)
+    assert not any("cached_paths" in msg for msg in debug_messages)
+    anchor_message = next(
+        msg for msg in debug_messages if "Prepared intra anchor" in msg
+    )
+    assert "row_dir=" in anchor_message
+    assert any("Completed intra task" in msg for msg in debug_messages)
+
+
 def test_register_intra_patient_main_keeps_state_resumable_when_rows_unprocessed(
     tmp_path, monkeypatch
 ):
@@ -998,6 +1121,260 @@ def test_register_population_row_principal_vectors_mode(tmp_path, monkeypatch):
     assert result["updates"]["population_register_stage"] == "principal_vectors"
     assert result["updates"]["population_register_template_mode"] == "principal_vectors"
     assert calls["rigid"] == 0
+
+
+def test_build_single_sample_template_debug_logging_omits_redundant_details(
+    tmp_path, monkeypatch, caplog
+):
+    nifti = tmp_path / "a.nii.gz"
+    mask = tmp_path / "a_mask.nii.gz"
+    for path in (nifti, mask):
+        path.write_text("x")
+
+    df = pd.DataFrame([{"_source_idx": 0, "nifti_path": str(nifti), "mask_liver": str(mask)}])
+
+    monkeypatch.setattr(
+        population_module.reg_common,
+        "sample_valid_rows_for_template",
+        lambda *args, **kwargs: [
+            {
+                "source_idx": 0,
+                "nifti_path": str(nifti),
+                "mask_path": str(mask),
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        population_module.reg_common,
+        "choose_median_exemplar",
+        lambda sampled_rows: sampled_rows[0],
+    )
+    monkeypatch.setattr(population_module.reg_common, "read_image", lambda *args, **kwargs: "image")
+    monkeypatch.setattr(population_module.reg_common, "read_binary_mask", lambda *args, **kwargs: "mask")
+    monkeypatch.setattr(
+        population_module.reg_common,
+        "write_image",
+        lambda image, path, **kwargs: Path(path).write_text("x"),
+    )
+
+    args = argparse.Namespace(
+        output_dir=str(tmp_path / "registered"),
+        mask_column="mask_liver",
+        template_sample_size=4,
+        template_seed=0,
+        template_mode="single_sample",
+        template_source_idx=None,
+    )
+
+    with caplog.at_level(logging.DEBUG):
+        population_module._build_single_sample_template(
+            df,
+            args=args,
+            sitk_module=object(),
+        )
+
+    debug_messages = [record.getMessage() for record in caplog.records if record.levelno == logging.DEBUG]
+
+    assert not any("Template sampled source indices" in msg for msg in debug_messages)
+    assert not any("Single-sample template chose median exemplar" in msg for msg in debug_messages)
+    assert not any("Single-sample template using explicit source_idx" in msg for msg in debug_messages)
+
+
+def test_register_population_row_debug_logging_keeps_success_and_normalization(
+    tmp_path, monkeypatch, caplog
+):
+    nifti = tmp_path / "a.nii.gz"
+    mask = tmp_path / "a_mask.nii.gz"
+    tumor = tmp_path / "a_tumor.nii.gz"
+    template_ref = tmp_path / "template_ref.nii.gz"
+    template_mask = tmp_path / "template_mask.nii.gz"
+    for path in (nifti, mask, tumor, template_ref, template_mask):
+        path.write_text("x")
+
+    class FakeImage:
+        def GetSpacing(self):
+            return (1.0, 1.0, 1.0)
+
+    class FakeSitk:
+        sitkNearestNeighbor = 0
+        sitkUInt8 = 1
+        sitkFloat32 = 2
+
+    monkeypatch.setattr(population_module.reg_common, "_load_register_dependencies", lambda: FakeSitk)
+    monkeypatch.setattr(population_module.reg_common, "read_image", lambda *args, **kwargs: FakeImage())
+    monkeypatch.setattr(population_module.reg_common, "read_binary_mask", lambda *args, **kwargs: "mask")
+    monkeypatch.setattr(population_module.reg_common, "rigid_register_mask_pair", lambda *args, **kwargs: "rigid")
+    monkeypatch.setattr(
+        population_module.reg_common,
+        "dice_coeff",
+        lambda *args, **kwargs: 0.5 if kwargs.get("tx") is None else 0.9,
+    )
+    monkeypatch.setattr(
+        population_module.reg_common,
+        "transform_to_flat_3x4",
+        lambda tx: {column: 0.0 for column in reg_common.POPULATION_MATRIX_COLUMNS},
+    )
+
+    def fake_warp_row_files(row, *, row_dir, path_columns, **kwargs):
+        out = {}
+        for column in path_columns:
+            value = row.get(column)
+            if not value:
+                continue
+            out_path = reg_common.build_output_path(
+                row_dir,
+                column_name=column,
+                source_path=value,
+            )
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(column)
+            out[column] = str(out_path)
+        return out
+
+    monkeypatch.setattr(population_module.reg_common, "warp_row_files", fake_warp_row_files)
+    monkeypatch.setattr(
+        population_module,
+        "save_transform_artifacts",
+        lambda **kwargs: argparse.Namespace(
+            transform_path="population.tfm",
+            metadata_path="population.json",
+        ),
+    )
+    monkeypatch.setattr(
+        population_module,
+        "normalize_image_and_masks",
+        lambda **kwargs: (
+            FakeImage(),
+            "organ_mask",
+            {"mask_liver_tumor": "tumor_mask"},
+            {"crop_mode": "margin"},
+        ),
+    )
+    monkeypatch.setattr(
+        population_module.reg_common,
+        "write_image",
+        lambda image, path, **kwargs: (
+            Path(path).parent.mkdir(parents=True, exist_ok=True),
+            Path(path).write_text("x"),
+        ),
+    )
+
+    args = argparse.Namespace(
+        mask_column="mask_liver",
+        save_registered_outputs=True,
+        normalize_registered_outputs=True,
+        output_dir=str(tmp_path / "registered"),
+        template_mode="mean_shape",
+        normalize_crop_mode="margin",
+        normalize_margin_mm=10.0,
+        normalize_without_background=False,
+        normalize_spacing=None,
+        normalize_orientation="LPS",
+        disable_normalize_center_organ=False,
+    )
+    template_info = {
+        "template_source_idx": 0,
+        "reference_image_path": str(template_ref),
+        "mask_path": str(template_mask),
+    }
+    row = {
+        "_source_idx": 0,
+        "nifti_path": str(nifti),
+        "mask_liver": str(mask),
+        "mask_liver_tumor": str(tumor),
+    }
+
+    with caplog.at_level(logging.DEBUG):
+        result = population_module._register_population_row(
+            row,
+            template_info=template_info,
+            args=args,
+            path_columns=["nifti_path", "mask_liver", "mask_liver_tumor"],
+        )
+
+    debug_messages = [record.getMessage() for record in caplog.records if record.levelno == logging.DEBUG]
+
+    assert result["error_message"] is None
+    assert not any("Starting population registration" in msg for msg in debug_messages)
+    assert not any("wrote 3 warped paths" in msg for msg in debug_messages)
+    assert any("registered successfully" in msg for msg in debug_messages)
+    assert any("wrote normalized outputs" in msg for msg in debug_messages)
+
+
+def test_register_population_main_debug_logging_omits_plumbing(
+    tmp_path, monkeypatch, caplog
+):
+    nifti = tmp_path / "a.nii.gz"
+    mask = tmp_path / "a_mask.nii.gz"
+    for path in (nifti, mask):
+        path.write_text("x")
+
+    csv_path = tmp_path / "nifti_index.csv"
+    pd.DataFrame([{"nifti_path": str(nifti), "mask_liver": str(mask)}]).to_csv(
+        csv_path, index=False
+    )
+
+    monkeypatch.setattr(population_module.reg_common, "_load_register_dependencies", lambda: object())
+    monkeypatch.setattr(
+        population_module,
+        "_build_population_template",
+        lambda df, *, args, sitk_module: {
+            "template_source_idx": 0,
+            "template_mode": "mean_shape",
+            "reference_image_path": str(nifti),
+            "mask_path": str(mask),
+            "sample_count": 1,
+        },
+    )
+    monkeypatch.setattr(
+        population_module,
+        "_register_population_row",
+        lambda row, *, template_info, args, path_columns: {
+            "source_idx": int(row["_source_idx"]),
+            "updates": {
+                "population_register_template_source_idx": 0,
+                "population_register_mask_column": args.mask_column,
+                "population_register_stage": "rigid",
+                "population_register_status": "ok",
+                "population_register_error_message": None,
+                "population_register_dice_before": 0.5,
+                "population_register_dice_after": 0.9,
+                **{
+                    column: 1.0 for column in reg_common.POPULATION_MATRIX_COLUMNS
+                },
+            },
+            "error_message": None,
+        },
+    )
+
+    args = argparse.Namespace(
+        csv_path=str(csv_path),
+        csv_path_out=str(tmp_path / "out.csv"),
+        output_dir=str(tmp_path / "registered"),
+        error_csv_path=str(tmp_path / "errors.csv"),
+        log_csv_path=str(tmp_path / "log.csv"),
+        organ="liver",
+        mask_column="mask_liver",
+        template_sample_size=8,
+        template_seed=0,
+        num_workers=1,
+        pad_mm=25.0,
+        save_registered_outputs=False,
+        normalize_registered_outputs=False,
+        verbose=False,
+        checkpoint_every_rows=1,
+        checkpoint_every_sec=3600,
+        resume=False,
+        strict_resume=False,
+    )
+
+    with caplog.at_level(logging.DEBUG):
+        population_module.main(args)
+
+    debug_messages = [record.getMessage() for record in caplog.records if record.levelno == logging.DEBUG]
+
+    assert not any("Population path columns selected" in msg for msg in debug_messages)
+    assert not any("population row payloads for execution" in msg for msg in debug_messages)
 
 
 def test_register_intra_patient_main_rewrites_paths(tmp_path, monkeypatch):

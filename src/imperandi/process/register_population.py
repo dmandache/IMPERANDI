@@ -586,10 +586,6 @@ def _sampled_rows_or_error(
         int(args.template_sample_size),
         int(args.template_seed),
     )
-    logger.debug(
-        "Template sampled source indices: %s",
-        [int(row["source_idx"]) for row in sampled_rows],
-    )
     return sampled_rows
 
 
@@ -603,10 +599,6 @@ def _build_single_sample_template(
     if template_source_idx is None:
         sampled_rows = _sampled_rows_or_error(df, args=args, sitk_module=sitk_module)
         exemplar = reg_common.choose_median_exemplar(sampled_rows)
-        logger.debug(
-            "Single-sample template chose median exemplar source_idx=%s.",
-            exemplar["source_idx"],
-        )
     else:
         selected = df.loc[df["_source_idx"] == int(template_source_idx)]
         if selected.empty:
@@ -635,10 +627,6 @@ def _build_single_sample_template(
             "nifti_path": str(nifti_path),
             "mask_path": str(mask_path),
         }
-        logger.debug(
-            "Single-sample template using explicit source_idx=%s.",
-            exemplar["source_idx"],
-        )
 
     exemplar_image = reg_common.read_image(exemplar["nifti_path"], sitk_module)
     exemplar_mask = reg_common.read_binary_mask(
@@ -1028,17 +1016,6 @@ def _register_population_row(
         if template_mode == TEMPLATE_MODE_PRINCIPAL_VECTORS
         else "rigid"
     )
-    logger.debug(
-        (
-            "Starting population registration for source_idx=%s "
-            "(mode=%s, template_source_idx=%s, save_outputs=%s, normalize=%s)."
-        ),
-        source_idx,
-        template_mode,
-        template_info.get("template_source_idx"),
-        bool(getattr(args, "save_registered_outputs", False)),
-        bool(getattr(args, "normalize_registered_outputs", False)),
-    )
     base_updates: dict[str, Any] = {
         "population_register_template_source_idx": int(
             template_info["template_source_idx"]
@@ -1152,12 +1129,6 @@ def _register_population_row(
                 sitk_module=sitk_module,
             )
             updates.update(rewritten_paths)
-            logger.debug(
-                "Population row source_idx=%s wrote %d warped paths into %s.",
-                source_idx,
-                len(rewritten_paths),
-                row_dir,
-            )
             tx_artifact = save_transform_artifacts(
                 row_dir=row_dir,
                 transform=rigid_tx,
@@ -1453,10 +1424,6 @@ def main(args: argparse.Namespace) -> None:
     )
     template_payload = _template_state_payload(template_info, args=args)
     path_columns = ["nifti_path", *reg_common.get_mask_columns(df)]
-    logger.debug(
-        "Population path columns selected for processing: %s",
-        path_columns,
-    )
 
     completed_indices: set[int] = set()
     if can_resume:
@@ -1503,11 +1470,6 @@ def main(args: argparse.Namespace) -> None:
         (idx, df.loc[idx].to_dict())
         for idx in pending_indices
     ]
-    logger.debug(
-        "Prepared %d population row payloads for execution with %d workers.",
-        len(row_payloads),
-        int(args.num_workers),
-    )
 
     if args.num_workers > 1 and len(row_payloads) > 1:
         with ThreadPoolExecutor(max_workers=args.num_workers) as executor:

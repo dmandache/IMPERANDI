@@ -387,16 +387,6 @@ def _process_patient_group(
     patient_value = (
         patient_df.iloc[0].get(patient_column) if not patient_df.empty else None
     )
-    logger.debug(
-        (
-            "Starting intra-patient task processing for patient=%s "
-            "with %d rows, %d pending rows, requested_mode=%s."
-        ),
-        patient_value,
-        len(patient_df),
-        len(pending_source_indices),
-        getattr(args, "intra_mode", "auto"),
-    )
     tasks, anchor_source_indices, resolved_mode = build_intra_patient_tasks(
         patient_df,
         keys=keys,
@@ -455,11 +445,6 @@ def _process_patient_group(
 
     def _ensure_anchor(anchor_source_idx: int) -> tuple[dict[str, Any], Any, Any, str | None]:
         if anchor_source_idx in anchor_cache:
-            logger.debug(
-                "Reusing cached intra anchor source_idx=%s for patient=%s.",
-                anchor_source_idx,
-                patient_value,
-            )
             return anchor_cache[anchor_source_idx]
 
         anchor_row = row_by_source_idx.get(anchor_source_idx)
@@ -469,13 +454,10 @@ def _process_patient_group(
         anchor_working = dict(anchor_row)
         row_dir = reg_common.build_row_output_dir(args.output_dir, anchor_source_idx)
 
-        if anchor_source_idx in pending_source_indices and anchor_source_idx not in emitted_anchor_success:
-            logger.debug(
-                "Copying anchor source_idx=%s for patient=%s into %s.",
-                anchor_source_idx,
-                patient_value,
-                row_dir,
-            )
+        if (
+            anchor_source_idx in pending_source_indices
+            and anchor_source_idx not in emitted_anchor_success
+        ):
             copied_paths = reg_common.copy_row_files(
                 anchor_working,
                 row_dir=row_dir,
@@ -536,12 +518,12 @@ def _process_patient_group(
         logger.debug(
             (
                 "Prepared intra anchor source_idx=%s for patient=%s "
-                "(phase=%s, cached_paths=%s)."
+                "(phase=%s, row_dir=%s)."
             ),
             anchor_source_idx,
             patient_value,
             anchor_phase,
-            sorted(anchor_working.keys()),
+            row_dir,
         )
         return anchor_cache[anchor_source_idx]
 
@@ -550,16 +532,6 @@ def _process_patient_group(
         if source_idx not in pending_source_indices:
             continue
         reference_source_idx = int(task.reference_source_idx)
-        logger.debug(
-            (
-                "Running intra task patient=%s kind=%s "
-                "moving_source_idx=%s reference_source_idx=%s."
-            ),
-            patient_value,
-            task.task_kind,
-            source_idx,
-            reference_source_idx,
-        )
         try:
             (
                 _anchor_row,
@@ -660,25 +632,6 @@ def _process_patient_group(
                 if dice_after_elastic >= dice_after_rigid:
                     final_tx = elastic_tx
                     final_stage = "bspline"
-                    logger.debug(
-                        (
-                            "Intra elastic stage accepted for source_idx=%s "
-                            "(dice_after_rigid=%.4f, dice_after_elastic=%.4f)."
-                        ),
-                        source_idx,
-                        float(dice_after_rigid),
-                        float(dice_after_elastic),
-                    )
-                else:
-                    logger.debug(
-                        (
-                            "Intra elastic stage rejected for source_idx=%s "
-                            "(dice_after_rigid=%.4f, dice_after_elastic=%.4f)."
-                        ),
-                        source_idx,
-                        float(dice_after_rigid),
-                        float(dice_after_elastic),
-                    )
             except Exception as exc:
                 logger.warning(
                     "Elastic registration fallback to rigid for row %s: %s",
@@ -775,12 +728,6 @@ def _process_patient_group(
                 )
             )
             processed_sources.add(source_idx)
-            logger.debug(
-                "Intra task failed for patient=%s moving_source_idx=%s: %s",
-                patient_value,
-                source_idx,
-                exc,
-            )
 
     for anchor_source_idx in sorted(anchor_source_indices):
         if anchor_source_idx not in pending_source_indices:
@@ -913,10 +860,6 @@ def main(args: argparse.Namespace) -> None:
         raise KeyError(f"column '{args.mask_column}' missing")
 
     path_columns = ["nifti_path", *reg_common.get_mask_columns(df)]
-    logger.debug(
-        "Intra-patient path columns selected for warping: %s",
-        path_columns,
-    )
     completed_indices: set[int] = set()
     if can_resume:
         completed_indices = {
@@ -973,13 +916,6 @@ def main(args: argparse.Namespace) -> None:
         completed_indices.add(int(df.at[idx, "_source_idx"]))
         ckpt.mark_processed()
         _checkpoint_write(force=False)
-    if missing_patient_indices:
-        logger.debug(
-            "Marked %d rows as intra-patient errors due to missing %s.",
-            len(missing_patient_indices),
-            patient_column,
-        )
-
     pending_source_indices = {
         int(df.at[idx, "_source_idx"])
         for idx in pending_indices
@@ -995,15 +931,6 @@ def main(args: argparse.Namespace) -> None:
             }
             if group_pending:
                 group_payloads.append((patient_df.copy(), group_pending))
-    logger.debug(
-        (
-            "Prepared %d intra-patient groups for execution "
-            "(pending_sources=%d, num_workers=%d)."
-        ),
-        len(group_payloads),
-        len(pending_source_indices),
-        int(args.num_workers),
-    )
     source_idx_to_idx = {
         int(df.at[idx, "_source_idx"]): idx
         for idx in df.index.tolist()

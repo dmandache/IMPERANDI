@@ -178,7 +178,6 @@ def _build_multiphasic_tasks(
             continue
         ref_idx = int(ref["_source_idx"])
         anchor_indices.add(ref_idx)
-        created_for_visit = 0
         for _, row in valid_visit.iterrows():
             moving = row.to_dict()
             moving_idx = int(moving["_source_idx"])
@@ -194,18 +193,6 @@ def _build_multiphasic_tasks(
                     moving_row=moving,
                 )
             )
-            created_for_visit += 1
-        logger.debug(
-            (
-                "Built %d multiphasic intra tasks for patient=%s visit=%s "
-                "using anchor source_idx=%s from %d valid rows."
-            ),
-            created_for_visit,
-            ref.get(keys.patient),
-            visit_value,
-            ref_idx,
-            len(valid_visit),
-        )
     return tasks, anchor_indices
 
 
@@ -242,16 +229,6 @@ def _build_longitudinal_tasks(
                 moving_row=moving,
             )
         )
-    logger.debug(
-        (
-            "Built %d longitudinal intra tasks for patient=%s "
-            "using anchor source_idx=%s from %d valid rows."
-        ),
-        len(tasks),
-        ref.get(keys.patient),
-        ref_idx,
-        len(valid_df),
-    )
     return tasks, {ref_idx}
 
 
@@ -284,16 +261,6 @@ def build_intra_patient_tasks(
             pending_source_indices=pending_source_indices,
             mask_column=mask_column,
         )
-        logger.debug(
-            (
-                "Intra task builder resolved mode=%s for patient=%s "
-                "with %d tasks and %d anchors."
-            ),
-            resolved_mode,
-            patient_df.iloc[0].get(keys.patient) if not patient_df.empty else None,
-            len(tasks),
-            len(anchors),
-        )
         return tasks, anchors, resolved_mode
 
     tasks, anchors = _build_longitudinal_tasks(
@@ -301,15 +268,5 @@ def build_intra_patient_tasks(
         keys=keys,
         pending_source_indices=pending_source_indices,
         mask_column=mask_column,
-    )
-    logger.debug(
-        (
-            "Intra task builder resolved mode=%s for patient=%s "
-            "with %d tasks and %d anchors."
-        ),
-        resolved_mode,
-        patient_df.iloc[0].get(keys.patient) if not patient_df.empty else None,
-        len(tasks),
-        len(anchors),
     )
     return tasks, anchors, resolved_mode
