@@ -340,6 +340,21 @@ def main(args: argparse.Namespace) -> None:
     audit_config = _build_audit_config(args)
     output_root = Path(args.output_dir)
     output_root.mkdir(parents=True, exist_ok=True)
+    logger.debug(
+        (
+            "Starting tumor consensus with patient_column=%s visit_column=%s "
+            "phase_column=%s image_column=%s organ_mask_column=%s "
+            "tumor_mask_column=%s rule=%s elastic=%s."
+        ),
+        args.patient_column,
+        args.visit_column,
+        args.phase_column,
+        args.image_column,
+        args.organ_mask_column,
+        args.tumor_mask_column,
+        consensus_config.rule,
+        consensus_config.use_elastic_registration,
+    )
 
     consensus_rows: list[dict[str, Any]] = []
     component_rows: list[dict[str, Any]] = []
@@ -349,6 +364,7 @@ def main(args: argparse.Namespace) -> None:
     grouped = list(
         df.groupby([args.patient_column, args.visit_column], sort=False, dropna=False)
     )
+    logger.debug("Prepared %d patient/visit groups for tumor consensus.", len(grouped))
     for (patient_value, visit_value), group_df in tqdm(
         grouped,
         total=len(grouped),
@@ -359,6 +375,12 @@ def main(args: argparse.Namespace) -> None:
         visit_key = str(visit_value)
         rows = [row for _, row in group_df.iterrows()]
         rows_dict = [row.to_dict() for row in rows]
+        logger.debug(
+            "Processing tumor consensus for patient=%s visit=%s with %d rows.",
+            patient_key,
+            visit_key,
+            len(rows_dict),
+        )
         try:
             result = build_visit_consensus(
                 rows_dict,
@@ -438,6 +460,17 @@ def main(args: argparse.Namespace) -> None:
                     "consensus_error_message": None,
                 }
             )
+            logger.debug(
+                (
+                    "Tumor consensus succeeded for patient=%s visit=%s "
+                    "(reference_source_idx=%s, aligned_masks=%d, components=%d)."
+                ),
+                patient_key,
+                visit_key,
+                int(result.reference_source_idx),
+                int(result.aligned_mask_count),
+                int(len(result.components)),
+            )
             components_by_patient_visit[(patient_key, visit_key)] = list(result.components)
             for component in result.components:
                 component_rows.append(
@@ -460,6 +493,12 @@ def main(args: argparse.Namespace) -> None:
                 )
         except Exception as exc:
             error_message = str(exc)
+            logger.debug(
+                "Tumor consensus failed for patient=%s visit=%s: %s",
+                patient_key,
+                visit_key,
+                error_message,
+            )
             consensus_rows.append(
                 {
                     args.patient_column: patient_key,

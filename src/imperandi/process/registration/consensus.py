@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 import math
 from typing import Any, Mapping
 
@@ -8,6 +9,9 @@ import numpy as np
 from scipy import ndimage
 
 from imperandi.process import _registration_common as reg_common
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -60,7 +64,14 @@ def _choose_reference_row(
         phase_rank = 0 if phase_value == "portal" else 1
         ranked.append((phase_rank, int(row.get("_source_idx", -1)), row))
     ranked.sort(key=lambda item: (item[0], item[1]))
-    return ranked[0][2]
+    reference = ranked[0][2]
+    logger.debug(
+        "Selected consensus reference source_idx=%s phase=%s from %d rows.",
+        int(reference.get("_source_idx", -1)),
+        reg_common.normalize_phase_value(reference.get(phase_column)),
+        len(rows),
+    )
+    return reference
 
 
 def _apply_consensus_rule(
@@ -160,6 +171,12 @@ def _align_tumor_mask_to_reference(
     source_idx = int(row.get("_source_idx", -1))
     tumor_path = row.get(tumor_mask_column)
     if not reg_common._is_existing_path(tumor_path):
+        logger.debug(
+            "Skipping consensus alignment for source_idx=%s: missing %s=%s.",
+            source_idx,
+            tumor_mask_column,
+            tumor_path,
+        )
         return None, {"status": "skipped", "reason": f"missing {tumor_mask_column}"}
 
     moving_tumor = reg_common.read_binary_mask(str(tumor_path), sitk_module=sitk_module)
@@ -174,6 +191,10 @@ def _align_tumor_mask_to_reference(
     )
 
     if int(reference_row.get("_source_idx", -1)) == source_idx:
+        logger.debug(
+            "Consensus source_idx=%s is the reference row; using reference-stage identity.",
+            source_idx,
+        )
         return moving_tumor, {"status": "ok", "stage": "reference", "source_idx": source_idx}
 
     if (
@@ -181,6 +202,13 @@ def _align_tumor_mask_to_reference(
         or not reg_common._is_existing_path(row.get(organ_mask_column))
         or not reg_common._is_existing_path(reference_row.get(organ_mask_column))
     ):
+        logger.debug(
+            (
+                "Consensus source_idx=%s falling back to identity because organ masks "
+                "are unavailable for registration."
+            ),
+            source_idx,
+        )
         return moving_tumor, {
             "status": "ok",
             "stage": "identity",
@@ -240,6 +268,10 @@ def _align_tumor_mask_to_reference(
         except Exception:
             # MVP fallback to rigid is explicit and deterministic.
             stage = "rigid"
+            logger.debug(
+                "Consensus elastic stage failed for source_idx=%s; keeping rigid transform.",
+                source_idx,
+            )
 
     aligned_tumor = reg_common.resample_like(
         reference_image,
@@ -260,6 +292,23 @@ def _align_tumor_mask_to_reference(
             None if dice_after_elastic is None else float(dice_after_elastic)
         ),
     }
+    logger.debug(
+        (
+            "Consensus aligned source_idx=%s against reference_source_idx=%s "
+            "with stage=%s dice_before=%.4f dice_after_rigid=%.4f "
+            "dice_after_elastic=%s."
+        ),
+        source_idx,
+        int(reference_row.get("_source_idx", -1)),
+        stage,
+        float(dice_before),
+        float(dice_after_rigid),
+        (
+            "None"
+            if dice_after_elastic is None
+            else f"{float(dice_after_elastic):.4f}"
+        ),
+    )
     return aligned_tumor, metadata
 
 
@@ -279,6 +328,17 @@ def build_visit_consensus(
         raise ValueError("rows must not be empty")
     reference_row = _choose_reference_row(rows, phase_column=phase_column)
     ref_idx = int(reference_row.get("_source_idx", -1))
+    logger.debug(
+        (
+            "Building visit consensus for patient=%s visit=%s "
+            "with %d rows, reference_source_idx=%s, rule=%s."
+        ),
+        patient_key,
+        visit_key,
+        len(rows),
+        ref_idx,
+        config.rule,
+    )
     ref_image_path = reference_row.get(image_column)
     if not reg_common._is_existing_path(ref_image_path):
         raise ValueError(f"invalid reference image path: {ref_image_path}")
@@ -343,6 +403,16 @@ def build_visit_consensus(
         consensus_array,
         reference_image=reference_image,
         sitk_module=sitk_module,
+    )
+    logger.debug(
+        (
+            "Built visit consensus for patient=%s visit=%s "
+            "(aligned_mask_count=%d, component_count=%d)."
+        ),
+        patient_key,
+        visit_key,
+        len(aligned_arrays),
+        len(components),
     )
     return ConsensusVisitResult(
         patient_key=str(patient_key),

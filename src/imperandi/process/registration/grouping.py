@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from typing import Any, Iterable
 
 import pandas as pd
 
 from imperandi.process import _registration_common as reg_common
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -99,7 +103,19 @@ def _choose_reference_row(group_df: pd.DataFrame, *, keys: GroupingKeys) -> dict
     ordered = _sort_frame_for_reference(group_df, keys=keys)
     if ordered.empty:
         return None
-    return ordered.iloc[0].to_dict()
+    reference = ordered.iloc[0].to_dict()
+    logger.debug(
+        (
+            "Selected intra reference row source_idx=%s patient=%s visit=%s "
+            "phase=%s from %d candidate rows."
+        ),
+        int(reference.get("_source_idx", -1)),
+        reference.get(keys.patient),
+        reference.get(keys.visit),
+        reg_common.infer_phase_from_row(reference),
+        len(ordered),
+    )
+    return reference
 
 
 def _infer_auto_mode(df: pd.DataFrame, *, keys: GroupingKeys) -> str:
@@ -114,7 +130,20 @@ def _infer_auto_mode(df: pd.DataFrame, *, keys: GroupingKeys) -> str:
             .nunique()
         )
         if int(visits) > 1:
+            logger.debug(
+                "Auto intra mode resolved to longitudinal from %d distinct visits.",
+                int(visits),
+            )
             return "longitudinal"
+        logger.debug(
+            "Auto intra mode resolved to multiphasic from %d distinct visits.",
+            int(visits),
+        )
+    else:
+        logger.debug(
+            "Auto intra mode resolved to multiphasic because visit column '%s' is absent.",
+            keys.visit,
+        )
     return "multiphasic"
 
 
@@ -134,6 +163,7 @@ def _build_multiphasic_tasks(
     else:
         grouped = [("single_visit", patient_df)]
     for _, visit_df in grouped:
+        visit_value = visit_df.iloc[0].get(keys.visit) if not visit_df.empty else None
         valid_visit = _valid_rows(
             visit_df,
             pending_source_indices=None,
@@ -141,9 +171,14 @@ def _build_multiphasic_tasks(
         )
         ref = _choose_reference_row(valid_visit, keys=keys)
         if ref is None:
+            logger.debug(
+                "Skipping multiphasic visit=%s because no valid reference row was found.",
+                visit_value,
+            )
             continue
         ref_idx = int(ref["_source_idx"])
         anchor_indices.add(ref_idx)
+        created_for_visit = 0
         for _, row in valid_visit.iterrows():
             moving = row.to_dict()
             moving_idx = int(moving["_source_idx"])
@@ -159,6 +194,18 @@ def _build_multiphasic_tasks(
                     moving_row=moving,
                 )
             )
+            created_for_visit += 1
+        logger.debug(
+            (
+                "Built %d multiphasic intra tasks for patient=%s visit=%s "
+                "using anchor source_idx=%s from %d valid rows."
+            ),
+            created_for_visit,
+            ref.get(keys.patient),
+            visit_value,
+            ref_idx,
+            len(valid_visit),
+        )
     return tasks, anchor_indices
 
 
@@ -176,6 +223,7 @@ def _build_longitudinal_tasks(
     )
     ref = _choose_reference_row(valid_df, keys=keys)
     if ref is None:
+        logger.debug("No valid longitudinal reference row found for patient group.")
         return [], set()
     ref_idx = int(ref["_source_idx"])
     tasks: list[IntraPairTask] = []
@@ -194,6 +242,16 @@ def _build_longitudinal_tasks(
                 moving_row=moving,
             )
         )
+    logger.debug(
+        (
+            "Built %d longitudinal intra tasks for patient=%s "
+            "using anchor source_idx=%s from %d valid rows."
+        ),
+        len(tasks),
+        ref.get(keys.patient),
+        ref_idx,
+        len(valid_df),
+    )
     return tasks, {ref_idx}
 
 
@@ -226,6 +284,16 @@ def build_intra_patient_tasks(
             pending_source_indices=pending_source_indices,
             mask_column=mask_column,
         )
+        logger.debug(
+            (
+                "Intra task builder resolved mode=%s for patient=%s "
+                "with %d tasks and %d anchors."
+            ),
+            resolved_mode,
+            patient_df.iloc[0].get(keys.patient) if not patient_df.empty else None,
+            len(tasks),
+            len(anchors),
+        )
         return tasks, anchors, resolved_mode
 
     tasks, anchors = _build_longitudinal_tasks(
@@ -233,5 +301,15 @@ def build_intra_patient_tasks(
         keys=keys,
         pending_source_indices=pending_source_indices,
         mask_column=mask_column,
+    )
+    logger.debug(
+        (
+            "Intra task builder resolved mode=%s for patient=%s "
+            "with %d tasks and %d anchors."
+        ),
+        resolved_mode,
+        patient_df.iloc[0].get(keys.patient) if not patient_df.empty else None,
+        len(tasks),
+        len(anchors),
     )
     return tasks, anchors, resolved_mode
