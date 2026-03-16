@@ -49,6 +49,7 @@ class ConsensusVisitResult:
     components: list[TumorComponent]
     aligned_mask_count: int
     transform_metadata_by_source_idx: dict[int, dict[str, Any]]
+    transform_by_source_idx: dict[int, Any]
 
 
 def _choose_reference_row(
@@ -150,45 +151,27 @@ def _mask_from_array(mask_array: np.ndarray, *, reference_image: Any, sitk_modul
     )
 
 
-def _align_tumor_mask_to_reference(
+def _build_row_transform_to_reference(
     row: Mapping[str, Any],
     *,
     reference_row: Mapping[str, Any],
     reference_image: Any,
     reference_organ_mask: Any | None,
-    tumor_mask_column: str,
     organ_mask_column: str | None,
     config: ConsensusConfig,
     sitk_module: Any,
-) -> tuple[Any | None, dict[str, Any]]:
+) -> tuple[Any, dict[str, Any]]:
     source_idx = int(row.get("_source_idx", -1))
-    tumor_path = row.get(tumor_mask_column)
-    if not reg_common._is_existing_path(tumor_path):
-        logger.debug(
-            "Skipping consensus alignment for source_idx=%s: missing %s=%s.",
-            source_idx,
-            tumor_mask_column,
-            tumor_path,
-        )
-        return None, {"status": "skipped", "reason": f"missing {tumor_mask_column}"}
-
-    moving_tumor = reg_common.read_binary_mask(str(tumor_path), sitk_module=sitk_module)
-    moving_tumor = reg_common.resample_like(
-        reference_image,
-        moving_tumor,
-        tx=None,
-        interp=sitk_module.sitkNearestNeighbor,
-        default=0,
-        pixel_id=sitk_module.sitkUInt8,
-        sitk_module=sitk_module,
-    )
-
     if int(reference_row.get("_source_idx", -1)) == source_idx:
         logger.debug(
             "Consensus source_idx=%s is the reference row; using reference-stage identity.",
             source_idx,
         )
-        return moving_tumor, {"status": "ok", "stage": "reference", "source_idx": source_idx}
+        return reg_common.identity_transform(sitk_module), {
+            "status": "ok",
+            "stage": "reference",
+            "source_idx": source_idx,
+        }
 
     if (
         organ_mask_column is None
@@ -202,7 +185,7 @@ def _align_tumor_mask_to_reference(
             ),
             source_idx,
         )
-        return moving_tumor, {
+        return reg_common.identity_transform(sitk_module), {
             "status": "ok",
             "stage": "identity",
             "source_idx": source_idx,
@@ -266,15 +249,6 @@ def _align_tumor_mask_to_reference(
                 source_idx,
             )
 
-    aligned_tumor = reg_common.resample_like(
-        reference_image,
-        moving_tumor,
-        tx=final_tx,
-        interp=sitk_module.sitkNearestNeighbor,
-        default=0,
-        pixel_id=sitk_module.sitkUInt8,
-        sitk_module=sitk_module,
-    )
     metadata = {
         "status": "ok",
         "source_idx": source_idx,
@@ -302,7 +276,48 @@ def _align_tumor_mask_to_reference(
             else f"{float(dice_after_elastic):.4f}"
         ),
     )
-    return aligned_tumor, metadata
+    return final_tx, metadata
+
+
+def _align_tumor_mask_to_reference(
+    row: Mapping[str, Any],
+    *,
+    reference_image: Any,
+    tumor_mask_column: str,
+    transform: Any,
+    metadata: Mapping[str, Any],
+    sitk_module: Any,
+) -> tuple[Any | None, dict[str, Any]]:
+    source_idx = int(row.get("_source_idx", -1))
+    tumor_path = row.get(tumor_mask_column)
+    if not reg_common._is_existing_path(tumor_path):
+        logger.debug(
+            "Skipping consensus alignment for source_idx=%s: missing %s=%s.",
+            source_idx,
+            tumor_mask_column,
+            tumor_path,
+        )
+        return None, {
+            **dict(metadata),
+            "tumor_mask_status": "skipped",
+            "tumor_mask_reason": f"missing {tumor_mask_column}",
+        }
+
+    moving_tumor = reg_common.read_binary_mask(str(tumor_path), sitk_module=sitk_module)
+    aligned_tumor = reg_common.resample_like(
+        reference_image,
+        moving_tumor,
+        tx=transform,
+        interp=sitk_module.sitkNearestNeighbor,
+        default=0,
+        pixel_id=sitk_module.sitkUInt8,
+        sitk_module=sitk_module,
+    )
+    return aligned_tumor, {
+        **dict(metadata),
+        "tumor_mask_status": "ok",
+        "tumor_mask_reason": None,
+    }
 
 
 def build_visit_consensus(
@@ -346,16 +361,25 @@ def build_visit_consensus(
 
     aligned_arrays: list[np.ndarray] = []
     metadata_by_source_idx: dict[int, dict[str, Any]] = {}
+    transform_by_source_idx: dict[int, Any] = {}
     for row in rows:
         source_idx = int(row.get("_source_idx", -1))
-        aligned_mask, metadata = _align_tumor_mask_to_reference(
+        transform, metadata = _build_row_transform_to_reference(
             row,
             reference_row=reference_row,
             reference_image=reference_image,
             reference_organ_mask=reference_organ_mask,
-            tumor_mask_column=tumor_mask_column,
             organ_mask_column=organ_mask_column,
             config=config,
+            sitk_module=sitk_module,
+        )
+        transform_by_source_idx[source_idx] = transform
+        aligned_mask, metadata = _align_tumor_mask_to_reference(
+            row,
+            reference_image=reference_image,
+            tumor_mask_column=tumor_mask_column,
+            transform=transform,
+            metadata=metadata,
             sitk_module=sitk_module,
         )
         metadata_by_source_idx[source_idx] = metadata
@@ -381,6 +405,7 @@ def build_visit_consensus(
             components=[],
             aligned_mask_count=0,
             transform_metadata_by_source_idx=metadata_by_source_idx,
+            transform_by_source_idx=transform_by_source_idx,
         )
 
     consensus_array = _apply_consensus_rule(
@@ -405,4 +430,5 @@ def build_visit_consensus(
         components=components,
         aligned_mask_count=len(aligned_arrays),
         transform_metadata_by_source_idx=metadata_by_source_idx,
+        transform_by_source_idx=transform_by_source_idx,
     )

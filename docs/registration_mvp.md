@@ -14,6 +14,7 @@
   - extra metadata columns for task kind, reference row, mode, and transform artifacts
 - New command `register-tumor-consensus`:
   - per-visit consensus mask generation across phases
+  - reference-space consensus persisted once per visit and mapped back into each scan space
   - component-level tumor descriptors (centroid, volume, bbox)
   - longitudinal audit flags across visits
 - `register-population` extension:

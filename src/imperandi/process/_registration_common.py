@@ -198,6 +198,67 @@ def resample_like(
     )
 
 
+def invert_transform(
+    transform,
+    *,
+    forward_reference_image,
+    inverse_reference_image,
+    sitk_module,
+):
+    if transform is None:
+        return identity_transform(sitk_module)
+
+    get_inverse = getattr(transform, "GetInverse", None)
+    if callable(get_inverse):
+        try:
+            return get_inverse()
+        except Exception:
+            logger.debug(
+                "Falling back to displacement-field inversion for transform type %s.",
+                type(transform).__name__,
+            )
+
+    field_filter_cls = getattr(sitk_module, "TransformToDisplacementFieldFilter", None)
+    inverse_filter_cls = getattr(sitk_module, "InvertDisplacementFieldImageFilter", None)
+    if inverse_filter_cls is None:
+        inverse_filter_cls = getattr(
+            sitk_module,
+            "InverseDisplacementFieldImageFilter",
+            None,
+        )
+    displacement_tx_cls = getattr(sitk_module, "DisplacementFieldTransform", None)
+    vector_pixel_id = getattr(sitk_module, "sitkVectorFloat64", None)
+    if (
+        field_filter_cls is None
+        or inverse_filter_cls is None
+        or displacement_tx_cls is None
+    ):
+        raise RuntimeError(
+            "transform inversion requires displacement-field support in SimpleITK"
+        )
+
+    field_filter = field_filter_cls()
+    if hasattr(field_filter, "SetReferenceImage"):
+        field_filter.SetReferenceImage(forward_reference_image)
+    if vector_pixel_id is not None and hasattr(field_filter, "SetOutputPixelType"):
+        field_filter.SetOutputPixelType(vector_pixel_id)
+    forward_field = field_filter.Execute(transform)
+
+    inverse_filter = inverse_filter_cls()
+    if hasattr(inverse_filter, "SetReferenceImage"):
+        inverse_filter.SetReferenceImage(inverse_reference_image)
+    if hasattr(inverse_filter, "SetMaximumNumberOfIterations"):
+        inverse_filter.SetMaximumNumberOfIterations(50)
+    if hasattr(inverse_filter, "SetMeanErrorToleranceThreshold"):
+        inverse_filter.SetMeanErrorToleranceThreshold(1e-3)
+    if hasattr(inverse_filter, "SetMaxErrorToleranceThreshold"):
+        inverse_filter.SetMaxErrorToleranceThreshold(0.1)
+    if hasattr(inverse_filter, "SetEnforceBoundaryCondition"):
+        inverse_filter.SetEnforceBoundaryCondition(True)
+    inverse_field = inverse_filter.Execute(forward_field)
+    return displacement_tx_cls(inverse_field)
+
+
 def dice_coeff(fixed_mask, moving_mask, *, sitk_module, tx=None) -> float:
     fixed = sitk_module.Cast(fixed_mask > 0, sitk_module.sitkUInt8)
     moving = sitk_module.Cast(moving_mask > 0, sitk_module.sitkUInt8)

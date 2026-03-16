@@ -304,6 +304,74 @@ def _build_audit_config(args: argparse.Namespace) -> LongitudinalAuditConfig:
     )
 
 
+def _write_consensus_in_scan_spaces(
+    *,
+    rows: list[dict[str, Any]],
+    result: Any,
+    output_root: Path,
+    image_column: str,
+    tumor_mask_column: str,
+    sitk_module: Any,
+) -> tuple[dict[int, str], dict[int, str]]:
+    mapped_paths_by_source_idx: dict[int, str] = {}
+    mapped_errors_by_source_idx: dict[int, str] = {}
+    transform_by_source_idx = dict(getattr(result, "transform_by_source_idx", {}) or {})
+    consensus_column_name = f"{tumor_mask_column}_consensus"
+
+    for row in rows:
+        source_idx = int(row.get("_source_idx", -1))
+        image_path = row.get(image_column)
+        if not reg_common._is_existing_path(image_path):
+            mapped_errors_by_source_idx[source_idx] = f"invalid {image_column}: {image_path}"
+            logger.warning(
+                "Skipping consensus back-mapping for source_idx=%s: invalid %s=%s",
+                source_idx,
+                image_column,
+                image_path,
+            )
+            continue
+        try:
+            source_image = reg_common.read_image(str(image_path), sitk_module)
+            forward_transform = transform_by_source_idx.get(source_idx)
+            if forward_transform is None:
+                forward_transform = reg_common.identity_transform(sitk_module)
+            inverse_transform = reg_common.invert_transform(
+                forward_transform,
+                forward_reference_image=result.consensus_mask,
+                inverse_reference_image=source_image,
+                sitk_module=sitk_module,
+            )
+            mapped_mask = reg_common.resample_like(
+                source_image,
+                result.consensus_mask,
+                tx=inverse_transform,
+                interp=sitk_module.sitkNearestNeighbor,
+                default=0,
+                pixel_id=sitk_module.sitkUInt8,
+                sitk_module=sitk_module,
+            )
+            row_dir = reg_common.build_row_output_dir(output_root, source_idx)
+            out_path = reg_common.build_output_path(
+                row_dir,
+                column_name=consensus_column_name,
+                source_path=str(image_path),
+            )
+            reg_common.write_image(
+                mapped_mask,
+                out_path,
+                sitk_module=sitk_module,
+            )
+            mapped_paths_by_source_idx[source_idx] = str(out_path)
+        except Exception as exc:
+            mapped_errors_by_source_idx[source_idx] = str(exc)
+            logger.warning(
+                "Failed to map consensus back to source_idx=%s: %s",
+                source_idx,
+                exc,
+            )
+    return mapped_paths_by_source_idx, mapped_errors_by_source_idx
+
+
 def main(args: argparse.Namespace) -> None:
     sitk_module = reg_common._load_register_dependencies()
     df = pd.read_csv(args.csv_path).copy()
@@ -397,6 +465,16 @@ def main(args: argparse.Namespace) -> None:
                 consensus_mask_path,
                 sitk_module=sitk_module,
             )
+            scan_space_paths_by_source_idx, scan_space_errors_by_source_idx = (
+                _write_consensus_in_scan_spaces(
+                    rows=rows_dict,
+                    result=result,
+                    output_root=output_root,
+                    image_column=args.image_column,
+                    tumor_mask_column=args.tumor_mask_column,
+                    sitk_module=sitk_module,
+                )
+            )
             metadata_path = visit_dir / "consensus_metadata.json"
             metadata_path.write_text(
                 json.dumps(
@@ -432,6 +510,8 @@ def main(args: argparse.Namespace) -> None:
                             for c in result.components
                         ],
                         "transform_metadata_by_source_idx": result.transform_metadata_by_source_idx,
+                        "scan_space_paths_by_source_idx": scan_space_paths_by_source_idx,
+                        "scan_space_errors_by_source_idx": scan_space_errors_by_source_idx,
                     },
                     indent=2,
                     sort_keys=True,
@@ -448,6 +528,22 @@ def main(args: argparse.Namespace) -> None:
                     "consensus_component_count": int(len(result.components)),
                     "consensus_mask_path": str(consensus_mask_path),
                     "consensus_metadata_path": str(metadata_path),
+                    "consensus_scan_space_count": int(
+                        len(scan_space_paths_by_source_idx)
+                    ),
+                    "consensus_scan_space_error_count": int(
+                        len(scan_space_errors_by_source_idx)
+                    ),
+                    "consensus_scan_space_paths_json": json.dumps(
+                        scan_space_paths_by_source_idx,
+                        sort_keys=True,
+                        ensure_ascii=True,
+                    ),
+                    "consensus_scan_space_errors_json": json.dumps(
+                        scan_space_errors_by_source_idx,
+                        sort_keys=True,
+                        ensure_ascii=True,
+                    ),
                     "consensus_rule": consensus_config.rule,
                     "consensus_status": "ok",
                     "consensus_error_message": None,
@@ -501,6 +597,18 @@ def main(args: argparse.Namespace) -> None:
                     "consensus_component_count": 0,
                     "consensus_mask_path": None,
                     "consensus_metadata_path": None,
+                    "consensus_scan_space_count": 0,
+                    "consensus_scan_space_error_count": 0,
+                    "consensus_scan_space_paths_json": json.dumps(
+                        {},
+                        sort_keys=True,
+                        ensure_ascii=True,
+                    ),
+                    "consensus_scan_space_errors_json": json.dumps(
+                        {},
+                        sort_keys=True,
+                        ensure_ascii=True,
+                    ),
                     "consensus_rule": consensus_config.rule,
                     "consensus_status": "error",
                     "consensus_error_message": error_message,
