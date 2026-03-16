@@ -477,6 +477,32 @@ def test_cli_register_intra_patient_accepts_optional_csv_path_only(tmp_path):
     assert exit_code == 0
 
 
+def test_cli_register_intra_patient_accepts_disable_elastic(tmp_path, capsys):
+    csv_in = tmp_path / "nifti_index.csv"
+    csv_in.write_text("patient_key,nifti_path,mask_liver\n")
+
+    exit_code = cli.main(
+        [
+            "register-intra-patient",
+            "--csv_path",
+            str(csv_in),
+            "--output_dir",
+            str(tmp_path / "registered"),
+            "--disable_elastic",
+            "--dry-run",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    disable_elastic_line = next(
+        line
+        for line in output.splitlines()
+        if line.strip().startswith("disable_elastic")
+    )
+    assert exit_code == 0
+    assert disable_elastic_line.strip().endswith("True")
+
+
 def test_cli_register_intra_patient_accepts_positional_csv_path_and_csv_path_out(
     tmp_path, capsys
 ):

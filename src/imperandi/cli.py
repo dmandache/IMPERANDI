@@ -158,7 +158,7 @@ def _add_register_intra_patient_subcommand(
 ) -> None:
     parser = subparsers.add_parser(
         "register-intra-patient",
-        help="Rigidly + elastically align volumes within each patient.",
+        help="Rigidly align volumes within each patient, with optional elastic refinement.",
     )
     register_intra_patient_module = _load_register_intra_patient_module()
     register_intra_patient_module.add_register_intra_patient_arguments(parser)

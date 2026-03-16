@@ -525,6 +525,7 @@ def test_normalize_register_intra_patient_args_defaults(tmp_path):
         mask_column=None,
         num_workers=2,
         pad_mm=25.0,
+        disable_elastic=False,
         band_mm=15.0,
         bspline_ctrl_spacing_mm=90.0,
         verbose=False,
@@ -544,6 +545,35 @@ def test_normalize_register_intra_patient_args_defaults(tmp_path):
         csv_path.parent / "register_intra_patient_log.csv"
     )
     assert out.mask_column == "mask_liver"
+    assert out.disable_elastic is False
+
+
+def test_normalize_register_intra_patient_args_preserves_disable_elastic(tmp_path):
+    csv_path = tmp_path / "nifti_index.csv"
+    csv_path.write_text("patient_key,nifti_path,mask_liver\n")
+
+    args = argparse.Namespace(
+        csv_path_pos=str(csv_path),
+        csv_path_opt=None,
+        csv_path_out_pos=None,
+        csv_path_out=None,
+        output_dir=str(tmp_path / "registered"),
+        error_csv_path=None,
+        log_csv_path=None,
+        organ="liver",
+        mask_column=None,
+        num_workers=2,
+        pad_mm=25.0,
+        disable_elastic=True,
+        band_mm=15.0,
+        bspline_ctrl_spacing_mm=90.0,
+        verbose=False,
+        dry_run=False,
+    )
+
+    out = intra_module.normalize_register_intra_patient_args(args)
+
+    assert out.disable_elastic is True
 
 
 def test_sample_valid_rows_for_template_is_deterministic(tmp_path, monkeypatch):
@@ -887,6 +917,130 @@ def test_process_patient_group_debug_logging_keeps_only_milestones(
     )
     assert "row_dir=" in anchor_message
     assert any("Completed intra task" in msg for msg in debug_messages)
+
+
+def test_process_patient_group_skips_elastic_when_disabled(tmp_path, monkeypatch):
+    nifti_a = tmp_path / "a.nii.gz"
+    mask_a = tmp_path / "a_mask.nii.gz"
+    nifti_b = tmp_path / "b.nii.gz"
+    mask_b = tmp_path / "b_mask.nii.gz"
+    for path in (nifti_a, mask_a, nifti_b, mask_b):
+        path.write_text("x")
+
+    df = pd.DataFrame(
+        [
+            {
+                "_source_idx": 0,
+                "patient_key": "p1",
+                "phase": "portal",
+                "visit_order": 0,
+                "nifti_path": str(nifti_a),
+                "mask_liver": str(mask_a),
+            },
+            {
+                "_source_idx": 1,
+                "patient_key": "p1",
+                "phase": "arteriel",
+                "visit_order": 1,
+                "nifti_path": str(nifti_b),
+                "mask_liver": str(mask_b),
+            },
+        ]
+    )
+
+    monkeypatch.setattr(
+        intra_module.reg_common, "_load_register_dependencies", lambda: object()
+    )
+    monkeypatch.setattr(
+        intra_module.reg_common,
+        "identity_transform",
+        lambda *_args, **_kwargs: "identity",
+    )
+    monkeypatch.setattr(
+        intra_module.reg_common,
+        "copy_row_files",
+        lambda row, *, row_dir, path_columns: {
+            column: str(
+                reg_common.build_output_path(
+                    row_dir,
+                    column_name=column,
+                    source_path=row.get(column),
+                )
+            )
+            for column in path_columns
+            if row.get(column)
+        },
+    )
+    monkeypatch.setattr(
+        intra_module.reg_common, "read_image", lambda *args, **kwargs: "image"
+    )
+    monkeypatch.setattr(
+        intra_module.reg_common, "read_binary_mask", lambda *args, **kwargs: "mask"
+    )
+    monkeypatch.setattr(
+        intra_module.reg_common,
+        "rigid_register_mask_pair",
+        lambda *args, **kwargs: "rigid",
+    )
+    monkeypatch.setattr(
+        intra_module.reg_common,
+        "bspline_register_mask_pair",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("elastic stage should be skipped")
+        ),
+    )
+
+    def fake_dice(*args, **kwargs):
+        tx = kwargs.get("tx")
+        if tx == "rigid":
+            return 0.8
+        return 0.5
+
+    monkeypatch.setattr(intra_module.reg_common, "dice_coeff", fake_dice)
+    monkeypatch.setattr(
+        intra_module.reg_common,
+        "warp_row_files",
+        lambda row, *, row_dir, path_columns, **kwargs: {
+            column: str(
+                reg_common.build_output_path(
+                    row_dir,
+                    column_name=column,
+                    source_path=row.get(column),
+                )
+            )
+            for column in path_columns
+            if row.get(column)
+        },
+    )
+    monkeypatch.setattr(
+        intra_module,
+        "save_transform_artifacts",
+        lambda **kwargs: argparse.Namespace(
+            transform_path="transform.tfm",
+            metadata_path="transform.json",
+        ),
+    )
+
+    args = argparse.Namespace(
+        output_dir=str(tmp_path / "registered"),
+        mask_column="mask_liver",
+        disable_elastic=True,
+        band_mm=15.0,
+        bspline_ctrl_spacing_mm=90.0,
+        intra_mode="longitudinal",
+    )
+
+    out = intra_module._process_patient_group(
+        df,
+        pending_source_indices={0, 1},
+        args=args,
+        path_columns=["nifti_path", "mask_liver"],
+    )
+
+    assert len(out) == 2
+    moving_result = next(result for result in out if result["source_idx"] == 1)
+    assert moving_result["updates"]["intra_register_stage"] == "rigid"
+    assert moving_result["updates"]["intra_register_dice_after_elastic"] is None
 
 
 def test_register_intra_patient_main_keeps_state_resumable_when_rows_unprocessed(

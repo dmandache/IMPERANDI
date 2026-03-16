@@ -128,6 +128,12 @@ def add_register_intra_patient_arguments(
         help="Reserved registration padding in mm for future cropping refinements.",
     )
     parser.add_argument(
+        "--disable_elastic",
+        action="store_true",
+        default=False,
+        help="Use rigid-only intra-patient alignment.",
+    )
+    parser.add_argument(
         "--band_mm",
         type=float,
         default=reg_common.DEFAULT_BAND_MM,
@@ -157,7 +163,7 @@ def add_register_intra_patient_arguments(
 
 def build_parser(add_help: bool = True) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Perform rigid + elastic registration within each patient.",
+        description="Perform rigid registration within each patient with optional elastic refinement.",
         add_help=add_help,
     )
     add_register_intra_patient_arguments(parser)
@@ -196,6 +202,7 @@ def normalize_register_intra_patient_args(args: argparse.Namespace) -> argparse.
         )
     args.num_workers = max(1, int(args.num_workers))
     args.pad_mm = float(args.pad_mm)
+    args.disable_elastic = bool(getattr(args, "disable_elastic", False))
     args.band_mm = float(args.band_mm)
     args.bspline_ctrl_spacing_mm = float(args.bspline_ctrl_spacing_mm)
 
@@ -614,30 +621,31 @@ def _process_patient_group(
             final_tx = rigid_tx
             final_stage = "rigid"
             dice_after_elastic: float | None = None
-            try:
-                elastic_tx = reg_common.bspline_register_mask_pair(
-                    fixed_mask=fixed_mask,
-                    moving_mask=moving_mask,
-                    initial_transform=rigid_tx,
-                    sitk_module=sitk_module,
-                    band_mm=args.band_mm,
-                    ctrl_spacing_mm=args.bspline_ctrl_spacing_mm,
-                )
-                dice_after_elastic = reg_common.dice_coeff(
-                    fixed_mask,
-                    moving_mask,
-                    sitk_module=sitk_module,
-                    tx=elastic_tx,
-                )
-                if dice_after_elastic >= dice_after_rigid:
-                    final_tx = elastic_tx
-                    final_stage = "bspline"
-            except Exception as exc:
-                logger.warning(
-                    "Elastic registration fallback to rigid for row %s: %s",
-                    source_idx,
-                    exc,
-                )
+            if not bool(getattr(args, "disable_elastic", False)):
+                try:
+                    elastic_tx = reg_common.bspline_register_mask_pair(
+                        fixed_mask=fixed_mask,
+                        moving_mask=moving_mask,
+                        initial_transform=rigid_tx,
+                        sitk_module=sitk_module,
+                        band_mm=args.band_mm,
+                        ctrl_spacing_mm=args.bspline_ctrl_spacing_mm,
+                    )
+                    dice_after_elastic = reg_common.dice_coeff(
+                        fixed_mask,
+                        moving_mask,
+                        sitk_module=sitk_module,
+                        tx=elastic_tx,
+                    )
+                    if dice_after_elastic >= dice_after_rigid:
+                        final_tx = elastic_tx
+                        final_stage = "bspline"
+                except Exception as exc:
+                    logger.warning(
+                        "Elastic registration fallback to rigid for row %s: %s",
+                        source_idx,
+                        exc,
+                    )
 
             row_dir = reg_common.build_row_output_dir(args.output_dir, source_idx)
             rewritten_paths = reg_common.warp_row_files(
