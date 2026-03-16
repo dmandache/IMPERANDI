@@ -315,7 +315,7 @@ imperandi register-tumor-consensus \
 - `segment`, `phase`, `radiomics`:
   - enriched cohort table + command-specific error CSV
 
-## Manifests and hooks
+## Manifests and hooks 🎚️
 
 Manifests define dataset-specific behavior and live in:
 
