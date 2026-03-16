@@ -65,7 +65,17 @@ Impact: enables phase-aware stratification and analysis without manual review of
 
 Impact: accelerates feature exctraction for prognostic and response modeling pipelines.
 
-### 6) Interactive quality control viewer (Jupyter)
+### 6) Registration and cohort harmonization
+
+- Aligns scans across patients with `register-population` using an organ mask as the registration target.
+- Aligns scans within each patient with `register-intra-patient` for multiphasic or longitudinal studies.
+- Builds per-visit tumor consensus masks and longitudinal tumor consistency audits with `register-tumor-consensus`.
+- Persists transform metadata, row-level logs, and explicit error CSVs for traceability and resumable execution.
+- Supports rigid-only execution where needed via `--disable_elastic` for intra-patient and tumor-consensus workflows.
+
+Impact: creates anatomically comparable scan spaces for downstream segmentation review, tumor tracking, and cohort-level analysis.
+
+### 7) Interactive quality control viewer (Jupyter)
 
 - Provides an interactive CT + mask viewer for cohort navigation and quick visual QA.
 - Supports patient/date/phase exploration, mask overlays, window presets, and keyboard navigation.
@@ -74,7 +84,7 @@ Impact: shortens the feedback loop between pipeline outputs and clinical/imaging
 
 ![image](https://raw.githubusercontent.com/dmandache/IMPERANDI/main/static/viewer-demo.png)
 
-## CLI overview
+## CLI overview 🛠️
 
 IMPERANDI ships a single CLI with these subcommands:
 
@@ -82,6 +92,9 @@ IMPERANDI ships a single CLI with these subcommands:
 - `clean`: filter and normalize parsed metadata.
 - `ingest`: run `parse` then `clean`.
 - `convert`: convert indexed DICOM volumes to NIfTI.
+- `register-population`: rigidly align a cohort to an organ-derived population template (requires _SimpleITK_, install with `.[register]`).
+- `register-intra-patient`: align scans within each patient, with optional elastic refinement (requires _SimpleITK_, install with `.[register]`).
+- `register-tumor-consensus`: build per-visit tumor consensus masks and longitudinal audit tables (requires _SimpleITK_, install with `.[register]`).
 - `segment`: run configurable segmentation on NIfTI volumes (requires _TotalSegmentator_, install with `.[segment]`).
 - `phase`: extract contrast phase metadata from NIfTI volumes (requires _TotalSegmentator_, install with `.[segment]`).
 - `radiomics`: extract radiomics features from NIfTI volumes and masks (requires _pyRadiomics_, install with `.[radiomics]`).
@@ -94,17 +107,26 @@ imperandi parse --help
 imperandi clean --help
 imperandi ingest --help
 imperandi convert --help
+imperandi register-population --help
+imperandi register-intra-patient --help
+imperandi register-tumor-consensus --help
 imperandi segment --help
 imperandi phase --help
 imperandi radiomics --help
 ```
 
-## Install
+## Install ⚙️
 
 Base install:
 
 ```bash
 python -m pip install -e .
+```
+
+Registration dependencies:
+
+```bash
+python -m pip install -e ".[register]"
 ```
 
 Segmentation dependencies:
@@ -145,7 +167,7 @@ Optional Jupyter kernel setup:
 python -m ipykernel install --user --name imperandi310 --display-name "IMPERANDI (Python 3.10)"
 ```
 
-## Quickstart
+## Quickstart 🚀
 
 Run ingest (parse + clean):
 
@@ -210,7 +232,61 @@ imperandi radiomics \
 If both `--manifest` and `--pyradiomics_settings` are provided, IMPERANDI warns and
 prefers manifest `radiomics` settings when that section exists.
 
-## Core outputs
+## Registration workflows 🧭
+
+Registration commands operate on NIfTI-index CSVs and expect valid organ masks. `register-tumor-consensus` additionally expects per-scan tumor masks. All three commands write an enriched cohort CSV plus dedicated logs/errors; the transform-heavy workflows also save artifacts under `--output_dir`.
+
+### Population registration (`register-population`)
+
+Use this when you want inter-patient spatial comparability across a cohort.
+
+- Input columns: `nifti_path` and an organ mask column such as `mask_liver`.
+- Main modes (set with `--template_mode`): `single_sample`, `mean_shape`, `principal_vectors`.
+- Useful flags: `--save_registered_outputs`, `--normalize_registered_outputs`.
+
+```bash
+imperandi register-population \
+  --csv_path /path/to/output/nifti_index_segmented.csv \
+  --output_dir /path/to/output/registered_population \
+  --template_mode mean_shape \
+  --save_registered_outputs \
+  --csv_path_out /path/to/output/nifti_index_registered_population.csv
+```
+
+### Intra-patient registration (`register-intra-patient`)
+
+Use this when you want to align scans within the same patient across phases and/or visits.
+
+- Input columns: `patient_key`, `nifti_path`, and an organ mask column such as `mask_liver`.
+- Modes (set with `--intra_mode`): `auto`, `multiphasic`, `longitudinal`.
+- Useful flags: `--disable_elastic`, `--grouping_visit_column`, `--grouping_phase_column`.
+
+```bash
+imperandi register-intra-patient \
+  --csv_path /path/to/output/nifti_index_segmented.csv \
+  --output_dir /path/to/output/registered_intra_patient \
+  --intra_mode auto \
+  --disable_elastic \
+  --csv_path_out /path/to/output/nifti_index_registered_intra_patient.csv
+```
+
+### Tumor consensus and audit (`register-tumor-consensus`)
+
+Use this when you have per-phase tumor masks and want a single consensus tumor representation per visit plus longitudinal consistency checks.
+
+- Input columns: patient/visit/phase grouping columns, `nifti_path`, organ mask, and tumor mask.
+- Consensus rules (set with `--consensus_rule`): `union`, `intersection`, `majority`.
+- Useful flags: `--majority_threshold`, `--disable_elastic`.
+
+```bash
+imperandi register-tumor-consensus \
+  --csv_path /path/to/output/nifti_index_segmented.csv \
+  --output_dir /path/to/output/tumor_consensus \
+  --consensus_rule majority \
+  --csv_path_out /path/to/output/nifti_index_tumor_consensus.csv
+```
+
+## Core outputs 📁
 
 - `parse`:
   - `dicom_index.csv` (resolved IDs and selected DICOM tags)
@@ -220,6 +296,22 @@ prefers manifest `radiomics` settings when that section exists.
 - `convert`:
   - NIfTI-enriched cohort table (`nifti_index.csv` by default)
   - conversion failures (`conv_errors.csv` by default)
+- `register-population`:
+  - registered cohort table (`<input>_registered_population.csv` by default)
+  - row-level registration log (`register_population_log.csv` by default)
+  - registration failures (`register_population_errors.csv` by default)
+  - template and optional registered-image artifacts under `--output_dir`
+- `register-intra-patient`:
+  - intra-patient registered cohort table (`<input>_registered_intra_patient.csv` by default)
+  - row-level registration log (`register_intra_patient_log.csv` by default)
+  - registration failures (`register_intra_patient_errors.csv` by default)
+  - per-row transform and warped-output artifacts under `--output_dir`
+- `register-tumor-consensus`:
+  - per-visit consensus cohort table (`<input>_tumor_consensus.csv` by default)
+  - tumor component summary (`tumor_consensus_components.csv` by default)
+  - longitudinal audit table (`tumor_consistency_audit.csv` by default)
+  - consensus failures (`register_tumor_consensus_errors.csv` by default)
+  - consensus masks and metadata under `--output_dir`
 - `segment`, `phase`, `radiomics`:
   - enriched cohort table + command-specific error CSV
 
@@ -238,10 +330,10 @@ You can pass either a manifest name (`generic`, `operandi`) or a custom manifest
 For radiomics, manifest key `radiomics` can directly contain a PyRadiomics-style
 settings object (same structure as `Params.yaml` content).
 
-## Performance and reliability notes
+## Performance and reliability notes 🛡️
 
-- Parallel execution controls are available for heavy stages (`parse`, `convert`, `segment`).
-- Long-running stages (`parse`, `convert`, `segment`, `phase`, `radiomics`) use a unified checkpoint interface:
+- Parallel execution controls are available for heavy stages (`parse`, `convert`, `register-population`, `register-intra-patient`, `segment`).
+- Long-running stages (`parse`, `convert`, `register-population`, `register-intra-patient`, `segment`, `phase`, `radiomics`) use a unified checkpoint interface:
   `--checkpoint_every_rows`, `--checkpoint_every_sec`, `--no_resume`, `--strict_resume`.
 - Resume is enabled by default; pass `--no_resume` to disable it.
 - `parse` reads tags from defaults (`DEFAULT_DICOM_TAGS`) plus `--tags`; use `--snapshot_tags` for full recursive tag snapshots on sampled data.
@@ -313,4 +405,3 @@ Inspect results with dashboards:
 - explore images & segmentations with the interactive viewer
 - inspect DICOM tags
 - basic radiomics statistics
-
