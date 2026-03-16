@@ -23,6 +23,7 @@ from imperandi.process.registration.normalization import (
 )
 from imperandi.process.registration.transforms import (
     TransformArtifact,
+    load_rigid_transform_from_metadata,
     save_transform_artifacts,
 )
 
@@ -39,6 +40,7 @@ __all__ = [
     "build_intra_patient_tasks",
     "build_longitudinal_audit",
     "build_visit_consensus",
+    "load_rigid_transform_from_metadata",
     "normalize_image_and_masks",
     "parse_spacing_csv_value",
     "save_transform_artifacts",

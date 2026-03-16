@@ -979,7 +979,7 @@ def _row_log_columns() -> list[str]:
         "population_normalization_metadata_path",
         "population_register_status",
         "population_register_error_message",
-        *reg_common.POPULATION_MATRIX_COLUMNS,
+        *reg_common.POPULATION_TRANSFORM_COLUMNS,
     ]
 
 
@@ -1113,7 +1113,7 @@ def _register_population_row(
         row_dir = reg_common.build_row_output_dir(args.output_dir, source_idx)
         updates = {
             **base_updates,
-            **reg_common.transform_to_flat_3x4(rigid_tx),
+            **reg_common.transform_to_flat_quaternion_translation(rigid_tx),
             "population_register_dice_before": dice_before,
             "population_register_dice_after": dice_after,
             "population_register_status": "ok",
@@ -1313,6 +1313,49 @@ def _build_log_df(df: pd.DataFrame) -> pd.DataFrame:
     return df[columns].copy()
 
 
+def _migrate_legacy_population_pose_columns(
+    df: pd.DataFrame,
+    *,
+    sitk_module,
+) -> pd.DataFrame:
+    legacy_rotation_columns = [
+        column
+        for column in reg_common.POPULATION_ROTATION_MATRIX_COLUMNS
+        if column in df.columns
+    ]
+    if not legacy_rotation_columns:
+        return df
+
+    for column in reg_common.POPULATION_TRANSFORM_COLUMNS:
+        if column not in df.columns:
+            df[column] = np.nan
+
+    rows_to_convert = []
+    for idx in df.index.tolist():
+        row = df.loc[idx]
+        has_new_pose = any(
+            not pd.isna(row.get(column))
+            for column in reg_common.POPULATION_TRANSFORM_COLUMNS
+        )
+        has_legacy_pose = all(
+            not pd.isna(row.get(column))
+            for column in reg_common.POPULATION_MATRIX_COLUMNS
+        )
+        if not has_new_pose and has_legacy_pose:
+            rows_to_convert.append(idx)
+
+    for idx in rows_to_convert:
+        transform = reg_common.rigid_transform_from_population_pose(
+            df.loc[idx].to_dict(),
+            sitk_module=sitk_module,
+        )
+        flat_pose = reg_common.transform_to_flat_quaternion_translation(transform)
+        for key, value in flat_pose.items():
+            df.at[idx, key] = value
+
+    return df.drop(columns=legacy_rotation_columns, errors="ignore")
+
+
 def _template_state_payload(
     template_info: dict[str, Any],
     *,
@@ -1403,6 +1446,7 @@ def main(args: argparse.Namespace) -> None:
         raise KeyError("column 'nifti_path' missing")
     if args.mask_column not in df.columns:
         raise KeyError(f"column '{args.mask_column}' missing")
+    df = _migrate_legacy_population_pose_columns(df, sitk_module=sitk_module)
     logger.info(
         "Loaded population table with %d rows (mask_column=%s).",
         len(df),

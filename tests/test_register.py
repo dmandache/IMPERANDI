@@ -15,6 +15,10 @@ import pytest
 from imperandi.process import _registration_common as reg_common
 from imperandi.process import register_intra_patient as intra_module
 from imperandi.process import register_population as population_module
+from imperandi.process.registration import (
+    load_rigid_transform_from_metadata,
+    save_transform_artifacts,
+)
 
 
 def test_normalize_register_population_args_defaults(tmp_path):
@@ -219,6 +223,185 @@ def test_principal_frame_transform_aligns_permuted_axes():
 
     np.testing.assert_allclose(np.asarray(tx.matrix, dtype=float).reshape(3, 3), np.eye(3))
     np.testing.assert_allclose(np.asarray(tx.translation, dtype=float), np.zeros(3))
+
+
+def test_rigid_pose_quaternion_roundtrip():
+    class FakeTransform:
+        def __init__(self, matrix, translation):
+            self.matrix = np.asarray(matrix, dtype=float).reshape(3, 3)
+            self.translation = np.asarray(translation, dtype=float).reshape(3)
+
+        def TransformPoint(self, point):
+            return tuple(self.matrix @ np.asarray(point, dtype=float) + self.translation)
+
+    class FakeAffine:
+        def __init__(self):
+            self.matrix = None
+            self.translation = None
+
+        def SetMatrix(self, matrix):
+            self.matrix = list(matrix)
+
+        def SetTranslation(self, translation):
+            self.translation = list(translation)
+
+    class FakeSitk:
+        def AffineTransform(self, dim):
+            assert dim == 3
+            return FakeAffine()
+
+    rotation = np.asarray(
+        [
+            [0.0, -1.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=float,
+    )
+    translation = np.asarray([12.5, -3.0, 4.25], dtype=float)
+    flat_pose = reg_common.transform_to_flat_quaternion_translation(
+        FakeTransform(rotation, translation)
+    )
+
+    assert flat_pose["population_tx_qx"] == pytest.approx(0.0)
+    assert flat_pose["population_tx_qy"] == pytest.approx(0.0)
+    assert flat_pose["population_tx_qz"] == pytest.approx(np.sqrt(0.5))
+    assert flat_pose["population_tx_qw"] == pytest.approx(np.sqrt(0.5))
+    assert flat_pose["population_tx_t0"] == pytest.approx(12.5)
+    assert flat_pose["population_tx_t1"] == pytest.approx(-3.0)
+    assert flat_pose["population_tx_t2"] == pytest.approx(4.25)
+
+    loaded = reg_common.rigid_transform_from_population_pose(
+        flat_pose,
+        sitk_module=FakeSitk(),
+    )
+
+    np.testing.assert_allclose(
+        np.asarray(loaded.matrix, dtype=float).reshape(3, 3),
+        rotation,
+    )
+    np.testing.assert_allclose(np.asarray(loaded.translation, dtype=float), translation)
+
+
+def test_save_transform_artifacts_persists_rigid_pose_as_quaternion(tmp_path):
+    class FakeTransform:
+        def __init__(self, matrix, translation):
+            self.matrix = np.asarray(matrix, dtype=float).reshape(3, 3)
+            self.translation = np.asarray(translation, dtype=float).reshape(3)
+
+        def TransformPoint(self, point):
+            return tuple(self.matrix @ np.asarray(point, dtype=float) + self.translation)
+
+    class FakeAffine:
+        def __init__(self):
+            self.matrix = None
+            self.translation = None
+
+        def SetMatrix(self, matrix):
+            self.matrix = list(matrix)
+
+        def SetTranslation(self, translation):
+            self.translation = list(translation)
+
+    class FakeSitk:
+        @staticmethod
+        def WriteTransform(_transform, path):
+            Path(path).write_text("tfm", encoding="utf-8")
+
+        def AffineTransform(self, dim):
+            assert dim == 3
+            return FakeAffine()
+
+    rotation = np.asarray(
+        [
+            [1.0, 0.0, 0.0],
+            [0.0, 0.0, -1.0],
+            [0.0, 1.0, 0.0],
+        ],
+        dtype=float,
+    )
+    translation = np.asarray([1.0, 2.0, 3.0], dtype=float)
+    artifact = save_transform_artifacts(
+        row_dir=tmp_path,
+        transform=FakeTransform(rotation, translation),
+        sitk_module=FakeSitk(),
+        prefix="rigid_pose",
+        metadata={"stage": "rigid"},
+    )
+
+    payload = json.loads(Path(artifact.metadata_path).read_text(encoding="utf-8"))
+    assert "rigid_pose" in payload
+    assert "matrix_3x4" not in payload
+    assert payload["rigid_pose"]["translation_xyz"] == [1.0, 2.0, 3.0]
+
+    loaded = load_rigid_transform_from_metadata(
+        artifact.metadata_path,
+        sitk_module=FakeSitk(),
+    )
+
+    np.testing.assert_allclose(
+        np.asarray(loaded.matrix, dtype=float).reshape(3, 3),
+        rotation,
+    )
+    np.testing.assert_allclose(np.asarray(loaded.translation, dtype=float), translation)
+
+
+def test_migrate_legacy_population_pose_columns_converts_rotation_matrix():
+    class FakeAffine:
+        def __init__(self):
+            self.matrix = None
+            self.translation = None
+
+        def SetMatrix(self, matrix):
+            self.matrix = list(matrix)
+
+        def SetTranslation(self, translation):
+            self.translation = list(translation)
+
+        def TransformPoint(self, point):
+            matrix = np.asarray(self.matrix, dtype=float).reshape(3, 3)
+            translation = np.asarray(self.translation, dtype=float)
+            return tuple(matrix @ np.asarray(point, dtype=float) + translation)
+
+    class FakeSitk:
+        def AffineTransform(self, dim):
+            assert dim == 3
+            return FakeAffine()
+
+    df = pd.DataFrame(
+        [
+            {
+                "nifti_path": "scan.nii.gz",
+                "mask_liver": "mask.nii.gz",
+                "population_tx_r00": 0.0,
+                "population_tx_r01": -1.0,
+                "population_tx_r02": 0.0,
+                "population_tx_r10": 1.0,
+                "population_tx_r11": 0.0,
+                "population_tx_r12": 0.0,
+                "population_tx_r20": 0.0,
+                "population_tx_r21": 0.0,
+                "population_tx_r22": 1.0,
+                "population_tx_t0": 7.0,
+                "population_tx_t1": 8.0,
+                "population_tx_t2": 9.0,
+            }
+        ]
+    )
+
+    out = population_module._migrate_legacy_population_pose_columns(
+        df,
+        sitk_module=FakeSitk(),
+    )
+
+    assert "population_tx_r00" not in out.columns
+    assert out.loc[0, "population_tx_qx"] == pytest.approx(0.0)
+    assert out.loc[0, "population_tx_qy"] == pytest.approx(0.0)
+    assert out.loc[0, "population_tx_qz"] == pytest.approx(np.sqrt(0.5))
+    assert out.loc[0, "population_tx_qw"] == pytest.approx(np.sqrt(0.5))
+    assert out.loc[0, "population_tx_t0"] == pytest.approx(7.0)
+    assert out.loc[0, "population_tx_t1"] == pytest.approx(8.0)
+    assert out.loc[0, "population_tx_t2"] == pytest.approx(9.0)
 
 
 def test_project_to_rotation_preserves_existing_rotation():
@@ -829,7 +1012,10 @@ def test_register_population_main_keeps_paths_unchanged_without_save(
                 "population_register_error_message": None,
                 "population_register_dice_before": 0.5,
                 "population_register_dice_after": 0.9,
-                **{column: float(index) for index, column in enumerate(reg_common.POPULATION_MATRIX_COLUMNS)},
+                **{
+                    column: float(index)
+                    for index, column in enumerate(reg_common.POPULATION_TRANSFORM_COLUMNS)
+                },
             },
             "error_message": None,
         }
@@ -862,7 +1048,7 @@ def test_register_population_main_keeps_paths_unchanged_without_save(
     out_df = pd.read_csv(args.csv_path_out)
     assert out_df.loc[0, "nifti_path"] == str(nifti_a)
     assert out_df.loc[0, "mask_liver"] == str(mask_a)
-    assert out_df.loc[0, "population_tx_r00"] == 0.0
+    assert out_df.loc[0, "population_tx_qx"] == 0.0
     assert out_df.loc[0, "population_register_status"] == "ok"
     assert out_df.loc[1, "nifti_path"] == str(nifti_b)
     assert out_df.loc[1, "population_register_status"] == "error"
@@ -935,7 +1121,7 @@ def test_register_population_main_rewrites_paths_when_save_enabled(
                 "population_register_error_message": None,
                 "population_register_dice_before": 0.5,
                 "population_register_dice_after": 0.9,
-                **{column: 1.0 for column in reg_common.POPULATION_MATRIX_COLUMNS},
+                **{column: 1.0 for column in reg_common.POPULATION_TRANSFORM_COLUMNS},
             },
             "error_message": None,
         }
@@ -1013,7 +1199,7 @@ def test_register_population_main_resume_skips_completed_rows(tmp_path, monkeypa
                 "population_register_error_message": None,
                 "population_register_dice_before": 0.5,
                 "population_register_dice_after": 0.9,
-                **{column: 1.0 for column in reg_common.POPULATION_MATRIX_COLUMNS},
+                **{column: 1.0 for column in reg_common.POPULATION_TRANSFORM_COLUMNS},
             },
             "error_message": None,
         }
@@ -1089,8 +1275,8 @@ def test_register_population_row_principal_vectors_mode(tmp_path, monkeypatch):
     monkeypatch.setattr(population_module, "_principal_frame_transform", lambda *args, **kwargs: "tx")
     monkeypatch.setattr(
         population_module.reg_common,
-        "transform_to_flat_3x4",
-        lambda tx: {column: 0.0 for column in reg_common.POPULATION_MATRIX_COLUMNS},
+        "transform_to_flat_quaternion_translation",
+        lambda tx: {column: 0.0 for column in reg_common.POPULATION_TRANSFORM_COLUMNS},
     )
 
     args = argparse.Namespace(
@@ -1211,8 +1397,8 @@ def test_register_population_row_debug_logging_keeps_success_and_normalization(
     )
     monkeypatch.setattr(
         population_module.reg_common,
-        "transform_to_flat_3x4",
-        lambda tx: {column: 0.0 for column in reg_common.POPULATION_MATRIX_COLUMNS},
+        "transform_to_flat_quaternion_translation",
+        lambda tx: {column: 0.0 for column in reg_common.POPULATION_TRANSFORM_COLUMNS},
     )
 
     def fake_warp_row_files(row, *, row_dir, path_columns, **kwargs):
@@ -1340,7 +1526,7 @@ def test_register_population_main_debug_logging_omits_plumbing(
                 "population_register_dice_before": 0.5,
                 "population_register_dice_after": 0.9,
                 **{
-                    column: 1.0 for column in reg_common.POPULATION_MATRIX_COLUMNS
+                    column: 1.0 for column in reg_common.POPULATION_TRANSFORM_COLUMNS
                 },
             },
             "error_message": None,

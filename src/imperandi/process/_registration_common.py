@@ -33,6 +33,22 @@ POPULATION_MATRIX_COLUMNS = [
     "population_tx_t1",
     "population_tx_t2",
 ]
+POPULATION_ROTATION_MATRIX_COLUMNS = POPULATION_MATRIX_COLUMNS[:9]
+POPULATION_QUATERNION_COLUMNS = [
+    "population_tx_qx",
+    "population_tx_qy",
+    "population_tx_qz",
+    "population_tx_qw",
+]
+POPULATION_TRANSLATION_COLUMNS = [
+    "population_tx_t0",
+    "population_tx_t1",
+    "population_tx_t2",
+]
+POPULATION_TRANSFORM_COLUMNS = [
+    *POPULATION_QUATERNION_COLUMNS,
+    *POPULATION_TRANSLATION_COLUMNS,
+]
 
 PHASE_ALIASES = {
     "portal": "portal",
@@ -506,14 +522,7 @@ def bspline_register_mask_pair(
 
 
 def transform_to_flat_3x4(transform) -> dict[str, float]:
-    origin = np.asarray(transform.TransformPoint((0.0, 0.0, 0.0)), dtype=float)
-    basis_points = [
-        np.asarray(transform.TransformPoint((1.0, 0.0, 0.0)), dtype=float),
-        np.asarray(transform.TransformPoint((0.0, 1.0, 0.0)), dtype=float),
-        np.asarray(transform.TransformPoint((0.0, 0.0, 1.0)), dtype=float),
-    ]
-    columns = [point - origin for point in basis_points]
-    matrix = np.column_stack(columns)
+    matrix, origin = transform_to_matrix_translation(transform)
     flat_values = {
         "population_tx_r00": float(matrix[0, 0]),
         "population_tx_r01": float(matrix[0, 1]),
@@ -529,6 +538,129 @@ def transform_to_flat_3x4(transform) -> dict[str, float]:
         "population_tx_t2": float(origin[2]),
     }
     return flat_values
+
+
+def transform_to_matrix_translation(transform) -> tuple[np.ndarray, np.ndarray]:
+    origin = np.asarray(transform.TransformPoint((0.0, 0.0, 0.0)), dtype=float)
+    basis_points = [
+        np.asarray(transform.TransformPoint((1.0, 0.0, 0.0)), dtype=float),
+        np.asarray(transform.TransformPoint((0.0, 1.0, 0.0)), dtype=float),
+        np.asarray(transform.TransformPoint((0.0, 0.0, 1.0)), dtype=float),
+    ]
+    columns = [point - origin for point in basis_points]
+    matrix = np.column_stack(columns)
+    return matrix, origin
+
+
+def _rotation_matrix_to_quaternion_xyzw(matrix: np.ndarray) -> np.ndarray:
+    matrix = np.asarray(matrix, dtype=float).reshape(3, 3)
+    trace = float(np.trace(matrix))
+    if trace > 0.0:
+        scale = 2.0 * math.sqrt(trace + 1.0)
+        qw = 0.25 * scale
+        qx = (matrix[2, 1] - matrix[1, 2]) / scale
+        qy = (matrix[0, 2] - matrix[2, 0]) / scale
+        qz = (matrix[1, 0] - matrix[0, 1]) / scale
+    elif matrix[0, 0] > matrix[1, 1] and matrix[0, 0] > matrix[2, 2]:
+        scale = 2.0 * math.sqrt(1.0 + matrix[0, 0] - matrix[1, 1] - matrix[2, 2])
+        qw = (matrix[2, 1] - matrix[1, 2]) / scale
+        qx = 0.25 * scale
+        qy = (matrix[0, 1] + matrix[1, 0]) / scale
+        qz = (matrix[0, 2] + matrix[2, 0]) / scale
+    elif matrix[1, 1] > matrix[2, 2]:
+        scale = 2.0 * math.sqrt(1.0 + matrix[1, 1] - matrix[0, 0] - matrix[2, 2])
+        qw = (matrix[0, 2] - matrix[2, 0]) / scale
+        qx = (matrix[0, 1] + matrix[1, 0]) / scale
+        qy = 0.25 * scale
+        qz = (matrix[1, 2] + matrix[2, 1]) / scale
+    else:
+        scale = 2.0 * math.sqrt(1.0 + matrix[2, 2] - matrix[0, 0] - matrix[1, 1])
+        qw = (matrix[1, 0] - matrix[0, 1]) / scale
+        qx = (matrix[0, 2] + matrix[2, 0]) / scale
+        qy = (matrix[1, 2] + matrix[2, 1]) / scale
+        qz = 0.25 * scale
+    quaternion = np.asarray([qx, qy, qz, qw], dtype=float)
+    norm = float(np.linalg.norm(quaternion))
+    if norm <= 0.0:
+        raise ValueError("rotation matrix produced a zero-length quaternion")
+    quaternion /= norm
+    return quaternion
+
+
+def quaternion_xyzw_to_rotation_matrix(quaternion_xyzw: Iterable[float]) -> np.ndarray:
+    quaternion = np.asarray(list(quaternion_xyzw), dtype=float).reshape(4)
+    norm = float(np.linalg.norm(quaternion))
+    if norm <= 0.0:
+        raise ValueError("quaternion must have non-zero norm")
+    x, y, z, w = quaternion / norm
+    xx, yy, zz = x * x, y * y, z * z
+    xy, xz, yz = x * y, x * z, y * z
+    wx, wy, wz = w * x, w * y, w * z
+    return np.asarray(
+        [
+            [1.0 - 2.0 * (yy + zz), 2.0 * (xy - wz), 2.0 * (xz + wy)],
+            [2.0 * (xy + wz), 1.0 - 2.0 * (xx + zz), 2.0 * (yz - wx)],
+            [2.0 * (xz - wy), 2.0 * (yz + wx), 1.0 - 2.0 * (xx + yy)],
+        ],
+        dtype=float,
+    )
+
+
+def transform_to_flat_quaternion_translation(transform) -> dict[str, float]:
+    matrix, translation = transform_to_matrix_translation(transform)
+    identity = np.eye(3, dtype=float)
+    gram = matrix.T @ matrix
+    determinant = float(np.linalg.det(matrix))
+    if not np.allclose(gram, identity, atol=1e-4, rtol=0.0):
+        raise ValueError("transform linear part is not a rigid rotation")
+    if not np.isclose(determinant, 1.0, atol=1e-4, rtol=0.0):
+        raise ValueError("transform linear part is not a proper rotation")
+    quaternion = _rotation_matrix_to_quaternion_xyzw(matrix)
+    return {
+        "population_tx_qx": float(quaternion[0]),
+        "population_tx_qy": float(quaternion[1]),
+        "population_tx_qz": float(quaternion[2]),
+        "population_tx_qw": float(quaternion[3]),
+        "population_tx_t0": float(translation[0]),
+        "population_tx_t1": float(translation[1]),
+        "population_tx_t2": float(translation[2]),
+    }
+
+
+def rigid_transform_from_population_pose(values: Mapping[str, Any], *, sitk_module):
+    if all(not pd.isna(values.get(column)) for column in POPULATION_TRANSFORM_COLUMNS):
+        rotation = quaternion_xyzw_to_rotation_matrix(
+            [values[column] for column in POPULATION_QUATERNION_COLUMNS]
+        )
+        translation = [float(values[column]) for column in POPULATION_TRANSLATION_COLUMNS]
+    elif all(not pd.isna(values.get(column)) for column in POPULATION_MATRIX_COLUMNS):
+        rotation = np.asarray(
+            [
+                [
+                    values["population_tx_r00"],
+                    values["population_tx_r01"],
+                    values["population_tx_r02"],
+                ],
+                [
+                    values["population_tx_r10"],
+                    values["population_tx_r11"],
+                    values["population_tx_r12"],
+                ],
+                [
+                    values["population_tx_r20"],
+                    values["population_tx_r21"],
+                    values["population_tx_r22"],
+                ],
+            ],
+            dtype=float,
+        )
+        translation = [float(values[column]) for column in POPULATION_TRANSLATION_COLUMNS]
+    else:
+        raise ValueError("population pose is missing quaternion or legacy matrix fields")
+    transform = sitk_module.AffineTransform(3)
+    transform.SetMatrix(np.asarray(rotation, dtype=float).reshape(-1).tolist())
+    transform.SetTranslation(list(translation))
+    return transform
 
 
 def choose_median_exemplar(metric_rows: list[dict[str, Any]]) -> dict[str, Any]:
