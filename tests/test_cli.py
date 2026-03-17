@@ -325,6 +325,34 @@ def test_cli_radiomics_accepts_repeatable_filter_flags(tmp_path, capsys):
     assert "'followup_months': ['0', '3']" in filters_line
 
 
+def test_cli_register_population_accepts_repeatable_filter_flags(tmp_path, capsys):
+    csv_in = tmp_path / "nifti_index.csv"
+    csv_in.write_text("nifti_path,mask_liver,phase\n")
+
+    exit_code = cli.main(
+        [
+            "register-population",
+            "--csv_path",
+            str(csv_in),
+            "--output_dir",
+            str(tmp_path / "registered"),
+            "--filter",
+            "phase=portal,arteriel",
+            "--filter",
+            "followup_months=0,3",
+            "--dry-run",
+        ]
+    )
+
+    output = capsys.readouterr().out.replace("\\\\", "\\")
+    filters_line = next(
+        line for line in output.splitlines() if line.strip().startswith("filters")
+    )
+    assert exit_code == 0
+    assert "'phase': ['portal', 'arteriel']" in filters_line
+    assert "'followup_months': ['0', '3']" in filters_line
+
+
 def test_cli_register_population_accepts_optional_csv_path_only(tmp_path):
     csv_in = tmp_path / "nifti_index.csv"
     csv_in.write_text("nifti_path,mask_liver\n")
@@ -457,6 +485,34 @@ def test_cli_register_population_accepts_principal_vectors_mode(tmp_path, capsys
     assert exit_code == 0
     assert mode_line.strip().endswith("principal_vectors")
     assert "[[1.0, 0.0, 0.0]," in vectors_line
+
+
+def test_cli_register_intra_patient_accepts_repeatable_filter_flags(tmp_path, capsys):
+    csv_in = tmp_path / "nifti_index.csv"
+    csv_in.write_text("patient_key,nifti_path,mask_liver,phase\n")
+
+    exit_code = cli.main(
+        [
+            "register-intra-patient",
+            "--csv_path",
+            str(csv_in),
+            "--output_dir",
+            str(tmp_path / "registered"),
+            "--filter",
+            "phase=portal,arteriel",
+            "--filter",
+            "followup_months=0,3",
+            "--dry-run",
+        ]
+    )
+
+    output = capsys.readouterr().out.replace("\\\\", "\\")
+    filters_line = next(
+        line for line in output.splitlines() if line.strip().startswith("filters")
+    )
+    assert exit_code == 0
+    assert "'phase': ['portal', 'arteriel']" in filters_line
+    assert "'followup_months': ['0', '3']" in filters_line
 
 
 def test_cli_register_intra_patient_accepts_optional_csv_path_only(tmp_path):

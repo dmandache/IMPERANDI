@@ -21,6 +21,11 @@ from imperandi.process.registration import (
 )
 from imperandi.utils.checkpoint_cli import add_checkpoint_arguments
 from imperandi.utils.misc import print_args
+from imperandi.utils.row_filters import (
+    apply_row_filters,
+    normalize_cli_filters,
+    resolve_row_filters,
+)
 from imperandi.utils.run_state import (
     CheckpointManager,
     atomic_write_csv,
@@ -94,6 +99,28 @@ def add_register_population_arguments(
         type=str,
         default=None,
         help="Path to save row-level registration logs (default: <csv_dir>/register_population_log.csv).",
+    )
+    parser.add_argument(
+        "--skip_filter",
+        action="store_true",
+        default=False,
+        help="Skip explicit row filters from CLI and manifest and process all rows.",
+    )
+    parser.add_argument(
+        "--filter",
+        dest="filter_args",
+        action="append",
+        default=None,
+        help=(
+            "Filter rows by column values using column=value1,value2 syntax. "
+            "Repeat to combine filters across columns."
+        ),
+    )
+    parser.add_argument(
+        "--manifest",
+        type=str,
+        default=None,
+        help="Dataset manifest name or path to manifest JSON.",
     )
     parser.add_argument(
         "--organ",
@@ -345,8 +372,14 @@ def normalize_register_population_args(args: argparse.Namespace) -> argparse.Nam
     else:
         args.log_csv_path = str(csv_path.parent / "register_population_log.csv")
 
+    args.filters = normalize_cli_filters(getattr(args, "filter_args", None))
+    if getattr(args, "manifest", None) is not None:
+        args.manifest = str(args.manifest)
+
     del args.csv_path_pos
     del args.csv_path_opt
+    if hasattr(args, "filter_args"):
+        del args.filter_args
     if hasattr(args, "csv_path_out_pos"):
         del args.csv_path_out_pos
     return args
@@ -358,6 +391,27 @@ def parse_arguments() -> argparse.Namespace:
     args = normalize_register_population_args(args)
     logger.info("Running %s with args: %s", Path(__file__).name, args)
     return args
+
+
+def _resolve_registration_filters(args: argparse.Namespace) -> dict[str, list[Any]]:
+    return resolve_row_filters(
+        args,
+        stage_key="registration",
+        stage_label="Population registration",
+        logger=logger,
+    )
+
+
+def _apply_explicit_filters(
+    df: pd.DataFrame,
+    filters: dict[str, list[Any]],
+) -> pd.DataFrame:
+    return apply_row_filters(
+        df,
+        filters,
+        stage_label="Population registration",
+        logger=logger,
+    )
 
 
 def _template_paths(args: argparse.Namespace) -> dict[str, Path]:
@@ -1446,6 +1500,8 @@ def main(args: argparse.Namespace) -> None:
         raise KeyError("column 'nifti_path' missing")
     if args.mask_column not in df.columns:
         raise KeyError(f"column '{args.mask_column}' missing")
+    effective_filters = _resolve_registration_filters(args)
+    df = _apply_explicit_filters(df, effective_filters)
     df = _migrate_legacy_population_pose_columns(df, sitk_module=sitk_module)
     logger.info(
         "Loaded population table with %d rows (mask_column=%s).",
@@ -1455,6 +1511,7 @@ def main(args: argparse.Namespace) -> None:
 
     source_df = pd.read_csv(args.csv_path).copy()
     source_df["_source_idx"] = source_df.index.astype(int)
+    source_df = _apply_explicit_filters(source_df, effective_filters)
     template_info = _build_population_template(
         source_df,
         args=args,

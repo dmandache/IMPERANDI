@@ -63,6 +63,87 @@ def test_normalize_register_population_args_defaults(tmp_path):
     assert out.principal_vectors is None
 
 
+def test_normalize_register_population_args_parses_filters(tmp_path):
+    csv_path = tmp_path / "nifti_index.csv"
+    csv_path.write_text("nifti_path,mask_liver\n")
+
+    args = argparse.Namespace(
+        csv_path_pos=str(csv_path),
+        csv_path_opt=None,
+        csv_path_out_pos=None,
+        csv_path_out=None,
+        output_dir=str(tmp_path / "registered"),
+        error_csv_path=None,
+        log_csv_path=None,
+        skip_filter=False,
+        filter_args=["phase=portal,arteriel", "followup_months=0,3"],
+        manifest=None,
+        organ="liver",
+        mask_column=None,
+        template_sample_size=8,
+        template_mode="mean_shape",
+        template_source_idx=None,
+        principal_vectors=None,
+        template_seed=0,
+        num_workers=2,
+        pad_mm=25.0,
+        save_registered_outputs=False,
+        verbose=False,
+        dry_run=False,
+    )
+
+    out = population_module.normalize_register_population_args(args)
+
+    assert out.filters == {
+        "phase": ["portal", "arteriel"],
+        "followup_months": ["0", "3"],
+    }
+    assert not hasattr(out, "filter_args")
+
+
+@pytest.mark.parametrize(
+    "raw_filter, expected_message",
+    [
+        ("phase", "exactly one '='"),
+        (" =portal", "column name is empty"),
+        ("phase=,", "at least one value is required"),
+    ],
+)
+def test_normalize_register_population_args_rejects_invalid_filters(
+    tmp_path, raw_filter, expected_message
+):
+    csv_path = tmp_path / "nifti_index.csv"
+    csv_path.write_text("nifti_path,mask_liver\n")
+
+    args = argparse.Namespace(
+        csv_path_pos=str(csv_path),
+        csv_path_opt=None,
+        csv_path_out_pos=None,
+        csv_path_out=None,
+        output_dir=str(tmp_path / "registered"),
+        error_csv_path=None,
+        log_csv_path=None,
+        skip_filter=False,
+        filter_args=[raw_filter],
+        manifest=None,
+        organ="liver",
+        mask_column=None,
+        template_sample_size=8,
+        template_mode="mean_shape",
+        template_source_idx=None,
+        principal_vectors=None,
+        template_seed=0,
+        num_workers=2,
+        pad_mm=25.0,
+        save_registered_outputs=False,
+        verbose=False,
+        dry_run=False,
+    )
+
+    with pytest.raises(ValueError, match=expected_message):
+        population_module.normalize_register_population_args(args)
+
+
 def test_normalize_register_population_args_parses_principal_vectors(tmp_path):
     csv_path = tmp_path / "nifti_index.csv"
     csv_path.write_text("nifti_path,mask_liver\n")
@@ -548,6 +629,41 @@ def test_normalize_register_intra_patient_args_defaults(tmp_path):
     assert out.disable_elastic is False
 
 
+def test_normalize_register_intra_patient_args_parses_filters(tmp_path):
+    csv_path = tmp_path / "nifti_index.csv"
+    csv_path.write_text("patient_key,nifti_path,mask_liver\n")
+
+    args = argparse.Namespace(
+        csv_path_pos=str(csv_path),
+        csv_path_opt=None,
+        csv_path_out_pos=None,
+        csv_path_out=None,
+        output_dir=str(tmp_path / "registered"),
+        error_csv_path=None,
+        log_csv_path=None,
+        skip_filter=False,
+        filter_args=["phase=portal,arteriel", "followup_months=0,3"],
+        manifest=None,
+        organ="liver",
+        mask_column=None,
+        num_workers=2,
+        pad_mm=25.0,
+        disable_elastic=False,
+        band_mm=15.0,
+        bspline_ctrl_spacing_mm=90.0,
+        verbose=False,
+        dry_run=False,
+    )
+
+    out = intra_module.normalize_register_intra_patient_args(args)
+
+    assert out.filters == {
+        "phase": ["portal", "arteriel"],
+        "followup_months": ["0", "3"],
+    }
+    assert not hasattr(out, "filter_args")
+
+
 def test_normalize_register_intra_patient_args_preserves_disable_elastic(tmp_path):
     csv_path = tmp_path / "nifti_index.csv"
     csv_path.write_text("patient_key,nifti_path,mask_liver\n")
@@ -574,6 +690,63 @@ def test_normalize_register_intra_patient_args_preserves_disable_elastic(tmp_pat
     out = intra_module.normalize_register_intra_patient_args(args)
 
     assert out.disable_elastic is True
+
+
+def test_resolve_registration_filters_prefers_manifest_for_same_column(tmp_path):
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        '{"registration": {"filters": {"phase": ["portal"], "site": ["A"]}}}'
+    )
+    args = argparse.Namespace(
+        skip_filter=False,
+        filters={"phase": ["arteriel"], "followup_months": ["0", "3"]},
+        manifest=str(manifest_path),
+    )
+
+    filters = population_module._resolve_registration_filters(args)
+
+    assert filters == {
+        "phase": ["portal"],
+        "followup_months": ["0", "3"],
+        "site": ["A"],
+    }
+
+
+def test_resolve_registration_filters_skip_filter_bypasses_manifest_and_cli(tmp_path):
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text('{"registration": {"filters": {"phase": ["portal"]}}}')
+    args = argparse.Namespace(
+        skip_filter=True,
+        filters={"phase": ["arteriel"]},
+        manifest=str(manifest_path),
+    )
+
+    assert population_module._resolve_registration_filters(args) == {}
+    assert intra_module._resolve_registration_filters(args) == {}
+
+
+def test_apply_registration_filters_requires_existing_columns():
+    df = pd.DataFrame([{"phase": "portal"}])
+
+    with pytest.raises(ValueError, match="missing from input CSV"):
+        population_module._apply_explicit_filters(df, {"site": ["A"]})
+
+
+def test_apply_registration_filters_uses_and_semantics_and_preserves_order():
+    df = pd.DataFrame(
+        [
+            {"phase": "portal", "followup_months": 3, "row_id": "keep-1"},
+            {"phase": "arteriel", "followup_months": 0, "row_id": "drop"},
+            {"phase": "portal", "followup_months": 0, "row_id": "keep-2"},
+        ]
+    )
+
+    out = population_module._apply_explicit_filters(
+        df,
+        {"phase": ["portal"], "followup_months": [0, 3]},
+    )
+
+    assert out["row_id"].tolist() == ["keep-1", "keep-2"]
 
 
 def test_sample_valid_rows_for_template_is_deterministic(tmp_path, monkeypatch):
@@ -1641,6 +1814,127 @@ def test_register_population_row_debug_logging_keeps_success_and_normalization(
     assert any("wrote normalized outputs" in msg for msg in debug_messages)
 
 
+def test_register_population_main_applies_explicit_filters_before_template_build(
+    tmp_path, monkeypatch
+):
+    nifti_a = tmp_path / "a.nii.gz"
+    nifti_b = tmp_path / "b.nii.gz"
+    nifti_c = tmp_path / "c.nii.gz"
+    mask_a = tmp_path / "a_mask.nii.gz"
+    mask_b = tmp_path / "b_mask.nii.gz"
+    mask_c = tmp_path / "c_mask.nii.gz"
+    for path in (nifti_a, nifti_b, nifti_c, mask_a, mask_b, mask_c):
+        path.write_text("x")
+
+    csv_path = tmp_path / "nifti_index.csv"
+    pd.DataFrame(
+        [
+            {
+                "nifti_path": str(nifti_a),
+                "mask_liver": str(mask_a),
+                "phase": "portal",
+                "followup_months": 0,
+            },
+            {
+                "nifti_path": str(nifti_b),
+                "mask_liver": str(mask_b),
+                "phase": "arteriel",
+                "followup_months": 0,
+            },
+            {
+                "nifti_path": str(nifti_c),
+                "mask_liver": str(mask_c),
+                "phase": "portal",
+                "followup_months": 3,
+            },
+        ]
+    ).to_csv(csv_path, index=False)
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        '{"registration": {"filters": {"phase": ["portal"]}}}'
+    )
+
+    monkeypatch.setattr(population_module.reg_common, "_load_register_dependencies", lambda: object())
+    seen = {"template_rows": None, "processed": []}
+
+    def fake_build_population_template(df, *, args, sitk_module):
+        seen["template_rows"] = df[["phase", "followup_months"]].to_dict("records")
+        return {
+            "template_source_idx": int(df.iloc[0]["_source_idx"]),
+            "template_mode": "mean_shape",
+            "reference_image_path": str(nifti_a),
+            "mask_path": str(mask_a),
+            "sample_count": len(df),
+        }
+
+    def fake_register_population_row(row, *, template_info, args, path_columns):
+        seen["processed"].append(int(row["_source_idx"]))
+        return {
+            "source_idx": int(row["_source_idx"]),
+            "updates": {
+                "population_register_template_source_idx": template_info[
+                    "template_source_idx"
+                ],
+                "population_register_mask_column": args.mask_column,
+                "population_register_stage": "rigid",
+                "population_register_status": "ok",
+                "population_register_error_message": None,
+            },
+            "error_message": None,
+        }
+
+    monkeypatch.setattr(
+        population_module,
+        "_build_population_template",
+        fake_build_population_template,
+    )
+    monkeypatch.setattr(
+        population_module,
+        "_register_population_row",
+        fake_register_population_row,
+    )
+
+    args = argparse.Namespace(
+        csv_path=str(csv_path),
+        csv_path_out=str(tmp_path / "out.csv"),
+        output_dir=str(tmp_path / "registered"),
+        error_csv_path=str(tmp_path / "errors.csv"),
+        log_csv_path=str(tmp_path / "log.csv"),
+        organ="liver",
+        mask_column="mask_liver",
+        template_sample_size=8,
+        template_mode="mean_shape",
+        template_source_idx=None,
+        principal_vectors=None,
+        template_seed=0,
+        num_workers=1,
+        pad_mm=25.0,
+        save_registered_outputs=False,
+        normalize_registered_outputs=False,
+        normalize_crop_mode="margin",
+        normalize_margin_mm=10.0,
+        normalize_without_background=False,
+        normalize_spacing=None,
+        normalize_orientation="LPS",
+        disable_normalize_center_organ=False,
+        skip_filter=False,
+        filters={"phase": ["arteriel"], "followup_months": [0]},
+        manifest=str(manifest_path),
+        verbose=False,
+        checkpoint_every_rows=1,
+        checkpoint_every_sec=3600,
+        resume=False,
+        strict_resume=False,
+    )
+
+    population_module.main(args)
+
+    assert seen["template_rows"] == [{"phase": "portal", "followup_months": 0}]
+    assert seen["processed"] == [0]
+    out_df = pd.read_csv(args.csv_path_out)
+    assert out_df["nifti_path"].tolist() == [str(nifti_a)]
+
+
 def test_register_population_main_debug_logging_omits_plumbing(
     tmp_path, monkeypatch, caplog
 ):
@@ -1715,6 +2009,84 @@ def test_register_population_main_debug_logging_omits_plumbing(
 
     assert not any("Population path columns selected" in msg for msg in debug_messages)
     assert not any("population row payloads for execution" in msg for msg in debug_messages)
+
+
+def test_register_intra_patient_main_applies_explicit_filters(tmp_path, monkeypatch):
+    nifti_a = tmp_path / "a.nii.gz"
+    nifti_b = tmp_path / "b.nii.gz"
+    mask_a = tmp_path / "a_mask.nii.gz"
+    mask_b = tmp_path / "b_mask.nii.gz"
+    for path in (nifti_a, nifti_b, mask_a, mask_b):
+        path.write_text("x")
+
+    csv_path = tmp_path / "nifti_index.csv"
+    pd.DataFrame(
+        [
+            {
+                "patient_key": "p1",
+                "phase": "portal",
+                "nifti_path": str(nifti_a),
+                "mask_liver": str(mask_a),
+            },
+            {
+                "patient_key": "p2",
+                "phase": "arteriel",
+                "nifti_path": str(nifti_b),
+                "mask_liver": str(mask_b),
+            },
+        ]
+    ).to_csv(csv_path, index=False)
+
+    monkeypatch.setattr(intra_module.reg_common, "_load_register_dependencies", lambda: object())
+    seen_groups: list[list[str]] = []
+
+    def fake_process_group(patient_df, *, pending_source_indices, args, path_columns):
+        seen_groups.append(patient_df["phase"].tolist())
+        row = patient_df.iloc[0]
+        return [
+            {
+                "source_idx": int(row["_source_idx"]),
+                "updates": {
+                    "intra_register_anchor_source_idx": int(row["_source_idx"]),
+                    "intra_register_anchor_phase": row["phase"],
+                    "intra_register_stage": "anchor",
+                    "intra_register_status": "ok",
+                    "intra_register_error_message": None,
+                },
+                "error_message": None,
+            }
+        ]
+
+    monkeypatch.setattr(intra_module, "_process_patient_group", fake_process_group)
+
+    args = argparse.Namespace(
+        csv_path=str(csv_path),
+        csv_path_out=str(tmp_path / "out.csv"),
+        output_dir=str(tmp_path / "registered"),
+        error_csv_path=str(tmp_path / "errors.csv"),
+        log_csv_path=str(tmp_path / "log.csv"),
+        organ="liver",
+        mask_column="mask_liver",
+        num_workers=1,
+        pad_mm=25.0,
+        disable_elastic=False,
+        band_mm=15.0,
+        bspline_ctrl_spacing_mm=90.0,
+        skip_filter=False,
+        filters={"phase": ["portal"]},
+        manifest=None,
+        verbose=False,
+        checkpoint_every_rows=1,
+        checkpoint_every_sec=3600,
+        resume=False,
+        strict_resume=False,
+    )
+
+    intra_module.main(args)
+
+    assert seen_groups == [["portal"]]
+    out_df = pd.read_csv(args.csv_path_out)
+    assert out_df["phase"].tolist() == ["portal"]
 
 
 def test_register_intra_patient_main_rewrites_paths(tmp_path, monkeypatch):

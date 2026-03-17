@@ -243,11 +243,13 @@ Use this when you want inter-patient spatial comparability across a cohort.
 - Input columns: `nifti_path` and an organ mask column such as `mask_liver`.
 - Main modes (set with `--template_mode`): `single_sample`, `mean_shape`, `principal_vectors`.
 - Useful flags: `--save_registered_outputs`, `--normalize_registered_outputs`.
+- Supports optional row filtering via `--filter`, `--skip_filter`, or manifest `registration.filters`.
 
 ```bash
 imperandi register-population \
   --csv_path /path/to/output/nifti_index_segmented.csv \
   --output_dir /path/to/output/registered_population \
+  --filter phase=portal \
   --template_mode mean_shape \
   --save_registered_outputs \
   --csv_path_out /path/to/output/nifti_index_registered_population.csv
@@ -260,6 +262,7 @@ Use this when you want to align scans within the same patient across phases and/
 - Input columns: `patient_key`, `nifti_path`, and an organ mask column such as `mask_liver`.
 - Modes (set with `--intra_mode`): `auto`, `multiphasic`, `longitudinal`.
 - Useful flags: `--disable_elastic`, `--grouping_visit_column`, `--grouping_phase_column`.
+- Supports optional row filtering via `--filter`, `--skip_filter`, or manifest `registration.filters`.
 
 ```bash
 imperandi register-intra-patient \
@@ -329,6 +332,9 @@ You can pass either a manifest name (`generic`, `operandi`) or a custom manifest
 
 For radiomics, manifest key `radiomics` can directly contain a PyRadiomics-style
 settings object (same structure as `Params.yaml` content).
+
+For registration, manifest key `registration.filters` can contain row filters using
+the same `{ "column": ["value1", "value2"] }` structure as radiomics filters.
 
 ## Performance and reliability notes 🛡️
 
