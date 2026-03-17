@@ -209,7 +209,7 @@ It helps visibility and future development.
 
 ---
 
-## 🧭 Project Context, Name & Funding
+## 🧭 Project Context & Funding
 
 **IMPERANDI** is developed within the context of the **[RHU OPERANDI project](https://rhu-operandi.com)**, a large-scale French University Hospital Research (RHU) initiative focused on improving the management of digestive cancers using **medical imaging, AI, and imagomics**.
 
