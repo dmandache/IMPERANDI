@@ -175,7 +175,7 @@ IMPERANDI produces:
 ## 🛠️ Roadmap
 
 * [x] Visualization tools
-* [ ] [ ] Full documentation (docs/)
+* [ ] Full documentation (docs/)
 * [ ] Configuration system improvements
 * [ ] Dataset versioning
 * [ ] Web dashboard (optional)
@@ -219,7 +219,7 @@ The project is coordinated by AP-HP / Université Paris Cité and supported by t
 
 👉 IMPERANDI focuses on the **data engineering layer**, transforming raw clinical imaging data (DICOM) into standardized datasets usable for radiomics and machine learning.
 
-**Disclaimer:** This project is for research use only and is not a certified medical device.
+---
 
 ## ⚠️ Disclaimer
 
