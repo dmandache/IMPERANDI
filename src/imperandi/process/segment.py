@@ -284,13 +284,14 @@ def _as_str_list(value: Any) -> List[str]:
     return [str(value)]
 
 
-def infer_task_outputs(task: Dict[str, Any]) -> List[str]:
-    def _normalize_output_key(raw: str) -> str:
-        value = str(raw).strip()
-        if value.endswith(".nii.gz"):
-            value = value[: -len(".nii.gz")]
-        return value
+def _normalize_output_key(raw: str) -> str:
+    value = str(raw).strip()
+    if value.endswith(".nii.gz"):
+        value = value[: -len(".nii.gz")]
+    return value
 
+
+def infer_task_outputs(task: Dict[str, Any]) -> List[str]:
     outputs: List[str] = []
     outputs.extend(_normalize_output_key(v) for v in _as_str_list(task.get("outputs")))
     outputs.extend(_normalize_output_key(v) for v in _as_str_list(task.get("output")))
@@ -303,6 +304,27 @@ def infer_task_outputs(task: Dict[str, Any]) -> List[str]:
                     outputs.append(_normalize_output_key(roi))
     # dedupe but keep order
     return list(dict.fromkeys(outputs))
+
+
+def infer_task_fetch_outputs(task: Dict[str, Any]) -> Dict[str, str]:
+    """Map logical output keys to backend-produced filenames to fetch."""
+    outputs = infer_task_outputs(task)
+    fetch_outputs: List[str] = []
+    fetch_outputs.extend(
+        _normalize_output_key(v) for v in _as_str_list(task.get("fetch_outputs"))
+    )
+    fetch_outputs.extend(
+        _normalize_output_key(v) for v in _as_str_list(task.get("fetch_output"))
+    )
+    if not fetch_outputs:
+        return {output_name: output_name for output_name in outputs}
+    if len(fetch_outputs) != len(outputs):
+        raise ValueError(
+            "task.fetch_output(s) must match task.output(s) one-to-one. "
+            f"task={task.get('task', '<unknown>')!r}, "
+            f"outputs={outputs}, fetch_outputs={fetch_outputs}"
+        )
+    return dict(zip(outputs, fetch_outputs))
 
 
 def _output_to_column(output_name: str) -> str:
@@ -336,6 +358,15 @@ def build_output_column_map(tasks: List[Dict[str, Any]]) -> Dict[str, str]:
             if output_name not in output_to_column:
                 output_to_column[output_name] = _output_to_column(output_name)
     return output_to_column
+
+
+def build_output_fetch_map(tasks: List[Dict[str, Any]]) -> Dict[str, str]:
+    output_to_fetch: Dict[str, str] = {}
+    for task in tasks:
+        for output_name, fetch_name in infer_task_fetch_outputs(task).items():
+            if output_name not in output_to_fetch:
+                output_to_fetch[output_name] = fetch_name
+    return output_to_fetch
 
 
 def _merge_key_to_column(merge_key: str) -> str:
@@ -432,6 +463,8 @@ def prefetch_totalsegmentator_models(tasks_config: Dict[str, Any]) -> None:
         "thigh_shoulder_muscles": [857],
         "thigh_shoulder_muscles_mr": [857],
         "coronary_arteries": [507],
+        "liver_lesions": [591],
+        "liver_lesions_mr": [589],
     }
 
     task_names = {
@@ -493,6 +526,7 @@ def segment_volume(
 
     backend = backend or TotalSegmentatorBackend()
     output_to_column = build_output_column_map(tasks)
+    output_to_fetch = build_output_fetch_map(tasks)
 
     for task in tasks:
         task_name = task["task"]
@@ -502,6 +536,7 @@ def segment_volume(
                 f"Cannot infer outputs for task '{task_name}'. "
                 "Set task.output/tasks.outputs or extra.roi_subset(_robust)."
             )
+        task_fetch_outputs = infer_task_fetch_outputs(task)
         extra = task.get("extra", {})
         if not isinstance(extra, dict):
             extra = {}
@@ -513,7 +548,10 @@ def segment_volume(
         # Keep a conservative default unless users explicitly override it.
         extra.setdefault("nr_thr_saving", 2)
 
-        expected_paths = [output_dir / _output_to_filename(output_name) for output_name in task_outputs]
+        expected_paths = [
+            output_dir / _output_to_filename(task_fetch_outputs[output_name])
+            for output_name in task_outputs
+        ]
         if expected_paths and all(dst.exists() for dst in expected_paths) and not force:
             if verbose:
                 logger.info("Skip %s – files exist", task_name)
@@ -580,7 +618,7 @@ def segment_volume(
 
     merged_ok = clean_and_merge_masks(
         output_dir,
-        [_output_to_filename(name) for name in merge_files],
+        [_output_to_filename(output_to_fetch.get(name, name)) for name in merge_files],
         output_name=merged_name,
         radius_mm=float(postprocess.get("radius_mm", 5.0)),
         verbose=verbose,
@@ -908,6 +946,7 @@ def main(args: argparse.Namespace) -> None:
         raise KeyError("column 'nifti_path' missing")
     df = df.drop_duplicates("nifti_path").copy()
     output_to_column = build_output_column_map(tasks_config.get("tasks", []))
+    output_to_fetch = build_output_fetch_map(tasks_config.get("tasks", []))
     for column_name in list(dict.fromkeys(output_to_column.values())):
         if column_name not in df.columns:
             df[column_name] = None
@@ -964,7 +1003,8 @@ def main(args: argparse.Namespace) -> None:
             base = Path(out_dir)
             row_warnings: List[str] = []
             for output_name, column_name in output_to_column.items():
-                mask_path = base / _output_to_filename(output_name)
+                fetch_name = output_to_fetch.get(output_name, output_name)
+                mask_path = base / _output_to_filename(fetch_name)
                 if mask_path.exists():
                     df.at[idx, column_name] = str(mask_path)
                 else:
