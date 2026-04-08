@@ -25,6 +25,9 @@
         "task": "liver_lesions",
         "output": "liver_tumor",
         "fetch_output": "liver_lesions"
+      },
+      {
+        "task": "liver_segments"
       }
     ],
     "postprocess": {
