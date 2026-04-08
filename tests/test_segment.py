@@ -1,5 +1,6 @@
 import sys
 from pathlib import Path
+import types
 
 # Ensure src/ is on sys.path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -147,6 +148,55 @@ def test_resolve_runtime_task_strips_fast_suffix_for_execution():
     task_name, extra = segment_module._resolve_runtime_task("total_fast", {})
     assert task_name == "total"
     assert extra["fast"] is True
+
+
+def test_prefetch_totalsegmentator_models_requires_supported_liver_lesions_version(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        segment_module, "_get_totalsegmentator_version", lambda: "2.12.0"
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"task needs totalsegmentator version >= 2\.13\.0, current version==2\.12\.0",
+    ):
+        segment_module.prefetch_totalsegmentator_models(
+            {
+                "backend": "totalsegmentator",
+                "tasks": [{"task": "liver_lesions"}],
+            }
+        )
+
+
+def test_prefetch_totalsegmentator_models_downloads_liver_lesions_when_version_supported(
+    monkeypatch,
+):
+    calls = []
+
+    fake_root = types.ModuleType("totalsegmentator")
+    fake_python_api = types.ModuleType("totalsegmentator.python_api")
+
+    def fake_download_pretrained_weights(task_id):
+        calls.append(task_id)
+
+    fake_python_api.download_pretrained_weights = fake_download_pretrained_weights
+    fake_root.python_api = fake_python_api
+
+    monkeypatch.setitem(sys.modules, "totalsegmentator", fake_root)
+    monkeypatch.setitem(sys.modules, "totalsegmentator.python_api", fake_python_api)
+    monkeypatch.setattr(
+        segment_module, "_get_totalsegmentator_version", lambda: "2.13.0"
+    )
+
+    segment_module.prefetch_totalsegmentator_models(
+        {
+            "backend": "totalsegmentator",
+            "tasks": [{"task": "liver_lesions"}],
+        }
+    )
+
+    assert calls == [591]
 
 
 def test_resolve_merge_outputs_requires_merge_keys():

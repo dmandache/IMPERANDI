@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 from collections import deque
 import copy
+from importlib.metadata import PackageNotFoundError, version as distribution_version
 import logging
 import multiprocessing as mp
 import os
@@ -57,6 +58,9 @@ from imperandi.utils.run_state import (
 DEFAULT_TIMEOUT = 15 * 60  # seconds – hard wall per study inside the pool
 DEFAULT_CHECKPOINT_EVERY_ROWS = 50
 DEFAULT_CHECKPOINT_EVERY_SEC = 5 * 60  # seconds
+
+LIVER_LESIONS_MIN_TOTALSEGMENTATOR_VERSION = "2.13.0"
+LIVER_LESIONS_TASKS = frozenset({"liver_lesions", "liver_lesions_mr"})
 
 logger = logging.getLogger(__name__)
 
@@ -272,6 +276,53 @@ def _resolve_runtime_task(task_name: str, extra: Dict[str, Any]) -> Tuple[str, D
     if runtime_task != task_name:
         extra.setdefault("fast", True)
     return runtime_task, extra
+
+
+def _parse_version_tuple(raw: str) -> Tuple[int, ...]:
+    parts = tuple(int(part) for part in re.findall(r"\d+", str(raw)))
+    return parts or (0,)
+
+
+def _version_is_at_least(current_version: str, minimum_version: str) -> bool:
+    current_parts = _parse_version_tuple(current_version)
+    minimum_parts = _parse_version_tuple(minimum_version)
+    max_len = max(len(current_parts), len(minimum_parts))
+    current_parts += (0,) * (max_len - len(current_parts))
+    minimum_parts += (0,) * (max_len - len(minimum_parts))
+    return current_parts >= minimum_parts
+
+
+def _get_totalsegmentator_version() -> str:
+    for package_name in ("TotalSegmentator", "totalsegmentator"):
+        try:
+            return distribution_version(package_name)
+        except PackageNotFoundError:
+            continue
+    try:
+        import totalsegmentator
+
+        return str(getattr(totalsegmentator, "__version__", "unknown"))
+    except Exception:
+        return "unknown"
+
+
+def _raise_liver_lesions_version_error(current_version: str) -> None:
+    raise RuntimeError(
+        "task needs totalsegmentator version >= "
+        f"{LIVER_LESIONS_MIN_TOTALSEGMENTATOR_VERSION}, "
+        f"current version=={current_version}"
+    )
+
+
+def _ensure_liver_lesions_version_supported(task_names: List[str]) -> None:
+    if not any(task_name in LIVER_LESIONS_TASKS for task_name in task_names):
+        return
+
+    current_version = _get_totalsegmentator_version()
+    if not _version_is_at_least(
+        current_version, LIVER_LESIONS_MIN_TOTALSEGMENTATOR_VERSION
+    ):
+        _raise_liver_lesions_version_error(current_version)
 
 
 def _as_str_list(value: Any) -> List[str]:
@@ -506,6 +557,7 @@ def prefetch_totalsegmentator_models(tasks_config: Dict[str, Any]) -> None:
         return
 
     resolved_tasks = sorted(task_names)
+    _ensure_liver_lesions_version_supported(resolved_tasks)
 
     missing = [name for name in resolved_tasks if name not in task_to_id]
     if missing:
