@@ -26,9 +26,14 @@
         "task": "total",
         "extra": { "roi_subset_robust": ["liver"] }
       },
+      // {
+      //   "task": "liver_vessels",
+      //   "output": "liver_tumor"
+      // }
       {
-        "task": "liver_vessels",
-        "output": "liver_tumor"
+        "task": "liver_lesions",
+        "output": "liver_tumor",
+        "fetch_output": "liver_lesions"
       }
     ],
     "postprocess": {
