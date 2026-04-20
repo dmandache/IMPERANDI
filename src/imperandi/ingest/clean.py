@@ -33,9 +33,6 @@ from imperandi.datasets_config.defaults import (
     TIME_CANDIDATES,
 )
 
-DEFAULT_VOLUME_LOWERBOUND = DEFAULT_VOLUME_LENGTH_MIN_MM
-DEFAULT_VOLUME_UPPERBOUND = DEFAULT_VOLUME_LENGTH_MAX_MM
-
 COLUMNS_TO_USE = [
     "patient_key",
     "_patient_key_raw",
