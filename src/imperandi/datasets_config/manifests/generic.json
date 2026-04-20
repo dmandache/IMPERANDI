@@ -17,13 +17,17 @@
       {
         "task": "total",
         "extra": { 
-          "roi_subset": ["liver", "pancreas", "spleen"], 
+          "roi_subset": ["liver"], 
           "fastest": true 
         }
       },
       {
-        "task": "liver_vessels",
-        "output": "liver_tumor"
+        "task": "liver_lesions",
+        "output": "liver_tumor",
+        "fetch_output": "liver_lesions"
+      },
+      {
+        "task": "liver_segments"
       }
     ],
     "postprocess": {

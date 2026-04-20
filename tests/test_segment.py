@@ -1,5 +1,6 @@
 import sys
 from pathlib import Path
+import types
 
 # Ensure src/ is on sys.path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -149,6 +150,55 @@ def test_resolve_runtime_task_strips_fast_suffix_for_execution():
     assert extra["fast"] is True
 
 
+def test_prefetch_totalsegmentator_models_requires_supported_liver_lesions_version(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        segment_module, "_get_totalsegmentator_version", lambda: "2.12.0"
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"task needs totalsegmentator version >= 2\.13\.0, current version==2\.12\.0",
+    ):
+        segment_module.prefetch_totalsegmentator_models(
+            {
+                "backend": "totalsegmentator",
+                "tasks": [{"task": "liver_lesions"}],
+            }
+        )
+
+
+def test_prefetch_totalsegmentator_models_downloads_liver_lesions_when_version_supported(
+    monkeypatch,
+):
+    calls = []
+
+    fake_root = types.ModuleType("totalsegmentator")
+    fake_python_api = types.ModuleType("totalsegmentator.python_api")
+
+    def fake_download_pretrained_weights(task_id):
+        calls.append(task_id)
+
+    fake_python_api.download_pretrained_weights = fake_download_pretrained_weights
+    fake_root.python_api = fake_python_api
+
+    monkeypatch.setitem(sys.modules, "totalsegmentator", fake_root)
+    monkeypatch.setitem(sys.modules, "totalsegmentator.python_api", fake_python_api)
+    monkeypatch.setattr(
+        segment_module, "_get_totalsegmentator_version", lambda: "2.13.0"
+    )
+
+    segment_module.prefetch_totalsegmentator_models(
+        {
+            "backend": "totalsegmentator",
+            "tasks": [{"task": "liver_lesions"}],
+        }
+    )
+
+    assert calls == [591]
+
+
 def test_resolve_merge_outputs_requires_merge_keys():
     postprocess = {"merge_outputs": ["a.nii.gz"]}
     tasks = [{"key": "a", "output": "a.nii.gz"}]
@@ -170,6 +220,18 @@ def test_resolve_merge_outputs_supports_bare_and_mask_column_keys():
         "a",
         "b",
     ]
+
+
+def test_infer_task_fetch_outputs_supports_aliasing_backend_filename():
+    task = {
+        "task": "liver_lesions",
+        "output": "liver_tumor.nii.gz",
+        "fetch_output": "liver_lesion.nii.gz",
+    }
+
+    assert segment_module.infer_task_fetch_outputs(task) == {
+        "liver_tumor": "liver_lesion"
+    }
 
 
 def test_segment_volume_calls_postprocess(tmp_path, monkeypatch):
@@ -215,6 +277,87 @@ def test_segment_volume_calls_postprocess(tmp_path, monkeypatch):
 
     assert calls["output_name"] == "merged.nii.gz"
     assert set(calls["mask_files"]) == {"a.nii.gz", "b.nii.gz"}
+
+
+def test_segment_volume_infers_outputs_from_created_segmentations(tmp_path):
+    nifti = tmp_path / "vol.nii.gz"
+    nifti.write_text("nifti")
+
+    tasks_config = {
+        "backend": "totalsegmentator",
+        "tasks": [
+            {"task": "task_a", "extra": {}},
+        ],
+    }
+
+    class DynamicBackend:
+        def run(self, *, input_path, output_dir, task, **kwargs):
+            (Path(output_dir) / "inferred_mask.nii.gz").write_text("mask")
+
+    resolved = {}
+    warnings = segment_module.segment_volume(
+        nifti,
+        tmp_path,
+        tasks_config,
+        verbose=False,
+        force=True,
+        backend=DynamicBackend(),
+        resolved_output_to_fetch=resolved,
+    )
+
+    assert warnings == []
+    assert resolved == {"inferred_mask": "inferred_mask"}
+
+
+def test_segment_volume_uses_fetch_output_alias_for_expected_and_merge_paths(
+    tmp_path, monkeypatch
+):
+    nifti = tmp_path / "vol.nii.gz"
+    nifti.write_text("nifti")
+
+    tasks_config = {
+        "backend": "totalsegmentator",
+        "tasks": [
+            {"task": "total", "output": "liver.nii.gz", "extra": {}},
+            {
+                "task": "liver_lesions",
+                "output": "liver_tumor.nii.gz",
+                "fetch_output": "liver_lesion.nii.gz",
+                "extra": {},
+            },
+        ],
+        "postprocess": {
+            "merge_keys": ["liver", "liver_tumor"],
+            "output": "merged.nii.gz",
+        },
+    }
+
+    backend = DummyBackend(
+        {"total": "liver.nii.gz", "liver_lesions": "liver_lesion.nii.gz"}
+    )
+
+    calls = {}
+
+    def fake_clean(dir_path, mask_files, *, output_name, **kwargs):
+        calls["dir_path"] = dir_path
+        calls["mask_files"] = mask_files
+        calls["output_name"] = output_name
+        (Path(dir_path) / output_name).write_text("merged")
+        return True
+
+    monkeypatch.setattr(segment_module, "clean_and_merge_masks", fake_clean)
+
+    segment_module.segment_volume(
+        nifti,
+        tmp_path,
+        tasks_config,
+        verbose=False,
+        force=True,
+        backend=backend,
+    )
+
+    assert calls["output_name"] == "merged.nii.gz"
+    assert set(calls["mask_files"]) == {"liver.nii.gz", "liver_lesion.nii.gz"}
 
 
 def test_segment_volume_skips_postprocess_when_outputs_already_checkpointed(tmp_path, monkeypatch):
@@ -373,7 +516,7 @@ def test_process_single_volume_success(tmp_path):
 
     backend = DummyBackend({"task_a": "a.nii.gz"})
 
-    idx, out_dir, err, warning = segment_module.process_single_volume(
+    idx, out_dir, err, warning, outputs = segment_module.process_single_volume(
         0,
         {"nifti_path": str(nifti)},
         tasks_config,
@@ -385,6 +528,38 @@ def test_process_single_volume_success(tmp_path):
     assert err is None
     assert warning is None
     assert out_dir == str(tmp_path)
+    assert outputs == {"a": "a"}
+
+
+def test_process_single_volume_infers_outputs_when_not_declared(tmp_path):
+    nifti = tmp_path / "vol.nii.gz"
+    nifti.write_text("nifti")
+
+    tasks_config = {
+        "backend": "totalsegmentator",
+        "tasks": [
+            {"task": "task_a", "extra": {}},
+        ],
+    }
+
+    class DynamicBackend:
+        def run(self, *, input_path, output_dir, task, **kwargs):
+            (Path(output_dir) / "created_here.nii.gz").write_text("mask")
+
+    idx, out_dir, err, warning, outputs = segment_module.process_single_volume(
+        0,
+        {"nifti_path": str(nifti)},
+        tasks_config,
+        verbose=False,
+        force=True,
+        backend=DynamicBackend(),
+    )
+
+    assert idx == 0
+    assert err is None
+    assert warning is None
+    assert out_dir == str(tmp_path)
+    assert outputs == {"created_here": "created_here"}
 
 
 def test_process_single_volume_missing_output(tmp_path):
@@ -402,7 +577,7 @@ def test_process_single_volume_missing_output(tmp_path):
         def run(self, *, input_path, output_dir, task, **kwargs):
             return None
 
-    idx, out_dir, err, warning = segment_module.process_single_volume(
+    idx, out_dir, err, warning, outputs = segment_module.process_single_volume(
         0,
         {"nifti_path": str(nifti)},
         tasks_config,
@@ -414,6 +589,7 @@ def test_process_single_volume_missing_output(tmp_path):
     assert out_dir is None
     assert "Expected mask not produced" in err
     assert warning is None
+    assert outputs is None
 
 
 def test_main_writes_mask_columns(tmp_path, monkeypatch):
@@ -502,6 +678,144 @@ def test_main_writes_mask_columns(tmp_path, monkeypatch):
     assert out_df.loc[0, "mask_liver"].endswith("liver.nii.gz")
     assert out_df.loc[0, "mask_vessels"].endswith("vessels.nii.gz")
     assert out_df.loc[0, "mask_merged"].endswith("merged.nii.gz")
+
+
+def test_main_maps_fetch_output_path_into_logical_mask_column(tmp_path, monkeypatch):
+    nifti = tmp_path / "vol.nii.gz"
+    nifti.write_text("nifti")
+
+    csv_path = tmp_path / "nifti_index.csv"
+    df = pd.DataFrame([{"nifti_path": str(nifti)}])
+    df.to_csv(csv_path, index=False)
+
+    config = {
+        "backend": "totalsegmentator",
+        "tasks": [
+            {"task": "total", "output": "liver.nii.gz", "extra": {}},
+            {
+                "task": "liver_lesions",
+                "output": "liver_tumor.nii.gz",
+                "fetch_output": "liver_lesion.nii.gz",
+                "extra": {},
+            },
+        ],
+        "postprocess": {"merge_keys": ["liver", "liver_tumor"], "output": "merged.nii.gz"},
+    }
+
+    config_path = tmp_path / "tasks.json"
+    config_path.write_text(json.dumps({"segmentation": config}))
+
+    class DummyFuture:
+        def __init__(self, result):
+            self._result = result
+
+        def result(self, timeout=None):
+            return self._result
+
+        def cancel(self):
+            return None
+
+    class DummyPool:
+        def __init__(self, max_workers=None, mp_context=None):
+            self._processes = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+        def submit(self, fn, *args, **kwargs):
+            idx = args[0]
+            row = args[1]
+            out_dir = str(Path(row["nifti_path"]).parent)
+            out_path = Path(out_dir)
+            (out_path / "liver.nii.gz").write_text("mask")
+            (out_path / "liver_lesion.nii.gz").write_text("mask")
+            (out_path / "merged.nii.gz").write_text("mask")
+            return DummyFuture((idx, out_dir, None, None))
+
+        def shutdown(self, wait=False, cancel_futures=True):
+            return None
+
+    monkeypatch.setattr(segment_module, "ProcessPoolExecutor", DummyPool)
+    monkeypatch.setattr(segment_module, "tqdm", passthrough_tqdm)
+    monkeypatch.setattr(
+        segment_module, "prefetch_totalsegmentator_models", lambda *a, **k: None
+    )
+    patch_strategy(monkeypatch, mode="process_pool", max_workers=2, max_in_flight=2)
+
+    args = argparse.Namespace(
+        csv_path=str(csv_path),
+        csv_path_out=str(tmp_path / "segmented.csv"),
+        error_csv_path=str(tmp_path / "errors.csv"),
+        manifest=str(config_path),
+        num_workers=2,
+        verbose=False,
+        force=False,
+        start_method="spawn",
+        timeout_sec=10,
+    )
+
+    segment_module.main(args)
+
+    out_df = pd.read_csv(args.csv_path_out)
+    assert "mask_liver_tumor" in out_df.columns
+    assert out_df.loc[0, "mask_liver"].endswith("liver.nii.gz")
+    assert out_df.loc[0, "mask_liver_tumor"].endswith("liver_lesion.nii.gz")
+    assert out_df.loc[0, "mask_merged"].endswith("merged.nii.gz")
+
+
+def test_main_adds_mask_columns_for_runtime_inferred_outputs(tmp_path, monkeypatch):
+    nifti = tmp_path / "vol.nii.gz"
+    nifti.write_text("nifti")
+    csv_path = tmp_path / "nifti_index.csv"
+    pd.DataFrame([{"nifti_path": str(nifti)}]).to_csv(csv_path, index=False)
+
+    config_path = tmp_path / "tasks.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "backend": "totalsegmentator",
+                "tasks": [{"task": "task_a"}],
+            }
+        )
+    )
+
+    monkeypatch.setattr(
+        segment_module, "prefetch_totalsegmentator_models", lambda *a, **k: None
+    )
+    monkeypatch.setattr(segment_module, "tqdm", passthrough_tqdm)
+    patch_strategy(monkeypatch, mode="serial", max_workers=1, max_in_flight=1)
+
+    def fake_process_single_volume(
+        idx, row, tasks_config, *, verbose, force, backend=None, **kwargs
+    ):
+        out_dir = Path(row["nifti_path"]).parent
+        (out_dir / "runtime_inferred.nii.gz").write_text("mask")
+        return idx, str(out_dir), None, None, {"runtime_inferred": "runtime_inferred"}
+
+    monkeypatch.setattr(
+        segment_module, "process_single_volume", fake_process_single_volume
+    )
+
+    args = argparse.Namespace(
+        csv_path=str(csv_path),
+        csv_path_out=str(tmp_path / "segmented.csv"),
+        error_csv_path=str(tmp_path / "errors.csv"),
+        manifest=str(config_path),
+        num_workers=1,
+        verbose=False,
+        force=False,
+        start_method="spawn",
+        timeout_sec=10,
+    )
+
+    segment_module.main(args)
+
+    out_df = pd.read_csv(args.csv_path_out)
+    assert "mask_runtime_inferred" in out_df.columns
+    assert out_df.loc[0, "mask_runtime_inferred"].endswith("runtime_inferred.nii.gz")
 
 
 def test_main_records_warning_when_merged_mask_missing(tmp_path, monkeypatch):

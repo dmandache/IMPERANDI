@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 from collections import deque
 import copy
+from importlib.metadata import PackageNotFoundError, version as distribution_version
 import logging
 import multiprocessing as mp
 import os
@@ -57,6 +58,9 @@ from imperandi.utils.run_state import (
 DEFAULT_TIMEOUT = 15 * 60  # seconds – hard wall per study inside the pool
 DEFAULT_CHECKPOINT_EVERY_ROWS = 50
 DEFAULT_CHECKPOINT_EVERY_SEC = 5 * 60  # seconds
+
+LIVER_LESIONS_MIN_TOTALSEGMENTATOR_VERSION = "2.13.0"
+LIVER_LESIONS_TASKS = frozenset({"liver_lesions", "liver_lesions_mr"})
 
 logger = logging.getLogger(__name__)
 
@@ -274,6 +278,53 @@ def _resolve_runtime_task(task_name: str, extra: Dict[str, Any]) -> Tuple[str, D
     return runtime_task, extra
 
 
+def _parse_version_tuple(raw: str) -> Tuple[int, ...]:
+    parts = tuple(int(part) for part in re.findall(r"\d+", str(raw)))
+    return parts or (0,)
+
+
+def _version_is_at_least(current_version: str, minimum_version: str) -> bool:
+    current_parts = _parse_version_tuple(current_version)
+    minimum_parts = _parse_version_tuple(minimum_version)
+    max_len = max(len(current_parts), len(minimum_parts))
+    current_parts += (0,) * (max_len - len(current_parts))
+    minimum_parts += (0,) * (max_len - len(minimum_parts))
+    return current_parts >= minimum_parts
+
+
+def _get_totalsegmentator_version() -> str:
+    for package_name in ("TotalSegmentator", "totalsegmentator"):
+        try:
+            return distribution_version(package_name)
+        except PackageNotFoundError:
+            continue
+    try:
+        import totalsegmentator
+
+        return str(getattr(totalsegmentator, "__version__", "unknown"))
+    except Exception:
+        return "unknown"
+
+
+def _raise_liver_lesions_version_error(current_version: str) -> None:
+    raise RuntimeError(
+        "task needs totalsegmentator version >= "
+        f"{LIVER_LESIONS_MIN_TOTALSEGMENTATOR_VERSION}, "
+        f"current version=={current_version}"
+    )
+
+
+def _ensure_liver_lesions_version_supported(task_names: List[str]) -> None:
+    if not any(task_name in LIVER_LESIONS_TASKS for task_name in task_names):
+        return
+
+    current_version = _get_totalsegmentator_version()
+    if not _version_is_at_least(
+        current_version, LIVER_LESIONS_MIN_TOTALSEGMENTATOR_VERSION
+    ):
+        _raise_liver_lesions_version_error(current_version)
+
+
 def _as_str_list(value: Any) -> List[str]:
     if value is None:
         return []
@@ -284,13 +335,14 @@ def _as_str_list(value: Any) -> List[str]:
     return [str(value)]
 
 
-def infer_task_outputs(task: Dict[str, Any]) -> List[str]:
-    def _normalize_output_key(raw: str) -> str:
-        value = str(raw).strip()
-        if value.endswith(".nii.gz"):
-            value = value[: -len(".nii.gz")]
-        return value
+def _normalize_output_key(raw: str) -> str:
+    value = str(raw).strip()
+    if value.endswith(".nii.gz"):
+        value = value[: -len(".nii.gz")]
+    return value
 
+
+def infer_task_outputs(task: Dict[str, Any]) -> List[str]:
     outputs: List[str] = []
     outputs.extend(_normalize_output_key(v) for v in _as_str_list(task.get("outputs")))
     outputs.extend(_normalize_output_key(v) for v in _as_str_list(task.get("output")))
@@ -303,6 +355,27 @@ def infer_task_outputs(task: Dict[str, Any]) -> List[str]:
                     outputs.append(_normalize_output_key(roi))
     # dedupe but keep order
     return list(dict.fromkeys(outputs))
+
+
+def infer_task_fetch_outputs(task: Dict[str, Any]) -> Dict[str, str]:
+    """Map logical output keys to backend-produced filenames to fetch."""
+    outputs = infer_task_outputs(task)
+    fetch_outputs: List[str] = []
+    fetch_outputs.extend(
+        _normalize_output_key(v) for v in _as_str_list(task.get("fetch_outputs"))
+    )
+    fetch_outputs.extend(
+        _normalize_output_key(v) for v in _as_str_list(task.get("fetch_output"))
+    )
+    if not fetch_outputs:
+        return {output_name: output_name for output_name in outputs}
+    if len(fetch_outputs) != len(outputs):
+        raise ValueError(
+            "task.fetch_output(s) must match task.output(s) one-to-one. "
+            f"task={task.get('task', '<unknown>')!r}, "
+            f"outputs={outputs}, fetch_outputs={fetch_outputs}"
+        )
+    return dict(zip(outputs, fetch_outputs))
 
 
 def _output_to_column(output_name: str) -> str:
@@ -336,6 +409,44 @@ def build_output_column_map(tasks: List[Dict[str, Any]]) -> Dict[str, str]:
             if output_name not in output_to_column:
                 output_to_column[output_name] = _output_to_column(output_name)
     return output_to_column
+
+
+def build_output_fetch_map(tasks: List[Dict[str, Any]]) -> Dict[str, str]:
+    output_to_fetch: Dict[str, str] = {}
+    for task in tasks:
+        for output_name, fetch_name in infer_task_fetch_outputs(task).items():
+            if output_name not in output_to_fetch:
+                output_to_fetch[output_name] = fetch_name
+    return output_to_fetch
+
+
+def _snapshot_nifti_files(dir_path: Path) -> Dict[str, Tuple[int, int]]:
+    snapshot: Dict[str, Tuple[int, int]] = {}
+    for path in sorted(dir_path.glob("*.nii.gz")):
+        if not path.is_file():
+            continue
+        stat = path.stat()
+        snapshot[path.name] = (stat.st_mtime_ns, stat.st_size)
+    return snapshot
+
+
+def _infer_outputs_from_snapshot(
+    before: Dict[str, Tuple[int, int]],
+    dir_path: Path,
+    *,
+    exclude_names: set[str] | None = None,
+) -> List[str]:
+    exclude_names = exclude_names or set()
+    inferred: List[str] = []
+    for path in sorted(dir_path.glob("*.nii.gz")):
+        if not path.is_file() or path.name in exclude_names:
+            continue
+        stat = path.stat()
+        signature = (stat.st_mtime_ns, stat.st_size)
+        if before.get(path.name) == signature:
+            continue
+        inferred.append(_normalize_output_key(path.name))
+    return inferred
 
 
 def _merge_key_to_column(merge_key: str) -> str:
@@ -432,6 +543,8 @@ def prefetch_totalsegmentator_models(tasks_config: Dict[str, Any]) -> None:
         "thigh_shoulder_muscles": [857],
         "thigh_shoulder_muscles_mr": [857],
         "coronary_arteries": [507],
+        "liver_lesions": [591],
+        "liver_lesions_mr": [589],
     }
 
     task_names = {
@@ -444,6 +557,7 @@ def prefetch_totalsegmentator_models(tasks_config: Dict[str, Any]) -> None:
         return
 
     resolved_tasks = sorted(task_names)
+    _ensure_liver_lesions_version_supported(resolved_tasks)
 
     missing = [name for name in resolved_tasks if name not in task_to_id]
     if missing:
@@ -479,6 +593,7 @@ def segment_volume(
     verbose: bool = False,
     force: bool = False,
     backend: TotalSegmentatorBackend | None = None,
+    resolved_output_to_fetch: Dict[str, str] | None = None,
 ) -> List[str]:
     """Run segmentation tasks and optional post‐processing."""
     warnings: List[str] = []
@@ -493,15 +608,22 @@ def segment_volume(
 
     backend = backend or TotalSegmentatorBackend()
     output_to_column = build_output_column_map(tasks)
+    output_to_fetch = build_output_fetch_map(tasks)
+
+    def _store_resolved_outputs() -> None:
+        if resolved_output_to_fetch is None:
+            return
+        resolved_output_to_fetch.clear()
+        resolved_output_to_fetch.update(output_to_fetch)
 
     for task in tasks:
         task_name = task["task"]
         task_outputs = infer_task_outputs(task)
-        if not task_outputs:
-            raise ValueError(
-                f"Cannot infer outputs for task '{task_name}'. "
-                "Set task.output/tasks.outputs or extra.roi_subset(_robust)."
-            )
+        task_fetch_outputs = (
+            infer_task_fetch_outputs(task)
+            if task_outputs
+            else {}
+        )
         extra = task.get("extra", {})
         if not isinstance(extra, dict):
             extra = {}
@@ -513,7 +635,15 @@ def segment_volume(
         # Keep a conservative default unless users explicitly override it.
         extra.setdefault("nr_thr_saving", 2)
 
-        expected_paths = [output_dir / _output_to_filename(output_name) for output_name in task_outputs]
+        before_snapshot = (
+            _snapshot_nifti_files(output_dir)
+            if not task_outputs
+            else {}
+        )
+        expected_paths = [
+            output_dir / _output_to_filename(task_fetch_outputs[output_name])
+            for output_name in task_outputs
+        ]
         if expected_paths and all(dst.exists() for dst in expected_paths) and not force:
             if verbose:
                 logger.info("Skip %s – files exist", task_name)
@@ -533,24 +663,50 @@ def segment_volume(
             )
             raise
 
-        missing = [p for p in expected_paths if not p.exists()]
-        if missing:
-            if len(missing) == 1:
-                raise RuntimeError(f"Expected mask not produced: {missing[0]}")
-            raise RuntimeError(
-                "Expected masks not produced: " + ", ".join(str(p) for p in missing)
+        if task_outputs:
+            missing = [p for p in expected_paths if not p.exists()]
+            if missing:
+                if len(missing) == 1:
+                    raise RuntimeError(f"Expected mask not produced: {missing[0]}")
+                raise RuntimeError(
+                    "Expected masks not produced: " + ", ".join(str(p) for p in missing)
+                )
+        else:
+            inferred_outputs = _infer_outputs_from_snapshot(
+                before_snapshot,
+                output_dir,
+                exclude_names={nifti_path.name},
             )
+            if not inferred_outputs:
+                raise RuntimeError(
+                    f"Could not infer outputs for task '{task_name}' from created segmentations."
+                )
+            task_outputs = inferred_outputs
+            task_fetch_outputs = {
+                output_name: output_name for output_name in inferred_outputs
+            }
+            for output_name, fetch_name in task_fetch_outputs.items():
+                output_to_column.setdefault(output_name, _output_to_column(output_name))
+                output_to_fetch.setdefault(output_name, fetch_name)
+            if verbose:
+                logger.info(
+                    "Inferred outputs for %s from created segmentations: %s",
+                    task_name,
+                    ", ".join(task_outputs),
+                )
         if verbose:
             logger.info("Masks saved for %s", task_name)
 
     postprocess = tasks_config.get("postprocess")
     if not postprocess:
+        _store_resolved_outputs()
         return warnings
 
     merge_files = resolve_merge_outputs(
         postprocess, tasks, output_to_column=output_to_column
     )
     if not merge_files:
+        _store_resolved_outputs()
         return warnings
 
     merged_output = str(postprocess.get("output", "merged")).strip() or "merged"
@@ -562,6 +718,7 @@ def segment_volume(
                 "Skip postprocess – output exists and row already has task outputs: %s",
                 dst,
             )
+        _store_resolved_outputs()
         return warnings
     if dst.exists():
         warnings.append(
@@ -580,7 +737,7 @@ def segment_volume(
 
     merged_ok = clean_and_merge_masks(
         output_dir,
-        [_output_to_filename(name) for name in merge_files],
+        [_output_to_filename(output_to_fetch.get(name, name)) for name in merge_files],
         output_name=merged_name,
         radius_mm=float(postprocess.get("radius_mm", 5.0)),
         verbose=verbose,
@@ -595,6 +752,7 @@ def segment_volume(
         logger.warning(message)
         warnings.append(message)
 
+    _store_resolved_outputs()
     return warnings
 
 
@@ -611,20 +769,21 @@ def process_single_volume(
     verbose: bool,
     force: bool,
     backend: TotalSegmentatorBackend | None = None,
-) -> Tuple[int, str | None, str | None, str | None]:
-    """Return ``(idx, output_dir|None, error_msg|None, warning_msg|None)``."""
+) -> Tuple[int, str | None, str | None, str | None, Dict[str, str] | None]:
+    """Return ``(idx, output_dir|None, error_msg|None, warning_msg|None, outputs|None)``."""
 
     setup_logging(verbose=verbose)
 
     try:
         nifti_path = Path(row["nifti_path"])
     except KeyError:
-        return idx, None, "column 'nifti_path' missing", None
+        return idx, None, "column 'nifti_path' missing", None, None
 
     if not nifti_path.exists():
-        return idx, None, "file not found", None
+        return idx, None, "file not found", None, None
 
     try:
+        resolved_output_to_fetch: Dict[str, str] = {}
         warnings = segment_volume(
             nifti_path,
             nifti_path.parent,
@@ -632,13 +791,28 @@ def process_single_volume(
             verbose=verbose,
             force=force,
             backend=backend,
+            resolved_output_to_fetch=resolved_output_to_fetch,
         )
         warning_msg = " | ".join(warnings) if warnings else None
-        return idx, str(nifti_path.parent), None, warning_msg
+        return idx, str(nifti_path.parent), None, warning_msg, (
+            resolved_output_to_fetch or None
+        )
     except Exception as exc:
         # Capture full traceback for later debugging
         logger.debug("Traceback for %s:\n%s", nifti_path.name, traceback.format_exc())
-        return idx, None, str(exc), None
+        return idx, None, str(exc), None, None
+
+
+def _normalize_process_result(
+    result: Tuple[Any, ...],
+) -> Tuple[int, str | None, str | None, str | None, Dict[str, str] | None]:
+    if len(result) == 4:
+        idx, out_dir, err_msg, warning_msg = result
+        return idx, out_dir, err_msg, warning_msg, None
+    if len(result) == 5:
+        idx, out_dir, err_msg, warning_msg, output_map = result
+        return idx, out_dir, err_msg, warning_msg, output_map
+    raise ValueError(f"Unexpected process result arity: {len(result)}")
 
 
 # -----------------------------------------------------------------------------
@@ -908,6 +1082,7 @@ def main(args: argparse.Namespace) -> None:
         raise KeyError("column 'nifti_path' missing")
     df = df.drop_duplicates("nifti_path").copy()
     output_to_column = build_output_column_map(tasks_config.get("tasks", []))
+    output_to_fetch = build_output_fetch_map(tasks_config.get("tasks", []))
     for column_name in list(dict.fromkeys(output_to_column.values())):
         if column_name not in df.columns:
             df[column_name] = None
@@ -955,7 +1130,11 @@ def main(args: argparse.Namespace) -> None:
         )
 
     def _apply_result(
-        idx: int, out_dir: str | None, err_msg: str | None, warning_msg: str | None
+        idx: int,
+        out_dir: str | None,
+        err_msg: str | None,
+        warning_msg: str | None,
+        result_output_to_fetch: Dict[str, str] | None = None,
     ) -> None:
         completed_indices.add(int(idx))
         ckpt.mark_processed()
@@ -963,8 +1142,17 @@ def main(args: argparse.Namespace) -> None:
         if out_dir:
             base = Path(out_dir)
             row_warnings: List[str] = []
+            if result_output_to_fetch:
+                for output_name, fetch_name in result_output_to_fetch.items():
+                    column_name = output_to_column.setdefault(
+                        output_name, _output_to_column(output_name)
+                    )
+                    output_to_fetch.setdefault(output_name, fetch_name)
+                    if column_name not in df.columns:
+                        df[column_name] = None
             for output_name, column_name in output_to_column.items():
-                mask_path = base / _output_to_filename(output_name)
+                fetch_name = output_to_fetch.get(output_name, output_name)
+                mask_path = base / _output_to_filename(fetch_name)
                 if mask_path.exists():
                     df.at[idx, column_name] = str(mask_path)
                 else:
@@ -1052,8 +1240,12 @@ def main(args: argparse.Namespace) -> None:
         *,
         progress_bar: tqdm | None = None,
         on_result: Any | None = None,
-    ) -> Dict[int, Tuple[int, str | None, str | None, str | None]]:
-        out: Dict[int, Tuple[int, str | None, str | None, str | None]] = {}
+    ) -> Dict[
+        int, Tuple[int, str | None, str | None, str | None, Dict[str, str] | None]
+    ]:
+        out: Dict[
+            int, Tuple[int, str | None, str | None, str | None, Dict[str, str] | None]
+        ] = {}
         if not row_indices:
             return out
 
@@ -1061,12 +1253,11 @@ def main(args: argparse.Namespace) -> None:
         row_queue = deque(row_indices)
         broken_pool = False
 
-        def _record_result(
-            idx: int, result: Tuple[int, str | None, str | None, str | None]
-        ) -> None:
-            out[idx] = result
+        def _record_result(idx: int, result: Tuple[Any, ...]) -> None:
+            normalized = _normalize_process_result(result)
+            out[idx] = normalized
             if on_result is not None:
-                on_result(*result)
+                on_result(*normalized)
             if progress_bar is not None:
                 progress_bar.update(1)
 
@@ -1170,7 +1361,10 @@ def main(args: argparse.Namespace) -> None:
                         effective_timeout,
                         now - started_at,
                     )
-                    _record_result(i, (i, None, f"timeout after {effective_timeout}s", None))
+                    _record_result(
+                        i,
+                        (i, None, f"timeout after {effective_timeout}s", None, None),
+                    )
 
                 if not timed_out_futures:
                     return False
@@ -1205,7 +1399,13 @@ def main(args: argparse.Namespace) -> None:
                         )
                         break
                     except Exception as exc:
-                        res = (i, None, f"worker crash: {type(exc).__name__}: {exc}", None)
+                        res = (
+                            i,
+                            None,
+                            f"worker crash: {type(exc).__name__}: {exc}",
+                            None,
+                            None,
+                        )
 
                     futures.pop(fut, None)
                     submit_started_at.pop(fut, None)
@@ -1235,9 +1435,9 @@ def main(args: argparse.Namespace) -> None:
             if broken_pool:
                 msg = broken_pool_msg or "BrokenProcessPool"
                 for i in list(futures.values()):
-                    out[i] = (i, None, msg, None)
+                    out[i] = (i, None, msg, None, None)
                 for i in row_queue:
-                    out[i] = (i, None, msg, None)
+                    out[i] = (i, None, msg, None, None)
                 break
 
         return out
@@ -1247,11 +1447,15 @@ def main(args: argparse.Namespace) -> None:
         *,
         progress_bar: tqdm | None = None,
         on_result: Any | None = None,
-    ) -> Dict[int, Tuple[int, str | None, str | None, str | None]]:
+    ) -> Dict[
+        int, Tuple[int, str | None, str | None, str | None, Dict[str, str] | None]
+    ]:
         if strategy.recycle_every <= 0:
             return _run_rows(row_indices, progress_bar=progress_bar, on_result=on_result)
 
-        out: Dict[int, Tuple[int, str | None, str | None, str | None]] = {}
+        out: Dict[
+            int, Tuple[int, str | None, str | None, str | None, Dict[str, str] | None]
+        ] = {}
         chunk_size = max(1, int(strategy.recycle_every))
         for start in range(0, len(row_indices), chunk_size):
             chunk = row_indices[start : start + chunk_size]
@@ -1273,12 +1477,14 @@ def main(args: argparse.Namespace) -> None:
         )
         results_by_idx = {}
         for idx in tqdm(row_indices, total=len(row_indices), desc="Segment"):
-            result = process_single_volume(
-                idx,
-                df.loc[idx].to_dict(),
-                tasks_config,
-                verbose=args.verbose,
-                force=args.force,
+            result = _normalize_process_result(
+                process_single_volume(
+                    idx,
+                    df.loc[idx].to_dict(),
+                    tasks_config,
+                    verbose=args.verbose,
+                    force=args.force,
+                )
             )
             results_by_idx[idx] = result
             _apply_result(*result)
@@ -1293,7 +1499,7 @@ def main(args: argparse.Namespace) -> None:
             retry_indices = [
                 i
                 for i in row_indices
-                if _is_retryable(results_by_idx.get(i, (i, None, None, None))[2])
+                if _is_retryable(results_by_idx.get(i, (i, None, None, None, None))[2])
             ]
             if retry_indices:
                 logger.warning(
