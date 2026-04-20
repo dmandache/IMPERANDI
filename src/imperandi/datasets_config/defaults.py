@@ -1,11 +1,11 @@
 # Used by clean.py after grouped volumes get a computed volume_length in mm.
 # Volumes outside this inclusive range are dropped; missing lengths are kept.
-DEFAULT_VOLUME_LENGTH_MIN_MM = 30.0  # Keep volumes with length >= 3 cm.
+DEFAULT_VOLUME_LENGTH_MIN_MM = 30.0    # Keep volumes with length >= 3 cm.
 DEFAULT_VOLUME_LENGTH_MAX_MM = 1700.0  # Keep volumes with length <= 170 cm.
 
 # Used by clean.py geometry filters. Rows with missing values are kept; rows
 # with present values above these maxima are dropped.
-DEFAULT_MAX_PIXEL_SPACING_MM = 1.25  # Max in-plane PixelSpacing[0] (XY), in mm.
+DEFAULT_MAX_PIXEL_SPACING_MM = 1.25   # Max in-plane PixelSpacing[0] (XY), in mm.
 DEFAULT_MAX_SLICE_THICKNESS_MM = 3.0  # Max SliceThickness (Z), in mm.
 
 # Used by parse.py as the default DICOM tag read list, and by clean.py to keep

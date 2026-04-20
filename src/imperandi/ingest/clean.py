@@ -463,13 +463,18 @@ def generate_volume_id(df):
     # If none of the preferred columns exist, enforce fallback
     if not cols_to_use:
         cols_to_use = [c for c in fallback_cols if c in df.columns]
+    
 
     # If even fallback columns are missing, use any columns that exist
     if not cols_to_use:
         cols_to_use = list(df.columns)
 
+    if cols_to_use:
+        logger.info("For unique volume ID generation, using columns: %s", cols_to_use)
+
     # If df truly has no columns (or empty selection), assign a single id
     if not cols_to_use:
+        logger.info("For unique volume ID generation, using no columns (all rows get same ID)")
         df = df.copy()
         df["volume_id"] = hashlib.sha1(b"volume").hexdigest()
         return df
