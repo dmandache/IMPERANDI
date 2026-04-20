@@ -125,8 +125,8 @@ def test_ircad_clean_matches_golden(tmp_path, ircad_dicom_root, ircad_reference_
         str(output_csv),
         csv_dict_path=None,
         manifest={},
-        volume_min=clean_module.DEFAULT_VOLUME_LOWERBOUND,
-        volume_max=clean_module.DEFAULT_VOLUME_UPPERBOUND,
+        volume_length_min_mm=clean_module.DEFAULT_VOLUME_LENGTH_MIN_MM,
+        volume_length_max_mm=clean_module.DEFAULT_VOLUME_LENGTH_MAX_MM,
     )
 
     generated = _normalize_dicom_path_column(pd.read_csv(output_csv))

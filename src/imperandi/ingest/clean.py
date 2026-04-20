@@ -25,13 +25,16 @@ from imperandi.utils.misc import print_args, report_volumes, report_change
 from imperandi.utils.datetime import to_dates, to_times
 from imperandi.datasets_config.defaults import (
     DEFAULT_DICOM_TAGS,
-    DEFAULT_VOLUME_LOWERBOUND,
-    DEFAULT_VOLUME_UPPERBOUND,
+    DEFAULT_VOLUME_LENGTH_MIN_MM,
+    DEFAULT_VOLUME_LENGTH_MAX_MM,
     DEFAULT_MAX_PIXEL_SPACING_MM,
     DEFAULT_MAX_SLICE_THICKNESS_MM,
     DATE_CANDIDATES,
     TIME_CANDIDATES,
 )
+
+DEFAULT_VOLUME_LOWERBOUND = DEFAULT_VOLUME_LENGTH_MIN_MM
+DEFAULT_VOLUME_UPPERBOUND = DEFAULT_VOLUME_LENGTH_MAX_MM
 
 COLUMNS_TO_USE = [
     "patient_key",
@@ -109,16 +112,36 @@ def add_clean_arguments(
             help="Dataset manifest name or path to manifest JSON.",
         )
     parser.add_argument(
-        "--volume_min",
+        "--volume-length-min-mm",
+        dest="volume_length_min_mm",
         type=float,
-        default=DEFAULT_VOLUME_LOWERBOUND,
-        help="Minimum allowable volume depth.",
+        default=DEFAULT_VOLUME_LENGTH_MIN_MM,
+        metavar="MM",
+        help="Minimum allowed reconstructed volume length in mm.",
+    )
+    parser.add_argument(
+        "--volume_min",
+        dest="volume_length_min_mm",
+        type=float,
+        default=argparse.SUPPRESS,
+        metavar="MM",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--volume-length-max-mm",
+        dest="volume_length_max_mm",
+        type=float,
+        default=DEFAULT_VOLUME_LENGTH_MAX_MM,
+        metavar="MM",
+        help="Maximum allowed reconstructed volume length in mm.",
     )
     parser.add_argument(
         "--volume_max",
+        dest="volume_length_max_mm",
         type=float,
-        default=DEFAULT_VOLUME_UPPERBOUND,
-        help="Maximum allowable volume depth.",
+        default=argparse.SUPPRESS,
+        metavar="MM",
+        help=argparse.SUPPRESS,
     )
     if include_dry_run:
         parser.add_argument(
@@ -188,6 +211,18 @@ def normalize_clean_args(args: argparse.Namespace) -> argparse.Namespace:
         args.csv_path_out = str(csv_out)
 
     for attr in ("csv_path_pos", "csv_path_opt", "csv_path_out_pos"):
+        if hasattr(args, attr):
+            delattr(args, attr)
+
+    if not hasattr(args, "volume_length_min_mm"):
+        args.volume_length_min_mm = getattr(
+            args, "volume_min", DEFAULT_VOLUME_LENGTH_MIN_MM
+        )
+    if not hasattr(args, "volume_length_max_mm"):
+        args.volume_length_max_mm = getattr(
+            args, "volume_max", DEFAULT_VOLUME_LENGTH_MAX_MM
+        )
+    for attr in ("volume_min", "volume_max"):
         if hasattr(args, attr):
             delattr(args, attr)
 
@@ -777,10 +812,13 @@ def calculate_volume_length(df):
     return df
 
 
-def filter_volumes_by_size(df, t_min, t_max):
+def filter_volumes_by_size(df, min_length_mm, max_length_mm):
     df = df[
         (df["volume_length"].isna())
-        | ((df["volume_length"] >= t_min) & (df["volume_length"] <= t_max))
+        | (
+            (df["volume_length"] >= min_length_mm)
+            & (df["volume_length"] <= max_length_mm)
+        )
     ]
     return df
 
@@ -1129,7 +1167,12 @@ def reorder_rows(df):
 
 
 def clean_and_save_data(
-    csv_path, csv_path_out, csv_dict_path, manifest, volume_min, volume_max
+    csv_path,
+    csv_path_out,
+    csv_dict_path,
+    manifest,
+    volume_length_min_mm,
+    volume_length_max_mm,
 ):
     df = load_data(csv_path)
     report_volumes(df, "initial load")
@@ -1207,8 +1250,14 @@ def clean_and_save_data(
     report_volumes(df, "computing volume length")
 
     df_prev = df.copy()
-    df = filter_volumes_by_size(df, volume_min, volume_max)
-    report_volumes(df, f"filtering volumes by size [{volume_min}, {volume_max}]")
+    df = filter_volumes_by_size(df, volume_length_min_mm, volume_length_max_mm)
+    report_volumes(
+        df,
+        (
+            "filtering volumes by reconstructed length "
+            f"[{volume_length_min_mm}, {volume_length_max_mm}] mm"
+        ),
+    )
     report_change(df, df_prev)
 
     df_prev = df.copy()
@@ -1248,6 +1297,6 @@ if __name__ == "__main__":
         args.csv_path_out,
         args.csv_dict_path,
         manifest,
-        args.volume_min,
-        args.volume_max,
+        args.volume_length_min_mm,
+        args.volume_length_max_mm,
     )

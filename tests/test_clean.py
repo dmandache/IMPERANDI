@@ -113,6 +113,27 @@ def test_normalize_clean_args_prefers_flag_csv_path_out_over_positional(tmp_path
     assert args.csv_path_out == str(csv_out_opt)
 
 
+def test_normalize_clean_args_migrates_legacy_volume_bounds(tmp_path):
+    csv_in = tmp_path / "input.csv"
+    csv_in.write_text("patient_key\np1\n")
+
+    args = clean.normalize_clean_args(
+        clean.argparse.Namespace(
+            csv_path_pos=str(csv_in),
+            csv_path_opt=None,
+            csv_path_out_pos=None,
+            csv_path_out=None,
+            volume_min=25.0,
+            volume_max=450.0,
+        )
+    )
+
+    assert args.volume_length_min_mm == 25.0
+    assert args.volume_length_max_mm == 450.0
+    assert not hasattr(args, "volume_min")
+    assert not hasattr(args, "volume_max")
+
+
 def test_uniform_string_and_remove_other_organs_description():
     assert clean.uniform_string("  Abc  .0") == "abc"
     assert clean.uniform_string("RévoluTion") == "revolution"
@@ -301,7 +322,9 @@ def test_group_volumes_and_calculate_length_and_filter_by_size():
     calc = clean.calculate_volume_length(grouped.copy())
     # v1 has n_files >1 -> volume_length computed
     assert "volume_length" in calc.columns
-    filtered = clean.filter_volumes_by_size(calc.copy(), t_min=0.0, t_max=5.0)
+    filtered = clean.filter_volumes_by_size(
+        calc.copy(), min_length_mm=0.0, max_length_mm=5.0
+    )
     # both volumes should be kept (v2 has NaN volume_length => kept)
     assert set(filtered["volume_id"]) == set(grouped["volume_id"])
 
