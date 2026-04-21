@@ -48,6 +48,7 @@ logger = logging.getLogger(__name__)
 DATETIME_TIME_RE = re.compile(
     r"datetime\.time\(\s*(\d{1,2})\s*,\s*(\d{1,2})(?:\s*,\s*(\d{1,2}))?(?:\s*,\s*(\d{1,6}))?\s*\)"
 )
+FLOAT_TOKEN_RE = re.compile(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?")
 
 
 def add_clean_arguments(
@@ -445,6 +446,7 @@ def generate_volume_id(df):
         "AcquisitionNumber",
         "ImageOrientationPatient",
         "SliceThickness",
+        "PixelSpacing",
         "PixelSpacingXY",
     ]
     fallback_cols = ["patient_key", "study_id", "series_id"]
@@ -542,10 +544,10 @@ def correct_volume_ids(df, z_tolerance=1e-3):
         "patient_key",
         "study_id",
         "series_id",
-        "ImageType",
-        "ImageOrientationPatient",
-        "SliceThickness",
-        "PixelSpacingXY",
+        # "ImageType",
+        # "ImageOrientationPatient",
+        # "SliceThickness",
+        # "PixelSpacingXY",
     ]
     fallback_group_cols = ["patient_key", "study_id", "series_id"]
 
@@ -579,49 +581,6 @@ def correct_volume_ids(df, z_tolerance=1e-3):
         if len(volume_ids) <= 1:
             continue
 
-        # --- get z positions robustly ---
-        z_positions = None
-
-        if "ImagePositionPatient" in group_df.columns:
-            s = group_df["ImagePositionPatient"]
-            # keep only rows with a usable tuple/list of len>=3
-            mask = s.notna() & s.apply(
-                lambda v: isinstance(v, (list, tuple)) and len(v) >= 3
-            )
-            if mask.any():
-                z_positions = s[mask].apply(lambda v: float(v[2])).to_numpy()
-
-        if (
-            z_positions is None or len(z_positions) < 2
-        ) and "SliceLocation" in group_df.columns:
-            s = group_df["SliceLocation"]
-            mask = s.notna()
-            if mask.any():
-                try:
-                    z_positions = s[mask].astype(float).to_numpy()
-                except Exception:
-                    # non-numeric slice locations -> skip
-                    z_positions = None
-
-        if z_positions is None or len(z_positions) < 2:
-            continue
-
-        # --- check consistent spacing ---
-        z_sorted = np.sort(z_positions)
-        z_diff = np.diff(z_sorted)
-
-        # If duplicates exist, drop zeros before checking (common with repeated slices)
-        z_diff_nz = z_diff[np.abs(z_diff) > z_tolerance]
-
-        if len(z_diff_nz) < 1:
-            # all slices same z (or too few distinct) -> can't decide
-            continue
-
-        consistent_spacing = np.all(
-            np.isclose(z_diff_nz, z_diff_nz[0], atol=z_tolerance)
-        )
-
-        # --- optional debug print (robust to missing cols) ---
         debug_cols = [
             c
             for c in ["patient_key", "date", "SeriesDescription"]
@@ -633,6 +592,100 @@ def correct_volume_ids(df, z_tolerance=1e-3):
             }
         else:
             summary = {}
+        logger.debug(
+            "Evaluating volume_id correction group: group_cols=%s, summary=%s, "
+            "volume_ids=%s, rows=%s",
+            group_cols,
+            summary,
+            list(map(str, volume_ids)),
+            len(group_df),
+        )
+
+        # --- get z positions robustly ---
+        z_positions = None
+
+        if "ImagePositionPatient" in group_df.columns:
+            z_values = []
+            ipp_parse_failures = 0
+            for value in group_df["ImagePositionPatient"]:
+                ipp = _parse_ipp(value)
+                if ipp is not None:
+                    z_values.append(ipp[2])
+                else:
+                    ipp_parse_failures += 1
+            if z_values:
+                z_positions = np.asarray(z_values, dtype=float)
+            logger.debug(
+                "ImagePositionPatient z extraction: parsed=%s, failed=%s, "
+                "sample_z=%s",
+                len(z_values),
+                ipp_parse_failures,
+                z_values[:5],
+            )
+
+        if (
+            z_positions is None or len(z_positions) < 2
+        ) and "SliceLocation" in group_df.columns:
+            logger.debug(
+                "Falling back to SliceLocation for z_positions: "
+                "ipp_z_count=%s, rows=%s",
+                0 if z_positions is None else len(z_positions),
+                len(group_df),
+            )
+            s = group_df["SliceLocation"]
+            mask = s.notna()
+            if mask.any():
+                try:
+                    z_positions = s[mask].astype(float).to_numpy()
+                    logger.debug(
+                        "SliceLocation z extraction: parsed=%s, sample_z=%s",
+                        len(z_positions),
+                        z_positions[:5].tolist(),
+                    )
+                except Exception as exc:
+                    # non-numeric slice locations -> skip
+                    z_positions = None
+                    logger.debug("SliceLocation z extraction failed: %s", exc)
+
+        if z_positions is None or len(z_positions) < 2:
+            logger.debug(
+                "Skipping volume_id correction group: insufficient z_positions "
+                "(count=%s)",
+                0 if z_positions is None else len(z_positions),
+            )
+            continue
+
+        # --- check consistent spacing ---
+        z_sorted = np.sort(z_positions)
+        z_diff = np.diff(z_sorted)
+
+        # If duplicates exist, drop zeros before checking (common with repeated slices)
+        z_diff_nz = z_diff[np.abs(z_diff) > z_tolerance]
+
+        if len(z_diff_nz) < 1:
+            # all slices same z (or too few distinct) -> can't decide
+            logger.debug(
+                "Skipping volume_id correction group: z differences are all "
+                "within tolerance. z_sample=%s, z_tolerance=%s",
+                z_sorted[:5].tolist(),
+                z_tolerance,
+            )
+            continue
+
+        consistent_spacing = np.all(
+            np.isclose(z_diff_nz, z_diff_nz[0], atol=z_tolerance)
+        )
+        logger.debug(
+            "z_positions spacing check: z_sample=%s, diff_sample=%s, "
+            "nonzero_diff_sample=%s, reference_spacing=%s, consistent=%s, "
+            "z_tolerance=%s",
+            z_sorted[:5].tolist(),
+            z_diff[:5].tolist(),
+            z_diff_nz[:5].tolist(),
+            float(z_diff_nz[0]),
+            bool(consistent_spacing),
+            z_tolerance,
+        )
 
         logger.info(
             "%s : %s pseudo-volumes, %s total files",
@@ -643,11 +696,23 @@ def correct_volume_ids(df, z_tolerance=1e-3):
 
         if consistent_spacing:
             logger.info("👫 Merged")
-            canonical_id = sorted(map(str, volume_ids))[0]
+            #canonical_id = sorted(map(str, volume_ids))[0]
+            canonical_id = hashlib.sha1(
+                "|".join(sorted(map(str, volume_ids))).encode()
+            ).hexdigest()
+            logger.debug(
+                "Merging volume_ids into canonical_id=%s: %s",
+                canonical_id,
+                list(map(str, volume_ids)),
+            )
             for vol_id in volume_ids:
                 updated_ids[vol_id] = canonical_id
         else:
             logger.info("👍 They are different volumes")
+            logger.debug(
+                "Keeping volume_ids separate due to inconsistent z spacing: %s",
+                list(map(str, volume_ids)),
+            )
 
     df["volume_id"] = df["volume_id"].apply(lambda vid: updated_ids.get(vid, vid))
     return df
@@ -723,20 +788,35 @@ def _parse_ipp(value):
     if isinstance(value, (list, tuple, np.ndarray)):
         seq = value
     elif isinstance(value, str):
+        s = value.strip()
+        if not s or s.lower() in {"none", "nan", "nat"}:
+            return None
         try:
-            seq = literal_eval(value)
+            seq = literal_eval(s)
         except (ValueError, SyntaxError):
+            seq = FLOAT_TOKEN_RE.findall(s)
+            if len(seq) < 3:
+                return None
+    elif isinstance(value, bytes):
+        return _parse_ipp(value.decode(errors="ignore"))
+    elif hasattr(value, "__iter__") and not isinstance(value, dict):
+        try:
+            seq = list(value)
+        except TypeError:
             return None
     else:
         return None
 
     try:
-        if len(seq) < 3:
+        if isinstance(seq, str):
+            return _parse_ipp(seq)
+        coords = np.asarray(seq, dtype=float).reshape(-1)
+        if coords.size < 3:
             return None
-        x = float(seq[0])
-        y = float(seq[1])
-        z = float(seq[2])
-        return (z, y, x)
+        x = float(coords[0])
+        y = float(coords[1])
+        z = float(coords[2])
+        return (x, y, z)
     except Exception:
         return None
 
@@ -748,7 +828,7 @@ def _sort_key_for_column(col_name):
             ipp = _parse_ipp(v)
             if ipp is None:
                 return (1, _string_sort_key(v))
-            return (0, ipp[0], ipp[1], ipp[2])
+            return (0, ipp[2], ipp[1], ipp[0])
 
         return key
 
