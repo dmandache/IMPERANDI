@@ -5,6 +5,9 @@ from typing import Optional
 
 
 def load_manifest(manifest_arg: Optional[str], *, base_path: Path) -> dict:
+    
+    base_path = Path(base_path)
+    
     if not manifest_arg:
         return {}
 
