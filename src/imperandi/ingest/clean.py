@@ -446,7 +446,6 @@ def generate_volume_id(df):
         "AcquisitionNumber",
         "ImageOrientationPatient",
         "SliceThickness",
-        "PixelSpacing",
         "PixelSpacingXY",
     ]
     fallback_cols = ["patient_key", "study_id", "series_id"]
@@ -544,10 +543,10 @@ def correct_volume_ids(df, z_tolerance=1e-3):
         "patient_key",
         "study_id",
         "series_id",
-        # "ImageType",
-        # "ImageOrientationPatient",
-        # "SliceThickness",
-        # "PixelSpacingXY",
+        "ImageType",
+        "ImageOrientationPatient",
+        "SliceThickness",
+        "PixelSpacingXY",
     ]
     fallback_group_cols = ["patient_key", "study_id", "series_id"]
 
@@ -620,7 +619,7 @@ def correct_volume_ids(df, z_tolerance=1e-3):
                 "sample_z=%s",
                 len(z_values),
                 ipp_parse_failures,
-                z_values[:5],
+                z_values[:10],
             )
 
         if (
@@ -640,7 +639,7 @@ def correct_volume_ids(df, z_tolerance=1e-3):
                     logger.debug(
                         "SliceLocation z extraction: parsed=%s, sample_z=%s",
                         len(z_positions),
-                        z_positions[:5].tolist(),
+                        z_positions[:10].tolist(),
                     )
                 except Exception as exc:
                     # non-numeric slice locations -> skip
@@ -659,21 +658,8 @@ def correct_volume_ids(df, z_tolerance=1e-3):
         z_sorted = np.sort(z_positions)
         z_diff = np.diff(z_sorted)
 
-        # If duplicates exist, drop zeros before checking (common with repeated slices)
-        z_diff_nz = z_diff[np.abs(z_diff) > z_tolerance]
-
-        if len(z_diff_nz) < 1:
-            # all slices same z (or too few distinct) -> can't decide
-            logger.debug(
-                "Skipping volume_id correction group: z differences are all "
-                "within tolerance. z_sample=%s, z_tolerance=%s",
-                z_sorted[:5].tolist(),
-                z_tolerance,
-            )
-            continue
-
         consistent_spacing = np.all(
-            np.isclose(z_diff_nz, z_diff_nz[0], atol=z_tolerance)
+            np.isclose(z_diff, z_diff[0], atol=z_tolerance)
         )
         logger.debug(
             "z_positions spacing check: z_sample=%s, diff_sample=%s, "
@@ -681,8 +667,8 @@ def correct_volume_ids(df, z_tolerance=1e-3):
             "z_tolerance=%s",
             z_sorted[:5].tolist(),
             z_diff[:5].tolist(),
-            z_diff_nz[:5].tolist(),
-            float(z_diff_nz[0]),
+            z_diff[:5].tolist(),
+            float(z_diff[0]),
             bool(consistent_spacing),
             z_tolerance,
         )
