@@ -308,6 +308,36 @@ def test_correct_volume_ids_merging(tmp_path, capsys):
     assert set(out["volume_id"].unique()) == {"b"}
 
 
+def test_correct_volume_ids_extracts_z_from_string_image_position_patient():
+    df = pd.DataFrame(
+        {
+            "patient_key": ["p", "p"],
+            "study_id": ["s", "s"],
+            "series_id": ["sr", "sr"],
+            "ImageType": ["A", "A"],
+            "ImageOrientationPatient": [
+                (1.0, 0.0, 0.0, 0.0, 1.0, 0.0),
+                (1.0, 0.0, 0.0, 0.0, 1.0, 0.0),
+            ],
+            "SliceThickness": [1.0, 1.0],
+            "PixelSpacingXY": [0.7, 0.7],
+            "volume_id": ["b", "c"],
+            "ImagePositionPatient": [
+                "[100.0, 0.0, 0.0]",
+                "[100.0, 0.0, 5.0]",
+            ],
+        }
+    )
+
+    out = clean.correct_volume_ids(df.copy(), z_tolerance=1e-3)
+
+    assert set(out["volume_id"].unique()) == {"b"}
+
+
+def test_parse_ipp_accepts_dicom_backslash_string():
+    assert clean._parse_ipp(r"1.5\-2.0\3.25") == (1.5, -2.0, 3.25)
+
+
 def test_group_volumes_and_calculate_length_and_filter_by_size():
     df = pd.DataFrame(
         {
@@ -335,9 +365,9 @@ def test_group_volumes_deterministic_ordering():
             "volume_id": ["v1", "v1", "v1", "v1"],
             "ImagePositionPatient": [
                 "[0, 0, 5.0]",
-                "[0, 0, 0.0]",
-                "[0, 0, 2.0]",
-                "[0, 0, 2.0]",
+                "[100, 0, 0.0]",
+                "[50, 0, 2.0]",
+                "[50, 0, 2.0]",
             ],
             "InstanceNumber": [3, 1, 2, 2],
             "SliceLocation": [10.0, 2.0, 2.0, 10.0],
@@ -346,8 +376,8 @@ def test_group_volumes_deterministic_ordering():
     grouped = clean.group_volumes(df.copy())
     row = grouped.iloc[0]
     assert row["ImagePositionPatient"] == [
-        "[0, 0, 0.0]",
-        "[0, 0, 2.0]",
+        "[100, 0, 0.0]",
+        "[50, 0, 2.0]",
         "[0, 0, 5.0]",
     ]
     assert row["InstanceNumber"] == [1, 2, 3]
