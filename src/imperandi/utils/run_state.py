@@ -204,6 +204,68 @@ def now_epoch() -> float:
     return float(time.time())
 
 
+def normalize_source_id(value: Any) -> str:
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    return str(value)
+
+
+def normalize_source_ids(values: Iterable[Any]) -> set[str]:
+    return {
+        source_id
+        for source_id in (normalize_source_id(v) for v in values)
+        if source_id
+    }
+
+
+def ensure_source_id_column(
+    df: pd.DataFrame,
+    *,
+    preferred_column: str = "volume_id",
+    source_column: str = "_source_idx",
+) -> pd.DataFrame:
+    fallback = pd.Series(df.index, index=df.index).map(normalize_source_id)
+
+    if preferred_column in df.columns:
+        preferred = df[preferred_column].map(normalize_source_id)
+        df[source_column] = preferred.where(preferred != "", fallback)
+        return df
+
+    if source_column in df.columns:
+        existing = df[source_column].map(normalize_source_id)
+        df[source_column] = existing.where(existing != "", fallback)
+        return df
+
+    df[source_column] = fallback
+    return df
+
+
+def source_id_resume_signature(
+    inputs: str | Path | Sequence[str | Path] | None,
+    *,
+    preferred_column: str = "volume_id",
+) -> dict[str, Any] | None:
+    if inputs is None:
+        return None
+    paths = [inputs] if isinstance(inputs, (str, Path)) else list(inputs)
+    for path in paths:
+        try:
+            columns = pd.read_csv(path, nrows=0).columns
+        except Exception:
+            continue
+        if preferred_column in columns:
+            return {
+                "source_id_schema": 1,
+                "preferred_source_id_column": preferred_column,
+            }
+    return None
+
+
 def prepare_resume_context(
     *,
     args: Any,
@@ -335,7 +397,7 @@ class CheckpointManager:
     def _build_state_payload(
         self,
         *,
-        completed_indices: Iterable[int],
+        completed_indices: Iterable[Any],
         finished: bool,
         extra_state: Mapping[str, Any] | None,
     ) -> dict[str, Any]:
@@ -344,7 +406,7 @@ class CheckpointManager:
             "command": self.config.command,
             "args_hash": self.config.args_hash,
             "input_fingerprint": self.config.input_fingerprint,
-            "completed_indices": sorted(int(i) for i in completed_indices),
+            "completed_indices": sorted(normalize_source_ids(completed_indices)),
             "updated_at_epoch": now_epoch(),
         }
         if finished:
@@ -358,7 +420,7 @@ class CheckpointManager:
         *,
         main_df: pd.DataFrame,
         error_df: pd.DataFrame | None,
-        completed_indices: Iterable[int],
+        completed_indices: Iterable[Any],
         force: bool = False,
         extra_state: Mapping[str, Any] | None = None,
     ) -> bool:
@@ -385,7 +447,7 @@ class CheckpointManager:
     def finalize_state(
         self,
         *,
-        completed_indices: Iterable[int],
+        completed_indices: Iterable[Any],
         extra_state: Mapping[str, Any] | None = None,
     ) -> None:
         atomic_write_json(

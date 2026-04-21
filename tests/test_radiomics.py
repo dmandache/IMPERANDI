@@ -574,6 +574,87 @@ def test_main_resume_skips_completed_rows(tmp_path, monkeypatch):
     assert dep_calls["count"] == 1
 
 
+def test_main_resume_reprocesses_when_manifest_filters_change(tmp_path, monkeypatch):
+    portal_nifti = tmp_path / "portal.nii.gz"
+    arterial_nifti = tmp_path / "arterial.nii.gz"
+    portal_mask = tmp_path / "portal_mask.nii.gz"
+    arterial_mask = tmp_path / "arterial_mask.nii.gz"
+    for path in (portal_nifti, arterial_nifti, portal_mask, arterial_mask):
+        path.write_text("x")
+
+    csv_path = tmp_path / "nifti_index.csv"
+    pd.DataFrame(
+        [
+            {
+                "nifti_path": str(portal_nifti),
+                "mask_liver": str(portal_mask),
+                "phase": "portal",
+            },
+            {
+                "nifti_path": str(arterial_nifti),
+                "mask_liver": str(arterial_mask),
+                "phase": "arterial",
+            },
+        ]
+    ).to_csv(csv_path, index=False)
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text('{"radiomics": {"filters": {"phase": ["portal"]}}}')
+
+    monkeypatch.setattr(
+        radiomics_module,
+        "_load_radiomics_dependencies",
+        lambda: (object(), object()),
+    )
+    monkeypatch.setattr(
+        radiomics_module,
+        "_create_radiomics_extractors",
+        _fake_extractors_factory,
+    )
+
+    processed = []
+
+    def fake_liver(
+        image_path,
+        liver_mask_path,
+        tumor_mask_path,
+        *,
+        extractors,
+        sitk_module,
+        prefix,
+        row_idx=None,
+    ):
+        processed.append(Path(image_path).name)
+        return {"liver_original_shape_VoxelVolume": 1.0}, None
+
+    monkeypatch.setattr(
+        radiomics_module, "extract_radiomics_organ_minus_tumor", fake_liver
+    )
+    monkeypatch.setattr(
+        radiomics_module, "extract_radiomics_safe", lambda *a, **k: ({}, None)
+    )
+
+    args = argparse.Namespace(
+        csv_path=str(csv_path),
+        csv_path_out=str(tmp_path / "out.csv"),
+        error_csv_path=str(tmp_path / "errors.csv"),
+        skip_filter=False,
+        filters={},
+        manifest=str(manifest_path),
+        verbose=False,
+        checkpoint_every_rows=1,
+        checkpoint_every_sec=3600,
+        resume=False,
+        strict_resume=False,
+    )
+    radiomics_module.main(args)
+
+    manifest_path.write_text('{"radiomics": {"filters": {"phase": ["arterial"]}}}')
+    args.resume = True
+    radiomics_module.main(args)
+
+    assert processed == ["portal.nii.gz", "arterial.nii.gz"]
+
+
 def test_main_preserves_foreign_columns_from_existing_output(tmp_path, monkeypatch):
     nifti = tmp_path / "good.nii.gz"
     mask = tmp_path / "good_mask.nii.gz"

@@ -18,15 +18,19 @@ from imperandi.utils.archive_io import (
     is_archive_uri,
 )
 from imperandi.utils.files import copy_files_to_temp_dir, check_file, is_valid_nifti
-from imperandi.utils.logging import setup_logging
+from imperandi.utils.logging import log_task_summary, setup_logging
 from imperandi.utils.misc import report_volumes, report_change, print_args
 from imperandi.utils.manifest import load_manifest
 from imperandi.utils.checkpoint_cli import add_checkpoint_arguments
 from imperandi.utils.run_state import (
     atomic_write_csv,
     CheckpointManager,
+    ensure_source_id_column,
     merge_with_existing_output,
+    normalize_source_id,
+    normalize_source_ids,
     prepare_resume_context,
+    source_id_resume_signature,
 )
 
 logger = logging.getLogger(__name__)
@@ -514,11 +518,16 @@ def convert_dicom_to_nifti_parallel(
             if on_result is not None:
                 on_result(k, export_path, error_row, status)
 
-    logger.info(
-        "Conversion summary: %s converted, %s skipped (already valid), %s failed",
-        converted_count,
-        skipped_count,
-        failed_count,
+    log_task_summary(
+        logger,
+        "Conversion",
+        total_rows=n_samples,
+        processed_rows=converted_count + skipped_count + failed_count,
+        succeeded_rows=converted_count,
+        skipped_rows=skipped_count,
+        failed_rows=failed_count,
+        success_label="converted",
+        skipped_label="skipped already valid",
     )
 
     return df, df_err
@@ -537,7 +546,6 @@ def main(args):
 
     exclude_hash_args = {
         "csv_path_out",
-        "error_csv_path",
         "dry_run",
         "verbose",
         "resume",
@@ -545,8 +553,17 @@ def main(args):
         "checkpoint_every_sec",
         "strict_resume",
     }
+    source_id_signature = source_id_resume_signature(args.csv_path)
+    resume_args = (
+        argparse.Namespace(
+            **vars(args),
+            checkpoint_source_id=source_id_signature,
+        )
+        if source_id_signature
+        else args
+    )
     resume_ctx = prepare_resume_context(
-        args=args,
+        args=resume_args,
         command="convert",
         inputs=args.csv_path,
         output_path=output_path,
@@ -578,14 +595,14 @@ def main(args):
     else:
         df_list = [pd.read_csv(p) for p in args.csv_path]
         df_all = pd.concat(df_list, ignore_index=True)
-        df_all["_source_idx"] = df_all.index.astype(int)
 
     if "nifti_path" not in df_all.columns:
         df_all["nifti_path"] = None
-    if "_source_idx" not in df_all.columns:
-        df_all["_source_idx"] = df_all.index.astype(int)
 
-    df_all = df_all.map(lambda x: convert_list_str_to_list(x) if isinstance(x, str) else x)
+    df_all = df_all.map(
+        lambda x: convert_list_str_to_list(x) if isinstance(x, str) else x
+    )
+    df_all = ensure_source_id_column(df_all)
 
     if args.verbose:
         logger.info("Before conversion:")
@@ -597,14 +614,12 @@ def main(args):
         print_args(args)
         return
 
-    completed_indices: set[int] = set()
-    errors_by_idx: dict[int, dict] = {}
+    completed_indices: set[str] = set()
+    errors_by_idx: dict[str, dict] = {}
     if can_resume:
-        completed_indices = {
-            int(i)
-            for i in (state or {}).get("completed_indices", [])
-            if isinstance(i, int)
-        }
+        completed_indices = normalize_source_ids(
+            (state or {}).get("completed_indices", [])
+        )
         logger.info(
             "Resume enabled: %d completed rows restored from state",
             len(completed_indices),
@@ -614,13 +629,17 @@ def main(args):
             for _, row in err_ckpt.iterrows():
                 if "_source_idx" in row:
                     try:
-                        errors_by_idx[int(row["_source_idx"])] = row.to_dict()
+                        source_idx = normalize_source_id(row["_source_idx"])
+                        if source_idx:
+                            errors_by_idx[source_idx] = row.to_dict()
                     except Exception:
                         continue
 
     def _checkpoint_write(*, force: bool = False) -> None:
         err_df = (
-            pd.DataFrame(list(errors_by_idx.values())) if errors_by_idx else pd.DataFrame()
+            pd.DataFrame(list(errors_by_idx.values()))
+            if errors_by_idx
+            else pd.DataFrame()
         )
         ckpt.flush(
             main_df=df_all,
@@ -636,17 +655,21 @@ def main(args):
     ) as archive_session:
         work_df = df_all[~df_all["_source_idx"].isin(completed_indices)].copy()
         work_df = work_df.reset_index(drop=True)
-        work_df, df_archive_err = materialize_archive_dicom_paths(work_df, archive_session)
+        work_df, df_archive_err = materialize_archive_dicom_paths(
+            work_df, archive_session
+        )
         if not df_archive_err.empty:
             for _, row in df_archive_err.iterrows():
                 if "_source_idx" in row:
-                    source_idx = int(row["_source_idx"])
+                    source_idx = normalize_source_id(row["_source_idx"])
+                    if not source_idx:
+                        continue
                     errors_by_idx[source_idx] = row.to_dict()
                     completed_indices.add(source_idx)
 
         def _on_result(k: int, export_path, error_row, status: str) -> None:
             ckpt.mark_processed()
-            source_idx = int(work_df.iloc[k]["_source_idx"])
+            source_idx = normalize_source_id(work_df.iloc[k]["_source_idx"])
             completed_indices.add(source_idx)
             if export_path is not None:
                 mask = df_all["_source_idx"] == source_idx
@@ -682,7 +705,14 @@ def main(args):
     df_success = merge_with_existing_output(
         df_success,
         args.csv_path_out,
-        preferred_keys=["dicom_path", "series_path", "series_id", "nifti_path", "_source_idx"],
+        preferred_keys=[
+            "volume_id",
+            "dicom_path",
+            "series_path",
+            "series_id",
+            "nifti_path",
+            "_source_idx",
+        ],
         strict=True,
     )
     atomic_write_csv(df_success, args.csv_path_out, index=False)

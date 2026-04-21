@@ -39,14 +39,18 @@ from skimage.morphology import ball
 from tqdm import tqdm
 
 from imperandi.utils.misc import report_volumes  # type: ignore
-from imperandi.utils.logging import setup_logging
+from imperandi.utils.logging import log_task_summary, setup_logging
 from imperandi.utils.manifest import load_manifest
 from imperandi.utils.checkpoint_cli import add_checkpoint_arguments
 from imperandi.utils.run_state import (
     atomic_write_csv,
     CheckpointManager,
+    ensure_source_id_column,
     merge_with_existing_output,
+    normalize_source_id,
+    normalize_source_ids,
     prepare_resume_context,
+    source_id_resume_signature,
 )
 
 # -----------------------------------------------------------------------------
@@ -997,10 +1001,21 @@ def main(args: argparse.Namespace) -> None:
     setup_logging(verbose=getattr(args, "verbose", False))
     output_path = Path(args.csv_path_out)
     error_path = Path(args.error_csv_path)
+    tasks_config = load_segmentation_config(
+        getattr(args, "manifest", None),
+        base_path=Path(__file__).resolve().parents[1],
+    )
+    source_id_signature = source_id_resume_signature(args.csv_path)
+    checkpoint_signature = {"segmentation": tasks_config}
+    if source_id_signature:
+        checkpoint_signature["source_id"] = source_id_signature
+    resume_args = argparse.Namespace(
+        **vars(args),
+        checkpoint_signature=checkpoint_signature,
+    )
 
     exclude_hash_args = {
         "csv_path_out",
-        "error_csv_path",
         "dry_run",
         "verbose",
         "resume",
@@ -1009,7 +1024,7 @@ def main(args: argparse.Namespace) -> None:
         "strict_resume",
     }
     resume_ctx = prepare_resume_context(
-        args=args,
+        args=resume_args,
         command="segment",
         inputs=args.csv_path,
         output_path=output_path,
@@ -1028,23 +1043,20 @@ def main(args: argparse.Namespace) -> None:
         )
         return
 
-    tasks_config = load_segmentation_config(
-        getattr(args, "manifest", None),
-        base_path=Path(__file__).resolve().parents[1],
-    )
     prefetch_totalsegmentator_models(tasks_config)
 
     from imperandi.utils.multiprocessing import (
         apply_strategy_env,
         strategy_to_log_dict,
-        decide_multiprocessing_strategy
+        decide_multiprocessing_strategy,
     )
+
     # Decide
     strategy = decide_multiprocessing_strategy(
         prefer_gpu=True,
         requested_workers=args.num_workers,
         start_method_hint=args.start_method,
-        target_task_mem_mb=6000,      # tune (TotalSegmentator can be heavy)
+        target_task_mem_mb=6000,  # tune (TotalSegmentator can be heavy)
         need_hard_timeouts=True,
     )
 
@@ -1067,13 +1079,13 @@ def main(args: argparse.Namespace) -> None:
     # Apply env caps BEFORE pool creation
     apply_strategy_env(strategy)
 
-
     # --- read and pre‑clean CSV ------------------------------------------------
     if can_resume and paths.main_checkpoint_path.exists():
         logger.info("Resuming segment from checkpoint: %s", paths.main_checkpoint_path)
         df = pd.read_csv(paths.main_checkpoint_path).copy()
     else:
         df = pd.read_csv(args.csv_path).copy()
+    df = ensure_source_id_column(df)
     if "nifti_path" not in df.columns:
         unnamed = [c for c in df.columns if c.startswith("Unnamed:")]
         if unnamed:
@@ -1097,27 +1109,38 @@ def main(args: argparse.Namespace) -> None:
         df["warning_message"] = None
     logged_warning_keys: set[str] = set()
 
-    completed_indices: set[int] = set()
+    completed_indices: set[str] = set()
+    resume_skipped_count = 0
     if can_resume:
-        completed_indices = {
-            int(i) for i in (state or {}).get("completed_indices", []) if isinstance(i, int)
-        }
-        logger.info("Resume enabled: %d completed rows restored from state", len(completed_indices))
+        completed_indices = normalize_source_ids(
+            (state or {}).get("completed_indices", [])
+        )
+        resume_skipped_count = len(completed_indices)
+        logger.info(
+            "Resume enabled: %d completed rows restored from state",
+            len(completed_indices),
+        )
 
-    errors_by_idx: Dict[int, str] = {}
+    errors_by_idx: Dict[str, str] = {}
     if can_resume and paths.error_checkpoint_path.exists():
         err_ckpt = pd.read_csv(paths.error_checkpoint_path)
-        if "idx" in err_ckpt.columns and "error_message" in err_ckpt.columns:
+        err_key = "_source_idx" if "_source_idx" in err_ckpt.columns else "idx"
+        if err_key in err_ckpt.columns and "error_message" in err_ckpt.columns:
             for _, row in err_ckpt.iterrows():
                 try:
-                    errors_by_idx[int(row["idx"])] = str(row["error_message"])
+                    source_idx = normalize_source_id(row[err_key])
+                    if source_idx:
+                        errors_by_idx[source_idx] = str(row["error_message"])
                 except Exception:
                     continue
 
     def _checkpoint_write(*, force: bool = False) -> None:
         err_ckpt_df = (
             pd.DataFrame(
-                [{"idx": k, "error_message": v} for k, v in sorted(errors_by_idx.items())]
+                [
+                    {"_source_idx": k, "error_message": v}
+                    for k, v in sorted(errors_by_idx.items())
+                ]
             )
             if errors_by_idx
             else pd.DataFrame()
@@ -1136,7 +1159,8 @@ def main(args: argparse.Namespace) -> None:
         warning_msg: str | None,
         result_output_to_fetch: Dict[str, str] | None = None,
     ) -> None:
-        completed_indices.add(int(idx))
+        source_idx = normalize_source_id(df.at[idx, "_source_idx"])
+        completed_indices.add(source_idx)
         ckpt.mark_processed()
 
         if out_dir:
@@ -1186,10 +1210,10 @@ def main(args: argparse.Namespace) -> None:
                     row_warnings.append(message)
             if row_warnings:
                 df.at[idx, "warning_message"] = " | ".join(row_warnings)
-            if idx in errors_by_idx:
-                del errors_by_idx[idx]
+            if source_idx in errors_by_idx:
+                del errors_by_idx[source_idx]
         else:
-            errors_by_idx[idx] = err_msg or "unknown"
+            errors_by_idx[source_idx] = err_msg or "unknown"
 
         _checkpoint_write(force=False)
 
@@ -1462,7 +1486,14 @@ def main(args: argparse.Namespace) -> None:
             out.update(_run_rows(chunk, progress_bar=progress_bar, on_result=on_result))
         return out
 
-    row_indices = [i for i in list(df.index) if i not in completed_indices]
+    row_indices = [
+        i
+        for i in list(df.index)
+        if normalize_source_id(df.at[i, "_source_idx"]) not in completed_indices
+    ]
+    processed_source_ids = {
+        normalize_source_id(df.at[i, "_source_idx"]) for i in row_indices
+    }
     run_serial = strategy.mode == "serial" or effective_workers <= 1
     if strategy.mode == "subprocess_per_case":
         # logger.warning(
@@ -1518,19 +1549,25 @@ def main(args: argparse.Namespace) -> None:
     _checkpoint_write(force=True)
 
     # --- write output tables ---------------------------------------------------
-    df = merge_with_existing_output(
-        df,
+    df_out = df.drop(columns=["_source_idx"], errors="ignore")
+    df_out = merge_with_existing_output(
+        df_out,
         args.csv_path_out,
-        preferred_keys=["nifti_path", "_source_idx"],
+        preferred_keys=["volume_id", "nifti_path", "_source_idx"],
         strict=True,
     )
-    atomic_write_csv(df, args.csv_path_out, index=False)
+    atomic_write_csv(df_out, args.csv_path_out, index=False)
     logger.info("Wrote main table → %s", args.csv_path_out)
 
     if errors_by_idx:
-        err_idx = sorted(errors_by_idx.keys())
-        err_df = df.loc[err_idx].copy()
-        err_df["error_message"] = [errors_by_idx[i] for i in err_idx]
+        error_messages = pd.Series(errors_by_idx, name="error_message")
+        err_df = (
+            df[df["_source_idx"].isin(error_messages.index)]
+            .copy()
+            .sort_values("_source_idx")
+        )
+        err_df["error_message"] = err_df["_source_idx"].map(error_messages)
+        err_df = err_df.drop(columns=["_source_idx"], errors="ignore")
         atomic_write_csv(err_df, args.error_csv_path, index=False)
         logger.warning("%d rows failed – see %s", len(err_df), args.error_csv_path)
 
@@ -1541,6 +1578,18 @@ def main(args: argparse.Namespace) -> None:
             logger.debug("report_volumes() failed – continuing")
 
     ckpt.finalize_state(completed_indices=completed_indices)
+    run_failed_count = len(processed_source_ids & set(errors_by_idx))
+    log_task_summary(
+        logger,
+        "Segmentation",
+        total_rows=len(df),
+        processed_rows=len(row_indices),
+        succeeded_rows=max(0, len(row_indices) - run_failed_count),
+        skipped_rows=resume_skipped_count,
+        failed_rows=run_failed_count,
+        success_label="segmented",
+        extra_counts={"skipped by resume": resume_skipped_count},
+    )
     logger.info("Segmentation done ✔")
 
     return

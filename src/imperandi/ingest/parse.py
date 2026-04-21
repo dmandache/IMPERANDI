@@ -23,7 +23,7 @@ from imperandi.utils.archive_io import (
     is_archive_uri,
     read_archive_member_bytes,
 )
-from imperandi.utils.logging import setup_logging
+from imperandi.utils.logging import log_task_summary, setup_logging
 from imperandi.utils.misc import print_args
 from imperandi.utils.manifest import load_manifest
 from imperandi.utils.checkpoint_cli import add_checkpoint_arguments
@@ -1074,6 +1074,17 @@ def process_with_checkpoint(
         logger.info(
             "Resume enabled and matching parse run already finished; skipping execution."
         )
+        log_task_summary(
+            logger,
+            "Parse",
+            total_rows=len(df),
+            processed_rows=0,
+            succeeded_rows=0,
+            skipped_rows=len(df),
+            failed_rows=0,
+            success_label="parsed",
+            extra_counts={"skipped by finished checkpoint": len(df)},
+        )
         if return_df:
             return pd.read_csv(output_path)
         return None
@@ -1091,6 +1102,7 @@ def process_with_checkpoint(
         next_source_idx = int((state or {}).get("next_source_idx", 0))
         next_source_idx = max(0, min(next_source_idx, len(df)))
         logger.info("Resuming parse from source index %s", next_source_idx)
+    resume_skipped_count = next_source_idx if can_resume else 0
 
     requested_workers = max(1, int(num_workers))
     active_worker_config = worker_config or {}
@@ -1263,6 +1275,18 @@ def process_with_checkpoint(
         next_source_idx=len(df),
         finished=True,
     )
+    processed_rows = max(0, len(df) - resume_skipped_count)
+    log_task_summary(
+        logger,
+        "Parse",
+        total_rows=len(df),
+        processed_rows=processed_rows,
+        succeeded_rows=processed_rows,
+        skipped_rows=resume_skipped_count,
+        failed_rows=0,
+        success_label="parsed",
+        extra_counts={"skipped by resume": resume_skipped_count},
+    )
     if return_df:
         return out
     return None
@@ -1378,6 +1402,7 @@ def main(args):
         "study_id_from": args.study_id_from,
         "series_id_from": args.series_id_from,
         "manifest": args.manifest,
+        "manifest_config": manifest,
     }
     process_with_checkpoint(
         df_paths=df,

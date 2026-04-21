@@ -15,6 +15,7 @@ from unittest.mock import MagicMock
 
 from imperandi.process import convert as convert_module
 from imperandi.utils.archive_io import ArchiveSession, encode_archive_uri
+from imperandi.utils.run_state import build_checkpoint_paths, load_state
 
 
 def test_convert_list_str_to_list_valid():
@@ -323,6 +324,127 @@ def test_main_resume_uses_checkpoint_state(tmp_path, monkeypatch):
     args.resume = True
     convert_module.main(args)
     assert work_sizes == [1]
+
+
+def test_main_resume_reprocesses_when_error_checkpoint_path_changes(
+    tmp_path, monkeypatch
+):
+    csv_path = tmp_path / "dicom_index.csv"
+    pd.DataFrame(
+        [
+            {
+                "dicom_path": ["a.dcm"],
+                "series_id": "S1",
+                "study_id": "ST1",
+                "patient_key": "P1",
+                "Modality": "CT",
+            }
+        ]
+    ).to_csv(csv_path, index=False)
+
+    work_sizes = []
+
+    def fake_convert(work_df, output_dir, verbose, num_workers, on_result):
+        work_sizes.append(len(work_df))
+        for i in range(len(work_df)):
+            on_result(
+                i,
+                None,
+                {"error": "x", "_source_idx": int(work_df.iloc[i]["_source_idx"])},
+                "failed",
+            )
+        return work_df, pd.DataFrame()
+
+    monkeypatch.setattr(convert_module, "convert_dicom_to_nifti_parallel", fake_convert)
+    monkeypatch.setattr(
+        convert_module,
+        "materialize_archive_dicom_paths",
+        lambda df, session: (df, pd.DataFrame()),
+    )
+    monkeypatch.setattr(convert_module, "report_volumes", lambda *_: None)
+    monkeypatch.setattr(convert_module, "report_change", lambda *_: None)
+
+    args = argparse.Namespace(
+        csv_path=[str(csv_path)],
+        output_dir=str(tmp_path / "nifti"),
+        csv_path_out=str(tmp_path / "out.csv"),
+        error_csv_path=str(tmp_path / "err1.csv"),
+        verbose=False,
+        dry_run=False,
+        num_workers=1,
+        archive_max_depth=3,
+        archive_cache_dir=None,
+        keep_archive_cache=False,
+        resume=False,
+        strict_resume=False,
+        checkpoint_every_rows=1,
+        checkpoint_every_sec=3600,
+        manifest=None,
+    )
+    convert_module.main(args)
+
+    args.resume = True
+    args.error_csv_path = str(tmp_path / "err2.csv")
+    convert_module.main(args)
+
+    assert work_sizes == [1, 1]
+
+
+def test_main_uses_volume_id_as_checkpoint_source_idx(tmp_path, monkeypatch):
+    csv_path = tmp_path / "dicom_index.csv"
+    pd.DataFrame(
+        [
+            {
+                "volume_id": "vol-a",
+                "dicom_path": ["a.dcm"],
+                "series_id": "S1",
+                "study_id": "ST1",
+                "patient_key": "P1",
+                "Modality": "CT",
+            }
+        ]
+    ).to_csv(csv_path, index=False)
+
+    seen_source_ids = []
+
+    def fake_convert(work_df, output_dir, verbose, num_workers, on_result):
+        seen_source_ids.extend(work_df["_source_idx"].tolist())
+        for i in range(len(work_df)):
+            on_result(i, Path(output_dir) / "scan.nii.gz", None, "converted")
+        return work_df, pd.DataFrame()
+
+    monkeypatch.setattr(convert_module, "convert_dicom_to_nifti_parallel", fake_convert)
+    monkeypatch.setattr(
+        convert_module,
+        "materialize_archive_dicom_paths",
+        lambda df, session: (df, pd.DataFrame()),
+    )
+    monkeypatch.setattr(convert_module, "report_volumes", lambda *_: None)
+    monkeypatch.setattr(convert_module, "report_change", lambda *_: None)
+
+    args = argparse.Namespace(
+        csv_path=[str(csv_path)],
+        output_dir=str(tmp_path / "nifti"),
+        csv_path_out=str(tmp_path / "out.csv"),
+        error_csv_path=str(tmp_path / "err.csv"),
+        verbose=False,
+        dry_run=False,
+        num_workers=1,
+        archive_max_depth=3,
+        archive_cache_dir=None,
+        keep_archive_cache=False,
+        resume=False,
+        strict_resume=False,
+        checkpoint_every_rows=1,
+        checkpoint_every_sec=3600,
+        manifest=None,
+    )
+    convert_module.main(args)
+
+    assert seen_source_ids == ["vol-a"]
+    paths = build_checkpoint_paths(args.csv_path_out, args.error_csv_path, "convert")
+    state = load_state(paths.state_path)
+    assert state["completed_indices"] == ["vol-a"]
 
 
 def test_main_preserves_foreign_columns_from_existing_output(tmp_path, monkeypatch):

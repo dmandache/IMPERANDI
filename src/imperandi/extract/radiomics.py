@@ -8,15 +8,20 @@ from typing import Any, Dict, Optional, Tuple
 import pandas as pd
 from tqdm import tqdm
 
-from imperandi.utils.logging import setup_logging
+from imperandi.utils.logging import log_task_summary, setup_logging
 from imperandi.utils.misc import print_args
 from imperandi.utils.manifest import load_manifest
 from imperandi.utils.checkpoint_cli import add_checkpoint_arguments
 from imperandi.utils.run_state import (
     atomic_write_csv,
     CheckpointManager,
+    ensure_source_id_column,
+    fingerprint_inputs,
     merge_with_existing_output,
+    normalize_source_id,
+    normalize_source_ids,
     prepare_resume_context,
+    source_id_resume_signature,
 )
 
 logger = logging.getLogger(__name__)
@@ -770,9 +775,30 @@ def _extract_row_features(
 def main(args: argparse.Namespace) -> None:
     output_path = Path(args.csv_path_out)
     error_path = Path(args.error_csv_path)
+    source_kind, settings_path, settings_dict = _resolve_pyradiomics_settings_source(
+        args
+    )
+    effective_filters = _resolve_radiomics_filters(args)
+    settings_fingerprint = (
+        fingerprint_inputs(settings_path, strict=True)
+        if settings_path
+        else []
+    )
+    source_id_signature = source_id_resume_signature(args.csv_path)
+    checkpoint_signature = {
+        "effective_filters": effective_filters,
+        "pyradiomics_settings_fingerprint": settings_fingerprint,
+        "pyradiomics_settings_source": source_kind,
+        "pyradiomics_settings": settings_dict,
+    }
+    if source_id_signature:
+        checkpoint_signature["source_id"] = source_id_signature
+    resume_args = argparse.Namespace(
+        **vars(args),
+        checkpoint_signature=checkpoint_signature,
+    )
     exclude_hash_args = {
         "csv_path_out",
-        "error_csv_path",
         "dry_run",
         "verbose",
         "resume",
@@ -781,7 +807,7 @@ def main(args: argparse.Namespace) -> None:
         "strict_resume",
     }
     resume_ctx = prepare_resume_context(
-        args=args,
+        args=resume_args,
         command="radiomics",
         inputs=args.csv_path,
         output_path=output_path,
@@ -805,9 +831,6 @@ def main(args: argparse.Namespace) -> None:
         enabled=bool(getattr(args, "verbose", False)),
         verbose=bool(getattr(args, "verbose", False)),
     )
-    source_kind, settings_path, settings_dict = _resolve_pyradiomics_settings_source(
-        args
-    )
     if source_kind == "manifest":
         extractors = _create_radiomics_extractors(
             featureextractor_module,
@@ -829,38 +852,41 @@ def main(args: argparse.Namespace) -> None:
         df = pd.read_csv(paths.main_checkpoint_path).copy()
     else:
         df = pd.read_csv(args.csv_path).copy()
-        df["_source_idx"] = df.index.astype(int)
-    if "_source_idx" not in df.columns:
-        df["_source_idx"] = df.index.astype(int)
+    df = ensure_source_id_column(df)
 
     if "nifti_path" not in df.columns:
         raise KeyError("column 'nifti_path' missing")
-    effective_filters = _resolve_radiomics_filters(args)
+    rows_before_filter = len(df)
     df = _apply_explicit_filters(df, effective_filters)
+    filter_skipped_count = rows_before_filter - len(df)
     mask_columns = _get_mask_columns(df)
 
     logger.info("Extracting radiomics from %d rows and ROIs: %s", len(df), mask_columns)
     _log_dataset_strategy(mask_columns)
-    completed_indices: set[int] = set()
+    completed_indices: set[str] = set()
+    resume_skipped_count = 0
     if can_resume:
-        completed_indices = {
-            int(i)
-            for i in (state or {}).get("completed_indices", [])
-            if isinstance(i, int)
-        }
-    errors_by_idx: dict[int, dict[str, Any]] = {}
+        completed_indices = normalize_source_ids(
+            (state or {}).get("completed_indices", [])
+        )
+        resume_skipped_count = len(completed_indices)
+    errors_by_idx: dict[str, dict[str, Any]] = {}
     if can_resume and paths.error_checkpoint_path.exists():
         err_ckpt = pd.read_csv(paths.error_checkpoint_path)
         for _, row in err_ckpt.iterrows():
             if "_source_idx" in row:
                 try:
-                    errors_by_idx[int(row["_source_idx"])] = row.to_dict()
+                    source_idx = normalize_source_id(row["_source_idx"])
+                    if source_idx:
+                        errors_by_idx[source_idx] = row.to_dict()
                 except Exception:
                     pass
 
     def _checkpoint_write(*, force: bool = False) -> None:
         err_df = (
-            pd.DataFrame(list(errors_by_idx.values())) if errors_by_idx else pd.DataFrame()
+            pd.DataFrame(list(errors_by_idx.values()))
+            if errors_by_idx
+            else pd.DataFrame()
         )
         ckpt.flush(
             main_df=df,
@@ -872,10 +898,13 @@ def main(args: argparse.Namespace) -> None:
     row_indices = [
         idx
         for idx in df.index.tolist()
-        if int(df.at[idx, "_source_idx"]) not in completed_indices
+        if normalize_source_id(df.at[idx, "_source_idx"]) not in completed_indices
     ]
+    processed_source_ids = {
+        normalize_source_id(df.at[idx, "_source_idx"]) for idx in row_indices
+    }
     for idx in tqdm(row_indices, total=len(row_indices), desc="Radiomics", unit="row"):
-        src_idx = int(df.at[idx, "_source_idx"])
+        src_idx = normalize_source_id(df.at[idx, "_source_idx"])
         logger.debug("Processing radiomics row=%s", src_idx)
         row = df.loc[idx]
 
@@ -917,7 +946,7 @@ def main(args: argparse.Namespace) -> None:
     df_features = merge_with_existing_output(
         df_features,
         args.csv_path_out,
-        preferred_keys=["nifti_path", "_source_idx"],
+        preferred_keys=["volume_id", "nifti_path", "_source_idx"],
         strict=True,
     )
     atomic_write_csv(df_features, args.csv_path_out, index=False)
@@ -931,6 +960,21 @@ def main(args: argparse.Namespace) -> None:
         logger.warning("%d rows failed -> %s", len(df_err), args.error_csv_path)
     ckpt.finalize_state(completed_indices=completed_indices)
 
+    run_failed_count = len(processed_source_ids & set(errors_by_idx))
+    log_task_summary(
+        logger,
+        "Radiomics extraction",
+        total_rows=rows_before_filter,
+        processed_rows=len(row_indices),
+        succeeded_rows=max(0, len(row_indices) - run_failed_count),
+        skipped_rows=resume_skipped_count + filter_skipped_count,
+        failed_rows=run_failed_count,
+        success_label="features extracted",
+        extra_counts={
+            "skipped by resume": resume_skipped_count,
+            "skipped by filters": filter_skipped_count,
+        },
+    )
     logger.info("Radiomics extraction done ✔")
 
 

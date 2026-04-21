@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
-from typing import Optional
+from typing import Mapping, Optional
 
 DEFAULT_LOG_LEVEL = "INFO"
 DEFAULT_LOG_FORMAT = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
@@ -21,6 +21,55 @@ def _coerce_level(level: Optional[str | int]) -> int:
     if name.isdigit():
         return int(name)
     return logging._nameToLevel.get(name, logging.INFO)
+
+
+def _coerce_count(value: object) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def log_task_summary(
+    logger: logging.Logger,
+    task_name: str,
+    *,
+    processed_rows: int,
+    skipped_rows: int = 0,
+    failed_rows: int = 0,
+    total_rows: Optional[int] = None,
+    succeeded_rows: Optional[int] = None,
+    success_label: str = "succeeded",
+    skipped_label: str = "skipped",
+    extra_counts: Optional[Mapping[str, int]] = None,
+) -> None:
+    """Log a consistent end-of-task row processing summary."""
+
+    processed = _coerce_count(processed_rows)
+    skipped = _coerce_count(skipped_rows)
+    failed = _coerce_count(failed_rows)
+    if succeeded_rows is None:
+        succeeded = max(0, processed - failed)
+    else:
+        succeeded = _coerce_count(succeeded_rows)
+
+    parts: list[str] = []
+    if total_rows is not None:
+        parts.append(f"{_coerce_count(total_rows)} total row(s)")
+    parts.extend(
+        [
+            f"{processed} processed",
+            f"{succeeded} {success_label}",
+            f"{skipped} {skipped_label}",
+            f"{failed} failed",
+        ]
+    )
+    for label, count in (extra_counts or {}).items():
+        count = _coerce_count(count)
+        if count:
+            parts.append(f"{count} {label}")
+
+    logger.info("%s summary: %s", task_name, ", ".join(parts))
 
 
 def setup_logging(

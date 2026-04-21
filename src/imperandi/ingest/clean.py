@@ -20,7 +20,7 @@ from imperandi.ingest.apply_hook_manifests import (
     apply_id_standardization,
     apply_derived_columns,
 )
-from imperandi.utils.logging import setup_logging
+from imperandi.utils.logging import log_task_summary, setup_logging
 from imperandi.utils.misc import print_args, report_volumes, report_change
 from imperandi.utils.datetime import to_dates, to_times
 from imperandi.datasets_config.defaults import (
@@ -1177,6 +1177,7 @@ def clean_and_save_data(
     volume_length_max_mm,
 ):
     df = load_data(csv_path)
+    input_rows = len(df)
     report_volumes(df, "initial load")
 
     df = apply_id_standardization(df, manifest, logger=logger)
@@ -1281,6 +1282,19 @@ def clean_and_save_data(
     logger.info("shape : %s", df.shape)
     logger.info("columns : %s", df.columns)
 
+    output_rows = len(df)
+    filtered_rows = max(0, input_rows - output_rows)
+    log_task_summary(
+        logger,
+        "Cleaning",
+        total_rows=input_rows,
+        processed_rows=input_rows,
+        succeeded_rows=output_rows,
+        skipped_rows=filtered_rows,
+        failed_rows=0,
+        success_label="retained",
+        skipped_label="filtered out",
+    )
     logger.info("Cleaning done ✔")
 
 

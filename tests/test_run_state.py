@@ -10,9 +10,11 @@ from imperandi.utils.run_state import (
     STATE_SCHEMA_VERSION,
     CheckpointManager,
     build_checkpoint_paths,
+    ensure_source_id_column,
     load_state,
     merge_with_existing_output,
     prepare_resume_context,
+    source_id_resume_signature,
 )
 
 
@@ -23,6 +25,51 @@ def test_build_checkpoint_paths_contract(tmp_path):
     assert paths.state_path == tmp_path / ".out.convert.state.json"
     assert paths.main_checkpoint_path == tmp_path / ".out.convert.checkpoint.csv"
     assert paths.error_checkpoint_path == tmp_path / ".errors.convert.checkpoint.csv"
+
+
+def test_source_id_column_prefers_volume_id_and_state_stores_strings(tmp_path):
+    df = pd.DataFrame({"volume_id": ["vol-a", None], "value": [1, 2]})
+    out = ensure_source_id_column(df.copy())
+    assert out["_source_idx"].tolist() == ["vol-a", "1"]
+
+    output = tmp_path / "out.csv"
+    err = tmp_path / "errors.csv"
+    args = argparse.Namespace(
+        checkpoint_every_rows=1,
+        checkpoint_every_sec=1,
+        resume=False,
+        strict_resume=False,
+    )
+    ctx = prepare_resume_context(
+        args=args,
+        command="phase",
+        inputs=[output],
+        output_path=output,
+        error_path=err,
+    )
+    manager = CheckpointManager(paths=ctx["paths"], config=ctx["config"])
+    manager.mark_processed()
+    manager.flush(
+        main_df=out,
+        error_df=pd.DataFrame(),
+        completed_indices=["vol-a", 1],
+        force=True,
+    )
+
+    state = load_state(ctx["paths"].state_path)
+    assert state["completed_indices"] == ["1", "vol-a"]
+
+
+def test_source_id_resume_signature_detects_volume_id_csv(tmp_path):
+    csv_path = tmp_path / "input.csv"
+    pd.DataFrame({"volume_id": ["vol-a"], "nifti_path": ["scan.nii.gz"]}).to_csv(
+        csv_path, index=False
+    )
+
+    assert source_id_resume_signature(csv_path) == {
+        "source_id_schema": 1,
+        "preferred_source_id_column": "volume_id",
+    }
 
 
 def test_prepare_resume_context_requires_new_schema(tmp_path):

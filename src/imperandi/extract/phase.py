@@ -10,14 +10,18 @@ import nibabel as nib
 import pandas as pd
 from tqdm import tqdm
 
-from imperandi.utils.logging import setup_logging
+from imperandi.utils.logging import log_task_summary, setup_logging
 from imperandi.utils.misc import print_args
 from imperandi.utils.checkpoint_cli import add_checkpoint_arguments
 from imperandi.utils.run_state import (
     atomic_write_csv,
     CheckpointManager,
+    ensure_source_id_column,
     merge_with_existing_output,
+    normalize_source_id,
+    normalize_source_ids,
     prepare_resume_context,
+    source_id_resume_signature,
 )
 
 logger = logging.getLogger(__name__)
@@ -185,7 +189,6 @@ def main(args: argparse.Namespace) -> None:
     error_path = Path(args.error_csv_path)
     exclude_hash_args = {
         "csv_path_out",
-        "error_csv_path",
         "dry_run",
         "verbose",
         "resume",
@@ -193,8 +196,17 @@ def main(args: argparse.Namespace) -> None:
         "checkpoint_every_sec",
         "strict_resume",
     }
+    source_id_signature = source_id_resume_signature(args.csv_path)
+    resume_args = (
+        argparse.Namespace(
+            **vars(args),
+            checkpoint_source_id=source_id_signature,
+        )
+        if source_id_signature
+        else args
+    )
     resume_ctx = prepare_resume_context(
-        args=args,
+        args=resume_args,
         command="phase",
         inputs=args.csv_path,
         output_path=output_path,
@@ -220,36 +232,38 @@ def main(args: argparse.Namespace) -> None:
         df = pd.read_csv(paths.main_checkpoint_path).copy()
     else:
         df = pd.read_csv(args.csv_path).copy()
-        df["_source_idx"] = df.index.astype(int)
-    if "_source_idx" not in df.columns:
-        df["_source_idx"] = df.index.astype(int)
+    df = ensure_source_id_column(df)
 
-    errors_by_idx: Dict[int, Dict[str, Any]] = {}
-    completed_indices: set[int] = set()
+    errors_by_idx: Dict[str, Dict[str, Any]] = {}
+    completed_indices: set[str] = set()
     force = bool(getattr(args, "force", False))
+    resume_skipped_count = 0
+    prefilled_skipped_count = 0
     if can_resume:
-        completed_indices = {
-            int(i)
-            for i in (state or {}).get("completed_indices", [])
-            if isinstance(i, int)
-        }
+        completed_indices = normalize_source_ids(
+            (state or {}).get("completed_indices", [])
+        )
+        resume_skipped_count = len(completed_indices)
         if paths.error_checkpoint_path.exists():
             err_ckpt = pd.read_csv(paths.error_checkpoint_path)
             for _, row in err_ckpt.iterrows():
                 if "_source_idx" in row:
                     try:
-                        errors_by_idx[int(row["_source_idx"])] = row.to_dict()
+                        source_idx = normalize_source_id(row["_source_idx"])
+                        if source_idx:
+                            errors_by_idx[source_idx] = row.to_dict()
                     except Exception:
                         pass
 
     if not force and "totalseg_phase" in df.columns:
         prefilled_indices = {
-            int(df.at[idx, "_source_idx"])
+            normalize_source_id(df.at[idx, "_source_idx"])
             for idx in df.index
             if _has_populated_value(df.at[idx, "totalseg_phase"])
         }
         newly_completed = prefilled_indices - completed_indices
         if newly_completed:
+            prefilled_skipped_count = len(newly_completed)
             completed_indices.update(prefilled_indices)
             for source_idx in newly_completed:
                 errors_by_idx.pop(source_idx, None)
@@ -260,7 +274,9 @@ def main(args: argparse.Namespace) -> None:
 
     def _checkpoint_write(*, force: bool = False) -> None:
         err_df = (
-            pd.DataFrame(list(errors_by_idx.values())) if errors_by_idx else pd.DataFrame()
+            pd.DataFrame(list(errors_by_idx.values()))
+            if errors_by_idx
+            else pd.DataFrame()
         )
         ckpt.flush(
             main_df=df,
@@ -272,10 +288,13 @@ def main(args: argparse.Namespace) -> None:
     row_indices = [
         idx
         for idx in df.index.tolist()
-        if int(df.at[idx, "_source_idx"]) not in completed_indices
+        if normalize_source_id(df.at[idx, "_source_idx"]) not in completed_indices
     ]
+    processed_source_ids = {
+        normalize_source_id(df.at[idx, "_source_idx"]) for idx in row_indices
+    }
     for idx in tqdm(row_indices, total=len(row_indices), desc="Phase"):
-        src_idx = int(df.at[idx, "_source_idx"])
+        src_idx = normalize_source_id(df.at[idx, "_source_idx"])
         _, phase_info, err_msg = process_single_volume(
             idx,
             df.loc[idx].to_dict(),
@@ -302,7 +321,7 @@ def main(args: argparse.Namespace) -> None:
     df_out = merge_with_existing_output(
         df_out,
         args.csv_path_out,
-        preferred_keys=["nifti_path", "_source_idx"],
+        preferred_keys=["volume_id", "nifti_path", "_source_idx"],
         strict=True,
     )
     atomic_write_csv(df_out, args.csv_path_out, index=False)
@@ -316,6 +335,21 @@ def main(args: argparse.Namespace) -> None:
         logger.warning("%d rows failed -> %s", len(df_err), args.error_csv_path)
     ckpt.finalize_state(completed_indices=completed_indices)
 
+    run_failed_count = len(processed_source_ids & set(errors_by_idx))
+    log_task_summary(
+        logger,
+        "Phase extraction",
+        total_rows=len(df),
+        processed_rows=len(row_indices),
+        succeeded_rows=max(0, len(row_indices) - run_failed_count),
+        skipped_rows=resume_skipped_count + prefilled_skipped_count,
+        failed_rows=run_failed_count,
+        success_label="phase extracted",
+        extra_counts={
+            "skipped by resume": resume_skipped_count,
+            "skipped with existing phase": prefilled_skipped_count,
+        },
+    )
     logger.info("Phase extraction done ✔")
 
 
