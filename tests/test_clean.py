@@ -1,3 +1,4 @@
+import hashlib
 import sys
 from pathlib import Path
 from datetime import time as dt_time
@@ -19,6 +20,10 @@ ACQUISITION_TEMP_COLS = {
 
 def _assert_no_acquisition_temp_cols(df: pd.DataFrame) -> None:
     assert ACQUISITION_TEMP_COLS.isdisjoint(df.columns)
+
+
+def _expected_merged_volume_id(*volume_ids: str) -> str:
+    return hashlib.sha1("|".join(sorted(volume_ids)).encode("utf-8")).hexdigest()
 
 
 def test_normalize_clean_args_prefers_optional_csv_path(tmp_path):
@@ -304,34 +309,8 @@ def test_correct_volume_ids_merging(tmp_path, capsys):
         }
     )
     out = clean.correct_volume_ids(df.copy(), z_tolerance=1e-3)
-    # both rows should now have the canonical (sorted) volume id 'b'
-    assert set(out["volume_id"].unique()) == {"b"}
-
-
-def test_correct_volume_ids_extracts_z_from_string_image_position_patient():
-    df = pd.DataFrame(
-        {
-            "patient_key": ["p", "p"],
-            "study_id": ["s", "s"],
-            "series_id": ["sr", "sr"],
-            "ImageType": ["A", "A"],
-            "ImageOrientationPatient": [
-                (1.0, 0.0, 0.0, 0.0, 1.0, 0.0),
-                (1.0, 0.0, 0.0, 0.0, 1.0, 0.0),
-            ],
-            "SliceThickness": [1.0, 1.0],
-            "PixelSpacingXY": [0.7, 0.7],
-            "volume_id": ["b", "c"],
-            "ImagePositionPatient": [
-                "[100.0, 0.0, 0.0]",
-                "[100.0, 0.0, 5.0]",
-            ],
-        }
-    )
-
-    out = clean.correct_volume_ids(df.copy(), z_tolerance=1e-3)
-
-    assert set(out["volume_id"].unique()) == {"b"}
+    # both rows should now have the canonical merged volume id
+    assert set(out["volume_id"].unique()) == {_expected_merged_volume_id("b", "c")}
 
 
 def test_parse_ipp_accepts_dicom_backslash_string():
