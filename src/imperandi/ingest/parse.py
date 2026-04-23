@@ -1181,7 +1181,12 @@ def process_with_checkpoint(
 
     total_rows = len(df)
     try:
-        with tqdm(total=total_rows, desc="Parse files", unit="file") as pbar:
+        with tqdm(
+            total=total_rows,
+            desc="Parse files",
+            unit="file",
+            miniters=1,
+        ) as pbar:
             if next_source_idx > 0:
                 pbar.update(next_source_idx)
 

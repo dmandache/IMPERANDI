@@ -544,7 +544,12 @@ def test_process_with_checkpoint_reports_file_progress(tmp_path, monkeypatch):
         final_name="dicom_index.csv",
     )
 
-    assert recorded["kwargs"] == {"total": 5, "desc": "Parse files", "unit": "file"}
+    assert recorded["kwargs"] == {
+        "total": 5,
+        "desc": "Parse files",
+        "unit": "file",
+        "miniters": 1,
+    }
     assert recorded["updates"] == [2, 2, 1]
     assert sum(recorded["updates"]) == 5
 
