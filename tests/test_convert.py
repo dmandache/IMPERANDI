@@ -293,11 +293,20 @@ def test_main_resume_uses_checkpoint_state(tmp_path, monkeypatch):
     def fake_convert(work_df, output_dir, verbose, num_workers, on_result):
         work_sizes.append(len(work_df))
         for i in range(len(work_df)):
-            on_result(i, None, {"error": "x", "_source_idx": int(work_df.iloc[i]["_source_idx"])}, "failed")
+            on_result(
+                i,
+                None,
+                {"error": "x", "_source_idx": int(work_df.iloc[i]["_source_idx"])},
+                "failed",
+            )
         return work_df, pd.DataFrame()
 
     monkeypatch.setattr(convert_module, "convert_dicom_to_nifti_parallel", fake_convert)
-    monkeypatch.setattr(convert_module, "materialize_archive_dicom_paths", lambda df, session: (df, pd.DataFrame()))
+    monkeypatch.setattr(
+        convert_module,
+        "materialize_archive_dicom_paths",
+        lambda df, session: (df, pd.DataFrame()),
+    )
     monkeypatch.setattr(convert_module, "report_volumes", lambda *_: None)
     monkeypatch.setattr(convert_module, "report_change", lambda *_: None)
 
@@ -461,9 +470,9 @@ def test_main_preserves_foreign_columns_from_existing_output(tmp_path, monkeypat
             }
         ]
     ).to_csv(csv_path, index=False)
-    pd.DataFrame(
-        [{"series_id": "S1", "foreign_col": "keep"}]
-    ).to_csv(out_path, index=False)
+    pd.DataFrame([{"series_id": "S1", "foreign_col": "keep"}]).to_csv(
+        out_path, index=False
+    )
 
     def fake_convert(work_df, output_dir, verbose, num_workers, on_result):
         for i in range(len(work_df)):
@@ -516,9 +525,9 @@ def test_main_fails_fast_on_unsafe_shared_output_alignment(tmp_path, monkeypatch
             }
         ]
     ).to_csv(csv_path, index=False)
-    pd.DataFrame(
-        [{"foreign_col": "x"}, {"foreign_col": "y"}]
-    ).to_csv(out_path, index=False)
+    pd.DataFrame([{"foreign_col": "x"}, {"foreign_col": "y"}]).to_csv(
+        out_path, index=False
+    )
 
     def fake_convert(work_df, output_dir, verbose, num_workers, on_result):
         for i in range(len(work_df)):
@@ -551,5 +560,7 @@ def test_main_fails_fast_on_unsafe_shared_output_alignment(tmp_path, monkeypatch
         checkpoint_every_sec=3600,
         manifest=None,
     )
-    with pytest.raises(ValueError, match="Cannot safely preserve existing output columns"):
+    with pytest.raises(
+        ValueError, match="Cannot safely preserve existing output columns"
+    ):
         convert_module.main(args)

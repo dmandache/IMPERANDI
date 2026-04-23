@@ -41,7 +41,9 @@ def strip_notebook(path: Path) -> bool:
 
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
-        print("Usage: strip_notebook_outputs.py <notebook.ipynb> [...]", file=sys.stderr)
+        print(
+            "Usage: strip_notebook_outputs.py <notebook.ipynb> [...]", file=sys.stderr
+        )
         return 1
 
     any_changed = False

@@ -30,7 +30,7 @@ _DURATION_TIME_NAME_TOKENS = (
     "exposure",
     "trigger",
     "frame",
-    #"timesince",
+    # "timesince",
 )
 
 
@@ -200,7 +200,9 @@ def _has_clock_time_content(series: pd.Series, n_samples: int = 30) -> bool:
         return False
 
     matches = sample.apply(
-        lambda value: any(_is_clock_like_token(token) for token in _iter_time_tokens(value))
+        lambda value: any(
+            _is_clock_like_token(token) for token in _iter_time_tokens(value)
+        )
     )
     return bool(matches.mean() >= 0.5)
 

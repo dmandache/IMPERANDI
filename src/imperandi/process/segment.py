@@ -231,10 +231,14 @@ def _default_segmentation_config() -> Dict[str, Any]:
     }
 
 
-def load_segmentation_config(manifest_arg: str | None, *, base_path: Path) -> Dict[str, Any]:
+def load_segmentation_config(
+    manifest_arg: str | None, *, base_path: Path
+) -> Dict[str, Any]:
     """Load segmentation config from manifest, falling back to generic manifest."""
     generic_manifest = load_manifest("generic", base_path=base_path)
-    generic_segmentation = generic_manifest.get("segmentation") or _default_segmentation_config()
+    generic_segmentation = (
+        generic_manifest.get("segmentation") or _default_segmentation_config()
+    )
 
     if not manifest_arg:
         return copy.deepcopy(generic_segmentation)
@@ -269,7 +273,9 @@ def _resolve_prefetch_task_name(task: Dict[str, Any]) -> str | None:
     return task_name
 
 
-def _resolve_runtime_task(task_name: str, extra: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+def _resolve_runtime_task(
+    task_name: str, extra: Dict[str, Any]
+) -> Tuple[str, Dict[str, Any]]:
     runtime_aliases = {
         "total_fast": "total",
         "total_fast_mr": "total_mr",
@@ -623,11 +629,7 @@ def segment_volume(
     for task in tasks:
         task_name = task["task"]
         task_outputs = infer_task_outputs(task)
-        task_fetch_outputs = (
-            infer_task_fetch_outputs(task)
-            if task_outputs
-            else {}
-        )
+        task_fetch_outputs = infer_task_fetch_outputs(task) if task_outputs else {}
         extra = task.get("extra", {})
         if not isinstance(extra, dict):
             extra = {}
@@ -639,11 +641,7 @@ def segment_volume(
         # Keep a conservative default unless users explicitly override it.
         extra.setdefault("nr_thr_saving", 2)
 
-        before_snapshot = (
-            _snapshot_nifti_files(output_dir)
-            if not task_outputs
-            else {}
-        )
+        before_snapshot = _snapshot_nifti_files(output_dir) if not task_outputs else {}
         expected_paths = [
             output_dir / _output_to_filename(task_fetch_outputs[output_name])
             for output_name in task_outputs
@@ -798,8 +796,12 @@ def process_single_volume(
             resolved_output_to_fetch=resolved_output_to_fetch,
         )
         warning_msg = " | ".join(warnings) if warnings else None
-        return idx, str(nifti_path.parent), None, warning_msg, (
-            resolved_output_to_fetch or None
+        return (
+            idx,
+            str(nifti_path.parent),
+            None,
+            warning_msg,
+            (resolved_output_to_fetch or None),
         )
     except Exception as exc:
         # Capture full traceback for later debugging
@@ -996,7 +998,6 @@ def normalize_segment_args(args: argparse.Namespace) -> argparse.Namespace:
     return args
 
 
-
 def main(args: argparse.Namespace) -> None:
     setup_logging(verbose=getattr(args, "verbose", False))
     output_path = Path(args.csv_path_out)
@@ -1099,9 +1100,9 @@ def main(args: argparse.Namespace) -> None:
         if column_name not in df.columns:
             df[column_name] = None
     if tasks_config.get("postprocess"):
-        merged_output = str(
-            tasks_config["postprocess"].get("output", "merged")
-        ).strip() or "merged"
+        merged_output = (
+            str(tasks_config["postprocess"].get("output", "merged")).strip() or "merged"
+        )
         merged_col = _output_to_column(merged_output)
         if merged_col not in df.columns:
             df[merged_col] = None
@@ -1182,9 +1183,10 @@ def main(args: argparse.Namespace) -> None:
                 else:
                     row_warnings.append(f"missing mask: {mask_path}")
             if tasks_config.get("postprocess"):
-                merged_output = str(
-                    tasks_config["postprocess"].get("output", "merged")
-                ).strip() or "merged"
+                merged_output = (
+                    str(tasks_config["postprocess"].get("output", "merged")).strip()
+                    or "merged"
+                )
                 merged_path = base / _output_to_filename(merged_output)
                 if merged_path.exists():
                     df.at[idx, _output_to_column(merged_output)] = str(merged_path)
@@ -1298,7 +1300,9 @@ def main(args: argparse.Namespace) -> None:
                         "Executor does not support worker initializer; running without GPU pinning (%s)",
                         exc,
                     )
-                return ProcessPoolExecutor(max_workers=effective_workers, mp_context=ctx)
+                return ProcessPoolExecutor(
+                    max_workers=effective_workers, mp_context=ctx
+                )
 
         def _shutdown_pool(pool: ProcessPoolExecutor, force: bool) -> None:
             if force:
@@ -1452,7 +1456,9 @@ def main(args: argparse.Namespace) -> None:
             except BrokenProcessPool as exc:
                 broken_pool = True
                 broken_pool_msg = _broken_pool_message(exc)
-                logger.error("BrokenProcessPool during completion loop; aborting fast: %s", exc)
+                logger.error(
+                    "BrokenProcessPool during completion loop; aborting fast: %s", exc
+                )
             finally:
                 _shutdown_pool(pool, force=(broken_pool or restart_pool_for_timeout))
 
@@ -1475,7 +1481,9 @@ def main(args: argparse.Namespace) -> None:
         int, Tuple[int, str | None, str | None, str | None, Dict[str, str] | None]
     ]:
         if strategy.recycle_every <= 0:
-            return _run_rows(row_indices, progress_bar=progress_bar, on_result=on_result)
+            return _run_rows(
+                row_indices, progress_bar=progress_bar, on_result=on_result
+            )
 
         out: Dict[
             int, Tuple[int, str | None, str | None, str | None, Dict[str, str] | None]

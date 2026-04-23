@@ -2,7 +2,6 @@ import importlib.util
 import logging
 from pathlib import Path
 
-
 _LOGGING_MODULE_PATH = (
     Path(__file__).resolve().parents[1] / "src" / "imperandi" / "utils" / "logging.py"
 )

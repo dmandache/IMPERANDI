@@ -94,7 +94,9 @@ def test_prepare_resume_context_requires_new_schema(tmp_path):
     manager = CheckpointManager(paths=ctx["paths"], config=ctx["config"])
     df = pd.DataFrame({"a": [1]})
     manager.mark_processed()
-    manager.flush(main_df=df, error_df=pd.DataFrame(), completed_indices=[0], force=True)
+    manager.flush(
+        main_df=df, error_df=pd.DataFrame(), completed_indices=[0], force=True
+    )
 
     ctx2 = prepare_resume_context(
         args=args,
@@ -163,7 +165,9 @@ def test_prepare_resume_context_ignores_resume_checkpoint_flags_by_default(tmp_p
     manager = CheckpointManager(paths=ctx_first["paths"], config=ctx_first["config"])
     df = pd.DataFrame({"a": [1]})
     manager.mark_processed()
-    manager.flush(main_df=df, error_df=pd.DataFrame(), completed_indices=[0], force=True)
+    manager.flush(
+        main_df=df, error_df=pd.DataFrame(), completed_indices=[0], force=True
+    )
 
     args_second = argparse.Namespace(
         checkpoint_every_rows=999,
@@ -214,7 +218,9 @@ def test_prepare_resume_context_marks_already_finished(tmp_path):
     assert resumed["already_finished"]
 
 
-def test_prepare_resume_context_finished_without_output_uses_checkpoint_if_available(tmp_path):
+def test_prepare_resume_context_finished_without_output_uses_checkpoint_if_available(
+    tmp_path,
+):
     output = tmp_path / "out.csv"
     err = tmp_path / "errors.csv"
     args = argparse.Namespace(

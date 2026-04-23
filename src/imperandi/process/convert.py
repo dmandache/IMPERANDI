@@ -35,7 +35,7 @@ from imperandi.utils.run_state import (
 
 logger = logging.getLogger(__name__)
 DEFAULT_CHECKPOINT_EVERY_ROWS = 50
-DEFAULT_CHECKPOINT_EVERY_SEC = 5 * 60 # 5 minutes
+DEFAULT_CHECKPOINT_EVERY_SEC = 5 * 60  # 5 minutes
 
 
 def _lower_log_level_one_step(level: int) -> int:
@@ -373,8 +373,8 @@ def process_single_volume(k, row, output_dir, verbose, return_status=False):
             else row.series_id
         )
 
-        export_dir = Path(output_dir) / str(row.patient_key) / str(row.study_id) / str(
-            series_id
+        export_dir = (
+            Path(output_dir) / str(row.patient_key) / str(row.study_id) / str(series_id)
         )
         export_path = export_dir / "scan.nii.gz"
 

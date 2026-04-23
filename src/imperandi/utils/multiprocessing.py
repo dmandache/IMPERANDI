@@ -253,7 +253,9 @@ def decide_multiprocessing_strategy(
     # For 1 GPU: explicitly enforce 1 worker to avoid multi-process CUDA fights
     if use_gpu and gpu_count == 1:
         gpu_cap = 1
-        reasons["gpu_cap_note"] = "single GPU -> force 1 worker to prevent CUDA OOM/fragmentation"
+        reasons["gpu_cap_note"] = (
+            "single GPU -> force 1 worker to prevent CUDA OOM/fragmentation"
+        )
 
     # Combine caps
     cap = min(mem_cap, cpu_cap, gpu_cap, max_workers_cap)

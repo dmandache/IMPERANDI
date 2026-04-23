@@ -587,8 +587,7 @@ def _normalize_snapshot_missing_strings(value):
         return [_normalize_snapshot_missing_strings(v) for v in value]
     if isinstance(value, dict):
         return {
-            key: _normalize_snapshot_missing_strings(val)
-            for key, val in value.items()
+            key: _normalize_snapshot_missing_strings(val) for key, val in value.items()
         }
     return value
 
@@ -771,7 +770,9 @@ def choose_ids(
             [_relative_to_root(p, r) for p, r in zip(df["dicom_path"], scan_roots)],
             index=df.index,
         )
-        df["patient_key_path"] = rel.map(lambda p: p.parts[0] if len(p.parts) > 1 else None)
+        df["patient_key_path"] = rel.map(
+            lambda p: p.parts[0] if len(p.parts) > 1 else None
+        )
         df["study_path"] = rel.map(lambda p: p.parts[1] if len(p.parts) > 2 else None)
         df["series_path"] = rel.map(lambda p: p.parts[2] if len(p.parts) > 3 else None)
         df["dicom_filename"] = rel.map(lambda p: p.name)
@@ -1017,7 +1018,9 @@ def process_with_checkpoint(
     cols_to_drop_for_persist = [read_path_col] if read_path_col != "dicom_path" else []
     output_path = output_dir / final_name
     error_path = output_dir / f"{Path(final_name).stem}_errors.csv"
-    paths = build_checkpoint_paths(output_path=output_path, error_path=error_path, command="parse")
+    paths = build_checkpoint_paths(
+        output_path=output_path, error_path=error_path, command="parse"
+    )
 
     df = df_paths.copy()
     if "_source_idx" not in df.columns:
@@ -1129,7 +1132,9 @@ def process_with_checkpoint(
         if buffer_frames:
             flush_df = pd.concat(buffer_frames, ignore_index=True)
             if "_source_idx" not in flush_df.columns:
-                raise KeyError("internal error: _source_idx missing from flush dataframe")
+                raise KeyError(
+                    "internal error: _source_idx missing from flush dataframe"
+                )
 
             if not checkpoint_columns:
                 checkpoint_columns = flush_df.columns.tolist()
@@ -1138,7 +1143,9 @@ def process_with_checkpoint(
                 checkpoint_columns = [*checkpoint_columns, *extra_cols]
                 if paths.main_checkpoint_path.exists():
                     existing = pd.read_csv(paths.main_checkpoint_path)
-                    existing = existing.reindex(columns=checkpoint_columns, fill_value=None)
+                    existing = existing.reindex(
+                        columns=checkpoint_columns, fill_value=None
+                    )
                     atomic_write_csv(existing, paths.main_checkpoint_path, index=False)
 
             flush_df = flush_df.reindex(columns=checkpoint_columns, fill_value=None)
@@ -1164,7 +1171,11 @@ def process_with_checkpoint(
                 tuple(active_worker_config.get("tags", [])),
                 bool(active_worker_config.get("force", False)),
                 bool(active_worker_config.get("archive_mode", False)),
-                int(active_worker_config.get("archive_max_depth", DEFAULT_ARCHIVE_MAX_DEPTH)),
+                int(
+                    active_worker_config.get(
+                        "archive_max_depth", DEFAULT_ARCHIVE_MAX_DEPTH
+                    )
+                ),
             ),
         )
 
@@ -1200,7 +1211,9 @@ def process_with_checkpoint(
                                 source,
                                 tags=list(active_worker_config.get("tags", [])),
                                 force=bool(active_worker_config.get("force", False)),
-                                archive_mode=bool(active_worker_config.get("archive_mode", False)),
+                                archive_mode=bool(
+                                    active_worker_config.get("archive_mode", False)
+                                ),
                                 archive_max_depth=int(
                                     active_worker_config.get(
                                         "archive_max_depth",
@@ -1351,7 +1364,9 @@ def main(args):
         archive_max_depth=args.archive_max_depth,
     )
 
-    if (not archive_mode) and any(is_archive_uri(str(p)) for p in df["dicom_path"].tolist()):
+    if (not archive_mode) and any(
+        is_archive_uri(str(p)) for p in df["dicom_path"].tolist()
+    ):
         logger.info(
             "[archive][detect] archive URI encountered in discovered sources; archive-aware reads will be used per file."
         )

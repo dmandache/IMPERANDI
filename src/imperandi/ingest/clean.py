@@ -464,7 +464,6 @@ def generate_volume_id(df):
     # If none of the preferred columns exist, enforce fallback
     if not cols_to_use:
         cols_to_use = [c for c in fallback_cols if c in df.columns]
-    
 
     # If even fallback columns are missing, use any columns that exist
     if not cols_to_use:
@@ -475,7 +474,9 @@ def generate_volume_id(df):
 
     # If df truly has no columns (or empty selection), assign a single id
     if not cols_to_use:
-        logger.info("For unique volume ID generation, using no columns (all rows get same ID)")
+        logger.info(
+            "For unique volume ID generation, using no columns (all rows get same ID)"
+        )
         df = df.copy()
         df["volume_id"] = hashlib.sha1(b"volume").hexdigest()
         return df
@@ -658,9 +659,7 @@ def correct_volume_ids(df, z_tolerance=1e-3):
         z_sorted = np.sort(z_positions)
         z_diff = np.diff(z_sorted)
 
-        consistent_spacing = np.all(
-            np.isclose(z_diff, z_diff[0], atol=z_tolerance)
-        )
+        consistent_spacing = np.all(np.isclose(z_diff, z_diff[0], atol=z_tolerance))
         logger.debug(
             "z_positions spacing check: z_sample=%s, diff_sample=%s, "
             "nonzero_diff_sample=%s, reference_spacing=%s, consistent=%s, "
@@ -682,7 +681,7 @@ def correct_volume_ids(df, z_tolerance=1e-3):
 
         if consistent_spacing:
             logger.info("👫 Merged")
-            #canonical_id = sorted(map(str, volume_ids))[0]
+            # canonical_id = sorted(map(str, volume_ids))[0]
             canonical_id = hashlib.sha1(
                 "|".join(sorted(map(str, volume_ids))).encode()
             ).hexdigest()
@@ -1062,14 +1061,16 @@ def compute_acquisition_order(df):
     if "time" in df.columns:
         df["time"] = df["time"].apply(_normalize_instance_creation_time)
         time_delta = df["time"].apply(
-            lambda t: pd.Timedelta(
-                hours=t.hour,
-                minutes=t.minute,
-                seconds=t.second,
-                microseconds=t.microsecond,
+            lambda t: (
+                pd.Timedelta(
+                    hours=t.hour,
+                    minutes=t.minute,
+                    seconds=t.second,
+                    microseconds=t.microsecond,
+                )
+                if t is not None
+                else pd.NaT
             )
-            if t is not None
-            else pd.NaT
         )
         time_delta = pd.to_timedelta(time_delta, errors="coerce")
     else:
@@ -1100,9 +1101,9 @@ def compute_acquisition_order(df):
     if "_acquisition_number_sort" in df.columns:
         agg_map["_acquisition_number_sort"] = ("_acquisition_number_sort", "min")
 
-    df_study = df.groupby(
-        ["patient_key", "study_id", "volume_id"], as_index=False
-    ).agg(**agg_map)
+    df_study = df.groupby(["patient_key", "study_id", "volume_id"], as_index=False).agg(
+        **agg_map
+    )
 
     sort_cols = ["patient_key", "study_id", "_acq_timestamp"]
     if "_series_number_sort" in df_study.columns:
@@ -1126,8 +1127,8 @@ def compute_acquisition_order(df):
 
     first_ts = df_study.groupby(group_cols)["_acq_timestamp"].transform("min")
     df_study["delay_since_first_acq_sec"] = (
-        (df_study["_acq_timestamp"] - first_ts).dt.total_seconds()
-    )
+        df_study["_acq_timestamp"] - first_ts
+    ).dt.total_seconds()
     df_study["acquisition_order"] = df_study.groupby(group_cols).cumcount()
 
     df = df.merge(
@@ -1148,7 +1149,7 @@ def compute_acquisition_order(df):
     )
     df = df.drop(
         columns=[
-            #"_acq_timestamp",
+            # "_acq_timestamp",
             "_series_number_sort",
             "_acquisition_number_sort",
         ],
@@ -1337,7 +1338,7 @@ def clean_and_save_data(
     df = compute_visit_order(df)
     df = compute_acquisition_order(df)
 
-    df = df.dropna(axis=1, how="all") # drop empty columns
+    df = df.dropna(axis=1, how="all")  # drop empty columns
 
     df = reorder_columns(df)
     df = reorder_rows(df)

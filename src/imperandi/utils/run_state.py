@@ -127,7 +127,9 @@ def fingerprint_inputs(
 
 def _atomic_write_bytes(path: Path, payload: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
     tmp_path = Path(tmp_name)
     try:
         with os.fdopen(fd, "wb") as handle:
@@ -145,11 +147,15 @@ def _atomic_write_bytes(path: Path, payload: bytes) -> None:
 
 def atomic_write_json(path: str | Path, payload: Mapping[str, Any]) -> None:
     p = Path(path)
-    blob = json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=True).encode("utf-8")
+    blob = json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=True).encode(
+        "utf-8"
+    )
     _atomic_write_bytes(p, blob)
 
 
-def atomic_write_csv(df: pd.DataFrame, path: str | Path, *, index: bool = False) -> None:
+def atomic_write_csv(
+    df: pd.DataFrame, path: str | Path, *, index: bool = False
+) -> None:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(prefix=f".{p.name}.", suffix=".tmp", dir=p.parent)
@@ -217,9 +223,7 @@ def normalize_source_id(value: Any) -> str:
 
 def normalize_source_ids(values: Iterable[Any]) -> set[str]:
     return {
-        source_id
-        for source_id in (normalize_source_id(v) for v in values)
-        if source_id
+        source_id for source_id in (normalize_source_id(v) for v in values) if source_id
     }
 
 

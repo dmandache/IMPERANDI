@@ -360,7 +360,9 @@ def test_segment_volume_uses_fetch_output_alias_for_expected_and_merge_paths(
     assert set(calls["mask_files"]) == {"liver.nii.gz", "liver_lesion.nii.gz"}
 
 
-def test_segment_volume_skips_postprocess_when_outputs_already_checkpointed(tmp_path, monkeypatch):
+def test_segment_volume_skips_postprocess_when_outputs_already_checkpointed(
+    tmp_path, monkeypatch
+):
     nifti = tmp_path / "vol.nii.gz"
     nifti.write_text("nifti")
     (tmp_path / "a.nii.gz").write_text("mask")
@@ -699,7 +701,10 @@ def test_main_maps_fetch_output_path_into_logical_mask_column(tmp_path, monkeypa
                 "extra": {},
             },
         ],
-        "postprocess": {"merge_keys": ["liver", "liver_tumor"], "output": "merged.nii.gz"},
+        "postprocess": {
+            "merge_keys": ["liver", "liver_tumor"],
+            "output": "merged.nii.gz",
+        },
     }
 
     config_path = tmp_path / "tasks.json"
@@ -916,7 +921,9 @@ def test_main_single_worker_avoids_process_pool(tmp_path, monkeypatch):
     patch_strategy(monkeypatch, mode="serial", max_workers=1, max_in_flight=1)
 
     def fail_if_pool_used(*args, **kwargs):
-        raise AssertionError("ProcessPoolExecutor should not be used in single-worker mode")
+        raise AssertionError(
+            "ProcessPoolExecutor should not be used in single-worker mode"
+        )
 
     monkeypatch.setattr(segment_module, "ProcessPoolExecutor", fail_if_pool_used)
 
@@ -971,7 +978,9 @@ def test_main_uses_strategy_effective_worker_count(tmp_path, monkeypatch):
     patch_strategy(monkeypatch, mode="process_pool", max_workers=1, max_in_flight=1)
 
     def fail_if_pool_used(*args, **kwargs):
-        raise AssertionError("ProcessPoolExecutor should not be used when strategy max_workers=1")
+        raise AssertionError(
+            "ProcessPoolExecutor should not be used when strategy max_workers=1"
+        )
 
     monkeypatch.setattr(segment_module, "ProcessPoolExecutor", fail_if_pool_used)
 
@@ -1525,7 +1534,9 @@ def test_main_subprocess_mode_currently_degrades_to_serial(tmp_path, monkeypatch
     )
 
     def fail_if_pool_used(*args, **kwargs):
-        raise AssertionError("ProcessPoolExecutor should not be used in subprocess fallback mode")
+        raise AssertionError(
+            "ProcessPoolExecutor should not be used in subprocess fallback mode"
+        )
 
     monkeypatch.setattr(segment_module, "ProcessPoolExecutor", fail_if_pool_used)
 
@@ -1576,7 +1587,9 @@ def test_main_resume_skips_completed_rows(tmp_path, monkeypatch):
     def fake_prefetch(*args, **kwargs):
         prefetch_calls["count"] += 1
 
-    monkeypatch.setattr(segment_module, "prefetch_totalsegmentator_models", fake_prefetch)
+    monkeypatch.setattr(
+        segment_module, "prefetch_totalsegmentator_models", fake_prefetch
+    )
     monkeypatch.setattr(segment_module, "tqdm", passthrough_tqdm)
     patch_strategy(monkeypatch, mode="serial", max_workers=1, max_in_flight=1)
 

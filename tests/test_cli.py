@@ -388,7 +388,9 @@ def test_cli_parse_resume_enabled_by_default(tmp_path, capsys):
     )
 
     output = capsys.readouterr().out
-    resume_line = next(line for line in output.splitlines() if line.strip().startswith("resume"))
+    resume_line = next(
+        line for line in output.splitlines() if line.strip().startswith("resume")
+    )
     assert exit_code == 0
     assert resume_line.strip().endswith("True")
 
@@ -410,7 +412,9 @@ def test_cli_parse_no_resume_disables_resume(tmp_path, capsys):
     )
 
     output = capsys.readouterr().out
-    resume_line = next(line for line in output.splitlines() if line.strip().startswith("resume"))
+    resume_line = next(
+        line for line in output.splitlines() if line.strip().startswith("resume")
+    )
     assert exit_code == 0
     assert resume_line.strip().endswith("False")
 

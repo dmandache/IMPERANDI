@@ -65,5 +65,6 @@ def report_change(df, previous_df, col=None):
             )
         if col is not None:
             logger.info(
-                "Distribution of affected values in column %s ", 
-                missing_df[col].value_counts(dropna=False))
+                "Distribution of affected values in column %s ",
+                missing_df[col].value_counts(dropna=False),
+            )

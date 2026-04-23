@@ -30,9 +30,9 @@ DEFAULT_CHECKPOINT_EVERY_SEC = 5 * 60
 
 DEFAULT_SETTINGS = {
     "binWidth": 25,
-    "resampledPixelSpacing": [1, 1, 1], # 1mm isotropic resampling
+    "resampledPixelSpacing": [1, 1, 1],  # 1mm isotropic resampling
     "resegmentRange": [-150, 250],  # typical HU range for soft tissue
-    "correctMask": True, # enable mask correction to ensure valid feature extraction, especially for shape features
+    "correctMask": True,  # enable mask correction to ensure valid feature extraction, especially for shape features
 }
 YAML_SUFFIXES = (".yaml", ".yml")
 
@@ -64,8 +64,10 @@ def _create_radiomics_extractors(
     settings_path: Optional[str] = None,
     settings_dict: Optional[Dict[str, Any]] = None,
 ):
-    mode_count = int(settings is not None) + int(settings_path is not None) + int(
-        settings_dict is not None
+    mode_count = (
+        int(settings is not None)
+        + int(settings_path is not None)
+        + int(settings_dict is not None)
     )
     if mode_count != 1:
         raise ValueError(
@@ -190,9 +192,7 @@ def _load_manifest_radiomics_settings(
     if pyradiomics_settings is None:
         return None
     if not isinstance(pyradiomics_settings, dict):
-        raise ValueError(
-            "Manifest radiomics.pyradiomics settings must be an object."
-        )
+        raise ValueError("Manifest radiomics.pyradiomics settings must be an object.")
     return pyradiomics_settings
 
 
@@ -253,7 +253,9 @@ def _load_manifest_radiomics_filters(
     for column, values in raw_filters.items():
         column_name = str(column).strip()
         if not column_name:
-            raise ValueError("Manifest radiomics.filters contains an empty column name.")
+            raise ValueError(
+                "Manifest radiomics.filters contains an empty column name."
+            )
         if not isinstance(values, list):
             raise ValueError(
                 f"Manifest radiomics.filters[{column_name!r}] must be a list."
@@ -516,7 +518,9 @@ def _is_existing_path(value: Any) -> bool:
     return bool(path) and Path(path).exists()
 
 
-def _project_radiomics_features(result: Dict[str, Any], *, prefix: str) -> Dict[str, Any]:
+def _project_radiomics_features(
+    result: Dict[str, Any], *, prefix: str
+) -> Dict[str, Any]:
     features: Dict[str, Any] = {}
     for key, value in result.items():
         skey = str(key)
@@ -628,7 +632,9 @@ def extract_radiomics_organ_minus_tumor(
             return _project_radiomics_features(result, prefix=prefix), None
 
         tumor = _resample_to_reference_if_needed(tumor, organ, sitk_module)
-        tumor_bin = sitk_module.Cast(sitk_module.NotEqual(tumor, 0), sitk_module.sitkUInt8)
+        tumor_bin = sitk_module.Cast(
+            sitk_module.NotEqual(tumor, 0), sitk_module.sitkUInt8
+        )
         organ_minus_tumor = sitk_module.And(
             organ_bin,
             sitk_module.Cast(sitk_module.Not(tumor_bin), sitk_module.sitkUInt8),
@@ -683,7 +689,9 @@ def _build_dataset_strategy(mask_columns: list[str]) -> list[str]:
                 f"fallback all on {mask_col} if {tumor_col} missing/empty"
             )
         else:
-            strategy.append(f"{prefix}: all on {mask_col} (no paired tumor mask column)")
+            strategy.append(
+                f"{prefix}: all on {mask_col} (no paired tumor mask column)"
+            )
 
     return strategy
 
@@ -780,9 +788,7 @@ def main(args: argparse.Namespace) -> None:
     )
     effective_filters = _resolve_radiomics_filters(args)
     settings_fingerprint = (
-        fingerprint_inputs(settings_path, strict=True)
-        if settings_path
-        else []
+        fingerprint_inputs(settings_path, strict=True) if settings_path else []
     )
     source_id_signature = source_id_resume_signature(args.csv_path)
     checkpoint_signature = {
@@ -848,7 +854,9 @@ def main(args: argparse.Namespace) -> None:
         )
 
     if can_resume and paths.main_checkpoint_path.exists():
-        logger.info("Resuming radiomics from checkpoint: %s", paths.main_checkpoint_path)
+        logger.info(
+            "Resuming radiomics from checkpoint: %s", paths.main_checkpoint_path
+        )
         df = pd.read_csv(paths.main_checkpoint_path).copy()
     else:
         df = pd.read_csv(args.csv_path).copy()

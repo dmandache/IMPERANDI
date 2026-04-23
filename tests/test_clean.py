@@ -12,7 +12,7 @@ import numpy as np
 from imperandi.ingest import clean
 
 ACQUISITION_TEMP_COLS = {
-    #"_acq_timestamp",
+    # "_acq_timestamp",
     "_series_number_sort",
     "_acquisition_number_sort",
 }

@@ -71,7 +71,9 @@ def test_normalize_radiomics_args_accepts_positional_csv_path_out(tmp_path):
     assert not hasattr(out, "csv_path_out_pos")
 
 
-def test_normalize_radiomics_args_validates_pyradiomics_settings_path(tmp_path, monkeypatch):
+def test_normalize_radiomics_args_validates_pyradiomics_settings_path(
+    tmp_path, monkeypatch
+):
     csv_path = tmp_path / "nifti_index.csv"
     csv_path.write_text("nifti_path\n")
     settings_path = tmp_path / "params.yaml"
@@ -162,9 +164,7 @@ def test_resolve_pyradiomics_settings_source_prefers_manifest_and_warns_twice(
     assert source_path is None
     assert source_dict == {"setting": {"binWidth": 9}}
     warnings = [
-        record.message
-        for record in caplog.records
-        if record.levelno >= logging.WARNING
+        record.message for record in caplog.records if record.levelno >= logging.WARNING
     ]
     assert len(warnings) == 2
     assert "Both --manifest and --pyradiomics_settings were provided" in warnings[0]
@@ -192,9 +192,7 @@ def test_resolve_pyradiomics_settings_source_uses_cli_file_when_manifest_has_no_
     assert source_path == str(settings_path.resolve())
     assert source_dict is None
     warnings = [
-        record.message
-        for record in caplog.records
-        if record.levelno >= logging.WARNING
+        record.message for record in caplog.records if record.levelno >= logging.WARNING
     ]
     assert len(warnings) == 1
     assert "Both --manifest and --pyradiomics_settings were provided" in warnings[0]
@@ -537,7 +535,9 @@ def test_main_resume_skips_completed_rows(tmp_path, monkeypatch):
         dep_calls["count"] += 1
         return object(), object()
 
-    monkeypatch.setattr(radiomics_module, "_load_radiomics_dependencies", fake_load_deps)
+    monkeypatch.setattr(
+        radiomics_module, "_load_radiomics_dependencies", fake_load_deps
+    )
     monkeypatch.setattr(
         radiomics_module,
         "_create_radiomics_extractors",
@@ -548,8 +548,12 @@ def test_main_resume_skips_completed_rows(tmp_path, monkeypatch):
         calls["count"] += 1
         return {"f": 1.0}, None
 
-    monkeypatch.setattr(radiomics_module, "extract_radiomics_organ_minus_tumor", fake_liver)
-    monkeypatch.setattr(radiomics_module, "extract_radiomics_safe", lambda *a, **k: ({}, None))
+    monkeypatch.setattr(
+        radiomics_module, "extract_radiomics_organ_minus_tumor", fake_liver
+    )
+    monkeypatch.setattr(
+        radiomics_module, "extract_radiomics_safe", lambda *a, **k: ({}, None)
+    )
 
     args = argparse.Namespace(
         csv_path=str(csv_path),
@@ -793,9 +797,7 @@ def test_main_applies_explicit_filters_from_manifest_and_cli(tmp_path, monkeypat
         ]
     ).to_csv(csv_path, index=False)
     manifest_path = tmp_path / "manifest.json"
-    manifest_path.write_text(
-        '{"radiomics": {"filters": {"phase": ["portal"]}}}'
-    )
+    manifest_path.write_text('{"radiomics": {"filters": {"phase": ["portal"]}}}')
 
     monkeypatch.setattr(
         radiomics_module,
@@ -978,7 +980,9 @@ def test_build_dataset_strategy_describes_extractor_plan():
     assert "liver_tumor: all on mask_liver_tumor" in strategy
 
 
-def test_extract_radiomics_organ_minus_tumor_uses_shape_and_non_shape_extractors(tmp_path):
+def test_extract_radiomics_organ_minus_tumor_uses_shape_and_non_shape_extractors(
+    tmp_path,
+):
     image_path = tmp_path / "img.nii.gz"
     organ_path = tmp_path / "organ.nii.gz"
     tumor_path = tmp_path / "tumor.nii.gz"
@@ -1033,7 +1037,9 @@ def test_extract_radiomics_organ_minus_tumor_uses_shape_and_non_shape_extractors
     old_resample = radiomics_module._resample_to_reference_if_needed
     old_is_existing = radiomics_module._is_existing_path
     try:
-        radiomics_module._resample_to_reference_if_needed = lambda mask, ref, sitk_module: mask
+        radiomics_module._resample_to_reference_if_needed = (
+            lambda mask, ref, sitk_module: mask
+        )
         radiomics_module._is_existing_path = lambda value: bool(value)
         features, msg = radiomics_module.extract_radiomics_organ_minus_tumor(
             str(image_path),
@@ -1097,9 +1103,9 @@ def test_extract_radiomics_organ_minus_tumor_missing_tumor_uses_all_extractor(tm
 
     old_is_existing = radiomics_module._is_existing_path
     try:
-        radiomics_module._is_existing_path = (
-            lambda value: bool(value) and str(value) == str(organ_path)
-        )
+        radiomics_module._is_existing_path = lambda value: bool(value) and str(
+            value
+        ) == str(organ_path)
         features, msg = radiomics_module.extract_radiomics_organ_minus_tumor(
             str(image_path),
             str(organ_path),
