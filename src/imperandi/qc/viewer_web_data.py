@@ -59,7 +59,7 @@ def is_image_path_value(value) -> bool:
     try:
         if path.exists():
             return path.is_file()
-    except:
+    except Exception:
         return False
 
     lower = text.lower()
