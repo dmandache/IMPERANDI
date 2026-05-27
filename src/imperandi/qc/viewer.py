@@ -1,16 +1,20 @@
 # %matplotlib widget
 
-from pathlib import Path
 import time
 import warnings
 
-import nibabel as nib
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import ipywidgets as widgets
 from IPython.display import clear_output, display
+
+from imperandi.qc.viewer_resample import (
+    DEFAULT_ISOTROPIC_RESOLUTION_MM,
+    load_nifti_isotropic,
+    validate_isotropic_resolution,
+)
 
 warnings.filterwarnings("ignore")  # Ignore warnings
 
@@ -51,18 +55,19 @@ JUMP_DROPDOWN_WIDTH = "250px"
 JUMP_NAV_BUTTON_WIDTH = "120px"
 
 
-def load_nifti(file_path, orientation="LAS"):
-    """Load a NIfTI file and return the image data oriented in RAS+."""
-    img = nib.load(Path(file_path).resolve())
-    data = img.get_fdata()
-    affine = img.affine
-    current_ornt = nib.orientations.io_orientation(affine)
-    if orientation == "RAS":
-        new_ornt = np.array([[0, 1], [1, 1], [2, 1]])
-    elif orientation == "LAS":
-        new_ornt = np.array([[0, -1], [1, 1], [2, 1]])
-    transform = nib.orientations.ornt_transform(current_ornt, new_ornt)
-    return nib.orientations.apply_orientation(data, transform)
+def load_nifti(
+    file_path,
+    orientation="LAS",
+    isotropic_resolution_mm=DEFAULT_ISOTROPIC_RESOLUTION_MM,
+    order=1,
+):
+    """Load a NIfTI file, orient it, and resample to isotropic display spacing."""
+    return load_nifti_isotropic(
+        file_path,
+        orientation=orientation,
+        resolution_mm=isotropic_resolution_mm,
+        order=order,
+    )
 
 
 def clip_hu_values(ct_scan, min_hu, max_hu):
@@ -80,6 +85,7 @@ class CTScanViewer:
         HU_min=-100,
         HU_max=400,
         exploration_mode="ordered",
+        isotropic_resolution_mm=DEFAULT_ISOTROPIC_RESOLUTION_MM,
     ):
         self.df = df
         self.ct_scan_col = ct_scan_col
@@ -141,6 +147,9 @@ class CTScanViewer:
         self.canvas_size_px = DISPLAY_CANVAS_PX
         self.figure_dpi = FIGURE_DPI
         self.image_aspect = "auto"
+        self.isotropic_resolution_mm = validate_isotropic_resolution(
+            isotropic_resolution_mm
+        )
 
         if self.exploration_mode == "random":
             self.explored_history = [self.current_index]
@@ -196,6 +205,16 @@ class CTScanViewer:
             layout=widgets.Layout(width="100%", min_width="0px"),
         )
         self.window_preset.observe(self.on_window_preset_change, names="value")
+
+        self.resolution_input = widgets.BoundedFloatText(
+            value=self.isotropic_resolution_mm,
+            min=0.01,
+            max=100.0,
+            step=0.25,
+            description="Voxel mm",
+            layout=widgets.Layout(width="100%", min_width="0px"),
+        )
+        self.resolution_input.observe(self.on_resolution_change, names="value")
 
         phase_desc = self.phase_col if self.phase_col else "phase"
         self.patient_dropdown = widgets.Dropdown(
@@ -427,7 +446,11 @@ class CTScanViewer:
             layout=group_layout,
         )
         window_group = widgets.VBox(
-            [widgets.HTML("<b>Rendering</b>"), self.window_preset],
+            [
+                widgets.HTML("<b>Rendering</b>"),
+                self.window_preset,
+                self.resolution_input,
+            ],
             layout=group_layout,
         )
         center_button_and_dropdown = widgets.HBox(
@@ -785,6 +808,10 @@ class CTScanViewer:
         self.HU_max = wl + ww / 2.0
         self.update_display()
 
+    def on_resolution_change(self, change):
+        self.isotropic_resolution_mm = validate_isotropic_resolution(change["new"])
+        self.load_data()
+
     def on_patient_change(self, change):
         if self._suspend_jump:
             return
@@ -847,7 +874,11 @@ class CTScanViewer:
 
         row = self.df.iloc[self.current_index]
         self.progress_bar.value = 0.1
-        self.ct_scan_raw = load_nifti(row[self.ct_scan_col])
+        self.ct_scan_raw = load_nifti(
+            row[self.ct_scan_col],
+            isotropic_resolution_mm=self.isotropic_resolution_mm,
+            order=1,
+        )
 
         self.segmentations = {}
         if self.segmentation_cols:
@@ -858,7 +889,11 @@ class CTScanViewer:
                 if isinstance(seg_path, float) and np.isnan(seg_path):
                     continue
                 try:
-                    self.segmentations[seg_col] = load_nifti(seg_path)
+                    self.segmentations[seg_col] = load_nifti(
+                        seg_path,
+                        isotropic_resolution_mm=self.isotropic_resolution_mm,
+                        order=0,
+                    )
                 except Exception as exc:
                     print(
                         f"Warning: failed to load segmentation {seg_col} "

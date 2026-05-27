@@ -1,13 +1,12 @@
 import argparse
 from html import escape
-from pathlib import Path
 import warnings
 
-import nibabel as nib
 import numpy as np
 import pandas as pd
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
@@ -15,6 +14,11 @@ import panel as pn
 import param
 
 try:
+    from imperandi.qc.viewer_resample import (
+        DEFAULT_ISOTROPIC_RESOLUTION_MM,
+        load_nifti_isotropic,
+        validate_isotropic_resolution,
+    )
     from imperandi.qc.viewer_web_data import (
         FILTER_ALL_COLUMNS,
         filter_dataframe,
@@ -26,6 +30,11 @@ try:
         load_dataframe,
     )
 except ModuleNotFoundError:
+    from viewer_resample import (
+        DEFAULT_ISOTROPIC_RESOLUTION_MM,
+        load_nifti_isotropic,
+        validate_isotropic_resolution,
+    )
     from viewer_web_data import (
         FILTER_ALL_COLUMNS,
         filter_dataframe,
@@ -73,25 +82,18 @@ WINDOW_PRESETS = {
 COLORMAPS = ["jet", "autumn", "summer", "winter", "viridis"]
 
 
-def load_nifti(file_path, orientation="LAS"):
-    """
-    Minimal copy of your current orientation-aware NIfTI loading logic.
-    """
-    img = nib.load(Path(file_path).resolve())
-    data = img.get_fdata()
-    affine = img.affine
-
-    current_ornt = nib.orientations.io_orientation(affine)
-
-    if orientation == "RAS":
-        new_ornt = np.array([[0, 1], [1, 1], [2, 1]])
-    elif orientation == "LAS":
-        new_ornt = np.array([[0, -1], [1, 1], [2, 1]])
-    else:
-        raise ValueError("orientation must be 'RAS' or 'LAS'")
-
-    transform = nib.orientations.ornt_transform(current_ornt, new_ornt)
-    return nib.orientations.apply_orientation(data, transform)
+def load_nifti(
+    file_path,
+    orientation="LAS",
+    isotropic_resolution_mm=DEFAULT_ISOTROPIC_RESOLUTION_MM,
+    order=1,
+):
+    return load_nifti_isotropic(
+        file_path,
+        orientation=orientation,
+        resolution_mm=isotropic_resolution_mm,
+        order=order,
+    )
 
 
 def clip_hu_values(ct_scan, min_hu, max_hu):
@@ -140,14 +142,22 @@ class CTScanPanelViewer(param.Parameterized):
     date = param.Selector(default=None, objects=[])
     phase = param.Selector(default=None, objects=[])
 
-    view_plane = param.Selector(default="axial", objects=["axial", "sagittal", "coronal"])
+    view_plane = param.Selector(
+        default="axial", objects=["axial", "sagittal", "coronal"]
+    )
     slice_idx = param.Integer(default=0, bounds=(0, 1))
 
-    window_preset = param.Selector(default="Custom", objects=list(WINDOW_PRESETS.keys()))
+    window_preset = param.Selector(
+        default="Custom", objects=list(WINDOW_PRESETS.keys())
+    )
     HU_min = param.Integer(default=-100, step=10, bounds=(-1000, 1000))
     HU_max = param.Integer(default=400, step=10, bounds=(-1000, 1000))
 
     alpha = param.Number(default=0.10, bounds=(0, 1))
+    isotropic_resolution_mm = param.Number(
+        default=DEFAULT_ISOTROPIC_RESOLUTION_MM,
+        bounds=(0.01, 100.0),
+    )
 
     center_segmentation = param.Selector(default=None, objects=[])
 
@@ -158,8 +168,13 @@ class CTScanPanelViewer(param.Parameterized):
         segmentation_cols=None,
         phase_col=None,
         orientation="LAS",
+        isotropic_resolution_mm=DEFAULT_ISOTROPIC_RESOLUTION_MM,
         **params,
     ):
+        params.setdefault(
+            "isotropic_resolution_mm",
+            validate_isotropic_resolution(isotropic_resolution_mm),
+        )
         super().__init__(**params)
 
         self.df = df.reset_index(drop=True)
@@ -181,7 +196,11 @@ class CTScanPanelViewer(param.Parameterized):
         if segmentation_cols is None:
             auto_cols = [c for c in self.df.columns if str(c).startswith("mask_")]
             if not auto_cols:
-                auto_cols = [c for c in ["liver_path", "liver_tumor_path"] if c in self.df.columns]
+                auto_cols = [
+                    c
+                    for c in ["liver_path", "liver_tumor_path"]
+                    if c in self.df.columns
+                ]
             self.segmentation_cols = auto_cols
         elif isinstance(segmentation_cols, str):
             self.segmentation_cols = [segmentation_cols]
@@ -189,8 +208,10 @@ class CTScanPanelViewer(param.Parameterized):
             self.segmentation_cols = list(segmentation_cols)
 
         self.segmentation_cols = [
-            c for c in self.segmentation_cols
-            if c in self.df.columns and self.df[c].apply(lambda x: not is_empty_value(x)).any()
+            c
+            for c in self.segmentation_cols
+            if c in self.df.columns
+            and self.df[c].apply(lambda x: not is_empty_value(x)).any()
         ]
 
         self.seg_visible = {c: True for c in self.segmentation_cols}
@@ -269,28 +290,48 @@ class CTScanPanelViewer(param.Parameterized):
             sizing_mode="stretch_width",
         )
 
+        self.resolution_widget = pn.widgets.FloatInput.from_param(
+            self.param.isotropic_resolution_mm,
+            name="Voxel mm",
+            step=0.25,
+        )
+
         self.center_widget = pn.widgets.Select.from_param(
             self.param.center_segmentation,
             name="Center mask",
             sizing_mode="stretch_width",
         )
 
-        self.prev_scan_button = pn.widgets.Button(name="< Prev Scan", button_type="default")
-        self.next_scan_button = pn.widgets.Button(name="Next Scan >", button_type="default")
+        self.prev_scan_button = pn.widgets.Button(
+            name="< Prev Scan", button_type="default"
+        )
+        self.next_scan_button = pn.widgets.Button(
+            name="Next Scan >", button_type="default"
+        )
         self.prev_patient_button = pn.widgets.Button(name="< Prev Patient")
         self.next_patient_button = pn.widgets.Button(name="Next Patient >")
         self.prev_date_button = pn.widgets.Button(name="< Prev Exam")
         self.next_date_button = pn.widgets.Button(name="Next Exam >")
         self.prev_slice_button = pn.widgets.Button(name="< Prev Slice")
         self.next_slice_button = pn.widgets.Button(name="Next Slice >")
-        self.center_button = pn.widgets.Button(name="Center on largest mask slice", button_type="primary")
+        self.center_button = pn.widgets.Button(
+            name="Center on largest mask slice", button_type="primary"
+        )
 
         self.prev_scan_button.on_click(lambda _: self.step_scan(-1))
         self.next_scan_button.on_click(lambda _: self.step_scan(1))
-        self.prev_patient_button.on_click(lambda _: self.step_selector("patient", -1, wrap=True))
-        self.next_patient_button.on_click(lambda _: self.step_selector("patient", 1, wrap=True))
-        self.prev_date_button.on_click(lambda _: self.step_selector("date", -1, wrap=False))
-        self.next_date_button.on_click(lambda _: self.step_selector("date", 1, wrap=False))
+        self.prev_patient_button.on_click(
+            lambda _: self.step_selector("patient", -1, wrap=True)
+        )
+        self.next_patient_button.on_click(
+            lambda _: self.step_selector("patient", 1, wrap=True)
+        )
+        self.prev_date_button.on_click(
+            lambda _: self.step_selector("date", -1, wrap=False)
+        )
+        self.next_date_button.on_click(
+            lambda _: self.step_selector("date", 1, wrap=False)
+        )
         self.prev_slice_button.on_click(lambda _: self.step_slice(-3))
         self.next_slice_button.on_click(lambda _: self.step_slice(3))
         self.center_button.on_click(lambda _: self.center_on_mask())
@@ -304,7 +345,10 @@ class CTScanPanelViewer(param.Parameterized):
         self.param.watch(self._on_jump_change, ["patient", "date", "phase"])
         self.param.watch(self._on_plane_change, "view_plane")
         self.param.watch(self._on_window_change, "window_preset")
-        self.param.watch(self._update_display_event, ["slice_idx", "HU_min", "HU_max", "alpha"])
+        self.param.watch(
+            self._update_display_event, ["slice_idx", "HU_min", "HU_max", "alpha"]
+        )
+        self.param.watch(self._on_resolution_change, "isotropic_resolution_mm")
 
     # ------------------------------------------------------------------
     # Navigation / dropdown logic
@@ -363,14 +407,19 @@ class CTScanPanelViewer(param.Parameterized):
             self.phase = self.param.phase.objects[0]
 
         self.param.center_segmentation.objects = self.segmentation_cols or [None]
-        if self.segmentation_cols and self.center_segmentation not in self.segmentation_cols:
+        if (
+            self.segmentation_cols
+            and self.center_segmentation not in self.segmentation_cols
+        ):
             self.center_segmentation = self.segmentation_cols[0]
 
     def _on_jump_change(self, event):
         matches = self.df.copy()
 
         if self.patient_col and self.patient not in [None, "?"]:
-            matches = matches[matches[self.patient_col].apply(format_value) == self.patient]
+            matches = matches[
+                matches[self.patient_col].apply(format_value) == self.patient
+            ]
 
         if self.date_col and self.date not in [None, "?"]:
             matches = matches[matches[self.date_col].apply(format_date) == self.date]
@@ -422,7 +471,12 @@ class CTScanPanelViewer(param.Parameterized):
         row = self.df.iloc[self.current_index]
 
         ct_path = row[self.ct_scan_col]
-        self.ct_scan_raw = load_nifti(ct_path, orientation=self.orientation)
+        self.ct_scan_raw = load_nifti(
+            ct_path,
+            orientation=self.orientation,
+            isotropic_resolution_mm=self.isotropic_resolution_mm,
+            order=1,
+        )
 
         self.progress.value = 50
 
@@ -431,7 +485,12 @@ class CTScanPanelViewer(param.Parameterized):
             path = row.get(col)
             if not is_empty_value(path):
                 try:
-                    self.segmentations[col] = load_nifti(path, orientation=self.orientation)
+                    self.segmentations[col] = load_nifti(
+                        path,
+                        orientation=self.orientation,
+                        isotropic_resolution_mm=self.isotropic_resolution_mm,
+                        order=0,
+                    )
                 except Exception as e:
                     print(f"Could not load segmentation {col}: {e}")
 
@@ -451,6 +510,10 @@ class CTScanPanelViewer(param.Parameterized):
         self._update_slice_bounds()
         self.slice_idx = self.param.slice_idx.bounds[1] // 2
         self.update_display()
+
+    def _on_resolution_change(self, event):
+        self.isotropic_resolution_mm = validate_isotropic_resolution(event.new)
+        self.load_data(refresh_jump=False)
 
     def _update_slice_bounds(self):
         shape = self.ct_scan_raw.shape
@@ -598,6 +661,7 @@ class CTScanPanelViewer(param.Parameterized):
         rendering_controls = pn.Card(
             self.window_widget,
             pn.Row(self.hu_min_widget, self.hu_max_widget),
+            self.resolution_widget,
             title="Rendering",
             collapsed=False,
         )
@@ -636,8 +700,12 @@ class CTScanPanelApp:
         segmentation_cols=None,
         phase_col=None,
         orientation="LAS",
+        isotropic_resolution_mm=DEFAULT_ISOTROPIC_RESOLUTION_MM,
     ):
         self.orientation = orientation
+        self.isotropic_resolution_mm = validate_isotropic_resolution(
+            isotropic_resolution_mm
+        )
         self.preferred_ct_col = ct_scan_col
         self.preferred_phase_col = phase_col
         self.preferred_seg_cols = segmentation_cols
@@ -712,6 +780,13 @@ class CTScanPanelApp:
             value=[],
             size=6,
             sizing_mode="stretch_width",
+        )
+        self.resolution_widget = pn.widgets.FloatInput(
+            name="Voxel mm",
+            value=self.isotropic_resolution_mm,
+            step=0.25,
+            start=0.01,
+            end=100.0,
         )
         self.refresh_viewer_button = pn.widgets.Button(
             name="Refresh Viewer",
@@ -788,9 +863,7 @@ class CTScanPanelApp:
     def _update_counts(self):
         total = len(self.source_df)
         active = len(self.filtered_df)
-        self.count_pane.object = (
-            f"<div style='font-size:13px; color:#555;'>Active rows: {active} / {total}</div>"
-        )
+        self.count_pane.object = f"<div style='font-size:13px; color:#555;'>Active rows: {active} / {total}</div>"
 
     def _configure_dataframe_widgets(self):
         columns = list(self.source_df.columns)
@@ -804,7 +877,9 @@ class CTScanPanelApp:
         self.ct_col_widget.value = ct_default if ct_default in path_columns else None
 
         self.phase_col_widget.options = [("None", None)] + [(c, c) for c in columns]
-        self.phase_col_widget.value = phase_default if phase_default in columns else None
+        self.phase_col_widget.value = (
+            phase_default if phase_default in columns else None
+        )
 
         self.seg_cols_widget.options = path_columns
         self.seg_cols_widget.value = [c for c in seg_defaults if c in path_columns]
@@ -812,7 +887,9 @@ class CTScanPanelApp:
         self.filter_column_widget.options = [("All columns", FILTER_ALL_COLUMNS)] + [
             (c, c) for c in columns
         ]
-        if self.filter_column_widget.value not in [value for _, value in self.filter_column_widget.options]:
+        if self.filter_column_widget.value not in [
+            value for _, value in self.filter_column_widget.options
+        ]:
             self.filter_column_widget.value = FILTER_ALL_COLUMNS
 
         if not path_columns:
@@ -914,9 +991,13 @@ class CTScanPanelApp:
 
         ct_scan_col = self.ct_col_widget.value
         if ct_scan_col is None:
-            self._set_viewer_message("Select the CT scan path column to open the viewer.")
+            self._set_viewer_message(
+                "Select the CT scan path column to open the viewer."
+            )
             if update_status:
-                self._set_status("Choose the CT scan column before opening the viewer.", kind="error")
+                self._set_status(
+                    "Choose the CT scan column before opening the viewer.", kind="error"
+                )
             return
 
         try:
@@ -958,6 +1039,7 @@ class CTScanPanelApp:
                 segmentation_cols=segmentation_cols or None,
                 phase_col=phase_col,
                 orientation=self.orientation,
+                isotropic_resolution_mm=self.resolution_widget.value,
             )
         except Exception as exc:
             self._set_viewer_message(f"Viewer error: {exc}")
@@ -989,6 +1071,7 @@ class CTScanPanelApp:
             self.ct_col_widget,
             self.phase_col_widget,
             self.seg_cols_widget,
+            self.resolution_widget,
             self.refresh_viewer_button,
             title="Columns",
             collapsed=False,
@@ -1037,6 +1120,9 @@ parser.add_argument("--csv", default=None)
 parser.add_argument("--ct-col", default="nifti_path")
 parser.add_argument("--phase-col", default=None)
 parser.add_argument("--seg-cols", nargs="*", default=None)
+parser.add_argument(
+    "--isotropic-resolution-mm", type=float, default=DEFAULT_ISOTROPIC_RESOLUTION_MM
+)
 args = parser.parse_args()
 
 app = CTScanPanelApp(
@@ -1044,6 +1130,7 @@ app = CTScanPanelApp(
     ct_scan_col=args.ct_col,
     segmentation_cols=args.seg_cols,
     phase_col=args.phase_col,
+    isotropic_resolution_mm=args.isotropic_resolution_mm,
 )
 
 app.panel().servable(title="IMPERANDI QC Viewer")
