@@ -65,6 +65,7 @@ def add_parse_arguments(
     include_manifest: bool = True,
     include_dry_run: bool = True,
 ) -> None:
+    """Add DICOM discovery, identity, archive, and resume options to a parser."""
     parser.add_argument(
         "root_path_pos",
         type=str,
@@ -221,6 +222,7 @@ def build_parser(
     include_manifest: bool = True,
     include_dry_run: bool = True,
 ) -> argparse.ArgumentParser:
+    """Build the standalone parser for DICOM metadata ingestion."""
     parser = argparse.ArgumentParser(
         description=(
             "Process DICOM files: read selected header tags once, then compute patient/study/series IDs from tags or path."
@@ -236,6 +238,11 @@ def build_parser(
 
 
 def resolve_root_paths(root_path: Optional[Union[str, Path]]) -> list[Path]:
+    """Resolve a directory, archive, or glob into deterministic input roots.
+
+    A missing path resolves to the current working directory. Glob results are
+    de-duplicated and restricted to directories and supported archives.
+    """
     if root_path is None:
         return [Path.cwd()]
 
@@ -254,6 +261,7 @@ def resolve_root_paths(root_path: Optional[Union[str, Path]]) -> list[Path]:
 
 
 def default_output_dir(root_path: Optional[str]) -> Path:
+    """Choose the default parse output directory for an input path or glob."""
     if root_path is None:
         return Path.cwd().parent
 
@@ -277,6 +285,7 @@ def _iter_root_files_deterministic(root: Path):
 def detect_archive_mode_by_subsample(
     resolved_roots: list[Path], sample_size: int = 128
 ) -> bool:
+    """Return whether a deterministic sample of the roots contains archives."""
     sample_size = max(1, int(sample_size))
     for root in resolved_roots:
         if root.is_file():
@@ -298,6 +307,11 @@ def detect_archive_mode_by_subsample(
 
 
 def normalize_parse_args(args: argparse.Namespace) -> argparse.Namespace:
+    """Resolve parse defaults and validate checkpoint settings in-place.
+
+    Named path options take precedence over positional values. Temporary parser
+    attributes are removed from the returned namespace.
+    """
     root_in = (
         args.root_path_opt
         if getattr(args, "root_path_opt", None) is not None
@@ -351,6 +365,7 @@ def normalize_parse_args(args: argparse.Namespace) -> argparse.Namespace:
 
 
 def parse_arguments():
+    """Parse and normalize arguments for the standalone parse command."""
     parser = build_parser()
     args = parser.parse_args()
     args = normalize_parse_args(args)
@@ -362,6 +377,7 @@ def parse_arguments():
 # IO helpers
 # -------------------------
 def ensure_directory_exists(output_dir: Path):
+    """Create an output directory and any missing parents."""
     output_dir.mkdir(parents=True, exist_ok=True)
 
 
@@ -379,6 +395,7 @@ def get_dicom_path_entries(
 
 
 def get_dicom_paths(root_path):
+    """Return discovered DICOM paths for compatibility with older callers."""
     entries = get_dicom_path_entries(root_path)
     paths = []
     for entry in entries:
@@ -394,6 +411,7 @@ def get_dicom_paths(root_path):
 # DICOM tag extraction
 # -------------------------
 def extract_dicom_tags_recursive(ds, parent_key=""):
+    """Flatten all readable elements of a DICOM dataset into a dictionary."""
     tags = {}
     for elem in ds:
         key = f"{parent_key}_{elem.keyword}" if parent_key else elem.keyword
@@ -428,6 +446,7 @@ def build_effective_tags(
     study_tag: str,
     series_tag: str,
 ) -> list[str]:
+    """Combine default, requested, and identifier tags without duplicates."""
     effective = []
     seen = set()
     for tag in default_tags + user_tags + [patient_tag, study_tag, series_tag]:
@@ -599,6 +618,12 @@ def build_global_readers(
     force: bool,
     archive_max_depth: int,
 ):
+    """Build selected/full header readers that can switch to archive mode.
+
+    Returns:
+        A selected-tag reader, a full-header reader, and their shared mutable
+        archive-detection state.
+    """
     state = {
         "archive_mode": bool(initial_archive_mode),
         "auto_switched": False,
@@ -659,6 +684,11 @@ def write_dicom_tags_snapshot(
     read_path_col: str = "_read_path",
     read_full_func=None,
 ) -> int:
+    """Write recursive tags from a deterministic source sample as NDJSON.
+
+    Returns:
+        The number of snapshot records written.
+    """
     if sample_size <= 0 or df.empty:
         return 0
 
@@ -1314,6 +1344,7 @@ def process_with_checkpoint(
 # Main
 # -------------------------
 def main(args):
+    """Run DICOM discovery and metadata parsing for a normalized namespace."""
     args = normalize_parse_args(args)
     root_path = args.root_path
     output_dir = Path(args.output_dir)

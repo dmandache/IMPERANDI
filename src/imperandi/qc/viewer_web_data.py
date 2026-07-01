@@ -22,6 +22,7 @@ SUPPORTED_IMAGE_PATH_SUFFIXES = (
 
 
 def is_empty_value(value) -> bool:
+    """Return whether a scalar should be treated as missing by the viewer."""
     if value is None:
         return True
     try:
@@ -33,6 +34,7 @@ def is_empty_value(value) -> bool:
 
 
 def load_dataframe(source, source_name: str | None = None) -> pd.DataFrame:
+    """Load a supported dataframe from a path or uploaded byte content."""
     if isinstance(source, (str, Path)):
         path = Path(source).expanduser().resolve()
         return _read_dataframe(path, path.suffix.lower())
@@ -48,6 +50,7 @@ def load_dataframe(source, source_name: str | None = None) -> pd.DataFrame:
 
 
 def is_image_path_value(value) -> bool:
+    """Return whether a value resembles a supported medical-image path."""
     if is_empty_value(value):
         return False
 
@@ -75,6 +78,7 @@ def is_image_path_column(
     allow_empty: bool = True,
     min_valid_ratio: float = 0.8,
 ) -> bool:
+    """Return whether enough non-empty values in a series look like paths."""
     non_empty = series[~series.apply(is_empty_value)]
     if non_empty.empty:
         return False
@@ -95,6 +99,7 @@ def get_image_path_columns(
     allow_empty: bool = True,
     min_valid_ratio: float = 0.8,
 ) -> list[str]:
+    """Find dataframe columns whose values are predominantly image paths."""
     return [
         column
         for column in df.columns
@@ -113,6 +118,7 @@ def validate_image_path_column(
     allow_empty: bool,
     label: str | None = None,
 ) -> None:
+    """Validate a selected image-path column and raise a useful user error."""
     if column not in df.columns:
         raise KeyError(f"Column not found: {column}")
 
@@ -141,6 +147,7 @@ def validate_image_path_column(
 
 
 def guess_ct_scan_col(columns: Iterable[str], preferred: str | None = None) -> str | None:
+    """Choose the most likely CT image path column from column names."""
     columns = list(columns)
     if preferred in columns:
         return preferred
@@ -170,6 +177,7 @@ def guess_ct_scan_col(columns: Iterable[str], preferred: str | None = None) -> s
 
 
 def guess_phase_col(columns: Iterable[str], preferred: str | None = None) -> str | None:
+    """Choose a preferred or conventional contrast-phase column."""
     columns = list(columns)
     if preferred in columns:
         return preferred
@@ -185,6 +193,7 @@ def guess_segmentation_cols(
     df: pd.DataFrame,
     preferred: str | Iterable[str] | None = None,
 ) -> list[str]:
+    """Choose populated segmentation path columns for viewer overlays."""
     if preferred is None:
         columns = [c for c in df.columns if str(c).startswith("mask_")]
         if not columns:
@@ -209,6 +218,7 @@ def filter_dataframe(
     query: str | None = None,
     case_sensitive: bool = False,
 ) -> pd.DataFrame:
+    """Filter viewer rows with an optional pandas query and text match."""
     filtered = df
 
     if query and query.strip():

@@ -8,6 +8,7 @@ DEFAULT_ISOTROPIC_RESOLUTION_MM = 1.0
 
 
 def validate_isotropic_resolution(value):
+    """Validate and return a positive finite display resolution in millimetres."""
     resolution = float(value)
     if not np.isfinite(resolution) or resolution <= 0:
         raise ValueError("isotropic_resolution_mm must be a positive finite number")
@@ -58,5 +59,6 @@ def load_nifti_isotropic(
     resolution_mm=DEFAULT_ISOTROPIC_RESOLUTION_MM,
     order=1,
 ):
+    """Load, orient, and resample a NIfTI volume for isotropic display."""
     data, spacing = load_oriented_nifti(file_path, orientation=orientation)
     return resample_to_isotropic(data, spacing, resolution_mm, order=order)

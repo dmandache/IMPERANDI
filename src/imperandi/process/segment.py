@@ -353,6 +353,7 @@ def _normalize_output_key(raw: str) -> str:
 
 
 def infer_task_outputs(task: Dict[str, Any]) -> List[str]:
+    """Infer normalized logical output names from one segmentation task."""
     outputs: List[str] = []
     outputs.extend(_normalize_output_key(v) for v in _as_str_list(task.get("outputs")))
     outputs.extend(_normalize_output_key(v) for v in _as_str_list(task.get("output")))
@@ -413,6 +414,7 @@ def _warning_dedupe_key(message: str) -> str:
 
 
 def build_output_column_map(tasks: List[Dict[str, Any]]) -> Dict[str, str]:
+    """Map each unique logical task output to its ``mask_*`` CSV column."""
     output_to_column: Dict[str, str] = {}
     for task in tasks:
         for output_name in infer_task_outputs(task):
@@ -422,6 +424,7 @@ def build_output_column_map(tasks: List[Dict[str, Any]]) -> Dict[str, str]:
 
 
 def build_output_fetch_map(tasks: List[Dict[str, Any]]) -> Dict[str, str]:
+    """Map logical task outputs to filenames produced by the backend."""
     output_to_fetch: Dict[str, str] = {}
     for task in tasks:
         for output_name, fetch_name in infer_task_fetch_outputs(task).items():
@@ -476,6 +479,11 @@ def resolve_merge_outputs(
     *,
     output_to_column: Dict[str, str] | None = None,
 ) -> List[str]:
+    """Resolve post-processing merge keys to known logical task outputs.
+
+    Raises:
+        ValueError: If merge keys are absent or refer to unknown mask columns.
+    """
     merge_keys = _as_str_list(postprocess.get("merge_keys"))
     if not merge_keys:
         raise ValueError("postprocess.merge_keys is required for postprocess merging.")
@@ -883,6 +891,7 @@ def add_segment_arguments(
     include_manifest: bool = True,
     include_dry_run: bool = True,
 ) -> None:
+    """Add segmentation, multiprocessing, and resume options to a parser."""
     parser.add_argument(
         "csv_path_pos",
         nargs="?",
@@ -957,6 +966,7 @@ def add_segment_arguments(
 
 
 def build_parser(add_help: bool = True) -> argparse.ArgumentParser:
+    """Build the standalone batch-segmentation parser."""
     parser = argparse.ArgumentParser(
         description="Batch segmentation with TotalSegmentator v2",
         add_help=add_help,
@@ -966,6 +976,7 @@ def build_parser(add_help: bool = True) -> argparse.ArgumentParser:
 
 
 def normalize_segment_args(args: argparse.Namespace) -> argparse.Namespace:
+    """Resolve segmentation input, output, and error paths in-place."""
     csv_in = args.csv_path_opt if args.csv_path_opt is not None else args.csv_path_pos
 
     if csv_in is None:
@@ -999,6 +1010,7 @@ def normalize_segment_args(args: argparse.Namespace) -> argparse.Namespace:
 
 
 def main(args: argparse.Namespace) -> None:
+    """Run manifest-configured segmentation over every eligible cohort row."""
     setup_logging(verbose=getattr(args, "verbose", False))
     output_path = Path(args.csv_path_out)
     error_path = Path(args.error_csv_path)

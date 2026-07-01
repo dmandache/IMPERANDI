@@ -76,6 +76,11 @@ def clip_hu_values(ct_scan, min_hu, max_hu):
 
 
 class CTScanViewer:
+    """Interactive Jupyter viewer for CT volumes and segmentation overlays.
+
+    The viewer navigates cohort rows, patients, exams, phases, and anatomical
+    planes while applying configurable HU windows and isotropic resampling.
+    """
     def __init__(
         self,
         df,

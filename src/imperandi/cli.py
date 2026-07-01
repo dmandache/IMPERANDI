@@ -141,6 +141,12 @@ def _add_segment_subcommand(subparsers: argparse._SubParsersAction) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the top-level IMPERANDI command-line parser.
+
+    Returns:
+        A parser containing global logging options and every pipeline
+        subcommand.
+    """
     parser = argparse.ArgumentParser(
         prog="imperandi",
         description="IMPERANDI CLI for ingest parsing and cleaning.",
@@ -318,6 +324,15 @@ def _handle_segment_unavailable(args: argparse.Namespace) -> int:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    """Parse command-line arguments and dispatch the selected command.
+
+    Args:
+        argv: Arguments excluding the executable name. When ``None``, arguments
+            are read from :data:`sys.argv`.
+
+    Returns:
+        The command's process-style exit code.
+    """
     parser = build_parser()
     args = parser.parse_args(argv)
     setup_logging(

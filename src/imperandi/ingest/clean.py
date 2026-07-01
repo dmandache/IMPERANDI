@@ -58,6 +58,7 @@ def add_clean_arguments(
     include_csv_path_out: bool = True,
     include_dry_run: bool = True,
 ) -> None:
+    """Add metadata-cleaning paths, thresholds, and manifest options."""
     if include_csv_path:
         parser.add_argument(
             "csv_path_pos",
@@ -155,6 +156,7 @@ def build_parser(
     add_help: bool = True,
     include_manifest: bool = True,
 ) -> argparse.ArgumentParser:
+    """Build the standalone parser for metadata cleaning."""
     parser = argparse.ArgumentParser(
         description="Clean and process DICOM metadata CSV.",
         add_help=add_help,
@@ -170,6 +172,7 @@ def build_parser(
 
 
 def parse_arguments():
+    """Parse and normalize arguments for the standalone clean command."""
     parser = build_parser()
     args = parser.parse_args()
     args = normalize_clean_args(args)
@@ -186,6 +189,7 @@ def _default_clean_output_path(csv_path: Path) -> Path:
 
 
 def normalize_clean_args(args: argparse.Namespace) -> argparse.Namespace:
+    """Resolve clean input/output paths and legacy threshold aliases in-place."""
     csv_in = (
         args.csv_path_opt
         if getattr(args, "csv_path_opt", None) is not None
@@ -228,12 +232,14 @@ def normalize_clean_args(args: argparse.Namespace) -> argparse.Namespace:
 
 
 def read_csv_with_valid_columns(file):
+    """Read only recognized identifier and DICOM metadata columns from CSV."""
     available_columns = pd.read_csv(file, nrows=0).columns
     valid_columns = [col for col in COLUMNS_TO_USE if col in available_columns]
     return pd.read_csv(file, usecols=valid_columns)
 
 
 def load_data(csv_path):
+    """Load and concatenate metadata CSVs, dropping empty helper columns."""
     if len(csv_path) == 1:
         df = read_csv_with_valid_columns(csv_path[0])
     else:
@@ -248,6 +254,7 @@ def load_data(csv_path):
 
 
 def filter_ct_modality(df):
+    """Keep CT Image Storage rows when modality tags are available."""
     if "Modality" not in df.columns or "SOPClassUID" not in df.columns:
         return df
     df = df[df.Modality == "CT"]
@@ -437,6 +444,7 @@ def clean_pixel_spacing(df):
 
 
 def generate_volume_id(df):
+    """Add a deterministic identifier for each candidate imaging volume."""
 
     preferred_cols = [
         "patient_key",
@@ -844,6 +852,7 @@ def _sorted_unique(values, col_name):
 
 
 def group_volumes(df):
+    """Aggregate instance-level metadata into one row per volume identifier."""
 
     def agg_fun(col):
         vals = list(col.dropna())
@@ -861,6 +870,7 @@ def group_volumes(df):
 
 
 def calculate_volume_length(df):
+    """Compute reconstructed volume length in millimetres from slice geometry."""
     def calculate_total_volume_length(row):
         try:
             n_files = row["n_files"]
@@ -880,6 +890,7 @@ def calculate_volume_length(df):
 
 
 def filter_volumes_by_size(df, min_length_mm, max_length_mm):
+    """Keep volumes within inclusive length bounds, retaining missing lengths."""
     df = df[
         (df["volume_length"].isna())
         | (
@@ -1243,6 +1254,19 @@ def clean_and_save_data(
     volume_length_min_mm,
     volume_length_max_mm,
 ):
+    """Run the complete metadata-curation pipeline and write its CSV output.
+
+    Args:
+        csv_path: One or more parsed metadata CSV paths.
+        csv_path_out: Destination for the curated volume table.
+        csv_dict_path: Optional DICOM tag dictionary used by cleaning.
+        manifest: Loaded dataset configuration and hook definitions.
+        volume_length_min_mm: Inclusive minimum reconstructed length.
+        volume_length_max_mm: Inclusive maximum reconstructed length.
+
+    The function writes ``csv_path_out`` when provided and otherwise performs
+    the same transformations and logging without persisting a table.
+    """
     df = load_data(csv_path)
     input_rows = len(df)
     report_volumes(df, "initial load")

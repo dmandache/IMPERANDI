@@ -62,6 +62,7 @@ def add_convert_arguments(
     include_manifest: bool = True,
     include_dry_run: bool = True,
 ):
+    """Add conversion paths, archive controls, and resume options to a parser."""
     parser.add_argument(
         "csv_path_pos",
         nargs="?",
@@ -155,6 +156,7 @@ def add_convert_arguments(
 
 
 def build_parser(add_help: bool = True) -> argparse.ArgumentParser:
+    """Build the standalone DICOM-to-NIfTI conversion parser."""
     parser = argparse.ArgumentParser(
         description="Convert DICOM Series to NIFTI file",
         add_help=add_help,
@@ -164,6 +166,7 @@ def build_parser(add_help: bool = True) -> argparse.ArgumentParser:
 
 
 def parse_arguments():
+    """Parse and normalize arguments for the standalone convert command."""
     parser = build_parser()
     args = parser.parse_args()
     args = normalize_convert_args(args)
@@ -172,6 +175,12 @@ def parse_arguments():
 
 
 def normalize_convert_args(args: argparse.Namespace) -> argparse.Namespace:
+    """Resolve conversion paths and validate input CSVs in-place.
+
+    Raises:
+        FileNotFoundError: If an input CSV does not exist.
+        ValueError: If an input is not CSV or no output directory is supplied.
+    """
     # pick optionals over positionals
     csv_in = args.csv_path_opt if args.csv_path_opt is not None else args.csv_path_pos
     out_in = (

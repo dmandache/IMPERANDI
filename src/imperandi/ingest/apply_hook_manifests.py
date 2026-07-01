@@ -13,6 +13,21 @@ def apply_id_standardization(
     hook_resolver: Callable[[dict], Callable | None] = resolve_hook,
     logger: logging.Logger | None = None,
 ) -> pd.DataFrame:
+    """Standardize ``patient_key`` using the hook configured by a manifest.
+
+    The original value is retained in ``_patient_key_raw``. If a non-empty raw
+    key produces an empty standardized key, ``patient_key_std_failed`` marks
+    the affected row.
+
+    Args:
+        df: Metadata table to update.
+        manifest: Loaded dataset manifest.
+        hook_resolver: Callable that resolves a hook configuration.
+        logger: Optional logger for standardization warnings.
+
+    Returns:
+        The updated metadata table.
+    """
     hook = hook_resolver(manifest.get("id_standardization") or {})
     if "patient_key" not in df.columns:
         return df
@@ -51,6 +66,19 @@ def apply_derived_columns(
     *,
     hook_resolver: Callable[[dict], Callable | None] = resolve_hook,
 ) -> pd.DataFrame:
+    """Apply manifest-defined hooks that derive columns from existing values.
+
+    Each hook result is expanded as a mapping. Existing columns are preserved
+    by the default ``missing_only`` join mode or replaced by ``overwrite``.
+
+    Args:
+        df: Metadata table to enrich.
+        manifest: Loaded dataset manifest.
+        hook_resolver: Callable that resolves a hook configuration.
+
+    Returns:
+        The enriched table.
+    """
     derived_columns = manifest.get("derived_columns", [])
     if not derived_columns:
         return df

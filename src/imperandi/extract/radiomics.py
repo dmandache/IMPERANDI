@@ -362,6 +362,7 @@ def add_radiomics_arguments(
     parser: argparse.ArgumentParser,
     include_dry_run: bool = True,
 ) -> None:
+    """Add radiomics paths, settings, filters, and resume options to a parser."""
     parser.add_argument(
         "csv_path_pos",
         nargs="?",
@@ -441,6 +442,7 @@ def add_radiomics_arguments(
 
 
 def build_parser(add_help: bool = True) -> argparse.ArgumentParser:
+    """Build the standalone PyRadiomics extraction parser."""
     parser = argparse.ArgumentParser(
         description="Extract PyRadiomics features from CT volumes and masks.",
         add_help=add_help,
@@ -450,6 +452,7 @@ def build_parser(add_help: bool = True) -> argparse.ArgumentParser:
 
 
 def normalize_radiomics_args(args: argparse.Namespace) -> argparse.Namespace:
+    """Resolve radiomics paths, filters, and settings arguments in-place."""
     csv_in = args.csv_path_opt if args.csv_path_opt is not None else args.csv_path_pos
     csv_path = Path(csv_in) if csv_in else (Path.cwd() / "nifti_index.csv")
 
@@ -490,6 +493,7 @@ def normalize_radiomics_args(args: argparse.Namespace) -> argparse.Namespace:
 
 
 def parse_arguments() -> argparse.Namespace:
+    """Parse and normalize arguments for standalone radiomics extraction."""
     parser = build_parser()
     args = parser.parse_args()
     args = normalize_radiomics_args(args)
@@ -498,6 +502,7 @@ def parse_arguments() -> argparse.Namespace:
 
 
 def mask_has_voxels(mask, sitk_module) -> bool:
+    """Return whether a SimpleITK-compatible mask contains non-zero voxels."""
     return bool(_array_sum(sitk_module.GetArrayViewFromImage(mask)) > 0)
 
 
@@ -560,6 +565,12 @@ def extract_radiomics_safe(
     sitk_module,
     row_idx: Optional[int] = None,
 ) -> Tuple[Dict[str, Any], Optional[str]]:
+    """Extract all enabled features for one image/mask pair.
+
+    Returns:
+        A ``(features, error)`` tuple. Expected row-level failures are captured
+        as an error string rather than raised.
+    """
     if not _is_existing_path(mask_path):
         return {}, f"{prefix} mask path is missing: {mask_path}"
 
@@ -593,6 +604,12 @@ def extract_radiomics_organ_minus_tumor(
     prefix: str = "liver",
     row_idx: Optional[int] = None,
 ) -> Tuple[Dict[str, Any], Optional[str]]:
+    """Extract organ features after excluding an optional paired tumor mask.
+
+    Shape features use the full organ mask, while non-shape features use the
+    organ-minus-tumor region. If no usable tumor mask exists, all features are
+    extracted from the organ.
+    """
     if not _is_existing_path(organ_mask_path):
         return {}, f"missing {prefix} mask"
 
@@ -781,6 +798,7 @@ def _extract_row_features(
 
 
 def main(args: argparse.Namespace) -> None:
+    """Extract radiomics for cohort mask columns with filters and checkpoints."""
     output_path = Path(args.csv_path_out)
     error_path = Path(args.error_csv_path)
     source_kind, settings_path, settings_dict = _resolve_pyradiomics_settings_source(

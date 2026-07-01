@@ -44,6 +44,7 @@ def add_phase_arguments(
     parser: argparse.ArgumentParser,
     include_dry_run: bool = True,
 ) -> None:
+    """Add phase-extraction paths, force, and resume options to a parser."""
     parser.add_argument(
         "csv_path_pos",
         nargs="?",
@@ -99,6 +100,7 @@ def add_phase_arguments(
 
 
 def build_parser(add_help: bool = True) -> argparse.ArgumentParser:
+    """Build the standalone CT contrast-phase extraction parser."""
     parser = argparse.ArgumentParser(
         description="Extract CT contrast phase metadata from NIfTI volumes.",
         add_help=add_help,
@@ -108,6 +110,12 @@ def build_parser(add_help: bool = True) -> argparse.ArgumentParser:
 
 
 def normalize_phase_args(args: argparse.Namespace) -> argparse.Namespace:
+    """Resolve phase input, output, and error paths in-place.
+
+    Raises:
+        FileNotFoundError: If the input table does not exist.
+        ValueError: If the input table is not a CSV file.
+    """
     csv_in = args.csv_path_opt if args.csv_path_opt is not None else args.csv_path_pos
     csv_path = Path(csv_in) if csv_in else (Path.cwd() / "nifti_index.csv")
 
@@ -138,6 +146,7 @@ def normalize_phase_args(args: argparse.Namespace) -> argparse.Namespace:
 
 
 def parse_arguments() -> argparse.Namespace:
+    """Parse and normalize arguments for standalone phase extraction."""
     parser = build_parser()
     args = parser.parse_args()
     args = normalize_phase_args(args)
@@ -160,6 +169,12 @@ def process_single_volume(
     phase_extractor: Callable[[Any], Dict[str, Any]],
     verbose: bool = False,
 ) -> Tuple[int, Dict[str, Any] | None, str | None]:
+    """Extract phase metadata for one cohort row without raising row errors.
+
+    Returns:
+        ``(row_index, metadata, error)``. Successful metadata keys are prefixed
+        with ``totalseg_``; failures return an error string instead.
+    """
     nifti_path_value = row.get("nifti_path")
     if not isinstance(nifti_path_value, str) or not nifti_path_value.strip():
         return idx, None, "column 'nifti_path' missing or invalid"
@@ -185,6 +200,7 @@ def process_single_volume(
 
 
 def main(args: argparse.Namespace) -> None:
+    """Extract phase metadata for a cohort with checkpoint-aware resuming."""
     output_path = Path(args.csv_path_out)
     error_path = Path(args.error_csv_path)
     exclude_hash_args = {

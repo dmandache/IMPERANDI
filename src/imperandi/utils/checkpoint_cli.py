@@ -11,6 +11,15 @@ def add_checkpoint_arguments(
     include_resume: bool = True,
     include_strict: bool = True,
 ) -> None:
+    """Add checkpoint frequency and resume controls to a CLI parser.
+
+    Args:
+        parser: Parser that receives the options.
+        default_rows: Default number of processed rows between flushes.
+        default_sec: Default maximum seconds between flushes.
+        include_resume: Add the ``--no_resume`` switch when true.
+        include_strict: Add the ``--strict_resume`` switch when true.
+    """
     parser.add_argument(
         "--checkpoint_every_rows",
         type=int,
