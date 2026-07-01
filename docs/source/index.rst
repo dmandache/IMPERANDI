@@ -1,4 +1,4 @@
-IMPERANDI
+Welcome to IMPERANDI’s documentation!
 =========
 
 .. figure:: https://raw.githubusercontent.com/dmandache/IMPERANDI/main/static/imperandi-logo.png
@@ -6,8 +6,8 @@ IMPERANDI
    :width: 700px
    :align: center
 
-IMaging PREprocessing And Normalization for Diagnostic
-Interoperability is a Python framework and command-line interface for
+IMPERANDI [IMaging PREprocessing And Normalization for Diagnostic
+Interoperability] is a Python framework and command-line interface for
 turning heterogeneous CT DICOM exports into traceable, analysis-ready cohorts.
 
 IMPERANDI discovers DICOM data, curates metadata,
