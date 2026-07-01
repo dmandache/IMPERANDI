@@ -3,6 +3,7 @@
 ![image](https://raw.githubusercontent.com/dmandache/IMPERANDI/main/static/imperandi-logo.png)
 
 ![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue)
+[![Documentation](https://readthedocs.org/projects/imperandi/badge/?version=latest)](https://imperandi.readthedocs.io/en/latest/)
 [![Code style](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 ![Linting](https://img.shields.io/badge/lint-ruff-red)
 ![Tests](https://github.com/dmandache/IMPERANDI/actions/workflows/tests.yml/badge.svg?branch=main)
