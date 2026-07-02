@@ -1,4 +1,4 @@
-Ingest API
+Ingestion API
 ==========
 
 Parsing

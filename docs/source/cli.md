@@ -1,4 +1,4 @@
-# Command-line reference
+# CLI Commands
 
 The installed entry point is `imperandi`; `python -m imperandi` is equivalent.
 
@@ -113,6 +113,5 @@ explicit YAML path and a warning is emitted.
 
 `parse`, `convert`, `segment`, `phase`, and `radiomics` accept checkpoint and
 resume options described in [Workflow](workflow.md). All commands support
-`--dry-run`; `clean` and `ingest` do not themselves expose resume state beyond
-the parse portion used by ingest.
+`--dry-run`.
 

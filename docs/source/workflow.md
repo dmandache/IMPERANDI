@@ -86,6 +86,65 @@ match. Common controls are:
 Changing material arguments or inputs invalidates an incompatible checkpoint.
 Do not manually edit checkpoint/state files while a command is running.
 
+## Example Slurm batch script
+
+For scheduled runs, a single Slurm job can execute the full pipeline with
+explicit paths between stages:
+
+```bash
+#!/bin/bash
+#SBATCH --job-name=imperandi-pipeline
+#SBATCH --partition=compute
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=32G
+#SBATCH --time=24:00:00
+#SBATCH --output=%x-%j.out
+
+set -euo pipefail
+
+# Activate the environment where IMPERANDI is installed.
+source /path/to/venv/bin/activate
+
+PROJECT_ROOT=/path/to/project
+DICOM_ROOT=/path/to/dicom
+TABLE_DIR="$PROJECT_ROOT/tables"
+NIFTI_DIR="$PROJECT_ROOT/nifti"
+MANIFEST="$PROJECT_ROOT/site-a.json"
+WORKERS="${SLURM_CPUS_PER_TASK:-4}"
+
+mkdir -p "$TABLE_DIR" "$NIFTI_DIR"
+
+imperandi ingest \
+  --root_path "$DICOM_ROOT" \
+  --output_dir "$TABLE_DIR" \
+  --manifest "$MANIFEST"
+
+imperandi convert \
+  --csv_path "$TABLE_DIR/dicom_index_clean.csv" \
+  --output_dir "$NIFTI_DIR" \
+  --csv_path_out "$TABLE_DIR/nifti_index.csv" \
+  --num_workers "$WORKERS"
+
+imperandi segment \
+  --csv_path "$TABLE_DIR/nifti_index.csv" \
+  --csv_path_out "$TABLE_DIR/nifti_index_segmented.csv" \
+  --manifest "$MANIFEST" \
+  --num_workers "$WORKERS"
+
+imperandi phase \
+  --csv_path "$TABLE_DIR/nifti_index_segmented.csv" \
+  --csv_path_out "$TABLE_DIR/nifti_index_phased.csv"
+
+imperandi radiomics \
+  --csv_path "$TABLE_DIR/nifti_index_phased.csv" \
+  --csv_path_out "$TABLE_DIR/nifti_index_radiomics.csv" \
+  --manifest "$MANIFEST"
+```
+
+Adjust Slurm resources for your cohort size and manifest complexity. On
+re-submission, matching checkpoints let long stages continue instead of
+starting from scratch unless you pass `--no_resume`.
+
 ## Operational recommendations
 
 - Keep raw DICOM roots read-only.
