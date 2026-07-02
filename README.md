@@ -226,7 +226,11 @@ prefers manifest `radiomics` settings when that section exists.
 - `segment`, `phase`, `radiomics`:
   - enriched cohort table + command-specific error CSV
 
-## Manifests and hooks
+## Configuration
+
+IMPERANDI configuration is done through dataset manifests and optional hooks.
+Manifests hold the declarative JSON settings, while hooks provide Python-based
+customization when a static file is not enough.
 
 Manifests define dataset-specific behavior and live in:
 
@@ -255,7 +259,7 @@ Official PyRadiomics parameter guide:
 Official TotalSegmentator task guide:
 [TotalSegmentator subtasks guide](https://github.com/wasserth/TotalSegmentator#subtasks).
 
-Full manifest file guide: [Documentation](https://imperandi.readthedocs.io/en/latest/manifests.html).
+Full configuration guide: [Documentation](https://imperandi.readthedocs.io/en/latest/manifests.html).
 
 ## Performance and reliability notes
 

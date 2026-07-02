@@ -1,8 +1,16 @@
-# Manifests
+# Configuration
 
-A manifest is a JSON document that captures dataset-specific identity rules,
-hooks, segmentation tasks, post-processing, and radiomics configuration. Pass a
-built-in name (`generic` or `operandi`) or a path to a JSON file:
+IMPERANDI configuration is done through manifests and hooks.
+
+- A manifest is a JSON document that declares dataset-specific settings such as
+  identifier extraction, segmentation tasks, post-processing, and radiomics
+  options.
+- A hook is a Python callable referenced by the manifest when declarative JSON
+  is not enough, for example to normalize patient identifiers or derive cohort
+  columns from existing values.
+
+Pass a built-in manifest name (`generic` or `operandi`) or a path to a JSON
+file:
 
 ```bash
 imperandi ingest --root_path ./dicom --manifest generic
@@ -12,9 +20,23 @@ imperandi segment ./nifti_index.csv --manifest ./site-a.json
 Built-ins live under `src/imperandi/datasets_config/manifests/`. Treat them as
 examples; keep institution-specific configuration in a reviewed, versioned
 file rather than editing package defaults in place. This Markdown page is the
-reference for that manifest JSON format.
+reference for how configuration is expressed through manifest JSON plus hook
+functions.
 
-## Structure
+## How configuration works
+
+In practice, configuration usually follows this flow:
+
+1. start from a built-in manifest or a project-owned copy;
+2. edit manifest keys for parsing, segmentation, and radiomics behavior;
+3. point manifest hook entries at Python functions when you need custom logic;
+4. run IMPERANDI with `--manifest your_config.json`.
+
+Use manifests for declarative settings that can live safely in versioned JSON.
+Use hooks for executable logic such as parsing institution-specific identifiers,
+mapping cohort metadata, or other transformations that need Python code.
+
+## Manifest structure
 
 ```json
 {
@@ -77,62 +99,99 @@ The usual workflow is:
 3. edit the JSON keys that match your dataset;
 4. pass the file path with `--manifest ./site-a.json`.
 
-Common customization points:
+The easiest way to read the manifest is by configuration area:
 
-- `dataset_name`: free-text label for the cohort or site. It is mainly for
-  readability and review, so choose something stable and specific such as
-  `site-a`, `operandi_v2`, or `external_validation`.
-- `id_extraction`: describe how identifiers should be derived. The manifest
-  schema examples use `source` (`auto`, `tags`, or `path`),
-  `force_dicom_read`, and per-ID blocks such as `patient_key`, `study_id`, and
-  `series_id` with `from_tag` and `fallback`. Typical `from_tag` values are
-  DICOM keywords such as `PatientID`, `PatientName`, `StudyInstanceUID`, and
-  `SeriesInstanceUID`. Typical `fallback` usage is `"path"` when a tag is
-  absent or unreliable. Keep this section aligned with the parse or ingest CLI
-  options you actually run: `--id_source`, `--force_dicom_read`,
-  `--patient_key_from`, `--study_id_from`, and `--series_id_from`.
-- `id_standardization`: attach a hook that rewrites raw `patient_key` values
-  into your canonical cohort identifier. Use this when tags contain prefixes,
-  embedded visit numbers, institution-specific formatting, or zero-padding that
-  should be normalized before downstream grouping.
-- `derived_columns`: add one or more hook-based enrichments after parsing or
-  cleaning. Each entry can specify `hook_module`, `function`, `from_column`,
-  and `join_mode` (`missing_only` or `overwrite`). This is a good place to
-  derive cohort metadata such as `center`, `source`, `tumor_type`, or site
-  labels from an existing identifier column.
-- `segmentation.backend`: currently `totalsegmentator`.
-- `segmentation.tasks`: define one or more TotalSegmentator runs. Each task
-  entry needs at least `task`. Optional keys are `extra` for backend kwargs
-  forwarded to TotalSegmentator, `output` or `outputs` for the logical mask
-  names you want in IMPERANDI, and `fetch_output` or `fetch_outputs` when the
-  backend-produced filenames differ from your preferred output names. In
-  `extra`, common choices are `roi_subset`, `roi_subset_robust`, `fast`, and
-  `fastest`, but any supported TotalSegmentator runtime kwarg can be passed
-  through. If you use `roi_subset` or `roi_subset_robust`, IMPERANDI also
-  infers mask names from those class names. For stable naming in your CSV
-  outputs, prefer declaring explicit `output` values. Official task references:
-  [TotalSegmentator subtasks guide](https://github.com/wasserth/TotalSegmentator#subtasks)
-  and [class details](https://github.com/wasserth/TotalSegmentator/blob/master/resources/class_details.md).
-  To inspect the exact capabilities of your installed version, run
-  `totalseg_info --list-tasks` and `totalseg_info --classes -ta total`.
-- `segmentation.postprocess`: merge and clean masks after segmentation.
-  `merge_keys` is required when post-processing is enabled and should name the
-  logical outputs to combine, such as `liver` and `liver_tumor`
-  (or their `mask_*` column equivalents). Optional parameters are `output` for
-  the merged mask name, `radius_mm` for morphological closing, `close`,
-  `fill_holes`, and `largest_cc` to control cleanup, and `on_failure` with
-  `warn_only` or `fail`.
-- `radiomics.pyradiomics`: embed the same extractor configuration you would put
-  in a PyRadiomics parameter file. Common top-level sections are `setting`,
-  `imageType`, and `featureClass`, plus filter-specific keys such as LoG
-  `sigma`. This lets you version feature extraction settings directly inside the
-  manifest instead of maintaining a separate YAML file. Official guide:
-  [PyRadiomics customization and parameter file docs](https://pyradiomics.readthedocs.io/en/latest/customization.html).
-- `radiomics.filters`: keep only selected rows before feature extraction using
-  a mapping of `column_name -> [allowed_value, ...]`. Typical columns include
-  `totalseg_phase`, `phase`, `center`, `source`, or any cohort column already
-  present in the CSV. This is the manifest equivalent of repeated CLI filters
-  such as `--filter totalseg_phase=portal_venous,arterial_late`.
+### Identity and cohort metadata
+
+`dataset_name`
+Use this as a short, stable label for the configuration. It is mainly for
+readability and review, so names such as `site-a`, `operandi_v2`, or
+`external_validation` are usually better than vague labels.
+
+`id_extraction`
+This controls how raw patient, study, and series identifiers are obtained.
+The usual fields are `source` (`auto`, `tags`, or `path`),
+`force_dicom_read`, and the per-ID blocks `patient_key`, `study_id`, and
+`series_id` with `from_tag` and `fallback`.
+Typical `from_tag` values are DICOM keywords such as `PatientID`,
+`PatientName`, `StudyInstanceUID`, and `SeriesInstanceUID`.
+Typical `fallback` usage is `"path"` when a tag is missing or unreliable.
+Keep this section aligned with the parse or ingest CLI options you actually run:
+`--id_source`, `--force_dicom_read`, `--patient_key_from`,
+`--study_id_from`, and `--series_id_from`.
+
+`id_standardization`
+Use this when raw identifiers need cleanup after extraction.
+It points to a hook that rewrites `patient_key` into your canonical cohort ID,
+for example by removing prefixes, normalizing zero-padding, or extracting the
+parts of the string that matter for downstream grouping.
+
+`derived_columns`
+Use this when you want to compute extra cohort columns from an existing value.
+Each entry can define `hook_module`, `function`, `from_column`, and
+`join_mode` (`missing_only` or `overwrite`).
+This is a good place to derive fields such as `center`, `source`,
+`tumor_type`, or other site-specific metadata from a patient key or similar
+identifier.
+
+### Segmentation
+
+`segmentation.backend`
+This selects the segmentation engine. In the current implementation, the
+supported value is `totalsegmentator`.
+
+`segmentation.tasks`
+This section defines which TotalSegmentator runs happen and how IMPERANDI names
+their outputs.
+Each task entry needs at least `task`.
+Common optional keys are `extra` for backend kwargs,
+`output` or `outputs` for the logical mask names you want in IMPERANDI, and
+`fetch_output` or `fetch_outputs` when the backend-produced filenames differ
+from your preferred output names.
+Inside `extra`, common runtime options are `roi_subset`, `roi_subset_robust`,
+`fast`, and `fastest`, but other supported TotalSegmentator kwargs can also be
+passed through.
+If you use `roi_subset` or `roi_subset_robust`, IMPERANDI can infer mask names
+from those class names, but explicit `output` names are usually clearer and
+more stable for downstream CSV columns.
+Official references:
+[TotalSegmentator subtasks guide](https://github.com/wasserth/TotalSegmentator#subtasks)
+and [class details](https://github.com/wasserth/TotalSegmentator/blob/master/resources/class_details.md).
+To inspect the exact capabilities of your installed version, run
+`totalseg_info --list-tasks` and `totalseg_info --classes -ta total`.
+
+### Segmentation Mask Postprocessing
+
+`segmentation.postprocess`
+Use this section when several masks should be merged or cleaned after
+segmentation.
+`merge_keys` is required when post-processing is enabled and should name the
+logical outputs to combine, such as `liver` and `liver_tumor`
+or their `mask_*` column equivalents.
+Common options are `output` for the merged mask name, `radius_mm` for
+morphological closing, `close`, `fill_holes`, and `largest_cc` for cleanup, and
+`on_failure` with `warn_only` or `fail`.
+
+### Radiomics
+
+`radiomics.pyradiomics`
+Use this when you want the manifest itself to carry your feature extraction
+settings instead of referencing a separate YAML file.
+Common top-level sections are `setting`, `imageType`, and `featureClass`,
+plus filter-specific keys such as LoG `sigma`.
+This is the manifest equivalent of a PyRadiomics parameter file and is useful
+when you want one versioned configuration file to describe both cohort logic
+and radiomics behavior.
+Official guide:
+[PyRadiomics customization and parameter file docs](https://pyradiomics.readthedocs.io/en/latest/customization.html).
+
+`radiomics.filters`
+Use this when radiomics should run only on a subset of rows.
+The format is `column_name -> [allowed_value, ...]`.
+Typical columns include `totalseg_phase`, `phase`, `center`, `source`, or any
+other cohort column already present in the CSV.
+This is the manifest equivalent of repeated CLI filters such as
+`--filter totalseg_phase=portal_venous,arterial_late`.
 
 Example:
 
