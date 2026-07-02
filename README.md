@@ -236,10 +236,26 @@ Hook implementations live in:
 
 - `src/imperandi/datasets_config/hooks/`
 
-You can pass either a manifest name (`generic`, `operandi`) or a custom manifest path.
+You can pass either a manifest name (`generic`, `operandi`) or a custom
+manifest path. The usual customization flow is to copy a built-in JSON,
+edit `id_extraction`, `id_standardization`, `derived_columns`,
+`segmentation`, and `radiomics`, then run with `--manifest ./site-a.json`.
+
+Hooks are normal Python callables referenced by manifest keys
+`hook_module` and `function`. `id_standardization` hooks rewrite
+`patient_key`, while `derived_columns` hooks can add fields such as center,
+source, or cohort-specific labels from an existing column.
 
 For radiomics, manifest key `radiomics` can directly contain a PyRadiomics-style
 settings object (same structure as `Params.yaml` content).
+
+Official PyRadiomics parameter guide:
+[PyRadiomics customization docs](https://pyradiomics.readthedocs.io/en/latest/customization.html).
+
+Official TotalSegmentator task guide:
+[TotalSegmentator subtasks guide](https://github.com/wasserth/TotalSegmentator#subtasks).
+
+Full manifest file guide: [Documentation](https://imperandi.readthedocs.io/en/latest/manifests.html).
 
 ## Performance and reliability notes
 
