@@ -6,23 +6,23 @@ derived artifacts.
 
 ```text
 DICOM roots / archives
-        │
-        ▼
- parse ─────► dicom_index.csv
-        │
-        ▼
- clean ─────► dicom_index_clean.csv
-        │
-        ▼
- convert ───► nifti_index.csv + NIfTI images
-        │
-        ├────────► phase ─────► totalseg_* metadata
-        │
-        ▼
- segment ───► mask_* paths
-        │
-        ▼
- radiomics ─► feature columns
+        |
+        v
+ parse -----> dicom_index.csv
+        |
+        v
+ clean -----> dicom_index_clean.csv
+        |
+        v
+ convert ---> nifti_index.csv + NIfTI images
+        |
+        +--------> phase -----> totalseg_* metadata
+        |
+        v
+ segment ---> mask_* paths
+        |
+        v
+ radiomics -> feature columns
 ```
 
 ## Parse
@@ -44,15 +44,17 @@ materialization is removed unless `--keep_archive_cache` is set.
 ## Clean
 
 `clean` groups instances into volumes, standardizes dates and times, orders
-exams/acquisitions, and rejects unsuitable data. The implemented filters cover
-non-CT data, localizers and secondary images, non-axial geometry, noise/body
-region patterns, implausible volume length, pixel spacing, and slice thickness.
-Missing geometry is generally retained for later review rather than silently
-treated as a failure.
+exams and acquisitions, and rejects unsuitable data. The built-in manifests
+currently filter out non-CT data, localizers and secondary images, non-target
+anatomy, non-axial geometry, suspicious spacing, and implausible reconstructed
+volume length. Missing geometry is generally retained for later review rather
+than silently treated as a failure.
 
-The default accepted reconstructed length is 30–1700 mm. Override it with
-`--volume-length-min-mm` and `--volume-length-max-mm` when a protocol calls for
-different bounds.
+This stage is manifest-driven: the selected manifest's `cleaning.steps` list
+defines the exact transforms, hooks, and filters that run. The built-in
+manifests currently keep volumes whose reconstructed length is between 30 and
+1700 mm via a volume-scope filter step; customize those bounds by editing the
+manifest instead of passing CLI thresholds.
 
 ## Convert
 
@@ -84,7 +86,7 @@ match. Common controls are:
   fingerprint; this is safer but slower on large inputs.
 
 Changing material arguments or inputs invalidates an incompatible checkpoint.
-Do not manually edit checkpoint/state files while a command is running.
+Do not manually edit checkpoint or state files while a command is running.
 
 ## Example Slurm batch script
 
@@ -152,4 +154,3 @@ starting from scratch unless you pass `--no_resume`.
 - Start with a small cohort and `--num_workers 1` when validating a manifest.
 - Preserve error CSVs and logs with the corresponding output table.
 - Use explicit output paths in automation instead of relying on defaults.
-

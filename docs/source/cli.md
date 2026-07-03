@@ -40,8 +40,9 @@ imperandi clean [CSV_PATH] [CSV_PATH_OUT] [OPTIONS]
 ```
 
 Curates parsed instance metadata into a volume-level table. `--csv_path`
-accepts one or more CSVs. Use `--volume-length-min-mm` and
-`--volume-length-max-mm` to change reconstructed-length bounds.
+accepts one or more CSVs. The cleaning behavior is defined by the selected
+manifest's `cleaning.steps` block, including row filters, volume filters, and
+optional hook steps.
 
 ## `ingest`
 
@@ -49,9 +50,10 @@ accepts one or more CSVs. Use `--volume-length-min-mm` and
 imperandi ingest [ROOT_PATH] [OUTPUT_DIR] [OPTIONS]
 ```
 
-Combines `parse` and `clean`. It accepts parse/archive options plus clean's
-length bounds and `--csv_dict_path`. `--csv_path_out` selects the final cleaned
-table; it defaults to `<output_dir>/dicom_index_clean.csv`.
+Combines `parse` and `clean`. It accepts the parse/archive options plus
+`--csv_path_out` for the final cleaned table, which defaults to
+`<output_dir>/dicom_index_clean.csv`. The same manifest drives both parse-time
+ID handling and clean-time `cleaning.steps`.
 
 ## `convert`
 

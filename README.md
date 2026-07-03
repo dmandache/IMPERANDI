@@ -242,12 +242,14 @@ Hook implementations live in:
 
 You can pass either a manifest name (`generic`, `operandi`) or a custom
 manifest path. The usual customization flow is to copy a built-in JSON,
-edit `id_extraction`, `id_standardization`, `derived_columns`,
+edit `id_extraction`, optional parse hooks (`id_standardization`,
+`derived_columns`), the clean pipeline under `cleaning.steps`,
 `segmentation`, and `radiomics`, then run with `--manifest ./site-a.json`.
 
-Hooks are normal Python callables referenced by manifest keys
-`hook_module` and `function`: `id_standardization` hook rewrites
-`patient_key`, while `derived_columns` hook can add fields based on an existing column.
+Hooks are normal Python callables. Parse hooks still use `hook_module` plus
+`function`, while clean-stage hooks are explicit `cleaning.steps` entries with
+`type: "hook"`, a `module:function` reference, and `source_columns`. Clean hook
+outputs are declared in Python with `@clean_hook(outputs=[...])`.
 
 For configuring radiomic extraction, manifest key `radiomics` can directly contain a PyRadiomics-style
 settings object (same structure as `Params.yaml` content).

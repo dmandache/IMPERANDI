@@ -53,3 +53,18 @@ def resolve_hook(hook_config: dict):
         return None
     module = importlib.import_module(f"imperandi.{module_name}")
     return getattr(module, function_name)
+
+
+def resolve_function_path(function_path: str):
+    """Resolve ``module:function`` paths relative to the ``imperandi`` package."""
+    if ":" not in function_path:
+        raise ValueError(
+            f"Invalid function path {function_path!r}. Expected 'module:function'."
+        )
+
+    module_name, function_name = function_path.split(":", 1)
+    if not module_name.startswith("imperandi."):
+        module_name = f"imperandi.{module_name}"
+
+    module = importlib.import_module(module_name)
+    return getattr(module, function_name)

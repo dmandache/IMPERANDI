@@ -4,7 +4,7 @@ from pathlib import Path
 # Ensure src/ is on sys.path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from imperandi.utils.manifest import load_manifest, resolve_hook
+from imperandi.utils.manifest import load_manifest, resolve_function_path
 
 
 def test_load_generic_manifest_and_hook_resolution():
@@ -12,8 +12,10 @@ def test_load_generic_manifest_and_hook_resolution():
     manifest = load_manifest("generic", base_path=base_path)
 
     assert manifest["dataset_name"] == "generic"
-    assert "id_standardization" in manifest
+    assert manifest["cleaning"]["version"] == 1
+    assert isinstance(manifest["cleaning"]["steps"], list)
 
-    hook = resolve_hook(manifest["id_standardization"])
-    assert hook is not None
-    assert hook("patient_0012_030") == "12-30"
+    clean_hook = resolve_function_path(
+        "datasets_config.hooks.generic:standardize_patient_key"
+    )
+    assert clean_hook("patient_0012_030") == "12-30"

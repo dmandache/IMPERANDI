@@ -18,7 +18,7 @@ Cleaning
 Manifest hooks
 --------------
 
-.. automodule:: imperandi.ingest.apply_hook_manifests
+.. automodule:: imperandi.ingest.hooks
    :members:
    :undoc-members:
 

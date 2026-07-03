@@ -1,37 +1,44 @@
+from __future__ import annotations
+
 import logging
-from typing import Callable
+from collections.abc import Callable
 
 import pandas as pd
 
 from imperandi.utils.manifest import resolve_hook
 
 
-def apply_id_standardization(
+CLEAN_HOOK_OUTPUTS_ATTR = "_imperandi_clean_outputs"
+
+
+def clean_hook(*, outputs: list[str]):
+    """Declare which columns a clean-stage hook produces."""
+
+    def decorator(func: Callable) -> Callable:
+        setattr(func, CLEAN_HOOK_OUTPUTS_ATTR, tuple(outputs))
+        return func
+
+    return decorator
+
+
+def get_clean_hook_outputs(func: Callable) -> list[str]:
+    """Return the column list declared by ``@clean_hook``."""
+    outputs = getattr(func, CLEAN_HOOK_OUTPUTS_ATTR, ())
+    return list(outputs)
+
+
+def apply_patient_key_standardization(
     df: pd.DataFrame,
-    manifest: dict,
+    hook: Callable | None,
     *,
-    hook_resolver: Callable[[dict], Callable | None] = resolve_hook,
     logger: logging.Logger | None = None,
+    log_prefix: str = "id_standardization",
 ) -> pd.DataFrame:
-    """Standardize ``patient_key`` using the hook configured by a manifest.
-
-    The original value is retained in ``_patient_key_raw``. If a non-empty raw
-    key produces an empty standardized key, ``patient_key_std_failed`` marks
-    the affected row.
-
-    Args:
-        df: Metadata table to update.
-        manifest: Loaded dataset manifest.
-        hook_resolver: Callable that resolves a hook configuration.
-        logger: Optional logger for standardization warnings.
-
-    Returns:
-        The updated metadata table.
-    """
-    hook = hook_resolver(manifest.get("id_standardization") or {})
+    """Rewrite ``patient_key`` while preserving raw values and failure flags."""
     if "patient_key" not in df.columns:
         return df
 
+    df = df.copy()
     if "_patient_key_raw" not in df.columns:
         df["_patient_key_raw"] = df["patient_key"]
 
@@ -53,11 +60,24 @@ def apply_id_standardization(
         if logger is not None:
             n_keys = int(df.loc[failed, "_patient_key_raw"].nunique())
             logger.warning(
-                "[id_standardization] failed on unique raw keys=%s",
+                "[%s] failed on unique raw keys=%s",
+                log_prefix,
                 n_keys,
             )
 
     return df
+
+
+def apply_id_standardization(
+    df: pd.DataFrame,
+    manifest: dict,
+    *,
+    hook_resolver: Callable[[dict], Callable | None] = resolve_hook,
+    logger: logging.Logger | None = None,
+) -> pd.DataFrame:
+    """Apply the manifest's parse-time ``id_standardization`` hook."""
+    hook = hook_resolver(manifest.get("id_standardization") or {})
+    return apply_patient_key_standardization(df, hook, logger=logger)
 
 
 def apply_derived_columns(
@@ -66,19 +86,7 @@ def apply_derived_columns(
     *,
     hook_resolver: Callable[[dict], Callable | None] = resolve_hook,
 ) -> pd.DataFrame:
-    """Apply manifest-defined hooks that derive columns from existing values.
-
-    Each hook result is expanded as a mapping. Existing columns are preserved
-    by the default ``missing_only`` join mode or replaced by ``overwrite``.
-
-    Args:
-        df: Metadata table to enrich.
-        manifest: Loaded dataset manifest.
-        hook_resolver: Callable that resolves a hook configuration.
-
-    Returns:
-        The enriched table.
-    """
+    """Join manifest-derived columns onto ``df`` using the configured join mode."""
     derived_columns = manifest.get("derived_columns", [])
     if not derived_columns:
         return df

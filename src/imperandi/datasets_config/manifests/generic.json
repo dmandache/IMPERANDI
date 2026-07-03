@@ -4,21 +4,140 @@
     "source": "auto",
     "force_dicom_read": false,
     "patient_key": { "from_tag": "PatientName", "fallback": "path" },
-    "study_id":    { "from_tag": "StudyInstanceUID", "fallback": "path" },
-    "series_id":   { "from_tag": "SeriesInstanceUID", "fallback": "path" }
+    "study_id": { "from_tag": "StudyInstanceUID", "fallback": "path" },
+    "series_id": { "from_tag": "SeriesInstanceUID", "fallback": "path" }
   },
-  "id_standardization": {
-    "hook_module": "datasets_config.hooks.generic",
-    "function": "standardize_patient_key"
+  "cleaning": {
+    "version": 1,
+    "steps": [
+      { "type": "coalesce_date" },
+      { "type": "coalesce_time" },
+      { "type": "sop_class" },
+      { "type": "parse_image_type" },
+      { "type": "clean_scan_size" },
+      {
+        "type": "filter",
+        "kind": "keep",
+        "scope": "row",
+        "logic": "and",
+        "rules": [
+          { "column": "Modality", "op": "eq", "value": "CT" },
+          { "column": "sop_class", "op": "eq", "value": "CTImageStorage" }
+        ]
+      },
+      {
+        "type": "filter",
+        "kind": "discard",
+        "scope": "row",
+        "logic": "or",
+        "rules": [
+          { "column": "ModalitiesInStudy", "op": "contains", "value": "PT" },
+          { "column": "ModalitiesInStudy", "op": "contains", "value": "NM" }
+        ]
+      },
+      {
+        "type": "filter",
+        "kind": "discard",
+        "scope": "row",
+        "logic": "or",
+        "rules": [
+          { "column": "ImageType", "op": "contains", "value": "LOCALIZER" },
+          { "column": "SeriesDescription", "op": "icontains", "value": "scout" }
+        ]
+      },
+      { "type": "normalize_string", "column": "SeriesDescription" },
+      {
+        "type": "filter",
+        "kind": "discard",
+        "scope": "row",
+        "logic": "or",
+        "rules": [
+          { "column": "SeriesDescription", "op": "contains", "value": "pelvis" },
+          { "column": "SeriesDescription", "op": "contains", "value": "crane" },
+          { "column": "SeriesDescription", "op": "contains", "value": "rachis" },
+          { "column": "SeriesDescription", "op": "contains", "value": "prostate" },
+          { "column": "SeriesDescription", "op": "contains", "value": "phlebo" },
+          { "column": "SeriesDescription", "op": "contains", "value": "meckel" },
+          { "column": "SeriesDescription", "op": "contains", "value": "femur" },
+          { "column": "SeriesDescription", "op": "contains", "value": "orl" }
+        ]
+      },
+      { "type": "pixel_spacing_xy" },
+      {
+        "type": "filter",
+        "kind": "keep",
+        "scope": "row",
+        "logic": "and",
+        "keep_null": true,
+        "rules": [
+          { "column": "PixelSpacingXY", "op": "lte", "value": 1.25 }
+        ]
+      },
+      { "type": "standardize_iop" },
+      { "type": "classify_acquisition_plane" },
+      {
+        "type": "filter",
+        "kind": "keep",
+        "scope": "row",
+        "logic": "and",
+        "rules": [
+          { "column": "acquisition_axis", "op": "eq", "value": "Z" }
+        ]
+      },
+      {
+        "type": "build_volume_id",
+        "preferred_columns": [
+          "patient_key",
+          "study_id",
+          "series_id",
+          "ImageType",
+          "AcquisitionNumber",
+          "ImageOrientationPatient",
+          "SliceThickness",
+          "PixelSpacingXY"
+        ],
+        "fallback_columns": ["patient_key", "study_id", "series_id"]
+      },
+      {
+        "type": "merge_volume_ids",
+        "group_columns": [
+          "patient_key",
+          "study_id",
+          "series_id",
+          "ImageType",
+          "ImageOrientationPatient",
+          "SliceThickness",
+          "PixelSpacingXY"
+        ],
+        "z_sources": ["ImagePositionPatient", "SliceLocation"],
+        "z_tolerance": 0.001
+      },
+      { "type": "group_volumes" },
+      { "type": "compute_volume_length" },
+      {
+        "type": "filter",
+        "kind": "keep",
+        "scope": "volume",
+        "logic": "and",
+        "keep_null": true,
+        "rules": [
+          { "column": "volume_length", "op": "gte", "value": 30.0 },
+          { "column": "volume_length", "op": "lte", "value": 1700.0 }
+        ]
+      },
+      { "type": "compute_visit_order" },
+      { "type": "compute_acquisition_order" },
+      { "type": "finalize" }
+    ]
   },
   "segmentation": {
     "backend": "totalsegmentator",
     "tasks": [
       {
         "task": "total",
-        "extra": { 
-          "roi_subset": ["liver"], 
-          "fastest": true 
+        "extra": {
+          "roi_subset": ["liver"],
+          "fastest": true
         }
       },
       {

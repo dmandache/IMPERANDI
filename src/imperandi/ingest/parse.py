@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import warnings
 import glob
 import hashlib
@@ -38,7 +40,7 @@ from imperandi.utils.run_state import (
     now_epoch,
 )
 from imperandi.datasets_config.defaults import DEFAULT_DICOM_TAGS
-from imperandi.ingest.apply_hook_manifests import apply_id_standardization
+from imperandi.ingest.hooks import apply_id_standardization
 
 warnings.filterwarnings("ignore")
 logger = logging.getLogger(__name__)
@@ -1271,7 +1273,7 @@ def process_with_checkpoint(
 
                 tags_chunk = pd.DataFrame.from_records(records)
                 chunk_out = chunk.merge(tags_chunk, on="_source_idx", how="left")
-                chunk_out = chunk_out.replace("", pd.NA).infer_objects(copy=False)
+                chunk_out = chunk_out.replace("", pd.NA).infer_objects()
                 if transform_chunk is not None:
                     chunk_out = transform_chunk(chunk_out)
                     if "_source_idx" not in chunk_out.columns:

@@ -37,10 +37,17 @@ standardizes patient keys, compare `patient_key` with `_patient_key_raw`.
 ## Cleaning removes too many volumes
 
 Inspect `Modality`, `ImageType`, `SeriesDescription`, orientation, spacing, and
-computed volume length in the parsed CSV. For legitimately short or long
-protocols, adjust the `--volume-length-min-mm` or
-`--volume-length-max-mm` bounds. Avoid broad threshold changes until you know
-which filter caused the loss.
+computed volume length in the parsed CSV, then inspect the selected manifest's
+`cleaning.steps` in order. Most unexpected losses come from one of these:
+
+- a row-scope keep filter that is too strict;
+- a row-scope discard filter that matches too broadly;
+- a geometry-derived column such as `PixelSpacingXY` or `acquisition_axis`;
+- a volume-scope filter on `volume_length`.
+
+For legitimately short or long protocols, edit the relevant volume-scope filter
+inside the manifest rather than looking for CLI threshold flags. Keep changes
+narrow until you know which step caused the loss.
 
 ## Conversion fails for archive-backed series
 
@@ -53,8 +60,9 @@ storage. Review `conv_errors.csv` for the affected rows.
 
 Resume only occurs for compatible state, but lightweight fingerprints cannot
 detect every in-place content change. Use `--strict_resume` when inputs may have
-changed without a path/metadata change, or `--no_resume` to deliberately start
-fresh. Do not combine outputs from manifests with different task definitions.
+changed without a path or metadata change, or `--no_resume` to deliberately
+start fresh. Do not combine outputs from manifests with different task
+definitions.
 
 ## Multiprocessing hangs or exhausts memory
 
@@ -69,4 +77,3 @@ Build from the repository root after installing the package and
 `docs/requirements.txt`. The Sphinx configuration mocks heavy optional modules,
 but base runtime dependencies must still be installed through `pip install -e
 .`. Re-run with `-W --keep-going` to see all warnings in one build.
-
