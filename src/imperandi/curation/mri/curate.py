@@ -391,7 +391,11 @@ def detect_t1_perfusion_phase(row: pd.Series) -> tuple[str, str, str, str]:
         return "OTHER", f"sequence={seq}; phase not assigned", "medium", "none"
 
     # Derived/subtraction rows are kept as T1 candidates but not valid phase labels.
-    if re.search(rules.RX_SUBTRACTION, text) or re.search(rules.RX_DERIVED_LOW_VALUE, text):
+    if (
+        re.search(rules.RX_SUBTRACTION, text)
+        or re.search(rules.RX_MIP_MPR, text)
+        or re.search(rules.RX_QUANT_OR_REPORT, text)
+    ):
         return "OTHER", "matched subtraction/derived/non-diagnostic marker", "high", "none"
 
     special_label, special_reason, special_conf, special_source = infer_special_t1_phase_from_volume_order(row)
@@ -484,7 +488,6 @@ def add_basic_feature_columns(df: pd.DataFrame) -> pd.DataFrame:
     out["series_text"] = out.apply(build_series_text, axis=1)
     out["plane"] = out["series_text"].apply(detect_plane)
 
-    out["is_derived_low_value"] = out["series_text"].str.contains(rules.RX_DERIVED_LOW_VALUE, regex=True, na=False)
     out["is_subtraction"] = out["series_text"].str.contains(rules.RX_SUBTRACTION, regex=True, na=False)
     out["is_mip_mpr"] = out["series_text"].str.contains(rules.RX_MIP_MPR, regex=True, na=False)
     out["is_quant_or_report"] = out["series_text"].str.contains(rules.RX_QUANT_OR_REPORT, regex=True, na=False)
