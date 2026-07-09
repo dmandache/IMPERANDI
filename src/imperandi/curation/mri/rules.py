@@ -19,7 +19,7 @@ def token(pattern: str) -> str:
 # Generic/non-diagnostic ------------------------------------------------------
 RX_LOCALIZER = token(r"locali[sz]er|scout|survey|rep[eè]rage|topogram|calibration|cal\s*body")
 RX_KEY_IMAGES = token(
-    r"key\s*images?|ko|snapshot|screen\s*save|capture|processed\s*images"
+    r"key\s*images?|ko|snapshot|screen\s*save|capture|processed\s*images?"
     r"|screen[\s_-]*saves?|images?[\s_-]*cl[eé]s?"
 )
 RX_SUBTRACTION = token(r"sub|subtraction|soustraction|sous")
@@ -28,12 +28,7 @@ RX_QUANT_OR_REPORT = token(r"quant|r2\*|r2star|fat\s*fraction|carto|map|mapping|
 
 
 # Sequence families -----------------------------------------------------------
-RX_SEQUENCE_DWI = token(
-    r"adc|apparent[\s_-]*diffusion[\s_-]*coefficient"
-    r"|dwi|dw[\s_-]*epi|dwepi|diff(?:usion)?|dif|ivim|dti"
-    r"|rec[\s_-]*b[\s_-]*[0-9]{1,4}"
-    r"|b[\s_-]*[0-9]{1,4}"
-)
+RX_SEQUENCE_DWI = token(r"dwi|diff|diffusion|adc|trace|ivim|ep2d|b\s*[=_-]?\s*\d+")
 
 # T1 3D GRE families. Dixon alone is included because liver multiphase T1 is
 # frequently named only as VIBE/LAVA/mDIXON/DIXON.
