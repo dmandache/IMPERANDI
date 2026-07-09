@@ -1,0 +1,327 @@
+"""
+Pytest suite for the simplified MVP MRI curation module.
+
+Run from the directory containing `mri_curation.py` and `mri_curation_rules.py`:
+
+    pytest -q test_mri_curation.py
+
+The tests focus on edge cases that previously caused missed or wrongly selected
+T1/T2 liver MRI diagnostic candidates.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from imperandi.curation.mri import curate as mc
+
+
+# -----------------------------------------------------------------------------
+# Test helpers
+# -----------------------------------------------------------------------------
+
+
+def row(
+    desc: str | None = None,
+    *,
+    patient_key: str = "P1",
+    study_id: str = "S1",
+    series_id: str = "SER1",
+    volume_id: str = "V1",
+    date: str = "2020-01-01",
+    time: str | int | float | None = "120000",
+    protocol: str | None = None,
+    image_type: str | None = "ORIGINAL\\PRIMARY",
+    n_rows: int = 80,
+    slice_thickness: float = 5.0,
+    pixel_spacing: str = "1.0\\1.0",
+    **extra,
+) -> dict:
+    """Small row factory with realistic default metadata."""
+    out = {
+        "patient_key": patient_key,
+        "study_id": study_id,
+        "series_id": series_id,
+        "volume_id": volume_id,
+        "date": date,
+        "time": time,
+        "SeriesDescription": desc,
+        "ProtocolName": protocol,
+        "ImageType": image_type,
+        "n_rows_in_volume": n_rows,
+        "SliceThickness": slice_thickness,
+        "PixelSpacing": pixel_spacing,
+    }
+    out.update(extra)
+    return out
+
+
+def curate(rows: list[dict]) -> dict[str, pd.DataFrame]:
+    return mc.curate_mri(pd.DataFrame(rows))
+
+
+def selected_for_slot(results: dict[str, pd.DataFrame], slot: str) -> pd.DataFrame:
+    return results["selected_long"].loc[
+        results["selected_long"]["selection_slot"].eq(slot)
+    ]
+
+
+# -----------------------------------------------------------------------------
+# Sequence classification edge cases
+# -----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "desc,expected",
+    [
+        ("T2 FS AX BLADE PACE DOME", "T2"),
+        ("AX T2 SPIR TE 90", "T2"),
+        ("T1 VIBE DIXON SANS IV CAIPI_W", "T1"),
+        ("T1 VIBE DIXON ART-PORT CAIPI_W", "T1"),
+        ("4D mDIXON-W", "T1"),
+        ("DWI b800", "DWI"),
+        ("ADC MAP", "DWI"),
+        ("Localizer 3 plans", "LOCALIZER"),
+        ("Processed Images", "KEY_IMAGES"),
+    ],
+)
+def test_sequence_classification_common_protocol_names(desc: str, expected: str):
+    out = mc.annotate_mri(pd.DataFrame([row(desc)]))
+    assert out.loc[0, "mri_sequence"] == expected
+
+
+def test_sequence_detection_uses_protocol_name_when_series_description_missing():
+    out = mc.annotate_mri(
+        pd.DataFrame([
+            row(None, protocol="T2 FS AX BLADE PACE DOME"),
+            row(None, protocol="T1 VIBE DIXON SANS IV CAIPI_W", volume_id="V2", series_id="SER2"),
+        ])
+    )
+    assert out.loc[0, "mri_sequence"] == "T2"
+    assert out.loc[1, "mri_sequence"] == "T1"
+
+
+# -----------------------------------------------------------------------------
+# Explicit T1 phase labels
+# -----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "desc,expected_phase",
+    [
+        ("T1 VIBE DIXON SANS IV CAIPI_W", "PRECONTRAST"),
+        ("AX T1 DIXON SS IV_W", "PRECONTRAST"),
+        ("AX T1 DIXON ART_W", "ARTERIAL"),
+        ("mDIXON port", "PORTAL_VENOUS"),
+        ("AX T1 DIXON VEIN_W", "PORTAL_VENOUS"),
+        ("AX T1 DIXON TARD_W", "DELAYED"),
+        ("mDIXON tardif", "DELAYED"),
+        ("mDIXON tardif 2h", "HEPATOBILIARY"),
+        ("mDIXON tardif+2h", "HEPATOBILIARY"),
+    ],
+)
+def test_explicit_t1_phase_labels(desc: str, expected_phase: str):
+    out = mc.annotate_mri(pd.DataFrame([row(desc)]))
+    assert out.loc[0, "mri_sequence"] == "T1"
+    assert out.loc[0, "mri_perfusion_label"] == expected_phase
+    assert out.loc[0, "mri_perfusion_source"].startswith("explicit_text")
+
+
+def test_hepatobiliary_2h_takes_priority_over_delayed_tardif():
+    out = mc.annotate_mri(pd.DataFrame([row("mDIXON tardif 2h")]))
+    assert out.loc[0, "mri_perfusion_label"] == "HEPATOBILIARY"
+    assert "hepatobiliary" in out.loc[0, "mri_perfusion_reason"].lower()
+
+
+# -----------------------------------------------------------------------------
+# Special dynamic phase inference edge cases
+# -----------------------------------------------------------------------------
+
+
+def test_art_port_two_independent_volumes_first_arterial_second_portal():
+    results = curate([
+        row("T1 VIBE DIXON ART-PORT CAIPI_W", series_id="SER_ARTPORT", volume_id="V1", time="120000"),
+        row("T1 VIBE DIXON ART-PORT CAIPI_W", series_id="SER_ARTPORT", volume_id="V2", time="120100"),
+    ])
+    cur = results["curated"].sort_values("volume_order_in_series")
+
+    assert cur["n_volumes_in_series"].tolist() == [2, 2]
+    assert cur["mri_perfusion_label"].tolist() == ["ARTERIAL", "PORTAL_VENOUS"]
+    assert cur["mri_perfusion_source"].tolist() == ["volume_order_art_port", "volume_order_art_port"]
+
+
+def test_art_port_single_volume_falls_back_to_portal_transition():
+    out = mc.annotate_mri(pd.DataFrame([row("T1 VIBE DIXON ART-PORT CAIPI_W")]))
+    assert out.loc[0, "mri_perfusion_label"] == "PORTAL_VENOUS"
+    assert out.loc[0, "mri_perfusion_source"] == "explicit_text_art_port_single"
+
+
+def test_mask_multiart_first_precontrast_rest_arterial():
+    results = curate([
+        row("Ax LAVA Mask+Multiart Fluoro", series_id="SER_MULTIART", volume_id="V1", time="120000"),
+        row("Ax LAVA Mask+Multiart Fluoro", series_id="SER_MULTIART", volume_id="V2", time="120100"),
+        row("Ax LAVA Mask+Multiart Fluoro", series_id="SER_MULTIART", volume_id="V3", time="120200"),
+    ])
+    cur = results["curated"].sort_values("volume_order_in_series")
+
+    assert cur["mri_sequence"].tolist() == ["T1", "T1", "T1"]
+    assert cur["mri_perfusion_label"].tolist() == ["PRECONTRAST", "ARTERIAL", "ARTERIAL"]
+    assert set(cur["mri_perfusion_source"]) == {"volume_order_mask_multiart"}
+
+
+def test_generic_4d_mdixon_volume_order_pre_art_port_delayed():
+    results = curate([
+        row("4D mDIXON-W", series_id="SER_4D", volume_id="V1", time="120000"),
+        row("4D mDIXON-W", series_id="SER_4D", volume_id="V2", time="120100"),
+        row("4D mDIXON-W", series_id="SER_4D", volume_id="V3", time="120200"),
+        row("4D mDIXON-W", series_id="SER_4D", volume_id="V4", time="120300"),
+    ])
+    cur = results["curated"].sort_values("volume_order_in_series")
+
+    assert cur["mri_perfusion_label"].tolist() == [
+        "PRECONTRAST",
+        "ARTERIAL",
+        "PORTAL_VENOUS",
+        "DELAYED",
+    ]
+    assert set(cur["mri_perfusion_source"]) == {"volume_order"}
+
+
+# -----------------------------------------------------------------------------
+# Explicit/pure phase should beat dynamic-inferred fallback
+# -----------------------------------------------------------------------------
+
+
+def test_explicit_portal_selected_over_inferred_4d_portal_even_if_same_exam():
+    results = curate([
+        row("4D mDIXON-W", series_id="SER_4D", volume_id="V1", time="120000"),
+        row("4D mDIXON-W", series_id="SER_4D", volume_id="V2", time="120100"),
+        row("4D mDIXON-W", series_id="SER_4D", volume_id="V3", time="120200"),
+        row("mDIXON port", series_id="SER_PORT", volume_id="VP", time="120300"),
+    ])
+
+    portal = selected_for_slot(results, "T1_PORTAL_VENOUS")
+    assert len(portal) == 1
+    assert portal.iloc[0]["SeriesDescription"] == "mDIXON port"
+    assert portal.iloc[0]["mri_perfusion_source"] == "explicit_text"
+
+
+def test_explicit_precontrast_selected_over_inferred_4d_precontrast():
+    results = curate([
+        row("4D mDIXON-W", series_id="SER_4D", volume_id="V1", time="120000"),
+        row("4D mDIXON-W", series_id="SER_4D", volume_id="V2", time="120100"),
+        row("4D mDIXON-W", series_id="SER_4D", volume_id="V3", time="120200"),
+        row("mDIXON pre", series_id="SER_PRE", volume_id="VPRE", time="115900"),
+    ])
+
+    pre = selected_for_slot(results, "T1_PRECONTRAST")
+    assert len(pre) == 1
+    assert pre.iloc[0]["SeriesDescription"] == "mDIXON pre"
+    assert pre.iloc[0]["mri_perfusion_source"] == "explicit_text"
+
+
+# -----------------------------------------------------------------------------
+# Dixon component and scoring edge cases
+# -----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "desc,expected_component",
+    [
+        ("AX T1 DIXON ART_W", "WATER"),
+        ("AX T1 DIXON ART_in", "IN_PHASE"),
+        ("AX T1 DIXON ART_opp", "OPPOSED_PHASE"),
+        ("AX T1 DIXON ART_F", "FAT"),
+        ("mDIXON-All_BH", "DIXON_ALL"),
+        ("mDIXON-Quant_BH", "FAT_FRACTION"),
+    ],
+)
+def test_dixon_component_detection(desc: str, expected_component: str):
+    out = mc.annotate_mri(pd.DataFrame([row(desc)]))
+    assert out.loc[0, "dixon_component"] == expected_component
+
+
+def test_water_component_scores_higher_than_in_phase_and_fat_for_same_phase():
+    results = curate([
+        row("AX T1 DIXON ART_W", series_id="SER_W", volume_id="VW"),
+        row("AX T1 DIXON ART_in", series_id="SER_IN", volume_id="VIN"),
+        row("AX T1 DIXON ART_F", series_id="SER_F", volume_id="VF"),
+    ])
+    cur = results["curated"].set_index("SeriesDescription")
+
+    assert cur.loc["AX T1 DIXON ART_W", "t1_score"] > cur.loc["AX T1 DIXON ART_in", "t1_score"]
+    assert cur.loc["AX T1 DIXON ART_in", "t1_score"] > cur.loc["AX T1 DIXON ART_F", "t1_score"]
+
+
+# -----------------------------------------------------------------------------
+# Selection and grouping edge cases
+# -----------------------------------------------------------------------------
+
+
+def test_best_t2_selects_axial_fatsat_motion_robust_over_plain_t2():
+    results = curate([
+        row("AX T2 TE 120 SENSE", series_id="SER_T2_PLAIN", volume_id="V1"),
+        row("T2 FS AX BLADE PACE DOME", series_id="SER_T2_BEST", volume_id="V2"),
+    ])
+    t2 = selected_for_slot(results, "T2")
+
+    assert len(t2) == 1
+    assert t2.iloc[0]["SeriesDescription"] == "T2 FS AX BLADE PACE DOME"
+
+
+def test_subtraction_is_not_selected_as_best_arterial_when_original_exists():
+    results = curate([
+        row("AX T1 DIXON ART_W_SUB", series_id="SER_SUB", volume_id="VSUB"),
+        row("AX T1 DIXON ART_W", series_id="SER_ORIG", volume_id="VORIG"),
+    ])
+    art = selected_for_slot(results, "T1_ARTERIAL")
+
+    assert len(art) == 1
+    assert art.iloc[0]["SeriesDescription"] == "AX T1 DIXON ART_W"
+    assert "SUB" not in art.iloc[0]["SeriesDescription"]
+
+
+def test_same_patient_same_date_different_studies_are_not_collapsed():
+    results = curate([
+        row("T2 FS AX BLADE", study_id="STUDY_A", series_id="SER_A", volume_id="VA", date="2020-01-01"),
+        row("AX T2 SPIR", study_id="STUDY_B", series_id="SER_B", volume_id="VB", date="2020-01-01"),
+    ])
+    t2 = selected_for_slot(results, "T2")
+
+    assert len(t2) == 2
+    assert set(t2["study_id"]) == {"STUDY_A", "STUDY_B"}
+
+
+def test_missing_optional_metadata_does_not_crash():
+    minimal = pd.DataFrame([
+        {
+            "patient_key": "P1",
+            "date": "2020-01-01",
+            "SeriesDescription": np.nan,
+            "ProtocolName": "T1 VIBE DIXON SANS IV CAIPI_W",
+        },
+        {
+            "patient_key": "P1",
+            "date": "2020-01-01",
+            "SeriesDescription": "T2 FS AX BLADE PACE DOME",
+        },
+    ])
+
+    results = mc.curate_mri(minimal)
+    cur = results["curated"]
+
+    assert len(cur) == 2
+    assert set(cur["mri_sequence"]) == {"T1", "T2"}
+    assert not results["selected_long"].empty
+
+
+def test_invalid_time_and_pixel_spacing_do_not_crash_selection():
+    results = curate([
+        row("T2 FS AX BLADE", time="not-a-time", pixel_spacing="bad-spacing"),
+        row("T1 VIBE DIXON SANS IV CAIPI_W", series_id="SER_T1", volume_id="VT1", time=None, pixel_spacing=None),
+    ])
+
+    assert len(results["curated"]) == 2
+    assert {"T2", "T1_PRECONTRAST"}.issubset(set(results["selected_long"]["selection_slot"]))
