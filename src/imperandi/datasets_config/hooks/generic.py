@@ -1,7 +1,10 @@
 ﻿import re
 from typing import Optional
 
+from imperandi.ingest.hooks import clean_hook
 
+
+@clean_hook(outputs=["patient_key"])
 def standardize_patient_key(x: Optional[str]) -> Optional[str]:
     """
     Extract numeric parts from a string, strip leading zeros,

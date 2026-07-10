@@ -8,8 +8,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import pandas as pd
 import numpy as np
+import pytest
 
 from imperandi.ingest import clean
+from imperandi.ingest.hooks import clean_hook
 
 ACQUISITION_TEMP_COLS = {
     # "_acq_timestamp",
@@ -118,25 +120,16 @@ def test_normalize_clean_args_prefers_flag_csv_path_out_over_positional(tmp_path
     assert args.csv_path_out == str(csv_out_opt)
 
 
-def test_normalize_clean_args_migrates_legacy_volume_bounds(tmp_path):
-    csv_in = tmp_path / "input.csv"
-    csv_in.write_text("patient_key\np1\n")
+def test_clean_parser_rejects_removed_legacy_flags():
+    parser = clean.build_parser()
 
-    args = clean.normalize_clean_args(
-        clean.argparse.Namespace(
-            csv_path_pos=str(csv_in),
-            csv_path_opt=None,
-            csv_path_out_pos=None,
-            csv_path_out=None,
-            volume_min=25.0,
-            volume_max=450.0,
-        )
-    )
-
-    assert args.volume_length_min_mm == 25.0
-    assert args.volume_length_max_mm == 450.0
-    assert not hasattr(args, "volume_min")
-    assert not hasattr(args, "volume_max")
+    for argv in (["--volume-length-min-mm", "25"], ["--csv_dict_path", "tags.csv"]):
+        try:
+            parser.parse_args(argv)
+        except SystemExit as exc:
+            assert exc.code != 0
+        else:
+            raise AssertionError(f"Removed clean flags should not parse: {argv!r}")
 
 
 def test_uniform_string_and_remove_other_organs_description():
@@ -152,24 +145,64 @@ def test_uniform_string_and_remove_other_organs_description():
     assert "liver" in " ".join(out["SeriesDescription"].astype(str))
 
 
-def test_filter_ct_modality_and_remove_pet_ct():
+def test_filter_supported_modality_image_storage_and_remove_pet_ct():
     df = pd.DataFrame(
         {
-            "Modality": ["CT", "MR", "CT"],
+            "Modality": ["CT", "MR", "CT", "US"],
             "SOPClassUID": [
                 "1.2.840.10008.5.1.4.1.1.2",  # CTImageStorage
                 "1.2.840.10008.5.1.4.1.1.4",  # MRImageStorage (example)
                 "1.2.840.10008.5.1.4.1.1.2",
+                "1.2.840.10008.5.1.4.1.1.6.1",  # UltrasoundImageStorage
             ],
-            "ModalitiesInStudy": ["CT", "PT", "CT"],
+            "ModalitiesInStudy": ["CT", "MR", "CT", "US"],
         }
     )
-    df_ct = clean.filter_ct_modality(df.copy())
-    assert (df_ct.Modality == "CT").all()
-    assert "sop_class" in df_ct.columns
+    df_supported = clean.filter_supported_modality_image_storage(df.copy())
+    assert set(df_supported.Modality) == {"CT", "MR"}
+    assert "sop_class" in df_supported.columns
     # remove rows with PT in ModalitiesInStudy
-    df_pet_removed = clean.remove_pet_ct(df.copy())
+    df_pet_removed = clean.remove_pet_ct(
+        df.assign(ModalitiesInStudy=["CT", "PT", "CT", "US"]).copy()
+    )
     assert "PT" not in " ".join(df_pet_removed["ModalitiesInStudy"].astype(str))
+
+
+def test_run_modality_curation_step_keeps_ct_and_mri_annotations():
+    df = pd.DataFrame([
+        {
+            "patient_key": "p1",
+            "study_id": "ct-study",
+            "series_id": "ct-series",
+            "volume_id": "ct-vol",
+            "date": "2020-01-01",
+            "Modality": "CT",
+            "SeriesDescription": "Abdomen portal venous",
+            "ImageType": "ORIGINAL PRIMARY AXIAL",
+            "Rows": 512,
+            "Columns": 512,
+            "SliceThickness": 2.0,
+            "n_files": 120,
+        },
+        {
+            "patient_key": "p1",
+            "study_id": "mr-study",
+            "series_id": "mr-series",
+            "volume_id": "mr-vol",
+            "date": "2020-01-01",
+            "Modality": "MR",
+            "SeriesDescription": "AX T1 DIXON VEIN_W",
+            "ImageType": "ORIGINAL\\PRIMARY",
+            "n_files": 80,
+        },
+    ])
+
+    out = clean.run_clean_pipeline(df.copy(), [{"type": "modality_curation"}])
+
+    assert set(out["curation_modality"]) == {"CT", "MR"}
+    assert "ct_phase" in out.columns
+    assert "mri_sequence" in out.columns
+    assert set(out["selection_slot"]) == {"CT_PORTAL_VENOUS", "T1_PORTAL_VENOUS"}
 
 
 def test_add_date_and_filter_image_type_and_remove_localizers_mpr():
@@ -206,9 +239,7 @@ def test_add_date_and_filter_image_type_and_remove_localizers_mpr():
         )
     )
     # both mpr occurrences removed
-    assert not df_nompr.apply(
-        lambda r: "mpr" in (str(r.ImageType) + str(r.SeriesDescription)).lower(), axis=1
-    ).any()
+    assert df_nompr.empty
 
 
 def test_add_date_selects_best_date_candidate():
@@ -264,7 +295,7 @@ def test_clean_scan_size_and_pixel_spacing():
     assert pd.isna(ps.loc[1, "PixelSpacingXY"])
 
 
-def test_generate_volume_id_and_filter_by_acquisition_plane():
+def test_build_volume_id_naive_and_filter_by_acquisition_plane():
     df = pd.DataFrame(
         {
             "patient_key": ["p1", "p1"],
@@ -278,7 +309,7 @@ def test_generate_volume_id_and_filter_by_acquisition_plane():
             "PixelSpacingXY": [0.7, 0.7],
         }
     )
-    with_sup = clean.generate_volume_id(df.copy())
+    with_sup = clean.build_volume_id_naive(df.copy())
     assert "volume_id" in with_sup.columns
     # same content -> identical volume_id
     assert with_sup.loc[0, "volume_id"] == with_sup.loc[1, "volume_id"]
@@ -286,6 +317,38 @@ def test_generate_volume_id_and_filter_by_acquisition_plane():
     # filter by plane: above orientation corresponds to axial (Z axis)
     filtered = clean.filter_by_acquisition_plane(with_sup.copy())
     assert filtered.shape[0] == with_sup.shape[0]
+
+
+def test_split_multivolume_series_by_repeated_slices_creates_volume_ids():
+    rows = []
+    for timepoint, acq in enumerate([1, 2]):
+        for z in range(8):
+            rows.append(
+                {
+                    "patient_key": "p",
+                    "study_id": "s",
+                    "series_id": "series-multivolume",
+                    "volume_id": "metadata-volume",
+                    "ImageOrientationPatient": "[1, 0, 0, 0, 1, 0]",
+                    "ImagePositionPatient": f"[0, 0, {z}]",
+                    "SliceLocation": float(z),
+                    "AcquisitionNumber": acq,
+                    "InstanceNumber": timepoint * 8 + z + 1,
+                }
+            )
+    df = pd.DataFrame(rows)
+
+    out = clean.split_multivolume_series_by_repeated_slices(
+        df,
+        min_slices=4,
+        min_repeated_slice_fraction=0.7,
+    )
+
+    assert out["volume_split_method"].eq("repeated_slice_stack").all()
+    assert set(out["volume_index_in_series"]) == {0, 1}
+    assert out["n_detected_volumes_in_series"].dropna().unique().tolist() == [2]
+    assert out["volume_id"].nunique() == 2
+    assert set(out.groupby("volume_id").size()) == {8}
 
 
 def test_correct_volume_ids_merging(tmp_path, capsys):
@@ -608,3 +671,370 @@ def test_load_data_and_read_csv_with_valid_columns(tmp_path):
     )
     combined = clean.load_data([str(csv), str(csv2)])
     assert combined.shape[0] == 2
+
+
+def test_validate_cleaning_manifest_uses_hook_output_metadata():
+    manifest = {
+        "cleaning": {
+            "version": 1,
+            "steps": [
+                {
+                    "type": "hook",
+                    "function": "datasets_config.hooks.operandi:extract_from_patient_key",
+                    "source_columns": ["patient_key"],
+                },
+                {
+                    "type": "filter",
+                    "kind": "keep",
+                    "scope": "row",
+                    "logic": "and",
+                    "rules": [{"column": "center", "op": "eq", "value": "BJN"}],
+                },
+            ],
+        }
+    }
+
+    steps = clean.validate_cleaning_manifest(manifest)
+    required = clean._collect_required_input_columns(steps)
+
+    assert "patient_key" in required
+    assert "center" not in required
+
+
+@pytest.mark.parametrize(
+    ("step", "message"),
+    [
+        (
+            {
+                "type": "filter",
+                "kind": "keep",
+                "scope": "row",
+                "logic": "and",
+                "rules": [{"column": "Modality", "op": "between"}],
+            },
+            "Unsupported filter operator",
+        ),
+        (
+            {
+                "type": "filter",
+                "kind": "keep",
+                "scope": "row",
+                "logic": "and",
+                "rules": [{"column": "Modality", "op": "eq"}],
+            },
+            "requires a 'value'",
+        ),
+        (
+            {"type": "normalize_string"},
+            "normalize_string steps must define",
+        ),
+        (
+            {"type": "coalesce_date", "candidates": "StudyDate"},
+            "coalesce_date.candidates",
+        ),
+        (
+            {"type": "classify_acquisition_plane", "angle_thresh_deg": "wide"},
+            "angle_thresh_deg",
+        ),
+        (
+            {"type": "build_volume_id", "preferred_columns": "patient_key"},
+            "build_volume_id.preferred_columns",
+        ),
+    ],
+)
+def test_validate_cleaning_manifest_rejects_invalid_step_configs(step, message):
+    manifest = {"cleaning": {"version": 1, "steps": [step]}}
+
+    with pytest.raises(ValueError) as exc:
+        clean.validate_cleaning_manifest(manifest)
+
+    assert message in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    ("column", "values", "rule", "expected_patients"),
+    [
+        ("value", ["CT", "MR", "PT"], {"column": "value", "op": "eq", "value": "CT"}, ["p1"]),
+        ("value", ["CT", "MR", "PT"], {"column": "value", "op": "ne", "value": "CT"}, ["p2", "p3"]),
+        ("value", ["CT", "MR", "PT"], {"column": "value", "op": "in", "value": ["CT", "PT"]}, ["p1", "p3"]),
+        ("value", ["CT", "MR", "PT"], {"column": "value", "op": "not_in", "value": ["CT", "PT"]}, ["p2"]),
+        (
+            "value",
+            ["LOCALIZER", "scout", "Portal Venous"],
+            {"column": "value", "op": "contains", "value": "LOCAL"},
+            ["p1"],
+        ),
+        (
+            "value",
+            ["LOCALIZER", "scout", "Portal Venous"],
+            {"column": "value", "op": "icontains", "value": "portal"},
+            ["p3"],
+        ),
+        (
+            "value",
+            ["LOCALIZER", "scout", "Portal Venous"],
+            {"column": "value", "op": "regex", "value": "^P"},
+            ["p3"],
+        ),
+        ("value", [1, 2, 3], {"column": "value", "op": "lt", "value": 2}, ["p1"]),
+        ("value", [1, 2, 3], {"column": "value", "op": "lte", "value": 2}, ["p1", "p2"]),
+        ("value", [1, 2, 3], {"column": "value", "op": "gt", "value": 2}, ["p3"]),
+        ("value", [1, 2, 3], {"column": "value", "op": "gte", "value": 2}, ["p2", "p3"]),
+        ("value", [1, None, 3], {"column": "value", "op": "is_null"}, ["p2"]),
+        ("value", [1, None, 3], {"column": "value", "op": "not_null"}, ["p1", "p3"]),
+    ],
+)
+def test_run_clean_pipeline_supports_all_filter_operators(
+    column, values, rule, expected_patients
+):
+    df = pd.DataFrame(
+        {
+            "patient_key": ["p1", "p2", "p3"],
+            "study_id": ["s1", "s1", "s1"],
+            "series_id": ["sr1", "sr2", "sr3"],
+            "dicom_path": ["a.dcm", "b.dcm", "c.dcm"],
+            column: values,
+        }
+    )
+    manifest = {
+        "cleaning": {
+            "version": 1,
+            "steps": [
+                {
+                    "type": "filter",
+                    "kind": "keep",
+                    "scope": "row",
+                    "logic": "and",
+                    "rules": [rule],
+                }
+            ],
+        }
+    }
+
+    steps = clean.validate_cleaning_manifest(manifest)
+    out = clean.run_clean_pipeline(df.copy(), steps)
+
+    assert out["patient_key"].tolist() == expected_patients
+
+
+def test_run_clean_pipeline_filter_logic_and_or():
+    df = pd.DataFrame(
+        {
+            "patient_key": ["p1", "p2", "p3"],
+            "study_id": ["s", "s", "s"],
+            "series_id": ["sr1", "sr2", "sr3"],
+            "dicom_path": ["a", "b", "c"],
+            "Modality": ["CT", "CT", "MR"],
+            "sop_class": ["CTImageStorage", "Other", "CTImageStorage"],
+            "ModalitiesInStudy": ["CT", "PT", "CT"],
+        }
+    )
+
+    steps = [
+        {
+            "type": "filter",
+            "kind": "keep",
+            "scope": "row",
+            "logic": "and",
+            "rules": [
+                {"column": "Modality", "op": "eq", "value": "CT"},
+                {"column": "sop_class", "op": "eq", "value": "CTImageStorage"},
+            ],
+        },
+        {
+            "type": "filter",
+            "kind": "discard",
+            "scope": "row",
+            "logic": "or",
+            "rules": [
+                {"column": "ModalitiesInStudy", "op": "contains", "value": "PT"},
+                {"column": "ModalitiesInStudy", "op": "contains", "value": "NM"},
+            ],
+        },
+    ]
+
+    out = clean.run_clean_pipeline(df.copy(), steps)
+
+    assert out["patient_key"].tolist() == ["p1"]
+
+
+def test_run_clean_pipeline_executes_all_supported_step_types(monkeypatch):
+    real_resolver = clean.resolve_function_path
+
+    @clean_hook(outputs=["patient_study_key"])
+    def combine_patient_and_study(row):
+        return f"{row['patient_key']}::{row['study_id']}"
+
+    def patched_resolver(function_path):
+        if function_path == "tests.helpers:combine_patient_and_study":
+            return combine_patient_and_study
+        return real_resolver(function_path)
+
+    monkeypatch.setattr(clean, "resolve_function_path", patched_resolver)
+
+    df = pd.DataFrame(
+        {
+            "patient_key": ["patient_0012_030"] * 4,
+            "study_id": ["study1"] * 4,
+            "series_id": ["series1", "series1", "series2", "series2"],
+            "dicom_path": ["a1.dcm", "a2.dcm", "b1.dcm", "b2.dcm"],
+            "AltDate": [None, None, None, None],
+            "StudyDate": ["20200101"] * 4,
+            "AltTime": [None, None, None, None],
+            "AcquisitionTime": ["120000", "120001", "121000", "121001"],
+            "Modality": ["CT"] * 4,
+            "SOPClassUID": ["1.2.840.10008.5.1.4.1.1.2"] * 4,
+            "ImageType": ["['ORIGINAL','PRIMARY']"] * 4,
+            "Rows": [512] * 4,
+            "Columns": [512] * 4,
+            "SliceThickness": [1.0] * 4,
+            "SpacingBetweenSlices": [1.0] * 4,
+            "SeriesDescription": [
+                " Portal Venous ",
+                " Portal Venous ",
+                " Arterial ",
+                " Arterial ",
+            ],
+            "PixelSpacing": ["[0.7, 0.7]"] * 4,
+            "ImageOrientationPatient": ["[1, 0, 0, 0, 1, 0]"] * 4,
+            "AcquisitionNumber": ["1", "1", "2", "2"],
+            "SeriesNumber": ["10", "10", "11", "11"],
+            "ImagePositionPatient": [
+                "[0, 0, 0]",
+                "[0, 0, 1]",
+                "[0, 0, 10]",
+                "[0, 0, 11]",
+            ],
+            "SliceLocation": [0.0, 1.0, 10.0, 11.0],
+        }
+    )
+    manifest = {
+        "cleaning": {
+            "version": 1,
+            "steps": [
+                {
+                    "type": "hook",
+                    "function": "datasets_config.hooks.generic:standardize_patient_key",
+                    "source_columns": ["patient_key"],
+                },
+                {
+                    "type": "hook",
+                    "function": "tests.helpers:combine_patient_and_study",
+                    "source_columns": ["patient_key", "study_id"],
+                },
+                {"type": "coalesce_date", "candidates": ["AltDate", "StudyDate"]},
+                {"type": "coalesce_time", "candidates": ["AltTime", "AcquisitionTime"]},
+                {"type": "sop_class"},
+                {"type": "parse_image_type"},
+                {"type": "clean_scan_size"},
+                {"type": "normalize_string", "column": "SeriesDescription"},
+                {"type": "pixel_spacing_xy"},
+                {"type": "standardize_iop"},
+                {"type": "classify_acquisition_plane", "angle_thresh_deg": 5.0},
+                {
+                    "type": "build_volume_id",
+                    "preferred_columns": [
+                        "patient_key",
+                        "study_id",
+                        "series_id",
+                        "ImageType",
+                        "AcquisitionNumber",
+                        "ImageOrientationPatient",
+                        "SliceThickness",
+                        "PixelSpacingXY",
+                    ],
+                    "fallback_columns": ["patient_key", "study_id", "series_id"],
+                    "merge_group_columns": [
+                        "patient_key",
+                        "study_id",
+                        "series_id",
+                        "ImageType",
+                        "ImageOrientationPatient",
+                        "SliceThickness",
+                        "PixelSpacingXY",
+                    ],
+                    "merge_z_sources": ["ImagePositionPatient", "SliceLocation"],
+                    "merge_z_tolerance": 0.01,
+                },
+                {"type": "group_volumes"},
+                {"type": "compute_volume_length"},
+                {"type": "modality_curation"},
+                {"type": "compute_visit_order"},
+                {"type": "compute_acquisition_order"},
+                {"type": "finalize"},
+            ],
+        }
+    }
+
+    steps = clean.validate_cleaning_manifest(manifest)
+    out = clean.run_clean_pipeline(df.copy(), steps)
+
+    assert out.shape[0] == 2
+    assert out["patient_key"].tolist() == ["12-30", "12-30"]
+    assert set(out["patient_study_key"].tolist()) == {"12-30::study1"}
+    assert set(out["SeriesDescription"].tolist()) == {"portal venous", "arterial"}
+    assert set(out["acquisition_axis"].tolist()) == {"Z"}
+    assert set(out["acquisition_order"].tolist()) == {0, 1}
+    assert set(out["volume_length"].tolist()) == {2.0}
+    assert set(out["curation_modality"].tolist()) == {"CT"}
+    assert "CT_PORTAL_VENOUS" in set(out["selection_slot"])
+
+
+def test_clean_and_save_data_runs_manifest_pipeline(tmp_path):
+    csv_in = tmp_path / "input.csv"
+    csv_out = tmp_path / "output.csv"
+    pd.DataFrame(
+        {
+            "patient_key": ["patient_0012_030", "patient_0012_030"],
+            "study_id": ["s1", "s1"],
+            "series_id": ["sr1", "sr1"],
+            "dicom_path": ["a.dcm", "b.dcm"],
+            "SOPClassUID": ["1.2.840.10008.5.1.4.1.1.2"] * 2,
+            "StudyDate": ["20200101", "20200101"],
+            "AcquisitionTime": ["120000", "120100"],
+            "SliceThickness": [1.0, 1.0],
+            "SpacingBetweenSlices": [1.0, 1.0],
+            "PixelSpacing": ["[0.7, 0.7]", "[0.7, 0.7]"],
+        }
+    ).to_csv(csv_in, index=False)
+
+    manifest = {
+        "cleaning": {
+            "version": 1,
+            "steps": [
+                {
+                    "type": "hook",
+                    "function": "datasets_config.hooks.generic:standardize_patient_key",
+                    "source_columns": ["patient_key"],
+                },
+                {"type": "coalesce_date"},
+                {"type": "coalesce_time"},
+                {"type": "pixel_spacing_xy"},
+                {
+                    "type": "build_volume_id",
+                    "preferred_columns": [
+                        "patient_key",
+                        "study_id",
+                        "series_id",
+                        "SliceThickness",
+                        "PixelSpacingXY",
+                    ],
+                    "fallback_columns": ["patient_key", "study_id", "series_id"],
+                },
+                {"type": "group_volumes"},
+                {"type": "compute_volume_length"},
+                {"type": "finalize"},
+            ],
+        }
+    }
+
+    clean.clean_and_save_data(
+        [str(csv_in)],
+        str(csv_out),
+        manifest=manifest,
+    )
+
+    out = pd.read_csv(csv_out)
+    assert out.loc[0, "patient_key"] == "12-30"
+    assert out.loc[0, "_patient_key_raw"] == "patient_0012_030"
+    assert out.loc[0, "volume_length"] == 2.0

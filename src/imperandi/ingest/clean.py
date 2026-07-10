@@ -5,28 +5,28 @@ import re
 from ast import literal_eval
 from datetime import time as dt_time
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 import pandas as pd
 from pydicom.uid import UID
 from unidecode import unidecode
 
-from imperandi.utils.manifest import load_manifest
+from imperandi.utils.manifest import load_manifest, resolve_function_path
 from imperandi.utils.geometry import (
     classify_plane_from_iop,
     standardize_iop,
 )
-from imperandi.ingest.apply_hook_manifests import (
-    apply_id_standardization,
-    apply_derived_columns,
+from imperandi.ingest.hooks import (
+    apply_patient_key_standardization,
+    get_clean_hook_outputs,
 )
+from imperandi.curation import curate_by_modality
 from imperandi.utils.logging import log_task_summary, setup_logging
 from imperandi.utils.misc import print_args, report_volumes, report_change
 from imperandi.utils.datetime import to_dates, to_times
 from imperandi.datasets_config.defaults import (
     DEFAULT_DICOM_TAGS,
-    DEFAULT_VOLUME_LENGTH_MIN_MM,
-    DEFAULT_VOLUME_LENGTH_MAX_MM,
     DEFAULT_MAX_PIXEL_SPACING_MM,
     DEFAULT_MAX_SLICE_THICKNESS_MM,
     DATE_CANDIDATES,
@@ -41,6 +41,14 @@ COLUMNS_TO_USE = [
     "dicom_path",
 ] + DEFAULT_DICOM_TAGS
 
+BASE_INPUT_COLUMNS = [
+    "patient_key",
+    "_patient_key_raw",
+    "study_id",
+    "series_id",
+    "dicom_path",
+]
+
 
 pd.options.mode.chained_assignment = None
 logger = logging.getLogger(__name__)
@@ -49,6 +57,21 @@ DATETIME_TIME_RE = re.compile(
     r"datetime\.time\(\s*(\d{1,2})\s*,\s*(\d{1,2})(?:\s*,\s*(\d{1,2}))?(?:\s*,\s*(\d{1,6}))?\s*\)"
 )
 FLOAT_TOKEN_RE = re.compile(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?")
+SUPPORTED_FILTER_OPERATORS = {
+    "eq",
+    "ne",
+    "in",
+    "not_in",
+    "contains",
+    "icontains",
+    "regex",
+    "lt",
+    "lte",
+    "gt",
+    "gte",
+    "is_null",
+    "not_null",
+}
 
 
 def add_clean_arguments(
@@ -58,7 +81,7 @@ def add_clean_arguments(
     include_csv_path_out: bool = True,
     include_dry_run: bool = True,
 ) -> None:
-    """Add metadata-cleaning paths, thresholds, and manifest options."""
+    """Add metadata-cleaning paths and manifest options."""
     if include_csv_path:
         parser.add_argument(
             "csv_path_pos",
@@ -97,12 +120,6 @@ def add_clean_arguments(
                 "Defaults to <csv_dir>/<csv_stem>_clean.csv."
             ),
         )
-    parser.add_argument(
-        "--csv_dict_path",
-        type=str,
-        default=None,
-        help="Path to the CSV tag dictionary file",
-    )
     if include_manifest:
         parser.add_argument(
             "--manifest",
@@ -110,38 +127,6 @@ def add_clean_arguments(
             default=None,
             help="Dataset manifest name or path to manifest JSON.",
         )
-    parser.add_argument(
-        "--volume-length-min-mm",
-        dest="volume_length_min_mm",
-        type=float,
-        default=DEFAULT_VOLUME_LENGTH_MIN_MM,
-        metavar="MM",
-        help="Minimum allowed reconstructed volume length in mm.",
-    )
-    parser.add_argument(
-        "--volume_min",
-        dest="volume_length_min_mm",
-        type=float,
-        default=argparse.SUPPRESS,
-        metavar="MM",
-        help=argparse.SUPPRESS,
-    )
-    parser.add_argument(
-        "--volume-length-max-mm",
-        dest="volume_length_max_mm",
-        type=float,
-        default=DEFAULT_VOLUME_LENGTH_MAX_MM,
-        metavar="MM",
-        help="Maximum allowed reconstructed volume length in mm.",
-    )
-    parser.add_argument(
-        "--volume_max",
-        dest="volume_length_max_mm",
-        type=float,
-        default=argparse.SUPPRESS,
-        metavar="MM",
-        help=argparse.SUPPRESS,
-    )
     if include_dry_run:
         parser.add_argument(
             "--dry-run",
@@ -189,7 +174,7 @@ def _default_clean_output_path(csv_path: Path) -> Path:
 
 
 def normalize_clean_args(args: argparse.Namespace) -> argparse.Namespace:
-    """Resolve clean input/output paths and legacy threshold aliases in-place."""
+    """Resolve clean input/output paths in-place."""
     csv_in = (
         args.csv_path_opt
         if getattr(args, "csv_path_opt", None) is not None
@@ -216,50 +201,58 @@ def normalize_clean_args(args: argparse.Namespace) -> argparse.Namespace:
         if hasattr(args, attr):
             delattr(args, attr)
 
-    if not hasattr(args, "volume_length_min_mm"):
-        args.volume_length_min_mm = getattr(
-            args, "volume_min", DEFAULT_VOLUME_LENGTH_MIN_MM
-        )
-    if not hasattr(args, "volume_length_max_mm"):
-        args.volume_length_max_mm = getattr(
-            args, "volume_max", DEFAULT_VOLUME_LENGTH_MAX_MM
-        )
-    for attr in ("volume_min", "volume_max"):
-        if hasattr(args, attr):
-            delattr(args, attr)
-
     return args
 
 
-def read_csv_with_valid_columns(file):
+def read_csv_with_valid_columns(file, required_columns=None):
     """Read only recognized identifier and DICOM metadata columns from CSV."""
     available_columns = pd.read_csv(file, nrows=0).columns
-    valid_columns = [col for col in COLUMNS_TO_USE if col in available_columns]
+    requested = set(COLUMNS_TO_USE)
+    if required_columns:
+        requested.update(required_columns)
+    valid_columns = [col for col in available_columns if col in requested]
     return pd.read_csv(file, usecols=valid_columns)
 
 
-def load_data(csv_path):
+def load_data(csv_path, required_columns=None):
     """Load and concatenate metadata CSVs, dropping empty helper columns."""
     if len(csv_path) == 1:
-        df = read_csv_with_valid_columns(csv_path[0])
+        df = read_csv_with_valid_columns(csv_path[0], required_columns=required_columns)
     else:
-        dfs = [read_csv_with_valid_columns(file) for file in csv_path]
+        dfs = [
+            read_csv_with_valid_columns(file, required_columns=required_columns)
+            for file in csv_path
+        ]
         df = pd.concat(dfs, ignore_index=True)
 
     df = df.loc[:, ~df.columns.str.startswith("Unnamed")]
-    df = df.dropna(axis=1, how="all")
+    required = set(required_columns or [])
+    empty_cols = [col for col in df.columns if df[col].isna().all() and col not in required]
+    if empty_cols:
+        df = df.drop(columns=empty_cols)
     logger.info("%s %s", df.shape, df.columns)
 
     return df
 
 
-def filter_ct_modality(df):
-    """Keep CT Image Storage rows when modality tags are available."""
+def filter_supported_modality_image_storage(df):
+    """Keep supported CT/MR image-storage rows when modality tags are available."""
     if "Modality" not in df.columns or "SOPClassUID" not in df.columns:
         return df
-    df = df[df.Modality == "CT"]
+    df = df.copy()
+    df["Modality"] = df["Modality"].astype(str).str.upper()
+    df = df[df["Modality"].isin(["CT", "MR", "MRI"])]
     df["sop_class"] = df.SOPClassUID.apply(lambda x: UID(x).keyword)
-    df = df[df.sop_class == "CTImageStorage"]
+    df = df[
+        df["sop_class"].isin(
+            [
+                "CTImageStorage",
+                "EnhancedCTImageStorage",
+                "MRImageStorage",
+                "EnhancedMRImageStorage",
+            ]
+        )
+    ]
     return df
 
 
@@ -275,18 +268,15 @@ def remove_pet_ct(df):
     return df
 
 
-def add_date(df):
-    candidate_cols = [col for col in DATE_CANDIDATES if col in df.columns]
+def add_date(df, candidate_columns=None):
+    candidates = candidate_columns or DATE_CANDIDATES
+    candidate_cols = [col for col in candidates if col in df.columns]
     if not candidate_cols:
         return df
 
-    parsed_by_candidate = {
-        col: pd.to_datetime(
-            df[col].apply(lambda x: pd.NaT if isinstance(x, list) else x),
-            errors="coerce",
-        )
-        for col in candidate_cols
-    }
+    parsed_by_candidate = {}
+    for col in candidate_cols:
+        parsed_by_candidate[col] = df[col].apply(_normalize_date_candidate)
     # Ordered fallback: first candidate has highest priority, next ones fill gaps.
     date = parsed_by_candidate[candidate_cols[0]].copy()
     fill_contrib = {}
@@ -312,8 +302,9 @@ def add_date(df):
     return df
 
 
-def add_time(df):
-    candidate_cols = [col for col in TIME_CANDIDATES if col in df.columns]
+def add_time(df, candidate_columns=None):
+    candidates = candidate_columns or TIME_CANDIDATES
+    candidate_cols = [col for col in candidates if col in df.columns]
     if not candidate_cols:
         return df
 
@@ -388,6 +379,8 @@ def remove_mpr(df):
 
 
 def uniform_string(s):
+    if s is None or _is_nan(s):
+        return ""
     s = str(s).rstrip(".0")
     s = " ".join(s.split())
     return unidecode(s.lower())
@@ -410,7 +403,7 @@ def remove_other_organs_description(df):
     df["SeriesDescription"] = df["SeriesDescription"].apply(uniform_string)
     df = df[
         df["SeriesDescription"].apply(
-            lambda x: not any(sub in x for sub in excluded_substrings)
+            lambda x: not any(sub in str(x) for sub in excluded_substrings)
         )
     ]
 
@@ -418,7 +411,6 @@ def remove_other_organs_description(df):
 
 
 def clean_scan_size(df):
-    df = df.dropna(axis=1, how="all")
     if "Rows" in df.columns and "Columns" in df.columns:
         df = df.dropna(subset=["Rows", "Columns"])
     if "SliceThickness" in df.columns:
@@ -443,10 +435,10 @@ def clean_pixel_spacing(df):
     return df
 
 
-def generate_volume_id(df):
+def build_volume_id_naive(df, preferred_cols=None, fallback_cols=None):
     """Add a deterministic identifier for each candidate imaging volume."""
 
-    preferred_cols = [
+    preferred_cols = preferred_cols or [
         "patient_key",
         "study_id",
         "series_id",
@@ -456,7 +448,7 @@ def generate_volume_id(df):
         "SliceThickness",
         "PixelSpacingXY",
     ]
-    fallback_cols = ["patient_key", "study_id", "series_id"]
+    fallback_cols = fallback_cols or ["patient_key", "study_id", "series_id"]
 
     if "ImageOrientationPatient" in df.columns:
         df = df.copy()
@@ -529,7 +521,281 @@ def filter_by_acquisition_plane(df, angle_thresh_deg=10.0):
     return df
 
 
-def correct_volume_ids(df, z_tolerance=1e-3):
+def _parse_vector(x):
+    """Parse a DICOM vector stored as a list, tuple, ndarray, or string."""
+    if x is None:
+        return None
+    if not isinstance(x, (list, tuple, np.ndarray)) and pd.isna(x):
+        return None
+
+    if isinstance(x, np.ndarray):
+        vals = x.tolist()
+    elif isinstance(x, (list, tuple)):
+        vals = list(x)
+    else:
+        s = str(x).strip()
+        if not s:
+            return None
+        try:
+            vals = literal_eval(s)
+        except Exception:
+            vals = re.split(r"[\\,;\s]+", s.strip("[]()"))
+
+    try:
+        return [float(v) for v in vals]
+    except Exception:
+        return None
+
+
+def _slice_coordinate(row):
+    """Return a robust slice coordinate from IPP/IOP projection or SliceLocation."""
+    ipp = _parse_vector(row.get("ImagePositionPatient"))
+    iop = _parse_vector(row.get("ImageOrientationPatient"))
+
+    if ipp is not None and iop is not None and len(ipp) >= 3 and len(iop) >= 6:
+        row_dir = np.asarray(iop[:3], dtype=float)
+        col_dir = np.asarray(iop[3:6], dtype=float)
+        normal = np.cross(row_dir, col_dir)
+
+        norm = np.linalg.norm(normal)
+        if norm > 0:
+            normal = normal / norm
+            return float(np.dot(np.asarray(ipp[:3], dtype=float), normal))
+
+    if "SliceLocation" in row.index and pd.notna(row.get("SliceLocation")):
+        try:
+            return float(row.get("SliceLocation"))
+        except Exception:
+            return np.nan
+
+    return np.nan
+
+
+def split_multivolume_series_by_repeated_slices(
+    df: pd.DataFrame,
+    series_group_cols=("patient_key", "study_id", "series_id"),
+    z_tolerance: float = 1e-2,
+    min_slices: int = 8,
+    min_repeated_slice_fraction: float = 0.7,
+    volume_col: str = "volume_id",
+    logger: logging.Logger | None = None,
+) -> pd.DataFrame:
+    """
+    Split series that contain several repeated 3D slice stacks.
+
+    When slice coordinates repeat within one series, each repetition is treated
+    as a separate volume, which is useful for multiphase/timepoint series stored
+    under a single DICOM SeriesInstanceUID.
+    """
+    if logger is None:
+        logger = logging.getLogger(__name__)
+
+    out = df.copy()
+    group_cols = [c for c in series_group_cols if c in out.columns]
+    if not group_cols:
+        raise ValueError("No valid series grouping columns found.")
+
+    if volume_col not in out.columns:
+        logger.info("Column %r missing; creating it before multivolume split.", volume_col)
+        out[volume_col] = pd.NA
+
+    logger.info(
+        "Detecting multivolume series by repeated slice stacks using group_cols=%s, "
+        "z_tolerance=%s, min_slices=%s, min_repeated_slice_fraction=%s",
+        group_cols,
+        z_tolerance,
+        min_slices,
+        min_repeated_slice_fraction,
+    )
+
+    out["_slice_coord"] = out.apply(_slice_coordinate, axis=1)
+    out["_slice_key"] = np.round(out["_slice_coord"] / z_tolerance).astype("Int64")
+    out["volume_index_in_series"] = pd.NA
+    out["volume_split_method"] = "metadata_hash_or_existing"
+    out["n_detected_volumes_in_series"] = pd.NA
+
+    possible_sort_cols = [
+        "TemporalPositionIdentifier",
+        "AcquisitionNumber",
+        "AcquisitionTime",
+        "ContentTime",
+        "InstanceNumber",
+        "SOPInstanceUID",
+    ]
+    sort_cols = [c for c in possible_sort_cols if c in out.columns]
+
+    n_groups = 0
+    n_split_groups = 0
+    n_skipped_insufficient_slices = 0
+    n_skipped_no_repetition = 0
+    n_irregular_groups = 0
+
+    for group_key, idx in out.groupby(group_cols, dropna=False).groups.items():
+        n_groups += 1
+        g = out.loc[idx].copy()
+
+        debug_cols = [
+            c for c in ["patient_key", "date", "SeriesDescription"] if c in g.columns
+        ]
+        summary = {c: g[c].dropna().unique().tolist()[:5] for c in debug_cols}
+        logger.debug(
+            "Evaluating possible multivolume series: group_cols=%s, group_key=%s, "
+            "summary=%s, rows=%s",
+            group_cols,
+            group_key,
+            summary,
+            len(g),
+        )
+
+        valid = g["_slice_key"].notna()
+        if valid.sum() < min_slices:
+            n_skipped_insufficient_slices += 1
+            logger.debug(
+                "Skipping multivolume split: insufficient valid slice coordinates. "
+                "valid_slices=%s, min_slices=%s, summary=%s",
+                int(valid.sum()),
+                min_slices,
+                summary,
+            )
+            continue
+
+        slice_counts = g.loc[valid, "_slice_key"].value_counts().sort_index()
+        n_unique_slices = slice_counts.shape[0]
+        if n_unique_slices < min_slices:
+            n_skipped_insufficient_slices += 1
+            logger.debug(
+                "Skipping multivolume split: insufficient unique slice positions. "
+                "n_unique_slices=%s, min_slices=%s, rows=%s, summary=%s",
+                n_unique_slices,
+                min_slices,
+                len(g),
+                summary,
+            )
+            continue
+
+        repeated_fraction = float((slice_counts > 1).mean())
+        repetition_counts = slice_counts.value_counts().sort_index().to_dict()
+        logger.debug(
+            "Repeated-slice analysis: n_unique_slices=%s, repeated_fraction=%.3f, "
+            "repetition_counts=%s, slice_count_sample=%s, summary=%s",
+            n_unique_slices,
+            repeated_fraction,
+            repetition_counts,
+            slice_counts.head(10).to_dict(),
+            summary,
+        )
+
+        if repeated_fraction < min_repeated_slice_fraction:
+            n_skipped_no_repetition += 1
+            logger.debug(
+                "Skipping multivolume split: repeated slice fraction too low. "
+                "repeated_fraction=%.3f, threshold=%.3f, summary=%s",
+                repeated_fraction,
+                min_repeated_slice_fraction,
+                summary,
+            )
+            continue
+
+        n_volumes = int(slice_counts.mode().iloc[0])
+        if n_volumes <= 1:
+            n_skipped_no_repetition += 1
+            logger.debug(
+                "Skipping multivolume split: modal repetition count <= 1. "
+                "n_volumes=%s, summary=%s",
+                n_volumes,
+                summary,
+            )
+            continue
+
+        if slice_counts.nunique() > 1:
+            n_irregular_groups += 1
+            logger.info(
+                "Irregular repeated-slice stack detected: %s estimated volumes, "
+                "%s unique slices, repetition_counts=%s, rows=%s, summary=%s",
+                n_volumes,
+                n_unique_slices,
+                repetition_counts,
+                len(g),
+                summary,
+            )
+        else:
+            logger.info(
+                "Multivolume series detected: %s volumes, %s unique slices, "
+                "%s total files, summary=%s",
+                n_volumes,
+                n_unique_slices,
+                len(g),
+                summary,
+            )
+
+        local_sort_cols = [c for c in sort_cols if c in g.columns]
+        if local_sort_cols:
+            logger.debug(
+                "Sorting candidate multivolume rows using columns=%s, summary=%s",
+                local_sort_cols,
+                summary,
+            )
+            g = g.sort_values(local_sort_cols, na_position="last").copy()
+        else:
+            logger.debug(
+                "No temporal/acquisition sort columns available; using original row order. "
+                "summary=%s",
+                summary,
+            )
+            g = g.sort_index().copy()
+
+        g["_repeat_index"] = g.groupby("_slice_key", dropna=False).cumcount()
+        g["_repeat_index"] = g["_repeat_index"].astype(int)
+
+        max_repeat_index = int(g["_repeat_index"].max())
+        detected_volume_indices = sorted(g["_repeat_index"].dropna().unique().tolist())
+        if max_repeat_index + 1 != n_volumes:
+            logger.info(
+                "Repeat index count differs from modal volume count: "
+                "modal_n_volumes=%s, actual_indices=%s, summary=%s",
+                n_volumes,
+                detected_volume_indices,
+                summary,
+            )
+
+        def _make_volume_id(row):
+            key_parts = [str(row[c]) for c in group_cols]
+            key_parts.append(f"vol{int(row['_repeat_index'])}")
+            return hashlib.sha1("||".join(key_parts).encode("utf-8")).hexdigest()
+
+        new_ids = g.apply(_make_volume_id, axis=1)
+        out.loc[g.index, volume_col] = new_ids
+        out.loc[g.index, "volume_index_in_series"] = g["_repeat_index"].values
+        out.loc[g.index, "volume_split_method"] = "repeated_slice_stack"
+        out.loc[g.index, "n_detected_volumes_in_series"] = n_volumes
+
+        n_split_groups += 1
+        logger.debug(
+            "Split detail: rows_per_new_volume=%s, summary=%s",
+            out.loc[g.index].groupby(volume_col).size().to_dict(),
+            summary,
+        )
+
+    logger.info(
+        "Repeated-slice multivolume split completed: evaluated_groups=%s, "
+        "split_groups=%s, irregular_groups=%s, skipped_insufficient_slices=%s, "
+        "skipped_no_repetition=%s",
+        n_groups,
+        n_split_groups,
+        n_irregular_groups,
+        n_skipped_insufficient_slices,
+        n_skipped_no_repetition,
+    )
+
+    return out.drop(columns=["_slice_coord", "_slice_key"], errors="ignore")
+
+
+def correct_volume_ids(
+    df,
+    z_tolerance=1e-3,
+    group_columns=None,
+    z_sources=None,
+):
     """
     Merge "pseudo-volumes" (multiple volume_id values) that actually belong to the same volume,
     but do it robustly when DICOM tags/columns are missing.
@@ -548,7 +814,7 @@ def correct_volume_ids(df, z_tolerance=1e-3):
     if "volume_id" not in df.columns:
         return df
 
-    preferred_group_cols = [
+    preferred_group_cols = group_columns or [
         "patient_key",
         "study_id",
         "series_id",
@@ -558,6 +824,7 @@ def correct_volume_ids(df, z_tolerance=1e-3):
         "PixelSpacingXY",
     ]
     fallback_group_cols = ["patient_key", "study_id", "series_id"]
+    z_sources = z_sources or ["ImagePositionPatient", "SliceLocation"]
 
     # Choose grouping columns: maximum available
     group_cols = [c for c in preferred_group_cols if c in df.columns]
@@ -612,7 +879,7 @@ def correct_volume_ids(df, z_tolerance=1e-3):
         # --- get z positions robustly ---
         z_positions = None
 
-        if "ImagePositionPatient" in group_df.columns:
+        if "ImagePositionPatient" in z_sources and "ImagePositionPatient" in group_df.columns:
             z_values = []
             ipp_parse_failures = 0
             for value in group_df["ImagePositionPatient"]:
@@ -633,7 +900,7 @@ def correct_volume_ids(df, z_tolerance=1e-3):
 
         if (
             z_positions is None or len(z_positions) < 2
-        ) and "SliceLocation" in group_df.columns:
+        ) and "SliceLocation" in z_sources and "SliceLocation" in group_df.columns:
             logger.debug(
                 "Falling back to SliceLocation for z_positions: "
                 "ipp_z_count=%s, rows=%s",
@@ -709,6 +976,44 @@ def correct_volume_ids(df, z_tolerance=1e-3):
 
     df["volume_id"] = df["volume_id"].apply(lambda vid: updated_ids.get(vid, vid))
     return df
+
+
+def build_volume_id(
+    df,
+    preferred_cols=None,
+    fallback_cols=None,
+    series_group_cols=("patient_key", "study_id", "series_id"),
+    split_z_tolerance: float = 1e-2,
+    min_slices: int = 8,
+    min_repeated_slice_fraction: float = 0.7,
+    merge_z_tolerance: float = 1e-3,
+    merge_group_columns=None,
+    merge_z_sources=None,
+    volume_col: str = "volume_id",
+    logger: logging.Logger | None = None,
+):
+    """Build robust volume ids using hash, multivolume split, and merge passes."""
+    out = build_volume_id_naive(
+        df,
+        preferred_cols=preferred_cols,
+        fallback_cols=fallback_cols,
+    )
+    out = split_multivolume_series_by_repeated_slices(
+        out,
+        series_group_cols=series_group_cols,
+        z_tolerance=split_z_tolerance,
+        min_slices=min_slices,
+        min_repeated_slice_fraction=min_repeated_slice_fraction,
+        volume_col=volume_col,
+        logger=logger,
+    )
+    out = correct_volume_ids(
+        out,
+        z_tolerance=merge_z_tolerance,
+        group_columns=merge_group_columns,
+        z_sources=merge_z_sources,
+    )
+    return out
 
 
 def _is_nan(value):
@@ -942,18 +1247,21 @@ def map_series_description(df, csv_tag_dict):
 def compute_visit_order(df):
     if "date" not in df.columns:
         return df
+    work = df.copy()
+    work["date"] = pd.to_datetime(work["date"], errors="coerce")
     df_study = (
-        df.reset_index()
+        work.reset_index()
         .groupby(["patient_key", "study_id"], group_keys=False)
         .first()
         .groupby("patient_key", group_keys=False)
         .apply(lambda x: x.sort_values(by=["date"]))
     )
 
-    df_study["delay_since_prev_exam"] = df_study.groupby("patient_key")["date"].diff()
-    df_study["delay_since_first_exam"] = df_study.groupby("patient_key")[
-        "delay_since_prev_exam"
-    ].cumsum()
+    first_date = df_study.groupby("patient_key")["date"].transform("min")
+    df_study["delay_since_prev_exam"] = (
+        df_study.groupby("patient_key")["date"].diff().fillna(pd.Timedelta(0))
+    )
+    df_study["delay_since_first_exam"] = df_study["date"] - first_date
     df_study["visit_order"] = df_study.groupby("patient_key")["date"].cumcount()
     logger.info("%s %s", df.shape, df_study.shape)
 
@@ -1230,7 +1538,11 @@ def reorder_rows(df):
 
     if "time" in df.columns:
         time_values = df["time"].apply(
-            lambda value: value.isoformat() if isinstance(value, dt_time) else value
+            lambda value: (
+                normalized.isoformat()
+                if (normalized := _normalize_instance_creation_time(value)) is not None
+                else None
+            )
         )
         tmp["_sort_time"] = pd.to_timedelta(time_values, errors="coerce")
         sort_cols.append("_sort_time")
@@ -1246,126 +1558,757 @@ def reorder_rows(df):
     return df.loc[ordered_idx].reset_index(drop=True)
 
 
+def _resolve_cleaning_config(manifest: dict) -> dict:
+    """Extract and validate the top-level ``cleaning`` manifest block."""
+    cleaning = manifest.get("cleaning")
+    if not isinstance(cleaning, dict):
+        raise ValueError("Cleaning manifest must define a 'cleaning' object.")
+    if cleaning.get("version") != 1:
+        raise ValueError(
+            "Cleaning manifest must define 'cleaning.version' equal to 1."
+        )
+    steps = cleaning.get("steps")
+    if not isinstance(steps, list) or not steps:
+        raise ValueError("Cleaning manifest must define a non-empty 'steps' list.")
+    return cleaning
+
+
+def _get_hook_outputs(step: dict) -> list[str]:
+    """Resolve a clean hook and return its declared output columns."""
+    hook = resolve_function_path(step["function"])
+    outputs = get_clean_hook_outputs(hook)
+    if not outputs:
+        raise ValueError(
+            f"Hook {step['function']!r} must declare clean outputs via @clean_hook."
+        )
+    return outputs
+
+
+def _get_step_inputs(step: dict) -> set[str]:
+    """Return the columns a step expects to read before it runs."""
+    step_type = step["type"]
+    if step_type == "hook":
+        return set(step["source_columns"])
+    if step_type == "filter":
+        return {rule["column"] for rule in step["rules"]}
+    if step_type == "coalesce_date":
+        return set(step.get("candidates", DATE_CANDIDATES))
+    if step_type == "coalesce_time":
+        return set(step.get("candidates", TIME_CANDIDATES))
+    if step_type == "sop_class":
+        return {"SOPClassUID"}
+    if step_type == "parse_image_type":
+        return {"ImageType"}
+    if step_type == "clean_scan_size":
+        return {"Rows", "Columns", "SliceThickness"}
+    if step_type == "normalize_string":
+        return {step["column"]}
+    if step_type == "pixel_spacing_xy":
+        return {"PixelSpacing"}
+    if step_type in {"standardize_iop", "classify_acquisition_plane"}:
+        return {"ImageOrientationPatient"}
+    if step_type == "build_volume_id":
+        return (
+            set(step.get("preferred_columns") or [])
+            | set(step.get("fallback_columns") or [])
+            | set(step.get("series_group_columns") or [])
+            | set(step.get("merge_group_columns") or [])
+            | set(step.get("merge_z_sources") or [])
+            | {
+                "volume_id",
+                "ImagePositionPatient",
+                "ImageOrientationPatient",
+                "SliceLocation",
+            }
+        )
+    if step_type == "merge_volume_ids":
+        return (
+            {"volume_id"}
+            | set(step.get("group_columns") or [])
+            | set(step.get("z_sources") or [])
+        )
+    if step_type == "split_multivolume_series":
+        return (
+            {"volume_id", "ImagePositionPatient", "ImageOrientationPatient", "SliceLocation"}
+            | set(step.get("series_group_columns") or [])
+        )
+    if step_type == "group_volumes":
+        return {"volume_id"}
+    if step_type == "compute_volume_length":
+        return {"dicom_path", "SliceThickness", "SpacingBetweenSlices"}
+    if step_type == "compute_visit_order":
+        return {"patient_key", "study_id", "date"}
+    if step_type == "compute_acquisition_order":
+        return {
+            "patient_key",
+            "study_id",
+            "volume_id",
+            "date",
+            "time",
+            "SeriesNumber",
+            "AcquisitionNumber",
+        }
+    if step_type == "modality_curation":
+        return {
+            "patient_key",
+            "study_id",
+            "series_id",
+            "volume_id",
+            "date",
+            "time",
+            "Modality",
+            "SeriesDescription",
+            "ProtocolName",
+            "StudyDescription",
+            "ImageType",
+            "ScanningSequence",
+            "SequenceVariant",
+            "ScanOptions",
+            "SequenceName",
+            "SliceThickness",
+            "PixelSpacing",
+            "n_files",
+            "Rows",
+            "Columns",
+        }
+    return set()
+
+
+def _get_step_outputs(step: dict) -> set[str]:
+    """Return the columns a step is expected to create or rewrite."""
+    step_type = step["type"]
+    if step_type == "hook":
+        outputs = set(_get_hook_outputs(step))
+        if outputs == {"patient_key"} and step.get("source_columns") == ["patient_key"]:
+            outputs |= {"_patient_key_raw", "patient_key_std_failed"}
+        return outputs
+    if step_type == "coalesce_date":
+        return {"date"}
+    if step_type == "coalesce_time":
+        return {"time"}
+    if step_type == "sop_class":
+        return {"sop_class"}
+    if step_type == "normalize_string":
+        return {step["column"]}
+    if step_type == "pixel_spacing_xy":
+        return {"PixelSpacingXY"}
+    if step_type == "standardize_iop":
+        return {"ImageOrientationPatient"}
+    if step_type == "classify_acquisition_plane":
+        return {"acquisition_plane", "acquisition_angle", "acquisition_axis"}
+    if step_type == "build_volume_id":
+        return {
+            "volume_id",
+            "volume_index_in_series",
+            "volume_split_method",
+            "n_detected_volumes_in_series",
+        }
+    if step_type == "merge_volume_ids":
+        return {"volume_id"}
+    if step_type == "split_multivolume_series":
+        return {
+            "volume_id",
+            "volume_index_in_series",
+            "volume_split_method",
+            "n_detected_volumes_in_series",
+        }
+    if step_type == "compute_volume_length":
+        return {"n_files", "volume_length"}
+    if step_type == "compute_visit_order":
+        return {"delay_since_prev_exam", "delay_since_first_exam", "visit_order"}
+    if step_type == "compute_acquisition_order":
+        return {
+            "_acq_timestamp",
+            "delay_since_prev_acq_sec",
+            "delay_since_first_acq_sec",
+            "acquisition_order",
+        }
+    if step_type == "modality_curation":
+        return {
+            "curation_modality",
+            "selection_slot",
+            "selection_score",
+            "ct_phase",
+            "mri_sequence",
+            "mri_perfusion_label",
+        }
+    return set()
+
+
+def _validate_string_list(
+    value,
+    field_name: str,
+    *,
+    allow_empty: bool,
+) -> None:
+    """Validate that a manifest field is a list of non-empty strings."""
+    if not isinstance(value, list):
+        raise ValueError(f"{field_name} must be a list of strings.")
+    if not allow_empty and not value:
+        raise ValueError(f"{field_name} must be a non-empty list of strings.")
+    if any(not isinstance(item, str) or not item for item in value):
+        raise ValueError(f"{field_name} must contain only non-empty strings.")
+
+
+def _validate_optional_number(step: dict, field_name: str) -> None:
+    """Validate an optional numeric step parameter when it is present."""
+    value = step.get(field_name)
+    if value is None:
+        return
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{field_name} must be numeric when provided.")
+
+
+def _validate_step_config(step: dict) -> None:
+    """Validate step-specific options beyond the generic type checks."""
+    step_type = step["type"]
+
+    if step_type in {"coalesce_date", "coalesce_time"} and "candidates" in step:
+        _validate_string_list(
+            step["candidates"],
+            f"{step_type}.candidates",
+            allow_empty=False,
+        )
+
+    if step_type == "normalize_string":
+        column = step.get("column")
+        if not isinstance(column, str) or not column:
+            raise ValueError("normalize_string steps must define a non-empty 'column'.")
+
+    if step_type == "classify_acquisition_plane":
+        _validate_optional_number(step, "angle_thresh_deg")
+
+    if step_type == "build_volume_id":
+        if "preferred_columns" in step:
+            _validate_string_list(
+                step["preferred_columns"],
+                "build_volume_id.preferred_columns",
+                allow_empty=True,
+            )
+        if "fallback_columns" in step:
+            _validate_string_list(
+                step["fallback_columns"],
+                "build_volume_id.fallback_columns",
+                allow_empty=True,
+            )
+        if "series_group_columns" in step:
+            _validate_string_list(
+                step["series_group_columns"],
+                "build_volume_id.series_group_columns",
+                allow_empty=False,
+            )
+        if "merge_group_columns" in step:
+            _validate_string_list(
+                step["merge_group_columns"],
+                "build_volume_id.merge_group_columns",
+                allow_empty=True,
+            )
+        if "merge_z_sources" in step:
+            _validate_string_list(
+                step["merge_z_sources"],
+                "build_volume_id.merge_z_sources",
+                allow_empty=True,
+            )
+        _validate_optional_number(step, "split_z_tolerance")
+        _validate_optional_number(step, "merge_z_tolerance")
+        _validate_optional_number(step, "min_repeated_slice_fraction")
+        min_slices = step.get("min_slices")
+        if min_slices is not None and (
+            isinstance(min_slices, bool) or not isinstance(min_slices, int) or min_slices < 1
+        ):
+            raise ValueError("build_volume_id.min_slices must be a positive integer.")
+
+    if step_type == "merge_volume_ids":
+        if "group_columns" in step:
+            _validate_string_list(
+                step["group_columns"],
+                "merge_volume_ids.group_columns",
+                allow_empty=True,
+            )
+        if "z_sources" in step:
+            _validate_string_list(
+                step["z_sources"],
+                "merge_volume_ids.z_sources",
+                allow_empty=True,
+            )
+        _validate_optional_number(step, "z_tolerance")
+
+    if step_type == "split_multivolume_series":
+        if "series_group_columns" in step:
+            _validate_string_list(
+                step["series_group_columns"],
+                "split_multivolume_series.series_group_columns",
+                allow_empty=False,
+            )
+        _validate_optional_number(step, "z_tolerance")
+        _validate_optional_number(step, "min_repeated_slice_fraction")
+        min_slices = step.get("min_slices")
+        if min_slices is not None and (
+            isinstance(min_slices, bool) or not isinstance(min_slices, int) or min_slices < 1
+        ):
+            raise ValueError("split_multivolume_series.min_slices must be a positive integer.")
+
+
+def validate_cleaning_manifest(manifest: dict) -> list[dict]:
+    """Validate ``cleaning.steps`` and return the normalized step list."""
+    cleaning = _resolve_cleaning_config(manifest)
+    validated_steps = []
+
+    for index, step in enumerate(cleaning["steps"], start=1):
+        if not isinstance(step, dict):
+            raise ValueError(f"Cleaning step {index} must be an object.")
+        step_type = step.get("type")
+        if step_type not in STEP_REGISTRY:
+            raise ValueError(f"Unknown cleaning step type: {step_type!r}.")
+
+        if step_type == "hook":
+            if not isinstance(step.get("function"), str) or not step["function"]:
+                raise ValueError("Hook steps must define a non-empty 'function'.")
+            source_columns = step.get("source_columns")
+            if not isinstance(source_columns, list) or not source_columns:
+                raise ValueError("Hook steps must define non-empty 'source_columns'.")
+            _validate_string_list(
+                source_columns,
+                "hook.source_columns",
+                allow_empty=False,
+            )
+            _get_hook_outputs(step)
+
+        if step_type == "filter":
+            if step.get("kind") not in {"keep", "discard"}:
+                raise ValueError("Filter steps must define kind='keep' or 'discard'.")
+            if step.get("scope") not in {"row", "volume"}:
+                raise ValueError("Filter steps must define scope='row' or 'volume'.")
+            if step.get("logic") not in {"and", "or"}:
+                raise ValueError("Filter steps must define logic='and' or 'or'.")
+            rules = step.get("rules")
+            if not isinstance(rules, list) or not rules:
+                raise ValueError("Filter steps must define a non-empty 'rules' list.")
+            if "keep_null" in step and not isinstance(step["keep_null"], bool):
+                raise ValueError("Filter steps must define keep_null as a boolean.")
+            for rule in rules:
+                if not isinstance(rule, dict):
+                    raise ValueError("Each filter rule must be an object.")
+                if "column" not in rule or "op" not in rule:
+                    raise ValueError("Each filter rule must define 'column' and 'op'.")
+                if not isinstance(rule["column"], str) or not rule["column"]:
+                    raise ValueError("Each filter rule must define a non-empty 'column'.")
+                if not isinstance(rule["op"], str) or not rule["op"]:
+                    raise ValueError("Each filter rule must define a non-empty 'op'.")
+                if rule["op"] not in SUPPORTED_FILTER_OPERATORS:
+                    raise ValueError(
+                        f"Unsupported filter operator: {rule['op']!r}."
+                    )
+                if rule["op"] not in {"is_null", "not_null"} and "value" not in rule:
+                    raise ValueError(
+                        f"Filter operator {rule['op']!r} requires a 'value'."
+                    )
+                if rule["op"] in {"in", "not_in"} and not isinstance(
+                    rule["value"], list
+                ):
+                    raise ValueError(
+                        f"Filter operator {rule['op']!r} requires a list 'value'."
+                    )
+
+        _validate_step_config(step)
+
+        validated_steps.append(step)
+
+    return validated_steps
+
+
+def _collect_required_input_columns(
+    steps: list[dict],
+) -> list[str]:
+    """Infer which source columns must be loaded from the parsed CSV."""
+    required = set(BASE_INPUT_COLUMNS)
+    produced = set()
+    for step in steps:
+        for col in _get_step_inputs(step):
+            if col not in produced:
+                required.add(col)
+        produced.update(_get_step_outputs(step))
+    return sorted(required)
+
+
+def _step_label(step: dict) -> str:
+    """Build a human-readable label for logging and validation errors."""
+    if step.get("name"):
+        return str(step["name"])
+    if step["type"] == "hook":
+        return f"hook {step['function']}"
+    if step["type"] == "filter":
+        return f"{step['kind']} {step['scope']} filter"
+    return step["type"].replace("_", " ")
+
+
+def _ensure_columns_present(df: pd.DataFrame, columns: set[str], step: dict) -> None:
+    """Raise when a step references columns that are missing from ``df``."""
+    missing = [col for col in columns if col not in df.columns]
+    if missing:
+        raise ValueError(
+            f"Step '{_step_label(step)}' requires missing columns: {sorted(missing)}"
+        )
+
+
+def _hook_output_frame(result: pd.Series, outputs: list[str]) -> pd.DataFrame:
+    """Coerce hook results into a DataFrame aligned with declared outputs."""
+    out = result.apply(pd.Series)
+    if set(outputs).issubset(out.columns):
+        return out.reindex(columns=outputs)
+    if out.shape[1] != len(outputs):
+        raise ValueError(
+            f"Hook returned {out.shape[1]} columns, expected {len(outputs)} outputs."
+        )
+    out.columns = outputs
+    return out
+
+
+def _run_hook_step(df: pd.DataFrame, step: dict) -> pd.DataFrame:
+    """Execute a manifest hook step against one or more source columns."""
+    source_columns = step["source_columns"]
+    _ensure_columns_present(df, set(source_columns), step)
+
+    hook = resolve_function_path(step["function"])
+    outputs = _get_hook_outputs(step)
+
+    if outputs == ["patient_key"] and source_columns == ["patient_key"]:
+        return apply_patient_key_standardization(df, hook)
+
+    df = df.copy()
+
+    if len(source_columns) == 1:
+        source_col = source_columns[0]
+        result = df[source_col].apply(hook)
+    else:
+        result = df[source_columns].apply(lambda row: hook(row.copy()), axis=1)
+
+    if len(outputs) == 1:
+        df[outputs[0]] = result
+    else:
+        out = _hook_output_frame(result, outputs)
+        for col in outputs:
+            df[col] = out[col]
+
+    return df
+
+
+def _normalize_date_candidate(value):
+    """Convert a date candidate into a scalar timestamp or ``NaT``."""
+    if isinstance(value, list):
+        return pd.NaT
+    if value is None or _is_nan(value):
+        return pd.NaT
+    if isinstance(value, pd.Timestamp):
+        return value
+    return pd.to_datetime(value, errors="coerce")
+
+
+def _rule_mask(df: pd.DataFrame, rule: dict) -> pd.Series:
+    """Evaluate a single declarative filter rule against ``df``."""
+    col = rule["column"]
+    op = rule["op"]
+    value = rule.get("value")
+    series = df[col]
+
+    if op == "eq":
+        return series == value
+    if op == "ne":
+        return series != value
+    if op == "in":
+        return series.isin(value)
+    if op == "not_in":
+        return ~series.isin(value)
+    if op == "contains":
+        return series.astype("string").str.contains(str(value), regex=False, na=False)
+    if op == "icontains":
+        return series.astype("string").str.contains(
+            str(value), regex=False, case=False, na=False
+        )
+    if op == "regex":
+        return series.astype("string").str.contains(str(value), regex=True, na=False)
+    if op == "lt":
+        return pd.to_numeric(series, errors="coerce") < value
+    if op == "lte":
+        return pd.to_numeric(series, errors="coerce") <= value
+    if op == "gt":
+        return pd.to_numeric(series, errors="coerce") > value
+    if op == "gte":
+        return pd.to_numeric(series, errors="coerce") >= value
+    if op == "is_null":
+        return series.isna()
+    if op == "not_null":
+        return series.notna()
+    raise ValueError(f"Unsupported filter operator: {op!r}")
+
+
+def _run_filter_step(df: pd.DataFrame, step: dict) -> pd.DataFrame:
+    """Apply a manifest filter step using explicit keep/discard semantics."""
+    required_columns = {rule["column"] for rule in step["rules"]}
+    _ensure_columns_present(df, required_columns, step)
+
+    masks = [_rule_mask(df, rule).fillna(False) for rule in step["rules"]]
+    mask = masks[0].copy()
+    for current in masks[1:]:
+        if step["logic"] == "and":
+            mask = mask & current
+        else:
+            mask = mask | current
+
+    if step.get("keep_null"):
+        null_mask = df[list(required_columns)].isna().any(axis=1)
+        mask = mask | null_mask
+
+    if step["kind"] == "keep":
+        return df[mask].copy()
+    return df[~mask].copy()
+
+
+def _safe_uid_keyword(value):
+    """Resolve a DICOM UID to its keyword, returning ``None`` on failure."""
+    try:
+        return UID(value).keyword
+    except Exception:
+        return None
+
+
+def _run_coalesce_date_step(df: pd.DataFrame, step: dict) -> pd.DataFrame:
+    """Normalize candidate date columns and populate the canonical ``date``."""
+    df = to_dates(df.copy())
+    return add_date(df, candidate_columns=step.get("candidates"))
+
+
+def _run_coalesce_time_step(df: pd.DataFrame, step: dict) -> pd.DataFrame:
+    """Normalize candidate time columns and populate the canonical ``time``."""
+    df = to_times(df.copy())
+    return add_time(df, candidate_columns=step.get("candidates"))
+
+
+def _run_sop_class_step(df: pd.DataFrame, step: dict) -> pd.DataFrame:
+    """Translate ``SOPClassUID`` values into DICOM keyword names."""
+    if "SOPClassUID" not in df.columns:
+        return df
+    df = df.copy()
+    df["sop_class"] = df["SOPClassUID"].apply(_safe_uid_keyword)
+    return df
+
+
+def _run_parse_image_type_step(df: pd.DataFrame, step: dict) -> pd.DataFrame:
+    """Parse serialized ``ImageType`` values into a structured representation."""
+    return filter_image_type(df)
+
+
+def _run_clean_scan_size_step(df: pd.DataFrame, step: dict) -> pd.DataFrame:
+    """Normalize scan-size fields used by later geometry filters."""
+    return clean_scan_size(df)
+
+
+def _run_normalize_string_step(df: pd.DataFrame, step: dict) -> pd.DataFrame:
+    """Lowercase and normalize a configured string column in-place."""
+    column = step["column"]
+    if column not in df.columns:
+        return df
+    df = df.copy()
+    df[column] = df[column].apply(uniform_string)
+    return df
+
+
+def _pixel_spacing_xy_value(value):
+    """Extract the first in-plane spacing value from ``PixelSpacing``."""
+    if value is None or _is_nan(value):
+        return None
+    if isinstance(value, str):
+        try:
+            parsed = literal_eval(value)
+        except (ValueError, SyntaxError):
+            return None
+    else:
+        parsed = value
+    if isinstance(parsed, (list, tuple, np.ndarray)) and len(parsed) > 0:
+        return parsed[0]
+    return None
+
+
+def _run_pixel_spacing_xy_step(df: pd.DataFrame, step: dict) -> pd.DataFrame:
+    """Derive numeric ``PixelSpacingXY`` values from ``PixelSpacing``."""
+    if "PixelSpacing" not in df.columns:
+        return df
+    df = df.copy()
+    df["PixelSpacingXY"] = df["PixelSpacing"].apply(_pixel_spacing_xy_value)
+    df["PixelSpacingXY"] = pd.to_numeric(df["PixelSpacingXY"], errors="coerce")
+    return df
+
+
+def _run_standardize_iop_step(df: pd.DataFrame, step: dict) -> pd.DataFrame:
+    """Canonicalize ``ImageOrientationPatient`` values for downstream geometry."""
+    if "ImageOrientationPatient" not in df.columns:
+        return df
+    df = df.copy()
+    df["ImageOrientationPatient"] = df["ImageOrientationPatient"].apply(standardize_iop)
+    return df
+
+
+def _run_classify_acquisition_plane_step(df: pd.DataFrame, step: dict) -> pd.DataFrame:
+    """Classify acquisition plane, angle, and axis from standardized IOP values."""
+    if "ImageOrientationPatient" not in df.columns:
+        return df
+    df = df.copy()
+    angle_thresh_deg = float(step.get("angle_thresh_deg", 10.0))
+    (
+        df["acquisition_plane"],
+        df["acquisition_angle"],
+        df["acquisition_axis"],
+    ) = zip(
+        *df["ImageOrientationPatient"].map(
+            lambda x: classify_plane_from_iop(x, angle_thresh_deg)
+        )
+    )
+    return df
+
+
+def _run_build_volume_id_step(df: pd.DataFrame, step: dict) -> pd.DataFrame:
+    """Build robust volume ids from configured hash, split, and merge options."""
+    return build_volume_id(
+        df,
+        preferred_cols=step.get("preferred_columns"),
+        fallback_cols=step.get("fallback_columns"),
+        series_group_cols=tuple(
+            step.get("series_group_columns")
+            or ("patient_key", "study_id", "series_id")
+        ),
+        split_z_tolerance=float(step.get("split_z_tolerance", 1e-2)),
+        min_slices=int(step.get("min_slices", 8)),
+        min_repeated_slice_fraction=float(
+            step.get("min_repeated_slice_fraction", 0.7)
+        ),
+        merge_z_tolerance=float(step.get("merge_z_tolerance", 1e-3)),
+        merge_group_columns=step.get("merge_group_columns"),
+        merge_z_sources=step.get("merge_z_sources"),
+        volume_col=step.get("volume_column", "volume_id"),
+        logger=logger,
+    )
+
+
+def _run_split_multivolume_series_step(df: pd.DataFrame, step: dict) -> pd.DataFrame:
+    """Split repeated slice stacks stored under one series into separate volumes."""
+    return split_multivolume_series_by_repeated_slices(
+        df,
+        series_group_cols=tuple(
+            step.get("series_group_columns")
+            or ("patient_key", "study_id", "series_id")
+        ),
+        z_tolerance=float(step.get("z_tolerance", 1e-2)),
+        min_slices=int(step.get("min_slices", 8)),
+        min_repeated_slice_fraction=float(
+            step.get("min_repeated_slice_fraction", 0.7)
+        ),
+        volume_col=step.get("volume_column", "volume_id"),
+        logger=logger,
+    )
+
+
+def _run_merge_volume_ids_step(df: pd.DataFrame, step: dict) -> pd.DataFrame:
+    """Merge near-duplicate volume ids using configurable geometry tolerances."""
+    return correct_volume_ids(
+        df,
+        z_tolerance=float(step.get("z_tolerance", 1e-3)),
+        group_columns=step.get("group_columns"),
+        z_sources=step.get("z_sources"),
+    )
+
+
+def _run_group_volumes_step(df: pd.DataFrame, step: dict) -> pd.DataFrame:
+    """Aggregate slice-level rows into volume-level records."""
+    return group_volumes(df)
+
+
+def _run_compute_volume_length_step(df: pd.DataFrame, step: dict) -> pd.DataFrame:
+    """Compute reconstructed volume length and file counts per volume."""
+    return calculate_volume_length(df)
+
+
+def _run_compute_visit_order_step(df: pd.DataFrame, step: dict) -> pd.DataFrame:
+    """Annotate each volume with patient-level exam ordering metadata."""
+    return compute_visit_order(df)
+
+
+def _run_compute_acquisition_order_step(df: pd.DataFrame, step: dict) -> pd.DataFrame:
+    """Annotate each volume with within-study acquisition ordering metadata."""
+    return compute_acquisition_order(df)
+
+
+def _run_modality_curation_step(df: pd.DataFrame, step: dict) -> pd.DataFrame:
+    """Annotate volume-level rows with CT/MR-specific curation labels and scores."""
+    if "Modality" not in df.columns:
+        return df
+
+    results = curate_by_modality(df)
+    curated = results["curated_all"]
+    if curated.empty:
+        return df.iloc[0:0].copy()
+    return curated
+
+
+def _run_finalize_step(df: pd.DataFrame, step: dict) -> pd.DataFrame:
+    """Drop empty helper columns and restore the canonical output ordering."""
+    df = df.dropna(axis=1, how="all")
+    df = reorder_columns(df)
+    df = reorder_rows(df)
+    return df
+
+
+STEP_REGISTRY: dict[str, Callable[[pd.DataFrame, dict], pd.DataFrame]] = {
+    "hook": _run_hook_step,
+    "filter": _run_filter_step,
+    "coalesce_date": _run_coalesce_date_step,
+    "coalesce_time": _run_coalesce_time_step,
+    "sop_class": _run_sop_class_step,
+    "parse_image_type": _run_parse_image_type_step,
+    "clean_scan_size": _run_clean_scan_size_step,
+    "normalize_string": _run_normalize_string_step,
+    "pixel_spacing_xy": _run_pixel_spacing_xy_step,
+    "standardize_iop": _run_standardize_iop_step,
+    "classify_acquisition_plane": _run_classify_acquisition_plane_step,
+    "build_volume_id": _run_build_volume_id_step,
+    "split_multivolume_series": _run_split_multivolume_series_step,
+    "merge_volume_ids": _run_merge_volume_ids_step,
+    "group_volumes": _run_group_volumes_step,
+    "compute_volume_length": _run_compute_volume_length_step,
+    "compute_visit_order": _run_compute_visit_order_step,
+    "compute_acquisition_order": _run_compute_acquisition_order_step,
+    "modality_curation": _run_modality_curation_step,
+    "finalize": _run_finalize_step,
+}
+
+
+def run_clean_pipeline(df: pd.DataFrame, steps: list[dict]) -> pd.DataFrame:
+    """Run validated cleaning steps sequentially with per-step reporting."""
+    report_volumes(df, "initial load")
+
+    for step in steps:
+        df_prev = df.copy()
+        df = STEP_REGISTRY[step["type"]](df, step)
+        label = _step_label(step)
+        report_volumes(df, label)
+        try:
+            report_change(df, df_prev)
+        except Exception:
+            logger.debug("Could not compute detailed change report for step %s", label)
+
+    return df
+
+
 def clean_and_save_data(
     csv_path,
     csv_path_out,
-    csv_dict_path,
     manifest,
-    volume_length_min_mm,
-    volume_length_max_mm,
 ):
-    """Run the complete metadata-curation pipeline and write its CSV output.
-
-    Args:
-        csv_path: One or more parsed metadata CSV paths.
-        csv_path_out: Destination for the curated volume table.
-        csv_dict_path: Optional DICOM tag dictionary used by cleaning.
-        manifest: Loaded dataset configuration and hook definitions.
-        volume_length_min_mm: Inclusive minimum reconstructed length.
-        volume_length_max_mm: Inclusive maximum reconstructed length.
-
-    The function writes ``csv_path_out`` when provided and otherwise performs
-    the same transformations and logging without persisting a table.
-    """
-    df = load_data(csv_path)
+    """Run the manifest-defined metadata-curation pipeline and write its CSV output."""
+    steps = validate_cleaning_manifest(manifest)
+    required_columns = _collect_required_input_columns(steps)
+    df = load_data(csv_path, required_columns=required_columns)
     input_rows = len(df)
-    report_volumes(df, "initial load")
-
-    df = apply_id_standardization(df, manifest, logger=logger)
-    report_volumes(df, "standardize patient key")
-
-    df = to_dates(df)
-    df = to_times(df)
-    df = add_date(df)  # generic date column
-    df = add_time(df)  # generic time column
-
-    df_prev = df.copy()
-    df = apply_derived_columns(df, manifest)
-    report_volumes(df, "add new columns based on patient key")
-    report_change(df, df_prev)
-
-    df_prev = df.copy()
-    df = filter_ct_modality(df)
-    report_volumes(df, "filtering CT modality")
-    report_change(df, df_prev, col="Modality")
-
-    df_prev = df.copy()
-    df = remove_pet_ct(df)
-    report_volumes(df, "removing PET-CT modality")
-    report_change(df, df_prev, col="ModalitiesInStudy")
-
-    df_prev = df.copy()
-    df = filter_image_type(df)
-    report_volumes(df, "filtering image type")
-    report_change(df, df_prev, col="ImageType")
-
-    df_prev = df.copy()
-    df = clean_scan_size(df)
-    report_volumes(df, "cleaning scan size")
-    report_change(df, df_prev)
-
-    df_prev = df.copy()
-    df = remove_scouts_localizers(df)
-    report_volumes(df, "removing localizers / scouts")
-    report_change(df, df_prev)
-
-    df_prev = df.copy()
-    df = remove_other_organs_description(df)
-    report_volumes(df, "removing other organs")
-    report_change(df, df_prev, col="SeriesDescription")
-
-    df_prev = df.copy()
-    df = clean_pixel_spacing(df)
-    report_volumes(df, "cleaning pixel spacing")
-
-    if "ImageOrientationPatient" in df.columns:
-        df_prev = df.copy()
-        df["ImageOrientationPatient"] = df["ImageOrientationPatient"].apply(
-            standardize_iop
-        )
-        df = filter_by_acquisition_plane(df)
-        report_volumes(df, "keeping only AXIAL acquisitions")
-        report_change(df, df_prev)
-
-    df_prev = df.copy()
-    df = generate_volume_id(df)
-    report_volumes(df, "generating volume IDs")
-    report_change(df, df_prev)
-
-    df_prev = df.copy()
-    df = correct_volume_ids(df)
-    report_volumes(df, "merging multi-acquisition volumes IDs")
-    report_change(df, df_prev)
-
-    df = group_volumes(df)
-    report_volumes(df, "grouping by volume IDs")
-
-    df = calculate_volume_length(df)
-    report_volumes(df, "computing volume length")
-
-    df_prev = df.copy()
-    df = filter_volumes_by_size(df, volume_length_min_mm, volume_length_max_mm)
-    report_volumes(
-        df,
-        (
-            "filtering volumes by reconstructed length "
-            f"[{volume_length_min_mm}, {volume_length_max_mm}] mm"
-        ),
-    )
-    report_change(df, df_prev)
-
-    df_prev = df.copy()
-    df = map_series_description(df, csv_dict_path)
-    report_volumes(df, "mapping series descriptions")
-    report_change(df, df_prev, col="SeriesDescription")
-
-    df = compute_visit_order(df)
-    df = compute_acquisition_order(df)
-
-    df = df.dropna(axis=1, how="all")  # drop empty columns
-
-    df = reorder_columns(df)
-    df = reorder_rows(df)
+    df = run_clean_pipeline(df, steps)
 
     if csv_path_out:
         df.to_csv(csv_path_out, index=False)
@@ -1402,8 +2345,5 @@ if __name__ == "__main__":
     clean_and_save_data(
         args.csv_path,
         args.csv_path_out,
-        args.csv_dict_path,
         manifest,
-        args.volume_length_min_mm,
-        args.volume_length_max_mm,
     )

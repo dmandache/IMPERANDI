@@ -1,6 +1,8 @@
 import re
 import pandas as pd
 
+from imperandi.ingest.hooks import clean_hook
+
 center_id_dict = {
     1: "BJN",
     2: "Nantes",
@@ -41,6 +43,7 @@ def check_operandi_patient_key(patient_key):
     return True
 
 
+@clean_hook(outputs=["patient_key"])
 def standardize_operandi_patient_key(patient_key):
     # remove prefix if string starts with 3 digits + underscore
     patient_key = re.sub(r"^\d{3}_", "", patient_key)
@@ -71,6 +74,7 @@ def transform_operandi_patient_key(patient_key):
         return None
 
 
+@clean_hook(outputs=["center", "source", "tumor_type"])
 def extract_from_patient_key(patient_key):
     patient_key = standardize_operandi_patient_key(patient_key)
     tokens = patient_key.split("-")

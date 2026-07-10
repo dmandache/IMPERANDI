@@ -206,10 +206,7 @@ def _handle_clean(args: argparse.Namespace) -> int:
     clean_module.clean_and_save_data(
         args.csv_path,
         args.csv_path_out,
-        args.csv_dict_path,
         manifest,
-        args.volume_length_min_mm,
-        args.volume_length_max_mm,
     )
     return 0
 
@@ -229,10 +226,7 @@ def _handle_ingest(args: argparse.Namespace) -> int:
         argparse.Namespace(
             csv_path=[str(parsed_csv)],
             csv_path_out=str(clean_out),
-            csv_dict_path=args.csv_dict_path,
             manifest=args.manifest,
-            volume_length_min_mm=args.volume_length_min_mm,
-            volume_length_max_mm=args.volume_length_max_mm,
         ),
     )
     if args.dry_run:
@@ -247,10 +241,7 @@ def _handle_ingest(args: argparse.Namespace) -> int:
     clean_module.clean_and_save_data(
         [str(parsed_csv)],
         str(clean_out),
-        args.csv_dict_path,
         manifest,
-        args.volume_length_min_mm,
-        args.volume_length_max_mm,
     )
     return 0
 
