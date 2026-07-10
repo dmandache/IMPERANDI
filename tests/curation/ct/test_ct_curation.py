@@ -32,13 +32,13 @@ def test_ct_phase_classification_and_selection_per_phase():
     results = curate_ct(df)
 
     assert set(results["curated"]["ct_phase"]) == {
-        "PRECONTRAST",
+        "NATIVE",
         "ARTERIAL",
         "PORTAL_VENOUS",
         "DELAYED",
     }
     assert set(results["selected_long"]["selection_slot"]) == {
-        "CT_PRECONTRAST",
+        "CT_NATIVE",
         "CT_ARTERIAL",
         "CT_PORTAL_VENOUS",
         "CT_DELAYED",

@@ -24,8 +24,8 @@ from . import rules
 def detect_ct_phase(row: pd.Series) -> tuple[str, str, str]:
     text = build_series_text(row)
 
-    if re.search(rules.RX_CT_PRECONTRAST, text):
-        return "PRECONTRAST", "matched CT precontrast/native keyword", "high"
+    if re.search(rules.RX_CT_NATIVE, text):
+        return "NATIVE", "matched CT native/non-injected keyword", "high"
     if re.search(rules.RX_CT_ARTERIAL, text):
         return "ARTERIAL", "matched CT arterial keyword", "high"
     if re.search(rules.RX_CT_PORTAL, text):

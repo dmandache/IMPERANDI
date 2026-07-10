@@ -3,7 +3,7 @@ MRI curation utilities.
 
 Core functionality:
 1. Classify MRI sequence family: T1, T2, DWI, LOCALIZER, KEY_IMAGES, OTHER.
-2. Classify T1 perfusion/contrast phase: PRECONTRAST, ARTERIAL,
+2. Classify T1 perfusion/contrast phase: NATIVE, ARTERIAL,
    PORTAL_VENOUS, DELAYED, HEPATOBILIARY, OTHER.
 3. Score diagnostic candidates.
 4. Select one best candidate per exam per sequence, and one best T1 per phase.
@@ -322,8 +322,8 @@ def infer_special_t1_phase_from_volume_order(row: pd.Series) -> tuple[str | None
     if text_matches_mask_multiart(row):
         if order == 1:
             return (
-                "PRECONTRAST",
-                f"inferred PRECONTRAST from first Mask+Multiart volume {order}/{n_volumes}",
+                "NATIVE",
+                f"inferred NATIVE from first Mask+Multiart volume {order}/{n_volumes}",
                 "medium",
                 "volume_order_mask_multiart",
             )
@@ -361,7 +361,7 @@ def infer_generic_t1_phase_from_volume_order(row: pd.Series) -> tuple[str | None
     n_volumes = int(n_volumes)
 
     mapping = {
-        1: "PRECONTRAST",
+        1: "NATIVE",
         2: "ARTERIAL",
         3: "PORTAL_VENOUS",
     }
@@ -402,8 +402,8 @@ def detect_t1_perfusion_phase(row: pd.Series) -> tuple[str, str, str, str]:
     if special_label is not None:
         return special_label, special_reason, special_conf, special_source
 
-    if re.search(rules.RX_PHASE_PRECONTRAST, text):
-        return "PRECONTRAST", "matched explicit precontrast/non-injected keyword", "high", "explicit_text"
+    if re.search(rules.RX_PHASE_NATIVE, text):
+        return "NATIVE", "matched explicit native/non-injected keyword", "high", "explicit_text"
 
     if re.search(rules.RX_PHASE_HEPATOBILIARY, text):
         return "HEPATOBILIARY", "matched explicit hepatobiliary/2h keyword", "high", "explicit_text"
@@ -632,7 +632,7 @@ def select_best_candidates(
         data["selection_slot"].isin([
             "T2",
             "DWI",
-            "T1_PRECONTRAST",
+            "T1_NATIVE",
             "T1_ARTERIAL",
             "T1_PORTAL_VENOUS",
             "T1_DELAYED",

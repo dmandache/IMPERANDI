@@ -86,7 +86,12 @@ def selected_for_slot(results: dict[str, pd.DataFrame], slot: str) -> pd.DataFra
         ("Apparent_Diffusion_Coefficient", "DWI"),
         ("DW-EPI rec-b-1000", "DWI"),
         ("DTI b_50", "DWI"),
+        ("DIF rec b 800", "DWI"),
+        ("T1 weighted IDEAL pre gad_W", "T1"),
+        ("T2 eSSFSE ASPIR", "T2"),
+        ("LOC 3 plans", "LOCALIZER"),
         ("Localizer 3 plans", "LOCALIZER"),
+        ("KOS", "KEY_IMAGES"),
         ("Processed Images", "KEY_IMAGES"),
     ],
 )
@@ -114,15 +119,17 @@ def test_sequence_detection_uses_protocol_name_when_series_description_missing()
 @pytest.mark.parametrize(
     "desc,expected_phase",
     [
-        ("T1 VIBE DIXON SANS IV CAIPI_W", "PRECONTRAST"),
-        ("AX T1 DIXON SS IV_W", "PRECONTRAST"),
+        ("T1 VIBE DIXON SANS IV CAIPI_W", "NATIVE"),
+        ("AX T1 DIXON SS IV_W", "NATIVE"),
         ("AX T1 DIXON ART_W", "ARTERIAL"),
         ("mDIXON port", "PORTAL_VENOUS"),
         ("AX T1 DIXON VEIN_W", "PORTAL_VENOUS"),
+        ("AX T1 DIXON PH3_W", "PORTAL_VENOUS"),
         ("AX T1 DIXON TARD_W", "DELAYED"),
         ("mDIXON tardif", "DELAYED"),
         ("mDIXON tardif 2h", "HEPATOBILIARY"),
         ("mDIXON tardif+2h", "HEPATOBILIARY"),
+        ("mDIXON primovist 20 min", "HEPATOBILIARY"),
     ],
 )
 def test_explicit_t1_phase_labels(desc: str, expected_phase: str):
@@ -161,7 +168,7 @@ def test_art_port_single_volume_falls_back_to_portal_transition():
     assert out.loc[0, "mri_perfusion_source"] == "explicit_text_art_port_single"
 
 
-def test_mask_multiart_first_precontrast_rest_arterial():
+def test_mask_multiart_first_native_rest_arterial():
     results = curate([
         row("Ax LAVA Mask+Multiart Fluoro", series_id="SER_MULTIART", volume_id="V1", time="120000"),
         row("Ax LAVA Mask+Multiart Fluoro", series_id="SER_MULTIART", volume_id="V2", time="120100"),
@@ -170,7 +177,7 @@ def test_mask_multiart_first_precontrast_rest_arterial():
     cur = results["curated"].sort_values("volume_order_in_series")
 
     assert cur["mri_sequence"].tolist() == ["T1", "T1", "T1"]
-    assert cur["mri_perfusion_label"].tolist() == ["PRECONTRAST", "ARTERIAL", "ARTERIAL"]
+    assert cur["mri_perfusion_label"].tolist() == ["NATIVE", "ARTERIAL", "ARTERIAL"]
     assert set(cur["mri_perfusion_source"]) == {"volume_order_mask_multiart"}
 
 
@@ -184,7 +191,7 @@ def test_generic_4d_mdixon_volume_order_pre_art_port_delayed():
     cur = results["curated"].sort_values("volume_order_in_series")
 
     assert cur["mri_perfusion_label"].tolist() == [
-        "PRECONTRAST",
+        "NATIVE",
         "ARTERIAL",
         "PORTAL_VENOUS",
         "DELAYED",
@@ -211,7 +218,7 @@ def test_explicit_portal_selected_over_inferred_4d_portal_even_if_same_exam():
     assert portal.iloc[0]["mri_perfusion_source"] == "explicit_text"
 
 
-def test_explicit_precontrast_selected_over_inferred_4d_precontrast():
+def test_explicit_native_selected_over_inferred_4d_native():
     results = curate([
         row("4D mDIXON-W", series_id="SER_4D", volume_id="V1", time="120000"),
         row("4D mDIXON-W", series_id="SER_4D", volume_id="V2", time="120100"),
@@ -219,7 +226,7 @@ def test_explicit_precontrast_selected_over_inferred_4d_precontrast():
         row("mDIXON pre", series_id="SER_PRE", volume_id="VPRE", time="115900"),
     ])
 
-    pre = selected_for_slot(results, "T1_PRECONTRAST")
+    pre = selected_for_slot(results, "T1_NATIVE")
     assert len(pre) == 1
     assert pre.iloc[0]["SeriesDescription"] == "mDIXON pre"
     assert pre.iloc[0]["mri_perfusion_source"] == "explicit_text"
@@ -236,7 +243,9 @@ def test_explicit_precontrast_selected_over_inferred_4d_precontrast():
         ("AX T1 DIXON ART_W", "WATER"),
         ("AX T1 DIXON ART_in", "IN_PHASE"),
         ("AX T1 DIXON ART_opp", "OPPOSED_PHASE"),
+        ("AX T1 DIXON phase out", "OPPOSED_PHASE"),
         ("AX T1 DIXON ART_F", "FAT"),
+        ("mDIXON water only", "WATER"),
         ("mDIXON-All_BH", "DIXON_ALL"),
         ("mDIXON-Quant_BH", "FAT_FRACTION"),
     ],
@@ -327,4 +336,4 @@ def test_invalid_time_and_pixel_spacing_do_not_crash_selection():
     ])
 
     assert len(results["curated"]) == 2
-    assert {"T2", "T1_PRECONTRAST"}.issubset(set(results["selected_long"]["selection_slot"]))
+    assert {"T2", "T1_NATIVE"}.issubset(set(results["selected_long"]["selection_slot"]))

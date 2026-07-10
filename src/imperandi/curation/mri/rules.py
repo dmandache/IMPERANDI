@@ -17,83 +17,140 @@ def token(pattern: str) -> str:
 
 
 # Generic/non-diagnostic ------------------------------------------------------
-RX_LOCALIZER = token(r"locali[sz]er|scout|survey|rep[eè]rage|topogram|calibration|cal\s*body")
-RX_KEY_IMAGES = token(
-    r"key\s*images?|ko|snapshot|screen\s*save|capture|processed\s*images?"
-    r"|screen[\s_-]*saves?|images?[\s_-]*cl[eé]s?"
+RX_LOCALIZER = token(
+    r"loc|loca|locali[sz]er|localiser|scout|survey|rep[eè]rage|topogram|calibration|cal\s*body"
 )
-RX_SUBTRACTION = token(r"sub|subtraction|soustraction|sous")
-RX_MIP_MPR = token(r"mip|mpr|reformat|reconstruction|recon")
-RX_QUANT_OR_REPORT = token(r"quant|r2\*|r2star|fat\s*fraction|carto|map|mapping|report|result|dose")
+RX_KEY_IMAGES = token(
+    r"key\s*(?:images?|objects?)|key[\s_-]*object[\s_-]*selection"
+    r"|ko|kos|kin|kon|snapshot|screen\s*save|capture|processed\s*images?"
+    r"|screen[\s_-]*saves?|images?[\s_-]*cl[eé]s?|objets?[\s_-]*cl[eé]s?"
+)
+RX_SUBTRACTION = token(r"s?sub|s?subtraction|s?soustraction|sous")
+RX_MIP_MPR = token(r"mip|mpr|reformat|multiplanar[\s_-]*reconstruction|reconstruction|recon")
+RX_QUANT_OR_REPORT = token(
+    r"quant|r2\*|r2star|fat\s*fraction|carto|map|mapping|reports?|results?|reading|histo"
+    r"|iron[\s_-]*reports?|elasto|error|dose"
+)
 
 
 # Sequence families -----------------------------------------------------------
-RX_SEQUENCE_DWI = token(r"dwi|diff|diffusion|adc|trace|ivim|ep2d|b\s*[=_-]?\s*\d+")
+RX_SEQUENCE_DWI = token(
+    r"dwi|dw[\s_-]*epi|dwepi|diff|diffusion|dif|adc|apparent[\s_-]*diffusion[\s_-]*coefficient"
+    r"|trace|ivim|dti|ep2d|b\s*[=_-]?\s*\d{1,4}"
+)
 
 # T1 3D GRE families. Dixon alone is included because liver multiphase T1 is
 # frequently named only as VIBE/LAVA/mDIXON/DIXON.
 RX_SEQUENCE_T1 = token(
     r"t1|vibe|lava|thrive|ethrive|twist|grasp|dynava|fspgr|spgr|tfe"
-    r"|m?dixon|q?dixon|e?dixon|3d\s*t1"
+    r"|twist[\s_-]*vibe|twistvibe|lava[\s_-]*flex|lavaflex"
+    r"|dixon|mdixon|qdixon|edixon|m[\s_-]*dixon|q[\s_-]*dixon|e[\s_-]*dixon"
+    r"|ideal|t1[\s_-]*weighted|3d\s*t1"
 )
-RX_SEQUENCE_T1_CONTRAST = token(r"gado|post\s*(?:iv|gado|contrast)|ce\s*t1")
+RX_SEQUENCE_T1_CONTRAST = token(
+    r"t1[\w\s_/\-+]{0,50}(?:post|gd|gado|gad|gadolinium|contrast|c\+|fs[\s_-]*post)"
+    r"|gado|gad|gadolinium|post\s*(?:iv|gado|gad|contrast)|ce\s*t1"
+)
 
 RX_SEQUENCE_T2 = token(
-    r"t2|tse|fse|ssfse|haste|blade|propeller|spir|spair|mrcp|bili|bhte"
+    r"t2|t2[\s_-]*weighted|tse|fse|frfse|ssfse|essfse|haste|ssh|blade|fblade"
+    r"|propeller|prop|spir|spair|aspir|mrcp|s[\s_-]*mrcp|bili|biliary|biliaire"
+    r"|chol|cholangio|cs[\s_-]*bili|bhte"
 )
 
 
 # Perfusion / contrast phase labels ------------------------------------------
-RX_PHASE_PRECONTRAST = token(
-    r"pre(?:\s*gado|\s*contrast|\s*iv)?|pregado|native|avant"
-    r"|sans\s*(?:iv|inj|injection|gado|contraste)"
-    r"|ss\s*iv|non\s*(?:injecte|injected|contrast|gado)"
+RX_PHASE_NATIVE = token(
+    r"pre(?:[\s_-]*(?:gado|gad|contrast|iv))?"
+    r"|native"
+    r"|avant(?:[\s_-]*injection)?"
+    r"|sans(?:\s*(?:iv|inj|injection|gado|gad|contraste))?"
+    r"|ss\s*(?:iv|i)"
+    r"|si"
+    r"|non[\s_-]*(?:inject(?:ed|e|ee|é|ée)?|contrast[eé]?|gado|gad)"
+    r"|ph1"
+    r"|blanc"
+    r"|masque"
 )
 
 RX_PHASE_ART_PORT_DYNAMIC = token(
     rf"art{SEP}port|art{SEP}portal|arterio{SEP}portal"
 )
 RX_PHASE_MASK_MULTIART_DYNAMIC = token(
-    rf"mask{SEP}multi{SEP}art|mask\+multiart|masque{SEP}multi{SEP}art|multi{SEP}art"
+    rf"mask{SEP}multi{SEP}art|masque{SEP}multi{SEP}art"
+    rf"|masq(?:ue)?{SEP}multi{SEP}art|masq(?:ue)?{SEP}\d+{SEP}art|multi{SEP}art"
 )
 
-RX_PHASE_ARTERIAL = token(r"art(?:eriel|erial|[eé]rielle?)?|artery|aorte|hepatic\s*arter")
-RX_PHASE_PORTAL = token(r"port(?:al)?|vein|veine|venous|ven|portal\s*venous|vp|pv")
+RX_PHASE_ARTERIAL = token(
+    r"late[\s_-]*arterial|early[\s_-]*arterial|multi[\s_-]*art|multiart"
+    r"|multi[\s_-]*art(?:eriel|erial)?|art(?:eriel|erial|[eé]rielle?)?|artériel|artérielle"
+    r"|arterial|artery|aorte|hepatic\s*arter|phase[\s_-]*a|ph2"
+    r"|(?:1[5-9]|[2-4][0-9])[\s_.+\-]*(?:s|sec|secs|second|seconds)"
+    r"|0[\s_.+\-]*(?:15|20|25|30|35|40|45)[\s_.+\-]*(?:min|mn)"
+)
+RX_PHASE_PORTAL = token(
+    r"port(?:al)?|porto|porte|portal[\s_-]*venous|portovenous|vein|veine|venous|ven|vp|pv"
+    r"|phase[\s_-]*p|ph3|veneux|veineux|veineuse|parenchymateux|parenchymal"
+    r"|[6-9]0[\s_.+\-]*(?:s|sec|secs|second|seconds)|1[\s_.+\-]*(?:min|mn)"
+    r"|1[\s_.+\-]*(?:10|20|30)[\s_.+\-]*(?:min|mn)"
+)
 
 # Put 2h/hepatobiliary before generic delayed in code.
-RX_PHASE_HEPATOBILIARY = token(r"hepatobiliary|hbp|bhp|tardif\s*\+?\s*2\s*h|2\s*h|120\s*min")
-RX_PHASE_DELAYED = token(
-    r"tard(?:if|ive)?|delay(?:ed)?|late|equilibrium|eq|interstitiel"
-    r"|3\s*(?:min|mn)|4\s*(?:min|mn)|5\s*(?:min|mn)|10\s*(?:min|mn)"
+RX_PHASE_HEPATOBILIARY = token(
+    r"hepato[\s_-]*biliary|hepato[\s_-]*biliaire"
+    r"|hbp|bhp|eovist|primovist|gadoxetate|gadoxetic|tardif\s*\+?\s*2\s*h|2\s*h"
+    r"|10[\s_-]*(?:min|mn)|15[\s_-]*(?:min|mn)|20[\s_-]*(?:min|mn)|120\s*min"
+    r"|hb|hbhr|voie[\s_-]*biliaire|transitionnel"
 )
-RX_PHASE_GENERIC_DYNAMIC = token(r"dyn|dynamic|perfusion|multi\s*phase|mph|ph\s*\d+|4d")
+RX_PHASE_DELAYED = token(
+    r"tard(?:if|ive)?|delay(?:ed)?|delai|délai|late|equilibrium|equilibre|équilibre|eq|interstitiel"
+    r"|phase[\s_-]*d|ph4|[2-6]\s*(?:min|mn)"
+)
+RX_PHASE_GENERIC_DYNAMIC = token(
+    r"dyn|dynamic|dynamique|dce|dsc|pwi|perfusion|perf|multi\s*phase|multiphase"
+    r"|multiphas(?:e|ic)|multiphasique|mph|m[\s_-]*ph|ph\s*\d+|4d|multi[\s_-]*art"
+    r"|multiart|art[\s_-]*port|twist|twistvibe|grasp|bolus|time[\s_-]*resolved"
+)
 
 
 # Feature extraction ----------------------------------------------------------
 RX_PLANE_AXIAL = token(r"ax|axial|tra|trans|transverse")
-RX_PLANE_CORONAL = token(r"cor|coronal")
-RX_PLANE_SAGITTAL = token(r"sag|sagittal")
+RX_PLANE_CORONAL = token(r"cor|coro|coronal|coronale|ecor")
+RX_PLANE_SAGITTAL = token(r"sag|sagi|sagittal|sagittale")
 
 RX_T2_FATSAT = token(r"fs|fat\s*sat|fatsat|spair|spir|stir|tirm")
-RX_T2_MOTION_ROBUST = token(r"blade|propeller|multivane|radial|pace|navigator|rtr|trigger")
-RX_T2_HASTE_SSFSE = token(r"haste|ssfse|single\s*shot")
-RX_T2_TSE_FSE = token(r"tse|fse|fast\s*spin|turbo\s*spin")
-RX_T2_MRCP_BILIARY = token(r"mrcp|bili|cholangi")
+RX_T2_MOTION_ROBUST = token(r"blade|fblade|propeller|prop|multivane|radial|pace|navigator|rtr|trigger")
+RX_T2_HASTE_SSFSE = token(r"haste|ssfse|essfse|ssh|single\s*shot")
+RX_T2_TSE_FSE = token(r"tse|fse|frfse|sense|te[\s_-]*\d+|fast\s*spin|turbo\s*spin")
+RX_T2_MRCP_BILIARY = token(r"mrcp|bili|biliary|biliaire|chol|cholangio|cholangi")
 
-RX_T1_3D_GRE = token(r"3d|vibe|lava|thrive|ethrive|twist|grasp|fspgr|spgr|tfe|dixon|mdixon")
-RX_T1_DYNAMIC = token(r"dyn|dynamic|4d|twist|grasp|mph|multi\s*phase|ph\s*\d+|art|port|tardif|gado")
-RX_BREATH_HOLD = token(r"bh|apnee|apn[eé]e|breath\s*hold")
-RX_RESP_TRIGGERED = token(r"pace|trigger|triggered|resp|rtr|navigator")
+RX_T1_3D_GRE = token(
+    r"3d|vibe|twist[\s_-]*vibe|twistvibe|lava|lava[\s_-]*flex|lavaflex|thrive|ethrive"
+    r"|twist|grasp|fspgr|spgr|tfe|dixon|mdixon|m[\s_-]*dixon|qdixon|q[\s_-]*dixon"
+    r"|edixon|e[\s_-]*dixon|ideal"
+)
+RX_T1_DYNAMIC = token(
+    r"dyn|dynamic|dynamique|4d|twist|twistvibe|grasp|mph|m[\s_-]*ph|multi\s*phase"
+    r"|multiphase|multiphas(?:e|ic)|multiphasique|ph\s*\d+|multi[\s_-]*art|multiart"
+    r"|art[\s_+\-/]*port|art|port|tardif|gado|gad|gadopdc|bolus|perf|perfusion|dce"
+)
+RX_BREATH_HOLD = token(r"bh|mbh|apnee|apn[eé]e|breath\s*hold")
+RX_RESP_TRIGGERED = token(r"pace|trigger|triggered|resp|respi|rtr|rt|nav|navigator")
 
 # Dixon components ------------------------------------------------------------
-RX_DIXON_CONTEXT = token(r"dixon|mdixon|lava\s*flex|flex")
-RX_DIXON_ALL = token(r"all|all_bh")
-RX_DIXON_WATER = token(r"w|water|eau")
-RX_DIXON_IN = token(r"in|ip|inphase|in\s*phase|eco\s*0")
-RX_DIXON_OPPOSED = token(r"opp|opposed|out|op|opposed\s*phase|eco\s*1")
+RX_DIXON_CONTEXT = token(
+    r"dixon|mdixon|m[\s_-]*dixon|qdixon|q[\s_-]*dixon|edixon|e[\s_-]*dixon"
+    r"|lava\s*flex|lavaflex|flex|ideal"
+)
+RX_DIXON_ALL = token(r"all|all_bh|m[\s_-]*dixon[\s_-]*all|mdixon[\s_-]*all|dixon[\s_-]*all")
+RX_DIXON_WATER = token(r"w|water|wat|eau")
+RX_DIXON_IN = token(r"in|ip|inphase|in[\s_-]*phase|phase[\s_-]*in|eco\s*0")
+RX_DIXON_OPPOSED = token(
+    r"opp|opposed|out|op|oop|out[\s_-]*phase|phase[\s_-]*out|eco\s*1"
+)
 RX_DIXON_FAT = token(r"f|fat|graisse")
-RX_DIXON_FAT_FRACTION = token(r"fat\s*fraction|ff|quant")
-RX_DIXON_R2STAR = token(r"r2\*|r2star")
+RX_DIXON_FAT_FRACTION = token(r"fat[\s_-]*fraction|fatfrac|pdff|ff|quant")
+RX_DIXON_R2STAR = token(r"r2\*|r2star|t2\*[\s_-]*map|t2star[\s_-]*map")
 
 
 # Priorities ------------------------------------------------------------------
@@ -103,7 +160,7 @@ T1_PHASE_PRIORITY = {
     "ARTERIAL": 105,
     "DELAYED": 95,
     "HEPATOBILIARY": 90,
-    "PRECONTRAST": 80,
+    "NATIVE": 80,
     "OTHER": 0,
 }
 

@@ -13,7 +13,7 @@ RX_CT_DERIVED_LOW_VALUE = token(
 )
 RX_CT_AXIAL = token(r"ax|axial|tra|trans|transverse")
 
-RX_CT_PRECONTRAST = token(
+RX_CT_NATIVE = token(
     r"sans(?:\s*iv|\s*injection|\s*inj|\s*contraste)?"
     r"|non(?:\s*injecte|\s*injected|\s*contrast)"
     r"|native|pre(?:\s*contrast|\s*iv|\s*inj)?|non\s*inject"
@@ -31,6 +31,6 @@ CT_PHASE_PRIORITY = {
     "PORTAL_VENOUS": 120,
     "ARTERIAL": 105,
     "DELAYED": 90,
-    "PRECONTRAST": 80,
+    "NATIVE": 80,
     "OTHER": 0,
 }
