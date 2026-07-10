@@ -112,6 +112,21 @@ def test_sequence_detection_uses_protocol_name_when_series_description_missing()
     assert out.loc[1, "mri_sequence"] == "T1"
 
 
+def test_build_series_text_normalizes_case_whitespace_and_lists():
+    series = pd.Series(
+        {
+            "SeriesDescription": "  AX   T1    DIXON  ",
+            "ProtocolName": ["  PORTAL   VENOUS ", "  WATER  "],
+            "ImageType": " ORIGINAL\\PRIMARY ",
+        }
+    )
+
+    assert (
+        mc.build_series_text(series)
+        == "ax t1 dixon | portal venous water | original\\primary"
+    )
+
+
 # -----------------------------------------------------------------------------
 # Explicit T1 phase labels
 # -----------------------------------------------------------------------------

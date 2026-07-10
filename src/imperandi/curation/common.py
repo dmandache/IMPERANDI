@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Sequence
 
@@ -53,10 +54,14 @@ def stable_text(x) -> str:
     return str(x)
 
 
+def clean_text(x) -> str:
+    return re.sub(r"\s+", " ", str(x).strip().lower())
+
+
 def safe_str(x) -> str:
     if isinstance(x, (list, tuple, set, np.ndarray)):
-        return " ".join(safe_str(v) for v in x if safe_str(v))
-    return str(x).strip().lower() if pd.notna(x) else ""
+        return clean_text(" ".join(safe_str(v) for v in x if safe_str(v)))
+    return clean_text(x) if pd.notna(x) else ""
 
 
 def norm_label(x, default: str = "OTHER") -> str:
@@ -83,9 +88,8 @@ def build_series_text(
     cols: Sequence[str] | None = None,
 ) -> str:
     cols = list(cols or TEXT_COLS_DEFAULT)
-    return " | ".join(
-        safe_str(row.get(c)) for c in cols if c in row.index and safe_str(row.get(c))
-    )
+    parts = [safe_str(row.get(c)) for c in cols if c in row.index]
+    return " | ".join(part for part in parts if part)
 
 
 def get_exam_group_cols(
