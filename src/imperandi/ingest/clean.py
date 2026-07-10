@@ -451,12 +451,7 @@ def build_volume_id_naive(df, preferred_cols=None, fallback_cols=None):
     fallback_cols = fallback_cols or ["patient_key", "study_id", "series_id"]
 
     if "ImageOrientationPatient" in df.columns:
-        df = df.copy()
-        df["ImageOrientationPatient"] = df["ImageOrientationPatient"].apply(
-            lambda x: (
-                tuple(x) if isinstance(x, (list, tuple)) else tuple(literal_eval(x))
-            )
-        )
+        df["ImageOrientationPatient"] = df["ImageOrientationPatient"].apply(standardize_iop)
 
     # Choose the maximum available columns among preferred
     cols_to_use = [c for c in preferred_cols if c in df.columns]
