@@ -11,6 +11,7 @@ T1/T2 liver MRI diagnostic candidates.
 
 from __future__ import annotations
 
+import re
 import numpy as np
 import pandas as pd
 import pytest
@@ -124,7 +125,6 @@ def test_sequence_detection_uses_protocol_name_when_series_description_missing()
         ("AX T1 DIXON ART_W", "ARTERIAL"),
         ("mDIXON port", "PORTAL_VENOUS"),
         ("AX T1 DIXON VEIN_W", "PORTAL_VENOUS"),
-        ("AX T1 DIXON PH3_W", "PORTAL_VENOUS"),
         ("AX T1 DIXON TARD_W", "DELAYED"),
         ("mDIXON tardif", "DELAYED"),
         ("mDIXON tardif 2h", "HEPATOBILIARY"),
@@ -137,6 +137,86 @@ def test_explicit_t1_phase_labels(desc: str, expected_phase: str):
     assert out.loc[0, "mri_sequence"] == "T1"
     assert out.loc[0, "mri_perfusion_label"] == expected_phase
     assert out.loc[0, "mri_perfusion_source"].startswith("explicit_text")
+
+
+def test_low_level_phase_regexes_do_not_classify_ordinal_phases():
+    assert not re.search(mc.rules.RX_PHASE_NATIVE, "ph1")
+    assert not re.search(mc.rules.RX_PHASE_ARTERIAL, "ph2")
+    assert not re.search(mc.rules.RX_PHASE_PORTAL, "ph3")
+    assert not re.search(mc.rules.RX_PHASE_DELAYED, "ph4")
+
+
+def test_water_lava_alone_is_not_native():
+    out = mc.annotate_mri(pd.DataFrame([row("WATER: Ax LAVA-Flex APNEE")]))
+
+    assert out.loc[0, "mri_sequence"] == "T1"
+    assert out.loc[0, "mri_perfusion_label"] == "OTHER"
+    assert out.loc[0, "mri_perfusion_confidence"] == "unknown"
+
+
+def test_post_gado_ordinal_phases_with_explicit_native_are_context_inferred():
+    results = curate([
+        row("Ax LAVA pre", series_id="SER_PRE", volume_id="VPRE", time="115900"),
+        row("Ph1/Ax LAVA Gado MPh Turbo", series_id="SER_PH1", volume_id="V1", time="120000"),
+        row("Ph2/Ax LAVA Gado MPh Turbo", series_id="SER_PH2", volume_id="V2", time="120100"),
+        row("Ph3/Ax LAVA Gado MPh Turbo", series_id="SER_PH3", volume_id="V3", time="120200"),
+    ])
+    cur = results["curated"].set_index("SeriesDescription")
+
+    assert cur.loc["Ax LAVA pre", "mri_perfusion_label"] == "NATIVE"
+    assert cur.loc["Ax LAVA pre", "mri_perfusion_confidence"] == "explicit"
+    assert cur.loc["Ph1/Ax LAVA Gado MPh Turbo", "mri_perfusion_label"] == "ARTERIAL"
+    assert cur.loc["Ph2/Ax LAVA Gado MPh Turbo", "mri_perfusion_label"] == "PORTAL_VENOUS"
+    assert cur.loc["Ph3/Ax LAVA Gado MPh Turbo", "mri_perfusion_label"] == "DELAYED"
+    assert set(cur.loc[
+        [
+            "Ph1/Ax LAVA Gado MPh Turbo",
+            "Ph2/Ax LAVA Gado MPh Turbo",
+            "Ph3/Ax LAVA Gado MPh Turbo",
+        ],
+        "mri_perfusion_confidence",
+    ]) == {"inferred"}
+    assert set(cur.loc[
+        [
+            "Ph1/Ax LAVA Gado MPh Turbo",
+            "Ph2/Ax LAVA Gado MPh Turbo",
+            "Ph3/Ax LAVA Gado MPh Turbo",
+        ],
+        "mri_perfusion_source",
+    ]) == {"ordinal_context"}
+
+
+def test_missing_native_fallback_uses_water_lava_only_with_dynamic_context():
+    results = curate([
+        row("WATER: Ax LAVA-Flex APNEE", series_id="SER_WATER", volume_id="VW", time="115900"),
+        row("Ph1/Ax LAVA Gado MPh Turbo", series_id="SER_PH1", volume_id="V1", time="120000"),
+        row("Ph2/Ax LAVA Gado MPh Turbo", series_id="SER_PH2", volume_id="V2", time="120100"),
+        row("Ph3/Ax LAVA Gado MPh Turbo", series_id="SER_PH3", volume_id="V3", time="120200"),
+    ])
+    cur = results["curated"].set_index("SeriesDescription")
+
+    assert cur.loc["WATER: Ax LAVA-Flex APNEE", "mri_perfusion_label"] == "NATIVE"
+    assert cur.loc["WATER: Ax LAVA-Flex APNEE", "mri_perfusion_confidence"] == "fallback"
+    assert cur.loc["WATER: Ax LAVA-Flex APNEE", "mri_perfusion_source"] == "exam_context"
+    assert cur.loc["Ph1/Ax LAVA Gado MPh Turbo", "mri_perfusion_label"] == "ARTERIAL"
+    assert cur.loc["Ph2/Ax LAVA Gado MPh Turbo", "mri_perfusion_label"] == "PORTAL_VENOUS"
+    assert cur.loc["Ph3/Ax LAVA Gado MPh Turbo", "mri_perfusion_label"] == "DELAYED"
+
+
+def test_explicit_portal_overrides_ordinal_phase_text():
+    out = mc.annotate_mri(pd.DataFrame([row("Ph1 Ax LAVA portal")]))
+
+    assert out.loc[0, "mri_perfusion_label"] == "PORTAL_VENOUS"
+    assert out.loc[0, "mri_perfusion_confidence"] == "explicit"
+    assert out.loc[0, "mri_perfusion_source"] == "explicit_text"
+
+
+def test_post_gado_ph1_is_never_native():
+    out = mc.annotate_mri(pd.DataFrame([row("Ph1/Ax LAVA Gado MPh Turbo")]))
+
+    assert out.loc[0, "mri_perfusion_label"] == "ARTERIAL"
+    assert out.loc[0, "mri_perfusion_confidence"] == "inferred"
+    assert out.loc[0, "mri_perfusion_source"] == "ordinal_context"
 
 
 def test_hepatobiliary_2h_takes_priority_over_delayed_tardif():

@@ -21,6 +21,7 @@ they are inferred from patient/study/series grouping.
 from __future__ import annotations
 
 import re
+import logging
 from pathlib import Path
 from typing import Sequence
 
@@ -28,6 +29,8 @@ import numpy as np
 import pandas as pd
 
 from . import rules
+
+logger = logging.getLogger(__name__)
 
 
 # -----------------------------------------------------------------------------
@@ -284,15 +287,55 @@ def text_matches_mask_multiart(row: pd.Series) -> bool:
     return bool(re.search(rules.RX_PHASE_MASK_MULTIART_DYNAMIC, build_series_text(row)))
 
 
+def has_post_contrast_text(row: pd.Series) -> bool:
+    return bool(re.search(rules.RX_PHASE_POST_CONTRAST, build_series_text(row)))
+
+
+def detect_ordinal_phase_index(row: pd.Series) -> int | None:
+    match = re.search(rules.RX_PHASE_ORDINAL, build_series_text(row))
+    if not match:
+        return None
+    for group in match.groups():
+        if group is not None:
+            return int(group)
+    return None
+
+
+def detect_explicit_phase_from_text(row: pd.Series) -> tuple[str | None, str, str, str]:
+    text = build_series_text(row)
+
+    if re.search(rules.RX_PHASE_NATIVE, text):
+        return "NATIVE", "matched explicit native/non-injected keyword", "explicit", "explicit_text"
+
+    if re.search(rules.RX_PHASE_HEPATOBILIARY, text):
+        return (
+            "HEPATOBILIARY",
+            "matched explicit hepatobiliary/2h keyword",
+            "explicit",
+            "explicit_text",
+        )
+
+    if re.search(rules.RX_PHASE_DELAYED, text):
+        return "DELAYED", "matched explicit delayed/tardif keyword", "explicit", "explicit_text"
+
+    if re.search(rules.RX_PHASE_PORTAL, text):
+        return "PORTAL_VENOUS", "matched explicit portal/venous keyword", "explicit", "explicit_text"
+
+    if re.search(rules.RX_PHASE_ARTERIAL, text):
+        return "ARTERIAL", "matched explicit arterial keyword", "explicit", "explicit_text"
+
+    return None, "no explicit T1 perfusion phase keyword matched", "unknown", "none"
+
+
 def infer_special_t1_phase_from_volume_order(row: pd.Series) -> tuple[str | None, str, str, str]:
     """Special same-description/multiple-volume protocols."""
     if norm_label(row.get("mri_sequence")) != "T1":
-        return None, "not T1", "low", "none"
+        return None, "not T1", "unknown", "none"
 
     order = safe_float(row.get("volume_order_in_series"))
     n_volumes = safe_float(row.get("n_volumes_in_series"))
     if pd.isna(order) or pd.isna(n_volumes) or n_volumes < 2:
-        return None, "no independent second volume detected", "low", "none"
+        return None, "no independent second volume detected", "unknown", "none"
 
     order = int(order)
     n_volumes = int(n_volumes)
@@ -302,20 +345,20 @@ def infer_special_t1_phase_from_volume_order(row: pd.Series) -> tuple[str | None
             return (
                 "ARTERIAL",
                 f"inferred ARTERIAL from first ART-PORT volume {order}/{n_volumes}",
-                "medium",
+                "inferred",
                 "volume_order_art_port",
             )
         if order == 2:
             return (
                 "PORTAL_VENOUS",
                 f"inferred PORTAL_VENOUS from second ART-PORT volume {order}/{n_volumes}",
-                "medium",
+                "inferred",
                 "volume_order_art_port",
             )
         return (
             "DELAYED",
             f"inferred DELAYED from later ART-PORT volume {order}/{n_volumes}",
-            "low",
+            "inferred",
             "volume_order_art_port",
         )
 
@@ -324,17 +367,17 @@ def infer_special_t1_phase_from_volume_order(row: pd.Series) -> tuple[str | None
             return (
                 "NATIVE",
                 f"inferred NATIVE from first Mask+Multiart volume {order}/{n_volumes}",
-                "medium",
+                "inferred",
                 "volume_order_mask_multiart",
             )
         return (
             "ARTERIAL",
             f"inferred ARTERIAL from Mask+Multiart volume {order}/{n_volumes}",
-            "medium",
+            "inferred",
             "volume_order_mask_multiart",
         )
 
-    return None, "no special dynamic T1 profile", "low", "none"
+    return None, "no special dynamic T1 profile", "unknown", "none"
 
 
 def has_generic_dynamic_t1_evidence(row: pd.Series) -> bool:
@@ -350,12 +393,12 @@ def has_generic_dynamic_t1_evidence(row: pd.Series) -> bool:
 
 def infer_generic_t1_phase_from_volume_order(row: pd.Series) -> tuple[str | None, str, str, str]:
     if not has_generic_dynamic_t1_evidence(row):
-        return None, "no generic dynamic multivolume T1 evidence", "low", "none"
+        return None, "no generic dynamic multivolume T1 evidence", "unknown", "none"
 
     order = safe_float(row.get("volume_order_in_series"))
     n_volumes = safe_float(row.get("n_volumes_in_series"))
     if pd.isna(order) or pd.isna(n_volumes):
-        return None, "missing volume order", "low", "none"
+        return None, "missing volume order", "unknown", "none"
 
     order = int(order)
     n_volumes = int(n_volumes)
@@ -369,7 +412,7 @@ def infer_generic_t1_phase_from_volume_order(row: pd.Series) -> tuple[str | None
     return (
         label,
         f"inferred {label} from generic dynamic T1 volume order {order}/{n_volumes}",
-        "medium",
+        "inferred",
         "volume_order",
     )
 
@@ -379,8 +422,8 @@ def detect_t1_perfusion_phase(row: pd.Series) -> tuple[str, str, str, str]:
     Volume-aware T1 phase classifier.
 
     Priority:
-      1. Special ART-PORT / Mask+Multiart order inference.
-      2. Explicit pure phase text, e.g. SANS IV, ART, PORT, TARDIF.
+      1. Explicit pure phase text, e.g. SANS IV, ART, PORT, TARDIF.
+      2. Special ART-PORT / Mask+Multiart order inference.
       3. Generic dynamic volume order inference.
       4. OTHER.
     """
@@ -388,7 +431,7 @@ def detect_t1_perfusion_phase(row: pd.Series) -> tuple[str, str, str, str]:
     seq = norm_label(row.get("mri_sequence"))
 
     if seq != "T1":
-        return "OTHER", f"sequence={seq}; phase not assigned", "medium", "none"
+        return "OTHER", f"sequence={seq}; phase not assigned", "unknown", "none"
 
     # Derived/subtraction rows are kept as T1 candidates but not valid phase labels.
     if (
@@ -396,51 +439,232 @@ def detect_t1_perfusion_phase(row: pd.Series) -> tuple[str, str, str, str]:
         or re.search(rules.RX_MIP_MPR, text)
         or re.search(rules.RX_QUANT_OR_REPORT, text)
     ):
-        return "OTHER", "matched subtraction/derived/non-diagnostic marker", "high", "none"
+        return "OTHER", "matched subtraction/derived/non-diagnostic marker", "unknown", "none"
 
-    special_label, special_reason, special_conf, special_source = infer_special_t1_phase_from_volume_order(row)
-    if special_label is not None:
-        return special_label, special_reason, special_conf, special_source
-
-    if re.search(rules.RX_PHASE_NATIVE, text):
-        return "NATIVE", "matched explicit native/non-injected keyword", "high", "explicit_text"
-
-    if re.search(rules.RX_PHASE_HEPATOBILIARY, text):
-        return "HEPATOBILIARY", "matched explicit hepatobiliary/2h keyword", "high", "explicit_text"
-
-    if re.search(rules.RX_PHASE_DELAYED, text):
-        return "DELAYED", "matched explicit delayed/tardif keyword", "high", "explicit_text"
-
-    # Text-only ART-PORT fallback when volume ordering was not available.
-    # This must be evaluated before the generic PORT regex, otherwise the source
-    # is swallowed as explicit_text.
     if text_matches_art_port(row):
+        special_label, special_reason, special_conf, special_source = infer_special_t1_phase_from_volume_order(row)
+        if special_label is not None:
+            return special_label, special_reason, special_conf, special_source
         return (
             "PORTAL_VENOUS",
             "matched ART-PORT text without usable volume order; treated as portal/transition",
-            "medium",
+            "inferred",
             "explicit_text_art_port_single",
         )
 
-    if re.search(rules.RX_PHASE_PORTAL, text):
-        return "PORTAL_VENOUS", "matched explicit portal/venous keyword", "high", "explicit_text"
+    if text_matches_mask_multiart(row):
+        special_label, special_reason, special_conf, special_source = infer_special_t1_phase_from_volume_order(row)
+        if special_label is not None:
+            return special_label, special_reason, special_conf, special_source
 
-    if re.search(rules.RX_PHASE_ARTERIAL, text):
-        return "ARTERIAL", "matched explicit arterial keyword", "high", "explicit_text"
+    explicit_label, explicit_reason, explicit_conf, explicit_source = detect_explicit_phase_from_text(row)
+    if explicit_label is not None:
+        return explicit_label, explicit_reason, explicit_conf, explicit_source
 
     generic_label, generic_reason, generic_conf, generic_source = infer_generic_t1_phase_from_volume_order(row)
     if generic_label is not None:
         return generic_label, generic_reason, generic_conf, generic_source
 
-    return "OTHER", "no supported T1 perfusion phase rule matched", "low", "none"
+    ordinal_index = detect_ordinal_phase_index(row)
+    if ordinal_index is not None:
+        return (
+            "OTHER",
+            f"ordinal phase Ph{ordinal_index} detected but exam context has not resolved it",
+            "unknown",
+            "ordinal_context",
+        )
+
+    return "OTHER", "no supported T1 perfusion phase rule matched", "unknown", "none"
 
 
-def add_mri_perfusion_columns(df: pd.DataFrame) -> pd.DataFrame:
+def infer_phase_from_ordinal_context(
+    row: pd.Series,
+    exam_rows: pd.DataFrame,
+) -> tuple[str | None, str, str, str]:
+    ordinal_index = detect_ordinal_phase_index(row)
+    if ordinal_index is None:
+        return None, "no ordinal phase index detected", "unknown", "none"
+
+    if norm_label(row.get("mri_sequence")) != "T1":
+        return None, "ordinal phase ignored because sequence is not T1", "unknown", "ordinal_context"
+
+    text = build_series_text(row)
+    has_dynamic_text = bool(
+        re.search(rules.RX_T1_DYNAMIC, text) or re.search(rules.RX_T1_3D_GRE, text)
+    )
+    has_post_text = has_post_contrast_text(row)
+    exam_has_post_ordinal = bool(
+        exam_rows.apply(
+            lambda r: detect_ordinal_phase_index(r) is not None and has_post_contrast_text(r),
+            axis=1,
+        ).any()
+    )
+    exam_has_explicit_native = bool(
+        exam_rows["mri_perfusion_label"].map(norm_label).eq("NATIVE").any()
+        and exam_rows["mri_perfusion_source"].eq("explicit_text").any()
+    )
+    exam_has_native_fallback = bool(
+        exam_rows.apply(is_native_fallback_candidate, axis=1).any()
+    )
+
+    if has_post_text or (has_dynamic_text and exam_has_post_ordinal):
+        mapping = {1: "ARTERIAL", 2: "PORTAL_VENOUS", 3: "DELAYED"}
+        label = mapping.get(ordinal_index, "DELAYED")
+        context = (
+            "with explicit/fallback native context"
+            if exam_has_explicit_native or exam_has_native_fallback
+            else "from post-contrast dynamic ordinal context"
+        )
+        return (
+            label,
+            f"inferred {label} from Ph{ordinal_index} {context}",
+            "inferred",
+            "ordinal_context",
+        )
+
+    return (
+        None,
+        f"ordinal phase Ph{ordinal_index} detected but context is insufficient",
+        "unknown",
+        "ordinal_context",
+    )
+
+
+def is_native_fallback_candidate(row: pd.Series) -> bool:
+    if norm_label(row.get("mri_sequence")) != "T1":
+        return False
+    if norm_label(row.get("mri_perfusion_label")) != "OTHER":
+        return False
+
+    text = build_series_text(row)
+    if (
+        re.search(rules.RX_SUBTRACTION, text)
+        or re.search(rules.RX_MIP_MPR, text)
+        or re.search(rules.RX_QUANT_OR_REPORT, text)
+        or has_post_contrast_text(row)
+        or detect_ordinal_phase_index(row) is not None
+    ):
+        return False
+
+    explicit_label, *_ = detect_explicit_phase_from_text(row)
+    if explicit_label is not None:
+        return False
+
+    dixon_component = row.get("dixon_component")
+    if dixon_component in {"FAT", "FAT_FRACTION", "R2STAR", "DIXON_ALL"}:
+        return False
+
+    return bool(
+        row.get("is_3d_gre")
+        or re.search(rules.RX_T1_3D_GRE, text)
+        or dixon_component in {"WATER", "IN_PHASE", "DIXON_UNKNOWN"}
+    )
+
+
+def _exam_has_post_contrast_dynamic_phase(exam_rows: pd.DataFrame) -> bool:
+    phase = exam_rows["mri_perfusion_label"].map(norm_label)
+    source = exam_rows["mri_perfusion_source"].fillna("none")
+    resolved_dynamic = phase.isin(["ARTERIAL", "PORTAL_VENOUS", "DELAYED"]) & source.isin(
+        ["ordinal_context", "volume_order", "volume_order_art_port", "volume_order_mask_multiart"]
+    )
+    post_text_dynamic = exam_rows.apply(
+        lambda r: has_post_contrast_text(r)
+        and detect_ordinal_phase_index(r) is not None
+        and norm_label(r.get("mri_sequence")) == "T1",
+        axis=1,
+    )
+    return bool(resolved_dynamic.any() or post_text_dynamic.any())
+
+
+def _sort_key_for_native_fallback(row: pd.Series) -> tuple:
+    text = build_series_text(row)
+    component = row.get("dixon_component")
+    component_score = {
+        "WATER": 4,
+        "IN_PHASE": 3,
+        "DIXON_UNKNOWN": 2,
+        "NOT_DIXON": 1,
+    }.get(component, 0)
+    quality_score = 0
+    quality_score += 4 if row.get("plane") == "AXIAL" else 0
+    quality_score += 3 if bool(row.get("is_3d_gre")) or re.search(rules.RX_T1_3D_GRE, text) else 0
+    quality_score += 1 if bool(row.get("is_breath_hold")) else 0
+
+    time_seconds = parse_time_to_seconds(row.get("time"))
+    series_number = safe_float(row.get("SeriesNumber"))
+    acquisition_number = safe_float(row.get("AcquisitionNumber"))
+    order = min(
+        [x for x in [time_seconds, series_number, acquisition_number] if pd.notna(x)]
+        or [np.inf]
+    )
+    return (-quality_score, -component_score, order)
+
+
+def infer_missing_native_fallback(exam_rows: pd.DataFrame) -> tuple[int | None, str]:
+    if exam_rows["mri_perfusion_label"].map(norm_label).eq("NATIVE").any():
+        return None, "native/precontrast already resolved in exam"
+    if not _exam_has_post_contrast_dynamic_phase(exam_rows):
+        return None, "no post-contrast dynamic context for native fallback"
+
+    candidates = exam_rows.loc[exam_rows.apply(is_native_fallback_candidate, axis=1)]
+    if candidates.empty:
+        return None, "no suitable native fallback candidate"
+
+    ranked = sorted(candidates.index, key=lambda idx: _sort_key_for_native_fallback(candidates.loc[idx]))
+    idx = ranked[0]
+    desc = candidates.loc[idx].get("SeriesDescription")
+    return (
+        idx,
+        (
+            "selected fallback native/precontrast from exam context because no explicit "
+            f"native series was found and post-contrast dynamic phases exist: {desc}"
+        ),
+    )
+
+
+def add_mri_perfusion_columns(
+    df: pd.DataFrame,
+    exam_group_cols: Sequence[str] | None = None,
+) -> pd.DataFrame:
     out = df.copy()
     result = out.apply(detect_t1_perfusion_phase, axis=1)
     out[["mri_perfusion_label", "mri_perfusion_reason", "mri_perfusion_confidence", "mri_perfusion_source"]] = pd.DataFrame(
         result.tolist(), index=out.index
     )
+
+    group_cols = [c for c in (exam_group_cols or []) if c in out.columns]
+    if group_cols:
+        grouped = out.groupby(group_cols, dropna=False).groups.values()
+    else:
+        grouped = [out.index]
+
+    for idx in grouped:
+        exam_rows = out.loc[idx].copy()
+
+        for row_idx, row in exam_rows.iterrows():
+            if norm_label(row.get("mri_perfusion_label")) != "OTHER":
+                continue
+            label, reason, confidence, source = infer_phase_from_ordinal_context(row, exam_rows)
+            if label is None:
+                if source == "ordinal_context":
+                    out.loc[row_idx, "mri_perfusion_reason"] = reason
+                    out.loc[row_idx, "mri_perfusion_confidence"] = confidence
+                    out.loc[row_idx, "mri_perfusion_source"] = source
+                continue
+            out.loc[row_idx, "mri_perfusion_label"] = label
+            out.loc[row_idx, "mri_perfusion_reason"] = reason
+            out.loc[row_idx, "mri_perfusion_confidence"] = confidence
+            out.loc[row_idx, "mri_perfusion_source"] = source
+
+        exam_rows = out.loc[idx].copy()
+        fallback_idx, reason = infer_missing_native_fallback(exam_rows)
+        if fallback_idx is not None:
+            logger.info("Fallback native selected for MRI exam: %s", reason)
+            out.loc[fallback_idx, "mri_perfusion_label"] = "NATIVE"
+            out.loc[fallback_idx, "mri_perfusion_reason"] = reason
+            out.loc[fallback_idx, "mri_perfusion_confidence"] = "fallback"
+            out.loc[fallback_idx, "mri_perfusion_source"] = "exam_context"
+
     return out
 
 
@@ -711,8 +935,14 @@ def annotate_mri(
         volume_col=volume_col,
     )
     out = add_mri_sequence_columns(out)
-    out = add_mri_perfusion_columns(out)
     out = add_basic_feature_columns(out)
+    exam_cols = get_exam_group_cols(
+        out,
+        patient_col=patient_col,
+        study_col=study_col,
+        date_col=date_col,
+    )
+    out = add_mri_perfusion_columns(out, exam_group_cols=exam_cols)
     out = add_scores(out)
     return out
 

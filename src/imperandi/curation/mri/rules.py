@@ -68,7 +68,6 @@ RX_PHASE_NATIVE = token(
     r"|ss\s*(?:iv|i)"
     r"|si"
     r"|non[\s_-]*(?:inject(?:ed|e|ee|é|ée)?|contrast[eé]?|gado|gad)"
-    r"|ph1"
     r"|blanc"
     r"|masque"
 )
@@ -84,13 +83,13 @@ RX_PHASE_MASK_MULTIART_DYNAMIC = token(
 RX_PHASE_ARTERIAL = token(
     r"late[\s_-]*arterial|early[\s_-]*arterial|multi[\s_-]*art|multiart"
     r"|multi[\s_-]*art(?:eriel|erial)?|art(?:eriel|erial|[eé]rielle?)?|artériel|artérielle"
-    r"|arterial|artery|aorte|hepatic\s*arter|phase[\s_-]*a|ph2"
+    r"|arterial|artery|aorte|hepatic\s*arter|phase[\s_-]*a"
     r"|(?:1[5-9]|[2-4][0-9])[\s_.+\-]*(?:s|sec|secs|second|seconds)"
     r"|0[\s_.+\-]*(?:15|20|25|30|35|40|45)[\s_.+\-]*(?:min|mn)"
 )
 RX_PHASE_PORTAL = token(
     r"port(?:al)?|porto|porte|portal[\s_-]*venous|portovenous|vein|veine|venous|ven|vp|pv"
-    r"|phase[\s_-]*p|ph3|veneux|veineux|veineuse|parenchymateux|parenchymal"
+    r"|phase[\s_-]*p|veneux|veineux|veineuse|parenchymateux|parenchymal"
     r"|[6-9]0[\s_.+\-]*(?:s|sec|secs|second|seconds)|1[\s_.+\-]*(?:min|mn)"
     r"|1[\s_.+\-]*(?:10|20|30)[\s_.+\-]*(?:min|mn)"
 )
@@ -104,7 +103,11 @@ RX_PHASE_HEPATOBILIARY = token(
 )
 RX_PHASE_DELAYED = token(
     r"tard(?:if|ive)?|delay(?:ed)?|delai|délai|late|equilibrium|equilibre|équilibre|eq|interstitiel"
-    r"|phase[\s_-]*d|ph4|[2-6]\s*(?:min|mn)"
+    r"|phase[\s_-]*d|[2-6]\s*(?:min|mn)"
+)
+RX_PHASE_ORDINAL = token(r"ph(?:ase)?[\s_-]*([1-9])|ph([1-9])")
+RX_PHASE_POST_CONTRAST = token(
+    r"gado|gad|gadolinium|contrast|contraste|inject(?:ed|ion|e|ee|é|ée)?|post|c\+"
 )
 RX_PHASE_GENERIC_DYNAMIC = token(
     r"dyn|dynamic|dynamique|dce|dsc|pwi|perfusion|perf|multi\s*phase|multiphase"
@@ -168,9 +171,11 @@ T1_PHASE_PRIORITY = {
 T1_PHASE_SOURCE_PRIORITY = {
     "explicit_text": 40,
     "explicit_text_art_port_single": 25,
+    "ordinal_context": 15,
     "volume_order_art_port": 10,
     "volume_order_mask_multiart": 10,
     "volume_order": 0,
+    "exam_context": -5,
     "none": -20,
 }
 
