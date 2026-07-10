@@ -17,6 +17,7 @@ from imperandi.curation.common import (
     norm_label,
     safe_float,
     safe_str,
+    stable_text,
 )
 from . import rules
 
@@ -119,31 +120,41 @@ def select_ct_per_exam(
         return candidates, pd.DataFrame(columns=[*exam_cols])
 
     candidates["_row_order"] = np.arange(len(candidates))
-    sort_cols = [*exam_cols, "selection_slot", "selection_score", "_row_order"]
+    exam_key_cols = []
+    for col in exam_cols:
+        key_col = f"_exam_key_{col}"
+        candidates[key_col] = candidates[col].apply(stable_text)
+        exam_key_cols.append(key_col)
+
+    sort_cols = [*exam_key_cols, "selection_slot", "selection_score", "_row_order"]
     selected_long = (
         candidates.sort_values(
             sort_cols,
-            ascending=[True] * len(exam_cols) + [True, False, True],
+            ascending=[True] * len(exam_key_cols) + [True, False, True],
             na_position="last",
         )
-        .groupby([*exam_cols, "selection_slot"], as_index=False)
+        .groupby([*exam_key_cols, "selection_slot"], as_index=False)
         .head(1)
         .reset_index(drop=True)
     )
 
     def _display(row: pd.Series) -> str:
         desc = row.get("SeriesDescription", "")
-        if pd.isna(desc) or str(desc).strip() == "":
+        if safe_str(desc) == "":
             desc = row.get("ProtocolName", build_series_text(row))
         return f"{desc} [score={row.get('selection_score'):.1f}]"
 
     selected_long["selected_candidate"] = selected_long.apply(_display, axis=1)
+    exam_lookup = selected_long[[*exam_key_cols, *exam_cols]].drop_duplicates(exam_key_cols)
     selected_wide = (
-        selected_long[[*exam_cols, "selection_slot", "selected_candidate"]]
-        .pivot_table(index=exam_cols, columns="selection_slot", values="selected_candidate", aggfunc="first")
+        selected_long[[*exam_key_cols, "selection_slot", "selected_candidate"]]
+        .pivot_table(index=exam_key_cols, columns="selection_slot", values="selected_candidate", aggfunc="first")
         .reset_index()
     )
     selected_wide.columns.name = None
+    selected_wide = exam_lookup.merge(selected_wide, on=exam_key_cols, how="right")
+    selected_wide = selected_wide.drop(columns=exam_key_cols, errors="ignore")
+    selected_long = selected_long.drop(columns=exam_key_cols, errors="ignore")
     return selected_long, selected_wide
 
 

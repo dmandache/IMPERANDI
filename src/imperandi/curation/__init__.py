@@ -8,11 +8,23 @@ from imperandi.curation.ct import curate_ct
 from imperandi.curation.mri import curate_mri
 
 
+def _modality_label(value) -> str:
+    if isinstance(value, (list, tuple, set)):
+        labels = {_modality_label(v) for v in value}
+        labels.discard("")
+        if len(labels) == 1:
+            return labels.pop()
+        return "|".join(sorted(labels))
+    if pd.isna(value):
+        return ""
+    return str(value).strip().upper()
+
+
 def split_by_modality(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     if "Modality" not in df.columns:
         return df.copy(), pd.DataFrame(columns=df.columns), pd.DataFrame(columns=df.columns)
 
-    modality = df["Modality"].fillna("").astype(str).str.upper()
+    modality = df["Modality"].apply(_modality_label)
     ct = df[modality.eq("CT")].copy()
     mr = df[modality.isin(["MR", "MRI"])].copy()
     other = df[~modality.isin(["CT", "MR", "MRI"])].copy()

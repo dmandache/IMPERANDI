@@ -53,11 +53,43 @@ def read_csv(path: str | Path, **kwargs) -> pd.DataFrame:
     return pd.read_csv(Path(path).expanduser(), low_memory=False, **kwargs)
 
 
+def _is_missing(value) -> bool:
+    if value is None:
+        return True
+    try:
+        return bool(pd.isna(value))
+    except (TypeError, ValueError):
+        return False
+
+
+def _first_numeric(value) -> float:
+    if isinstance(value, (list, tuple, set, np.ndarray)):
+        parsed = [_first_numeric(v) for v in value]
+        parsed = [v for v in parsed if pd.notna(v)]
+        return min(parsed) if parsed else np.nan
+    return safe_float(value)
+
+
+def _stable_text(value) -> str:
+    if isinstance(value, (list, tuple, set, np.ndarray)):
+        parts = [_stable_text(v) for v in value]
+        if isinstance(value, set):
+            parts = sorted(parts)
+        return "|".join(parts)
+    if _is_missing(value):
+        return ""
+    return str(value)
+
+
 def safe_str(x) -> str:
+    if isinstance(x, (list, tuple, set, np.ndarray)):
+        return " ".join(safe_str(v) for v in x if safe_str(v))
     return str(x).strip().lower() if pd.notna(x) else ""
 
 
 def norm_label(x, default: str = "OTHER") -> str:
+    if isinstance(x, (list, tuple, set, np.ndarray)):
+        x = next((v for v in x if not _is_missing(v)), "")
     if pd.isna(x) or str(x).strip() == "":
         return default
     return str(x).strip().upper()
@@ -78,7 +110,12 @@ def safe_float(x) -> float:
 
 def parse_time_to_seconds(x) -> float:
     """Parse DICOM-ish HHMMSS / HH:MM:SS / datetime-like values."""
-    if pd.isna(x):
+    if isinstance(x, (list, tuple, set, np.ndarray)):
+        parsed = [parse_time_to_seconds(v) for v in x]
+        parsed = [v for v in parsed if pd.notna(v)]
+        return min(parsed) if parsed else np.nan
+
+    if _is_missing(x):
         return np.nan
 
     s = str(x).strip()
@@ -102,7 +139,9 @@ def parse_time_to_seconds(x) -> float:
 
 
 def parse_pixel_spacing(x) -> tuple[float, float, float, float]:
-    if pd.isna(x):
+    if isinstance(x, (list, tuple, set, np.ndarray)):
+        x = next((v for v in x if not _is_missing(v)), None)
+    if _is_missing(x):
         return np.nan, np.nan, np.nan, np.nan
 
     s = str(x).strip()
@@ -187,28 +226,47 @@ def add_volume_order_features(
     work["_sort_time_seconds"] = (
         work[time_col].apply(parse_time_to_seconds) if time_col in work.columns else np.nan
     )
+    work["_row_order_for_volume_order"] = np.arange(len(work))
 
     for col in ["AcquisitionNumber", "InstanceNumber", "volume_id"]:
         if col not in work.columns:
             work[col] = np.nan
 
+    work["_sort_acquisition_number"] = work["AcquisitionNumber"].apply(_first_numeric)
+    work["_sort_instance_number"] = work["InstanceNumber"].apply(_first_numeric)
+    work["_sort_volume_id"] = work[volume_col].apply(_stable_text)
+    work["_series_group_key"] = work.apply(
+        lambda row: "||".join(_stable_text(row.get(c)) for c in series_group_cols),
+        axis=1,
+    )
+    work["_volume_group_key"] = work.apply(
+        lambda row: "||".join(_stable_text(row.get(c)) for c in volume_group_cols),
+        axis=1,
+    )
+
     # One representative row per volume for ordering.
     rep = (
         work.sort_values(
-            [*series_group_cols, "_sort_time_seconds", "AcquisitionNumber", "InstanceNumber", volume_col],
+            [
+                "_series_group_key",
+                "_sort_time_seconds",
+                "_sort_acquisition_number",
+                "_sort_instance_number",
+                "_sort_volume_id",
+            ],
             na_position="last",
         )
-        .drop_duplicates(volume_group_cols)
+        .drop_duplicates("_volume_group_key")
         .copy()
     )
 
-    rep["volume_index_in_series"] = rep.groupby(series_group_cols, dropna=False).cumcount()
+    rep["volume_index_in_series"] = rep.groupby("_series_group_key", dropna=False).cumcount()
     rep["volume_order_in_series"] = rep["volume_index_in_series"] + 1
-    rep["n_volumes_in_series"] = rep.groupby(series_group_cols, dropna=False)[volume_col].transform("size")
+    rep["n_volumes_in_series"] = rep.groupby("_series_group_key", dropna=False)["_volume_group_key"].transform("size")
     rep["is_multivolume_series"] = rep["n_volumes_in_series"] > 1
 
     order_cols = [
-        *volume_group_cols,
+        "_volume_group_key",
         "volume_index_in_series",
         "volume_order_in_series",
         "n_volumes_in_series",
@@ -226,7 +284,20 @@ def add_volume_order_features(
         ],
         errors="ignore",
     )
-    return out.merge(rep[order_cols], on=volume_group_cols, how="left")
+    ordered = work[["_row_order_for_volume_order", "_volume_group_key"]].merge(
+        rep[order_cols],
+        on="_volume_group_key",
+        how="left",
+    )
+    ordered = ordered.set_index("_row_order_for_volume_order").reindex(range(len(out)))
+    for col in [
+        "volume_index_in_series",
+        "volume_order_in_series",
+        "n_volumes_in_series",
+        "is_multivolume_series",
+    ]:
+        out[col] = ordered[col].to_numpy()
+    return out
 
 
 # -----------------------------------------------------------------------------
