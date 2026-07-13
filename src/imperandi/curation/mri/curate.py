@@ -648,7 +648,7 @@ def infer_two_series_art_port_phases(exam_rows: pd.DataFrame) -> list[tuple[int,
     )
     assignments = []
     for component_name, component_rows in candidates.groupby(component, sort=False):
-        if len(component_rows) != 2:
+        if len(component_rows) < 2:
             continue
         ranked = sorted(
             component_rows.index,
