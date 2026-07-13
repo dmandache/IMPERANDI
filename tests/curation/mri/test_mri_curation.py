@@ -325,6 +325,35 @@ def test_art_port_prefers_computed_acquisition_order_over_dicom_fields():
     assert cur.loc["SER_SECOND", "mri_perfusion_label"] == "PORTAL_VENOUS"
 
 
+def test_art_port_pairs_each_dixon_component_across_two_acquisitions():
+    rows = []
+    for component_index, component in enumerate(["W", "in", "opp", "F"]):
+        for acquisition, label in [(1, "FIRST"), (2, "SECOND")]:
+            rows.append(row(
+                f"T1 VIBE DIXON ART-PORT CAIPI_{component}",
+                series_id=f"SER_{component}_{label}",
+                volume_id=f"VOL_{component}_{label}",
+                time=f"120{acquisition - 1}00",
+                AcquisitionNumber=acquisition,
+                acquisition_order=(acquisition - 1) * 4 + component_index,
+            ))
+
+    results = curate(rows)
+    cur = results["curated"]
+
+    assert cur.groupby("mri_perfusion_label").size().to_dict() == {
+        "ARTERIAL": 4,
+        "PORTAL_VENOUS": 4,
+    }
+    assert set(cur["mri_perfusion_source"]) == {"acquisition_order_art_port"}
+    assert results["selected_long"].set_index("selection_slot").loc[
+        "T1_ARTERIAL", "volume_id"
+    ] == "VOL_W_FIRST"
+    assert results["selected_long"].set_index("selection_slot").loc[
+        "T1_PORTAL_VENOUS", "volume_id"
+    ] == "VOL_W_SECOND"
+
+
 def test_art_port_single_volume_falls_back_to_portal_transition():
     out = mc.annotate_mri(pd.DataFrame([row("T1 VIBE DIXON ART-PORT CAIPI_W")]))
     assert out.loc[0, "mri_perfusion_label"] == "PORTAL_VENOUS"

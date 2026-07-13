@@ -608,11 +608,11 @@ def infer_phase_from_ordinal_context(
 
 
 def infer_two_series_art_port_phases(exam_rows: pd.DataFrame) -> list[tuple[int, str, str]]:
-    """Resolve two single-volume ART-PORT series by acquisition order."""
+    """Resolve paired single-volume ART-PORT series by acquisition order."""
     is_single_volume = exam_rows["n_volumes_in_series"].apply(safe_float).eq(1)
     is_unresolved_art_port = exam_rows["mri_perfusion_source"].eq(ART_PORT_CONTEXT_PENDING)
     candidates = exam_rows.loc[is_single_volume & is_unresolved_art_port]
-    if len(candidates) != 2:
+    if candidates.empty:
         return []
 
     row_order = {idx: order for order, idx in enumerate(candidates.index)}
@@ -631,16 +631,29 @@ def infer_two_series_art_port_phases(exam_rows: pd.DataFrame) -> list[tuple[int,
             row_order[idx],
         )
 
-    ranked = sorted(candidates.index, key=_acquisition_sort_key)
-    labels = ["ARTERIAL", "PORTAL_VENOUS"]
-    return [
-        (
-            row_idx,
-            label,
-            f"inferred {label} from ART-PORT acquisition {rank}/{len(ranked)} across two single-volume series",
-        )
-        for rank, (row_idx, label) in enumerate(zip(ranked, labels), start=1)
-    ]
+    component = (
+        candidates["dixon_component"].fillna("UNKNOWN")
+        if "dixon_component" in candidates.columns
+        else pd.Series("UNKNOWN", index=candidates.index)
+    )
+    assignments = []
+    for component_name, component_rows in candidates.groupby(component, sort=False):
+        if len(component_rows) != 2:
+            continue
+        ranked = sorted(component_rows.index, key=_acquisition_sort_key)
+        for rank, (row_idx, label) in enumerate(
+            zip(ranked, ["ARTERIAL", "PORTAL_VENOUS"]),
+            start=1,
+        ):
+            assignments.append((
+                row_idx,
+                label,
+                (
+                    f"inferred {label} from ART-PORT acquisition {rank}/2 "
+                    f"for paired {component_name} single-volume series"
+                ),
+            ))
+    return assignments
 
 
 def is_native_fallback_candidate(row: pd.Series) -> bool:
