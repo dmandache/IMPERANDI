@@ -40,13 +40,13 @@ logger = logging.getLogger(__name__)
 
 TEXT_COLS_DEFAULT = [
     "SeriesDescription",
-    "ProtocolName",
-    "StudyDescription",
-    "ImageType",
-    "ScanningSequence",
-    "SequenceVariant",
-    "ScanOptions",
-    "SequenceName",
+    # "ProtocolName",
+    # "StudyDescription",
+    # "ImageType",
+    # "ScanningSequence",
+    # "SequenceVariant",
+    # "ScanOptions",
+    # "SequenceName",
 ]
 
 DIXON_TEXT_COLS = [col for col in TEXT_COLS_DEFAULT if col != "ImageType"]
