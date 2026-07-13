@@ -959,7 +959,14 @@ def select_best_candidates(
         desc = row.get("SeriesDescription")
         if pd.isna(desc) or str(desc).strip() == "":
             desc = row.get("ProtocolName", row.get("series_text", ""))
-        return f"{desc} [score={row.get('selection_score'):.1f}]"
+
+        details = []
+        volume_order = safe_float(row.get("volume_order_in_series"))
+        n_volumes = safe_float(row.get("n_volumes_in_series"))
+        if pd.notna(volume_order) and pd.notna(n_volumes):
+            details.append(f"volume={volume_order:g}/{n_volumes:g}")
+        details.append(f"score={row.get('selection_score'):.1f}")
+        return f"{desc} [{', '.join(details)}]"
 
     ranked["selected_candidate"] = ranked.apply(_display, axis=1)
     ranked["_candidate_rank"] = ranked.groupby([*exam_cols, "selection_slot"]).cumcount()

@@ -453,3 +453,25 @@ def test_selected_wide_includes_ranked_other_candidates_per_slot():
     assert "; T2 COR" in selected_wide.loc[0, "T2_other_candidates"]
     assert "T1_NATIVE_other_candidates" in selected_wide.columns
     assert pd.isna(selected_wide.loc[0, "T1_NATIVE_other_candidates"])
+
+
+def test_candidate_display_includes_volume_ordinal_out_of_series_total():
+    results = curate([
+        row(
+            "T2 AX",
+            series_id="T2_MULTIVOLUME",
+            volume_id="T2_VOLUME_1",
+            time="100000",
+        ),
+        row(
+            "T2 AX",
+            series_id="T2_MULTIVOLUME",
+            volume_id="T2_VOLUME_2",
+            time="110000",
+        ),
+    ])
+
+    selected_wide = results["selected_wide"]
+
+    assert "[volume=1/2, score=" in selected_wide.loc[0, "T2"]
+    assert "[volume=2/2, score=" in selected_wide.loc[0, "T2_other_candidates"]
