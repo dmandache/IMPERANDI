@@ -381,6 +381,38 @@ def test_mask_multiart_first_native_rest_arterial():
     assert set(cur["mri_perfusion_source"]) == {"volume_order_mask_multiart"}
 
 
+def test_mask_multiart_single_volume_series_use_acquisition_order_per_component():
+    rows = []
+    for component_index, component in enumerate(["W", "in"]):
+        for acquisition, label in [(1, "FIRST"), (2, "SECOND")]:
+            rows.append(row(
+                f"Ax LAVA Mask+Multiart Fluoro_{component}",
+                series_id=f"SER_{component}_{label}",
+                volume_id=f"VOL_{component}_{label}",
+                AcquisitionNumber=10 - acquisition,
+                acquisition_order=(acquisition - 1) * 2 + component_index,
+            ))
+
+    results = curate(rows)
+    cur = results["curated"].set_index("volume_id")
+
+    for component in ["W", "in"]:
+        assert cur.loc[f"VOL_{component}_FIRST", "mri_perfusion_label"] == "NATIVE"
+        assert cur.loc[f"VOL_{component}_SECOND", "mri_perfusion_label"] == "ARTERIAL"
+    assert set(cur["mri_perfusion_source"]) == {
+        "acquisition_order_mask_multiart"
+    }
+
+
+def test_mask_multiart_single_volume_falls_back_to_arterial():
+    out = mc.annotate_mri(pd.DataFrame([row("Ax LAVA Mask+Multiart Fluoro_W")]))
+
+    assert out.loc[0, "mri_perfusion_label"] == "ARTERIAL"
+    assert out.loc[0, "mri_perfusion_source"] == (
+        "explicit_text_mask_multiart_single"
+    )
+
+
 def test_generic_4d_mdixon_volume_order_pre_art_port_delayed():
     results = curate([
         row("4D mDIXON-W", series_id="SER_4D", volume_id="V1", time="120000"),

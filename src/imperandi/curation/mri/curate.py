@@ -52,6 +52,7 @@ TEXT_COLS_DEFAULT = [
 DIXON_TEXT_COLS = [col for col in TEXT_COLS_DEFAULT if col != "ImageType"]
 
 ART_PORT_CONTEXT_PENDING = "art_port_context_pending"
+MASK_MULTIART_CONTEXT_PENDING = "mask_multiart_context_pending"
 
 
 def read_csv(path: str | Path, **kwargs) -> pd.DataFrame:
@@ -533,6 +534,12 @@ def detect_t1_perfusion_phase(row: pd.Series) -> tuple[str, str, str, str]:
         special_label, special_reason, special_conf, special_source = infer_special_t1_phase_from_volume_order(row)
         if special_label is not None:
             return special_label, special_reason, special_conf, special_source
+        return (
+            "OTHER",
+            "matched single-volume Mask+Multiart text; awaiting exam acquisition context",
+            "unknown",
+            MASK_MULTIART_CONTEXT_PENDING,
+        )
 
     explicit_label, explicit_reason, explicit_conf, explicit_source = detect_explicit_phase_from_text(row)
     if explicit_label is not None:
@@ -664,6 +671,48 @@ def infer_two_series_art_port_phases(exam_rows: pd.DataFrame) -> list[tuple[int,
     return assignments
 
 
+def infer_single_volume_mask_multiart_phases(
+    exam_rows: pd.DataFrame,
+) -> list[tuple[int, str, str]]:
+    """Resolve single-volume Mask+Multiart series within each Dixon component."""
+    n_volumes = exam_rows.get(
+        "n_volumes_in_series", pd.Series(1, index=exam_rows.index)
+    )
+    is_single_volume = n_volumes.apply(safe_float).eq(1)
+    is_pending = exam_rows["mri_perfusion_source"].eq(MASK_MULTIART_CONTEXT_PENDING)
+    candidates = exam_rows.loc[is_single_volume & is_pending]
+    if candidates.empty:
+        return []
+
+    row_order = {idx: order for order, idx in enumerate(candidates.index)}
+    component = (
+        candidates["dixon_component"].fillna("UNKNOWN")
+        if "dixon_component" in candidates.columns
+        else pd.Series("UNKNOWN", index=candidates.index)
+    )
+    assignments = []
+    for component_name, component_rows in candidates.groupby(component, sort=False):
+        if len(component_rows) < 2:
+            continue
+        ranked = sorted(
+            component_rows.index,
+            key=lambda row_idx: _acquisition_sort_key(
+                component_rows.loc[row_idx], row_order[row_idx]
+            ),
+        )
+        for rank, row_idx in enumerate(ranked, start=1):
+            label = "NATIVE" if rank == 1 else "ARTERIAL"
+            assignments.append((
+                row_idx,
+                label,
+                (
+                    f"inferred {label} from Mask+Multiart acquisition {rank}/{len(ranked)} "
+                    f"for {component_name} single-volume series"
+                ),
+            ))
+    return assignments
+
+
 def infer_generic_dynamic_phases_from_exam_context(
     exam_rows: pd.DataFrame,
 ) -> list[tuple[int, str, str]]:
@@ -774,6 +823,7 @@ def _exam_has_post_contrast_dynamic_phase(exam_rows: pd.DataFrame) -> bool:
         [
             "ordinal_context",
             "acquisition_order_art_port",
+            "acquisition_order_mask_multiart",
             "acquisition_order_dixon_component",
             "volume_order",
             "volume_order_art_port",
@@ -869,6 +919,32 @@ def add_mri_perfusion_columns(
             )
             out.loc[row_idx, "mri_perfusion_confidence"] = "inferred"
             out.loc[row_idx, "mri_perfusion_source"] = "explicit_text_art_port_single"
+
+        exam_rows = out.loc[idx].copy()
+
+        for row_idx, label, reason in infer_single_volume_mask_multiart_phases(
+            exam_rows
+        ):
+            out.loc[row_idx, "mri_perfusion_label"] = label
+            out.loc[row_idx, "mri_perfusion_reason"] = reason
+            out.loc[row_idx, "mri_perfusion_confidence"] = "inferred"
+            out.loc[row_idx, "mri_perfusion_source"] = (
+                "acquisition_order_mask_multiart"
+            )
+
+        unresolved_mask_multiart = out.loc[idx, "mri_perfusion_source"].eq(
+            MASK_MULTIART_CONTEXT_PENDING
+        )
+        for row_idx in out.loc[idx].index[unresolved_mask_multiart]:
+            out.loc[row_idx, "mri_perfusion_label"] = "ARTERIAL"
+            out.loc[row_idx, "mri_perfusion_reason"] = (
+                "Mask+Multiart exam context did not contain multiple single-volume "
+                "acquisitions; treated as arterial"
+            )
+            out.loc[row_idx, "mri_perfusion_confidence"] = "inferred"
+            out.loc[row_idx, "mri_perfusion_source"] = (
+                "explicit_text_mask_multiart_single"
+            )
 
         exam_rows = out.loc[idx].copy()
 
