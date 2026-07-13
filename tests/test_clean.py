@@ -585,7 +585,7 @@ def test_compute_acquisition_order_without_date_and_time_falls_back_to_numbers()
     _assert_no_acquisition_temp_cols(out)
 
 
-def test_compute_acquisition_order_tie_breaks_by_volume_id_when_no_sort_keys():
+def test_compute_acquisition_order_preserves_input_order_when_no_sort_keys():
     df = pd.DataFrame(
         {
             "patient_key": ["p", "p", "p"],
@@ -597,9 +597,31 @@ def test_compute_acquisition_order_tie_breaks_by_volume_id_when_no_sort_keys():
     out = clean.compute_acquisition_order(df.copy())
     out_by_volume = out.set_index("volume_id")
 
-    assert out_by_volume.loc["v1", "acquisition_order"] == 0
+    assert out_by_volume.loc["v2", "acquisition_order"] == 0
     assert out_by_volume.loc["v10", "acquisition_order"] == 1
-    assert out_by_volume.loc["v2", "acquisition_order"] == 2
+    assert out_by_volume.loc["v1", "acquisition_order"] == 2
+    _assert_no_acquisition_temp_cols(out)
+
+
+def test_compute_acquisition_order_uses_temporal_position_then_instance_number():
+    df = pd.DataFrame(
+        {
+            "patient_key": ["p", "p", "p"],
+            "study_id": ["s", "s", "s"],
+            "volume_id": ["v_temporal_2", "v_instance_3", "v_instance_1"],
+            "SeriesNumber": [1, 1, 1],
+            "AcquisitionNumber": [1, 1, 1],
+            "TemporalPositionIdentifier": [2, 1, 1],
+            "InstanceNumber": [[2, 5, 8], [3, 6, 9], [1, 4, 7]],
+        }
+    )
+
+    out = clean.compute_acquisition_order(df)
+    out_by_volume = out.set_index("volume_id")
+
+    assert out_by_volume.loc["v_instance_1", "acquisition_order"] == 0
+    assert out_by_volume.loc["v_instance_3", "acquisition_order"] == 1
+    assert out_by_volume.loc["v_temporal_2", "acquisition_order"] == 2
     _assert_no_acquisition_temp_cols(out)
 
 

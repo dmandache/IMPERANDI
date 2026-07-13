@@ -1370,107 +1370,224 @@ def _normalize_acquisition_sort_number(value):
     return np.nan
 
 
-def compute_acquisition_order(df):
+def compute_acquisition_order(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Compute volume order within each patient study using only:
+
+    - canonical date/time columns;
+    - DICOM time metadata;
+    - SeriesNumber;
+    - AcquisitionNumber;
+    - TemporalPositionIdentifier;
+    - InstanceNumber.
+
+    InstanceNumber may contain an interleaved list after volume aggregation:
+
+        phase 1: [1, 5, 9, ...]
+        phase 2: [2, 6, 10, ...]
+        phase 3: [3, 7, 11, ...]
+
+    The minimum InstanceNumber is therefore used as the representative
+    ordering value for each volume.
+
+    If all available DICOM ordering metadata are identical or missing,
+    the original input order is preserved as a neutral fallback.
+    """
     df = df.copy()
-    if "time" in df.columns:
-        df["time"] = df["time"].apply(_normalize_instance_creation_time)
-        time_delta = df["time"].apply(
-            lambda t: (
-                pd.Timedelta(
-                    hours=t.hour,
-                    minutes=t.minute,
-                    seconds=t.second,
-                    microseconds=t.microsecond,
-                )
-                if t is not None
-                else pd.NaT
-            )
+
+    grouping_cols = ["patient_key", "study_id", "volume_id"]
+    study_cols = ["patient_key", "study_id"]
+
+    missing = [col for col in grouping_cols if col not in df.columns]
+    if missing:
+        raise ValueError(
+            f"compute_acquisition_order requires columns: {missing}"
         )
-        time_delta = pd.to_timedelta(time_delta, errors="coerce")
-    else:
-        time_delta = pd.Series(pd.NaT, index=df.index, dtype="timedelta64[ns]")
+
+    # Avoid duplicate result columns if the function is called more than once.
+    df = df.drop(
+        columns=[
+            "delay_since_prev_acq_sec",
+            "delay_since_first_acq_sec",
+            "acquisition_order",
+        ],
+        errors="ignore",
+    )
+
+    df["_input_order_sort"] = np.arange(len(df))
+
+    # ------------------------------------------------------------------
+    # Acquisition timestamp
+    # ------------------------------------------------------------------
+    # Prefer the canonical `time`, then fall back to DICOM time fields.
+    time_candidates = [
+        "time",
+        "AcquisitionTime",
+        "SeriesTime",
+        "ContentTime",
+        "InstanceCreationTime",
+    ]
+
+    normalized_time = pd.Series(
+        None,
+        index=df.index,
+        dtype="object",
+    )
+
+    for col in time_candidates:
+        if col not in df.columns:
+            continue
+
+        candidate = df[col].apply(_normalize_instance_creation_time)
+        missing_time = normalized_time.isna()
+        normalized_time.loc[missing_time] = candidate.loc[missing_time]
+
+    time_delta = pd.Series(
+        [
+            pd.Timedelta(
+                hours=t.hour,
+                minutes=t.minute,
+                seconds=t.second,
+                microseconds=t.microsecond,
+            )
+            if isinstance(t, dt_time)
+            else pd.NaT
+            for t in normalized_time
+        ],
+        index=df.index,
+        dtype="timedelta64[ns]",
+    )
 
     if "date" in df.columns:
-        date_values = pd.to_datetime(df["date"], errors="coerce")
+        date_values = pd.to_datetime(df["date"], errors="coerce").dt.normalize()
     else:
-        date_values = pd.Series(pd.NaT, index=df.index, dtype="datetime64[ns]")
+        date_values = pd.Series(
+            pd.NaT,
+            index=df.index,
+            dtype="datetime64[ns]",
+        )
 
     df["_acq_timestamp"] = date_values + time_delta
 
-    if "SeriesNumber" in df.columns:
-        df["_series_number_sort"] = df["SeriesNumber"].apply(
-            _normalize_acquisition_sort_number
-        )
-    if "AcquisitionNumber" in df.columns:
-        df["_acquisition_number_sort"] = df["AcquisitionNumber"].apply(
-            _normalize_acquisition_sort_number
-        )
+    # ------------------------------------------------------------------
+    # DICOM numeric ordering fields
+    # ------------------------------------------------------------------
+    dicom_sort_columns = {
+        "SeriesNumber": "_series_number_sort",
+        "AcquisitionNumber": "_acquisition_number_sort",
+        "TemporalPositionIdentifier": "_temporal_position_sort",
+        "InstanceNumber": "_instance_number_sort",
+    }
 
-    # One row per (patient, study, volume) with representative acquisition keys.
-    # Sort primarily by acquisition timestamp when available, then fallback to
-    # numeric SeriesNumber and AcquisitionNumber.
-    agg_map = {"_acq_timestamp": ("_acq_timestamp", "min")}
-    if "_series_number_sort" in df.columns:
-        agg_map["_series_number_sort"] = ("_series_number_sort", "min")
-    if "_acquisition_number_sort" in df.columns:
-        agg_map["_acquisition_number_sort"] = ("_acquisition_number_sort", "min")
+    for source_col, sort_col in dicom_sort_columns.items():
+        if source_col in df.columns:
+            df[sort_col] = df[source_col].apply(
+                _normalize_acquisition_sort_number
+            )
 
-    df_study = df.groupby(["patient_key", "study_id", "volume_id"], as_index=False).agg(
-        **agg_map
+    # ------------------------------------------------------------------
+    # One representative row per volume
+    # ------------------------------------------------------------------
+    agg_map = {
+        "_acq_timestamp": ("_acq_timestamp", "min"),
+        "_input_order_sort": ("_input_order_sort", "min"),
+    }
+
+    for sort_col in dicom_sort_columns.values():
+        if sort_col in df.columns:
+            agg_map[sort_col] = (sort_col, "min")
+
+    df_study = (
+        df.groupby(
+            grouping_cols,
+            as_index=False,
+            dropna=False,
+            sort=False,
+        )
+        .agg(**agg_map)
     )
 
-    sort_cols = ["patient_key", "study_id", "_acq_timestamp"]
-    if "_series_number_sort" in df_study.columns:
-        sort_cols.append("_series_number_sort")
-    if "_acquisition_number_sort" in df_study.columns:
-        sort_cols.append("_acquisition_number_sort")
-    sort_cols.append("volume_id")
+    # ------------------------------------------------------------------
+    # Chronological ordering
+    # ------------------------------------------------------------------
+    sort_cols = [
+        "patient_key",
+        "study_id",
+        "_acq_timestamp",
+    ]
+
+    for sort_col in [
+        "_series_number_sort",
+        "_acquisition_number_sort",
+        "_temporal_position_sort",
+        "_instance_number_sort",
+    ]:
+        if sort_col in df_study.columns:
+            sort_cols.append(sort_col)
+
+    # Neutral fallback only when DICOM metadata cannot distinguish volumes.
+    sort_cols.append("_input_order_sort")
 
     df_study = df_study.sort_values(
         by=sort_cols,
         kind="mergesort",
         na_position="last",
     )
-    group_cols = ["patient_key", "study_id"]
+
+    # ------------------------------------------------------------------
+    # Delays and order
+    # ------------------------------------------------------------------
+    grouped = df_study.groupby(
+        study_cols,
+        dropna=False,
+        sort=False,
+    )
 
     df_study["delay_since_prev_acq_sec"] = (
-        df_study.groupby(group_cols)["_acq_timestamp"].diff().dt.total_seconds()
+        grouped["_acq_timestamp"]
+        .diff()
+        .dt.total_seconds()
     )
-    first_mask = df_study.groupby(group_cols).cumcount() == 0
-    df_study.loc[first_mask, "delay_since_prev_acq_sec"] = 0.0
 
-    first_ts = df_study.groupby(group_cols)["_acq_timestamp"].transform("min")
+    first_volume_mask = grouped.cumcount() == 0
+    df_study.loc[
+        first_volume_mask,
+        "delay_since_prev_acq_sec",
+    ] = 0.0
+
+    first_timestamp = grouped["_acq_timestamp"].transform("min")
+
     df_study["delay_since_first_acq_sec"] = (
-        df_study["_acq_timestamp"] - first_ts
+        df_study["_acq_timestamp"] - first_timestamp
     ).dt.total_seconds()
-    df_study["acquisition_order"] = df_study.groupby(group_cols).cumcount()
+
+    df_study["acquisition_order"] = grouped.cumcount()
+
+    # ------------------------------------------------------------------
+    # Merge volume-level annotations back
+    # ------------------------------------------------------------------
+    result_cols = [
+        *grouping_cols,
+        "delay_since_prev_acq_sec",
+        "delay_since_first_acq_sec",
+        "acquisition_order",
+    ]
 
     df = df.merge(
-        df_study[
-            [
-                "patient_key",
-                "study_id",
-                "volume_id",
-                "delay_since_prev_acq_sec",
-                "delay_since_first_acq_sec",
-                "acquisition_order",
-            ]
-        ],
-        on=["patient_key", "study_id", "volume_id"],
-        left_index=False,
-        right_index=False,
+        df_study[result_cols],
+        on=grouping_cols,
         how="left",
+        validate="many_to_one",
+        sort=False,
     )
-    df = df.drop(
-        columns=[
-            # "_acq_timestamp",
-            "_series_number_sort",
-            "_acquisition_number_sort",
-        ],
-        errors="ignore",
-    )
-    return df
 
+    helper_cols = [
+        "_input_order_sort",
+        "_acq_timestamp",
+        *dicom_sort_columns.values(),
+    ]
+
+    return df.drop(columns=helper_cols, errors="ignore")
 
 def drop_irrelevant_dicom_tags(df):
     important_dicom_tags = [
