@@ -284,6 +284,31 @@ def test_art_port_two_single_volume_series_use_acquisition_order():
     ]
 
 
+def test_art_port_prefers_computed_acquisition_order_over_dicom_fields():
+    results = curate([
+        row(
+            "T1 VIBE DIXON ART-PORT CAIPI_W",
+            series_id="SER_SECOND",
+            volume_id="V_SECOND",
+            time="100000",
+            AcquisitionNumber=10,
+            acquisition_order=1,
+        ),
+        row(
+            "T1 VIBE DIXON ART-PORT CAIPI_W",
+            series_id="SER_FIRST",
+            volume_id="V_FIRST",
+            time="110000",
+            AcquisitionNumber=20,
+            acquisition_order=0,
+        ),
+    ])
+    cur = results["curated"].set_index("series_id")
+
+    assert cur.loc["SER_FIRST", "mri_perfusion_label"] == "ARTERIAL"
+    assert cur.loc["SER_SECOND", "mri_perfusion_label"] == "PORTAL_VENOUS"
+
+
 def test_art_port_single_volume_falls_back_to_portal_transition():
     out = mc.annotate_mri(pd.DataFrame([row("T1 VIBE DIXON ART-PORT CAIPI_W")]))
     assert out.loc[0, "mri_perfusion_label"] == "PORTAL_VENOUS"

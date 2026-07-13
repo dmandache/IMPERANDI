@@ -616,12 +616,14 @@ def infer_two_series_art_port_phases(exam_rows: pd.DataFrame) -> list[tuple[int,
 
     row_order = {idx: order for order, idx in enumerate(candidates.index)}
 
-    def _acquisition_sort_key(idx: int) -> tuple[float, float, float, int]:
+    def _acquisition_sort_key(idx: int) -> tuple[float, float, float, float, int]:
         row = candidates.loc[idx]
+        acquisition_order = _first_numeric(row.get("acquisition_order"))
         acquisition_number = _first_numeric(row.get("AcquisitionNumber"))
         acquisition_time = parse_time_to_seconds(row.get("time"))
         series_number = _first_numeric(row.get("SeriesNumber"))
         return (
+            acquisition_order if pd.notna(acquisition_order) else np.inf,
             acquisition_number if pd.notna(acquisition_number) else np.inf,
             acquisition_time if pd.notna(acquisition_time) else np.inf,
             series_number if pd.notna(series_number) else np.inf,
