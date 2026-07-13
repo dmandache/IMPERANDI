@@ -20,6 +20,7 @@ they are inferred from patient/study/series grouping.
 
 from __future__ import annotations
 
+from ast import literal_eval
 import re
 import logging
 from pathlib import Path
@@ -47,6 +48,8 @@ TEXT_COLS_DEFAULT = [
     "ScanOptions",
     "SequenceName",
 ]
+
+DIXON_TEXT_COLS = [col for col in TEXT_COLS_DEFAULT if col != "ImageType"]
 
 ART_PORT_CONTEXT_PENDING = "art_port_context_pending"
 
@@ -830,28 +833,163 @@ def detect_plane(text: str) -> str:
     return "UNKNOWN"
 
 
-def detect_dixon_component(text: str) -> str:
-    text = str(text or "").lower()
-    has_dixon = bool(re.search(rules.RX_DIXON_CONTEXT, text))
+def parse_image_type_tokens(value: object) -> list[str]:
+    """Return normalized, exact DICOM ImageType tokens."""
+    if _is_missing(value):
+        return []
+
+    if isinstance(value, (list, tuple, set, np.ndarray)):
+        tokens = []
+        values = sorted(value, key=str) if isinstance(value, set) else value
+        for item in values:
+            tokens.extend(parse_image_type_tokens(item))
+        return tokens
+
+    text = str(value).strip()
+    if not text:
+        return []
+
+    if text[:1] in "[(" and text[-1:] in ")]":
+        try:
+            parsed = literal_eval(text)
+        except (ValueError, SyntaxError):
+            parsed = None
+        if parsed is not None and not isinstance(parsed, str):
+            return parse_image_type_tokens(parsed)
+
+    raw_tokens = re.split(r"[\\,;\s]+", text)
+    return [
+        re.sub(r"[\s-]+", "_", token.strip().upper())
+        for token in raw_tokens
+        if token.strip()
+    ]
+
+
+IMAGE_TYPE_DIXON_COMPONENTS = {
+    "W": "WATER",
+    "WATER": "WATER",
+    "F": "FAT",
+    "FAT": "FAT",
+    "IP": "IN_PHASE",
+    "IN_PHASE": "IN_PHASE",
+    "INPHASE": "IN_PHASE",
+    "OP": "OPPOSED_PHASE",
+    "OOP": "OPPOSED_PHASE",
+    "OUT_PHASE": "OPPOSED_PHASE",
+    "OUTOFPHASE": "OPPOSED_PHASE",
+    "FF": "FAT_FRACTION",
+    "FAT_FRACTION": "FAT_FRACTION",
+    "FATFRACTION": "FAT_FRACTION",
+    "R2STAR": "R2STAR",
+    "R2*": "R2STAR",
+    "R2S": "R2STAR",
+}
+
+IMAGE_TYPE_QUANTITATIVE_COMPONENTS = ("FAT_FRACTION", "R2STAR")
+
+
+def _image_type_dixon_details(value: object) -> tuple[str | None, list[str]]:
+    """Prefer quantitative tokens; reject contradictory reconstruction tokens."""
+    tokens = parse_image_type_tokens(value)
+    matched = {
+        IMAGE_TYPE_DIXON_COMPONENTS[token]
+        for token in tokens
+        if token in IMAGE_TYPE_DIXON_COMPONENTS
+    }
+    if not matched:
+        return None, tokens
+
+    for component in IMAGE_TYPE_QUANTITATIVE_COMPONENTS:
+        if component in matched:
+            return component, tokens
+
+    if len(matched) > 1:
+        return "DIXON_UNKNOWN", tokens
+    return next(iter(matched)), tokens
+
+
+def detect_dixon_component_from_image_type(value: object) -> str | None:
+    """Classify exact ImageType component tokens; contradictions are unknown."""
+    component, _ = _image_type_dixon_details(value)
+    return component
+
+
+def _free_text_component_tokens(text: str) -> set[str]:
+    """Parse compact reconstruction suffixes only after Dixon context is known."""
+    return {
+        token.upper()
+        for token in re.split(r"[\s_.+\-/]+", text)
+        if token
+    }
+
+
+def detect_dixon_component(row: pd.Series) -> tuple[str, str, str]:
+    """Return normalized Dixon component, reason, and evidence source."""
+    text = build_series_text(row, cols=DIXON_TEXT_COLS)
 
     if re.search(rules.RX_DIXON_FAT_FRACTION, text):
-        return "FAT_FRACTION"
+        return "FAT_FRACTION", "matched explicit fat-fraction/PDFF text", "explicit_text"
     if re.search(rules.RX_DIXON_R2STAR, text):
-        return "R2STAR"
+        return "R2STAR", "matched explicit R2*/T2* map text", "explicit_text"
+
+    image_component, image_tokens = _image_type_dixon_details(row.get("ImageType"))
+    if image_component is not None:
+        matched_tokens = [
+            token for token in image_tokens if token in IMAGE_TYPE_DIXON_COMPONENTS
+        ]
+        if image_component == "DIXON_UNKNOWN":
+            return (
+                image_component,
+                f"contradictory ImageType Dixon tokens: {', '.join(matched_tokens)}",
+                "image_type",
+            )
+        return (
+            image_component,
+            f"matched ImageType token {matched_tokens[0]}",
+            "image_type",
+        )
+
     if re.search(rules.RX_DIXON_ALL, text):
-        return "DIXON_ALL"
+        return "DIXON_ALL", "matched explicit all-reconstructions text", "explicit_text"
 
-    # Compact suffixes are common: ART_W, ART_in, ART_opp, ART_F.
-    if re.search(r"(?:^|[\s_.+\-/])w(?:$|[\s_.+\-/])", text) or re.search(rules.RX_DIXON_WATER, text):
-        return "WATER"
-    if re.search(r"(?:^|[\s_.+\-/])in(?:$|[\s_.+\-/])", text) or re.search(rules.RX_DIXON_IN, text):
-        return "IN_PHASE"
-    if re.search(r"(?:^|[\s_.+\-/])opp(?:$|[\s_.+\-/])", text) or re.search(rules.RX_DIXON_OPPOSED, text):
-        return "OPPOSED_PHASE"
-    if has_dixon and (re.search(r"(?:^|[\s_.+\-/])f(?:$|[\s_.+\-/])", text) or re.search(rules.RX_DIXON_FAT, text)):
-        return "FAT"
+    explicit_components = []
+    for component, pattern in [
+        ("WATER", rules.RX_DIXON_WATER),
+        ("FAT", rules.RX_DIXON_FAT),
+        ("IN_PHASE", rules.RX_DIXON_IN),
+        ("OPPOSED_PHASE", rules.RX_DIXON_OPPOSED),
+    ]:
+        if re.search(pattern, text):
+            explicit_components.append(component)
 
-    return "DIXON_UNKNOWN" if has_dixon else "NOT_DIXON"
+    has_dixon_context = bool(re.search(rules.RX_DIXON_CONTEXT, text))
+    if has_dixon_context:
+        suffix_tokens = _free_text_component_tokens(text)
+        for token, component in {
+            "W": "WATER",
+            "F": "FAT",
+            "IN": "IN_PHASE",
+            "IP": "IN_PHASE",
+            "OPP": "OPPOSED_PHASE",
+            "OP": "OPPOSED_PHASE",
+            "OOP": "OPPOSED_PHASE",
+        }.items():
+            if token in suffix_tokens:
+                explicit_components.append(component)
+
+    explicit_components = list(dict.fromkeys(explicit_components))
+    if len(explicit_components) == 1:
+        component = explicit_components[0]
+        return component, f"matched explicit {component.lower()} text", "explicit_text"
+    if len(explicit_components) > 1:
+        return (
+            "DIXON_UNKNOWN",
+            f"contradictory explicit Dixon components: {', '.join(explicit_components)}",
+            "explicit_text",
+        )
+    if has_dixon_context:
+        return "DIXON_UNKNOWN", "Dixon context detected without component", "dixon_context"
+    return "NOT_DIXON", "no Dixon context or component token", "none"
 
 
 def add_basic_feature_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -864,7 +1002,10 @@ def add_basic_feature_columns(df: pd.DataFrame) -> pd.DataFrame:
     out["is_quant_or_report"] = out["series_text"].str.contains(rules.RX_QUANT_OR_REPORT, regex=True, na=False)
 
     # T1 features.
-    out["dixon_component"] = out["series_text"].apply(detect_dixon_component)
+    dixon = out.apply(detect_dixon_component, axis=1)
+    out[["dixon_component", "dixon_component_reason", "dixon_component_source"]] = (
+        pd.DataFrame(dixon.tolist(), index=out.index)
+    )
     out["is_3d_gre"] = out["series_text"].str.contains(rules.RX_T1_3D_GRE, regex=True, na=False)
     out["is_dynamic_t1_text"] = out["series_text"].str.contains(rules.RX_T1_DYNAMIC, regex=True, na=False)
     out["is_breath_hold"] = out["series_text"].str.contains(rules.RX_BREATH_HOLD, regex=True, na=False)

@@ -143,15 +143,16 @@ RX_RESP_TRIGGERED = token(r"pace|trigger|triggered|resp|respi|rtr|rt|nav|navigat
 # Dixon components ------------------------------------------------------------
 RX_DIXON_CONTEXT = token(
     r"dixon|mdixon|m[\s_-]*dixon|qdixon|q[\s_-]*dixon|edixon|e[\s_-]*dixon"
-    r"|lava\s*flex|lavaflex|flex|ideal"
+    r"|lava\s*flex|lavaflex|flex|ideal|water[\s_-]*fat"
 )
 RX_DIXON_ALL = token(r"all|all_bh|m[\s_-]*dixon[\s_-]*all|mdixon[\s_-]*all|dixon[\s_-]*all")
-RX_DIXON_WATER = token(r"w|water|wat|eau")
-RX_DIXON_IN = token(r"in|ip|inphase|in[\s_-]*phase|phase[\s_-]*in|eco\s*0")
+RX_DIXON_WATER = token(r"water(?:[\s_-]*only)?|wat|eau")
+RX_DIXON_IN = token(r"inphase|in[\s_-]*phase|phase[\s_-]*in|eco\s*0")
 RX_DIXON_OPPOSED = token(
-    r"opp|opposed|out|op|oop|out[\s_-]*phase|phase[\s_-]*out|eco\s*1"
+    r"opposed[\s_-]*phase|out[\s_-]*of[\s_-]*phase|out[\s_-]*phase"
+    r"|phase[\s_-]*out|eco\s*1"
 )
-RX_DIXON_FAT = token(r"f|fat|graisse")
+RX_DIXON_FAT = token(r"fat(?:[\s_-]*only)?|graisse")
 RX_DIXON_FAT_FRACTION = token(r"fat[\s_-]*fraction|fatfrac|pdff|ff|quant")
 RX_DIXON_R2STAR = token(r"r2\*|r2star|t2\*[\s_-]*map|t2star[\s_-]*map")
 
