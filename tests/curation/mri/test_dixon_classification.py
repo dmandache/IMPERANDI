@@ -130,3 +130,18 @@ def test_dixon_components_are_independent_from_acquisition_order():
     assert water_rows["acquisition_order"].tolist() == [4, 5, 6, 7]
     assert "volume_index_in_series" not in classified.columns
     assert "volume_order_in_series" not in classified.columns
+
+    phase_input = mc.add_mri_sequence_columns(classified)
+    phased = mc.add_mri_perfusion_columns(
+        phase_input,
+        exam_group_cols=["patient_key", "study_id"],
+    )
+    ip_phases = phased[phased["volume_id"].str.startswith("IP_")]
+    water_phases = phased[phased["volume_id"].str.startswith("W_")]
+    expected_phases = ["NATIVE", "ARTERIAL", "PORTAL_VENOUS", "DELAYED"]
+
+    assert ip_phases["mri_perfusion_label"].tolist() == expected_phases
+    assert water_phases["mri_perfusion_label"].tolist() == expected_phases
+    assert set(phased["mri_perfusion_source"]) == {
+        "acquisition_order_dixon_component"
+    }

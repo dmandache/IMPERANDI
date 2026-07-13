@@ -607,29 +607,32 @@ def infer_phase_from_ordinal_context(
     )
 
 
+def _acquisition_sort_key(row: pd.Series, row_order: int) -> tuple:
+    acquisition_order = _first_numeric(row.get("acquisition_order"))
+    acquisition_number = _first_numeric(row.get("AcquisitionNumber"))
+    acquisition_time = parse_time_to_seconds(row.get("time"))
+    series_number = _first_numeric(row.get("SeriesNumber"))
+    return (
+        acquisition_order if pd.notna(acquisition_order) else np.inf,
+        acquisition_number if pd.notna(acquisition_number) else np.inf,
+        acquisition_time if pd.notna(acquisition_time) else np.inf,
+        series_number if pd.notna(series_number) else np.inf,
+        row_order,
+    )
+
+
 def infer_two_series_art_port_phases(exam_rows: pd.DataFrame) -> list[tuple[int, str, str]]:
     """Resolve paired single-volume ART-PORT series by acquisition order."""
-    is_single_volume = exam_rows["n_volumes_in_series"].apply(safe_float).eq(1)
+    n_volumes = exam_rows.get(
+        "n_volumes_in_series", pd.Series(1, index=exam_rows.index)
+    )
+    is_single_volume = n_volumes.apply(safe_float).eq(1)
     is_unresolved_art_port = exam_rows["mri_perfusion_source"].eq(ART_PORT_CONTEXT_PENDING)
     candidates = exam_rows.loc[is_single_volume & is_unresolved_art_port]
     if candidates.empty:
         return []
 
     row_order = {idx: order for order, idx in enumerate(candidates.index)}
-
-    def _acquisition_sort_key(idx: int) -> tuple[float, float, float, float, int]:
-        row = candidates.loc[idx]
-        acquisition_order = _first_numeric(row.get("acquisition_order"))
-        acquisition_number = _first_numeric(row.get("AcquisitionNumber"))
-        acquisition_time = parse_time_to_seconds(row.get("time"))
-        series_number = _first_numeric(row.get("SeriesNumber"))
-        return (
-            acquisition_order if pd.notna(acquisition_order) else np.inf,
-            acquisition_number if pd.notna(acquisition_number) else np.inf,
-            acquisition_time if pd.notna(acquisition_time) else np.inf,
-            series_number if pd.notna(series_number) else np.inf,
-            row_order[idx],
-        )
 
     component = (
         candidates["dixon_component"].fillna("UNKNOWN")
@@ -640,7 +643,12 @@ def infer_two_series_art_port_phases(exam_rows: pd.DataFrame) -> list[tuple[int,
     for component_name, component_rows in candidates.groupby(component, sort=False):
         if len(component_rows) != 2:
             continue
-        ranked = sorted(component_rows.index, key=_acquisition_sort_key)
+        ranked = sorted(
+            component_rows.index,
+            key=lambda row_idx: _acquisition_sort_key(
+                component_rows.loc[row_idx], row_order[row_idx]
+            ),
+        )
         for rank, (row_idx, label) in enumerate(
             zip(ranked, ["ARTERIAL", "PORTAL_VENOUS"]),
             start=1,
@@ -651,6 +659,78 @@ def infer_two_series_art_port_phases(exam_rows: pd.DataFrame) -> list[tuple[int,
                 (
                     f"inferred {label} from ART-PORT acquisition {rank}/2 "
                     f"for paired {component_name} single-volume series"
+                ),
+            ))
+    return assignments
+
+
+def infer_generic_dynamic_phases_from_exam_context(
+    exam_rows: pd.DataFrame,
+) -> list[tuple[int, str, str]]:
+    """Infer generic dynamic phases within each available Dixon component."""
+
+    def _is_candidate(row: pd.Series) -> bool:
+        if norm_label(row.get("mri_sequence")) != "T1":
+            return False
+        if safe_str(row.get("mri_perfusion_source")) not in {"none", "volume_order"}:
+            return False
+        text = build_series_text(row)
+        if not re.search(rules.RX_PHASE_GENERIC_DYNAMIC, text):
+            return False
+        if text_matches_art_port(row) or text_matches_mask_multiart(row):
+            return False
+        if detect_ordinal_phase_index(row) is not None:
+            return False
+        if (
+            re.search(rules.RX_SUBTRACTION, text)
+            or re.search(rules.RX_MIP_MPR, text)
+            or re.search(rules.RX_QUANT_OR_REPORT, text)
+        ):
+            return False
+        explicit_label, *_ = detect_explicit_phase_from_text(row)
+        return explicit_label is None
+
+    candidates = exam_rows.loc[exam_rows.apply(_is_candidate, axis=1)].copy()
+    if candidates.empty:
+        return []
+
+    supported_components = {"WATER", "FAT", "IN_PHASE", "OPPOSED_PHASE"}
+    components = candidates.get(
+        "dixon_component", pd.Series("DIXON_UNKNOWN", index=candidates.index)
+    ).fillna("DIXON_UNKNOWN")
+    if components.isin(supported_components).any():
+        group_keys = components.where(
+            components.isin(supported_components), "DIXON_UNSPECIFIED"
+        )
+    else:
+        group_keys = pd.Series("DYNAMIC", index=candidates.index)
+
+    row_order = {idx: order for order, idx in enumerate(candidates.index)}
+    assignments = []
+    for component, component_rows in candidates.groupby(group_keys, sort=False):
+        if len(component_rows) < 3:
+            continue
+        acquisition_order = component_rows.get(
+            "acquisition_order", pd.Series(np.nan, index=component_rows.index)
+        ).apply(_first_numeric)
+        if acquisition_order.isna().any():
+            continue
+        ranked = sorted(
+            component_rows.index,
+            key=lambda row_idx: _acquisition_sort_key(
+                component_rows.loc[row_idx], row_order[row_idx]
+            ),
+        )
+        for rank, row_idx in enumerate(ranked, start=1):
+            label = {1: "NATIVE", 2: "ARTERIAL", 3: "PORTAL_VENOUS"}.get(
+                rank, "DELAYED"
+            )
+            assignments.append((
+                row_idx,
+                label,
+                (
+                    f"inferred {label} from generic dynamic acquisition {rank}/{len(ranked)} "
+                    f"within Dixon component {component}"
                 ),
             ))
     return assignments
@@ -694,6 +774,7 @@ def _exam_has_post_contrast_dynamic_phase(exam_rows: pd.DataFrame) -> bool:
         [
             "ordinal_context",
             "acquisition_order_art_port",
+            "acquisition_order_dixon_component",
             "volume_order",
             "volume_order_art_port",
             "volume_order_mask_multiart",
@@ -788,6 +869,18 @@ def add_mri_perfusion_columns(
             )
             out.loc[row_idx, "mri_perfusion_confidence"] = "inferred"
             out.loc[row_idx, "mri_perfusion_source"] = "explicit_text_art_port_single"
+
+        exam_rows = out.loc[idx].copy()
+
+        for row_idx, label, reason in infer_generic_dynamic_phases_from_exam_context(
+            exam_rows
+        ):
+            out.loc[row_idx, "mri_perfusion_label"] = label
+            out.loc[row_idx, "mri_perfusion_reason"] = reason
+            out.loc[row_idx, "mri_perfusion_confidence"] = "inferred"
+            out.loc[row_idx, "mri_perfusion_source"] = (
+                "acquisition_order_dixon_component"
+            )
 
         exam_rows = out.loc[idx].copy()
 
