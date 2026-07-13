@@ -139,9 +139,9 @@
           { "column": "volume_length", "op": "lte", "value": 1700.0 }
         ]
       },
-      { "type": "modality_curation" },
       { "type": "compute_visit_order" },
       { "type": "compute_acquisition_order" },
+      { "type": "modality_curation" },
       { "type": "finalize" }
     ]
   },
