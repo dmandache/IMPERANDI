@@ -104,7 +104,7 @@ RX_PHASE_HEPATOBILIARY = token(
 )
 RX_PHASE_DELAYED = token(
     r"tard(?:if|ive)?|delay(?:ed)?|delai|délai|late|equilibrium|equilibre|équilibre|eq|interstitiel"
-    r"|phase[\s_-]*d|[2-10]\s*(?:min|mn)"
+    r"|phase[\s_-]*d|[2-9]\s*(?:min|mn)"
 )
 RX_PHASE_ORDINAL = token(r"ph(?:ase)?[\s_-]*([1-9])|ph([1-9])")
 RX_PHASE_POST_CONTRAST = token(
