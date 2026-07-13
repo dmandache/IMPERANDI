@@ -284,6 +284,22 @@ def test_art_port_two_single_volume_series_use_acquisition_order():
     ]
 
 
+def test_single_volume_art_port_row_defers_to_exam_context():
+    candidate = pd.Series({
+        **row("T1 VIBE DIXON ART-PORT CAIPI_W"),
+        "mri_sequence": "T1",
+        "volume_order_in_series": 1,
+        "n_volumes_in_series": 1,
+    })
+
+    label, reason, confidence, source = mc.detect_t1_perfusion_phase(candidate)
+
+    assert label == "OTHER"
+    assert "awaiting exam acquisition context" in reason
+    assert confidence == "unknown"
+    assert source == mc.ART_PORT_CONTEXT_PENDING
+
+
 def test_art_port_prefers_computed_acquisition_order_over_dicom_fields():
     results = curate([
         row(
@@ -505,6 +521,16 @@ def test_selected_wide_includes_ranked_other_candidates_per_slot():
     assert "; T2 COR" in selected_wide.loc[0, "T2_other_candidates"]
     assert "T1_NATIVE_other_candidates" in selected_wide.columns
     assert pd.isna(selected_wide.loc[0, "T1_NATIVE_other_candidates"])
+
+
+def test_selected_wide_handles_an_empty_other_candidates_table():
+    selected_wide = curate([
+        row("T2 FS AX BLADE", series_id="T2_ONLY", volume_id="T2_ONLY"),
+    ])["selected_wide"]
+
+    assert selected_wide.loc[0, "T2"].startswith("T2 FS AX BLADE")
+    assert "T2_other_candidates" in selected_wide.columns
+    assert pd.isna(selected_wide.loc[0, "T2_other_candidates"])
 
 
 def test_candidate_display_includes_volume_ordinal_out_of_series_total():

@@ -48,6 +48,8 @@ TEXT_COLS_DEFAULT = [
     "SequenceName",
 ]
 
+ART_PORT_CONTEXT_PENDING = "art_port_context_pending"
+
 
 def read_csv(path: str | Path, **kwargs) -> pd.DataFrame:
     return pd.read_csv(Path(path).expanduser(), low_memory=False, **kwargs)
@@ -496,10 +498,11 @@ def detect_t1_perfusion_phase(row: pd.Series) -> tuple[str, str, str, str]:
     Volume-aware T1 phase classifier.
 
     Priority:
-      1. Explicit pure phase text, e.g. SANS IV, ART, PORT, TARDIF.
-      2. Special ART-PORT / Mask+Multiart order inference.
-      3. Generic dynamic volume order inference.
-      4. OTHER.
+      1. Special multivolume ART-PORT / Mask+Multiart order inference.
+      2. Defer single-volume ART-PORT candidates to exam context.
+      3. Explicit pure phase text, e.g. SANS IV, ART, PORT, TARDIF.
+      4. Generic dynamic volume order inference.
+      5. OTHER.
     """
     text = build_series_text(row)
     seq = norm_label(row.get("mri_sequence"))
@@ -520,10 +523,10 @@ def detect_t1_perfusion_phase(row: pd.Series) -> tuple[str, str, str, str]:
         if special_label is not None:
             return special_label, special_reason, special_conf, special_source
         return (
-            "PORTAL_VENOUS",
-            "matched ART-PORT text without usable volume order; treated as portal/transition",
-            "inferred",
-            "explicit_text_art_port_single",
+            "OTHER",
+            "matched single-volume ART-PORT text; awaiting exam acquisition context",
+            "unknown",
+            ART_PORT_CONTEXT_PENDING,
         )
 
     if text_matches_mask_multiart(row):
@@ -607,9 +610,7 @@ def infer_phase_from_ordinal_context(
 def infer_two_series_art_port_phases(exam_rows: pd.DataFrame) -> list[tuple[int, str, str]]:
     """Resolve two single-volume ART-PORT series by acquisition order."""
     is_single_volume = exam_rows["n_volumes_in_series"].apply(safe_float).eq(1)
-    is_unresolved_art_port = exam_rows["mri_perfusion_source"].eq(
-        "explicit_text_art_port_single"
-    )
+    is_unresolved_art_port = exam_rows["mri_perfusion_source"].eq(ART_PORT_CONTEXT_PENDING)
     candidates = exam_rows.loc[is_single_volume & is_unresolved_art_port]
     if len(candidates) != 2:
         return []
@@ -764,6 +765,16 @@ def add_mri_perfusion_columns(
             out.loc[row_idx, "mri_perfusion_reason"] = reason
             out.loc[row_idx, "mri_perfusion_confidence"] = "inferred"
             out.loc[row_idx, "mri_perfusion_source"] = "acquisition_order_art_port"
+
+        unresolved_art_port = out.loc[idx, "mri_perfusion_source"].eq(ART_PORT_CONTEXT_PENDING)
+        for row_idx in out.loc[idx].index[unresolved_art_port]:
+            out.loc[row_idx, "mri_perfusion_label"] = "PORTAL_VENOUS"
+            out.loc[row_idx, "mri_perfusion_reason"] = (
+                "ART-PORT exam context did not resolve two single-volume acquisitions; "
+                "treated as portal/transition"
+            )
+            out.loc[row_idx, "mri_perfusion_confidence"] = "inferred"
+            out.loc[row_idx, "mri_perfusion_source"] = "explicit_text_art_port_single"
 
         exam_rows = out.loc[idx].copy()
 
@@ -1042,12 +1053,12 @@ def select_best_candidates(
     )
     other_candidates = (
         ranked.loc[ranked["_candidate_rank"] > 0]
-        .groupby([*exam_cols, "selection_slot"], as_index=False)["selected_candidate"]
-        .agg("; ".join)
+        .groupby([*exam_cols, "selection_slot"], as_index=False)
+        .agg(other_candidates=("selected_candidate", "; ".join))
         .pivot_table(
             index=exam_cols,
             columns="selection_slot",
-            values="selected_candidate",
+            values="other_candidates",
             aggfunc="first",
         )
         .rename(columns=lambda slot: f"{slot}_other_candidates")
