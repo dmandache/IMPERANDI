@@ -25,7 +25,7 @@ RX_KEY_IMAGES = token(
     r"|ko|kos|kin|kon|snapshot|screen\s*save|capture|processed\s*images?"
     r"|screen[\s_-]*saves?|images?[\s_-]*cl[eé]s?|objets?[\s_-]*cl[eé]s?"
 )
-RX_SUBTRACTION = token(r"s?sub|s?subtraction|s?soustraction|s?sous")
+RX_SUBTRACTION = token(r"s?sub(?:traction)?|s?soustr(?:ac|a)tion|s?sous")
 RX_MIP_MPR = token(r"mip|mpr|reformat|multiplanar[\s_-]*reconstruction|reconstruction|recon")
 RX_QUANT_OR_REPORT = token(
     r"quant|r2\*|r2star|fat\s*fraction|carto|map|mapping|reports?|results?|reading|histo"

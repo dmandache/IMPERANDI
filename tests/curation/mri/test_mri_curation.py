@@ -101,15 +101,14 @@ def test_sequence_classification_common_protocol_names(desc: str, expected: str)
     assert out.loc[0, "mri_sequence"] == expected
 
 
-def test_sequence_detection_uses_protocol_name_when_series_description_missing():
+def test_sequence_detection_ignores_protocol_name_when_series_description_missing():
     out = mc.annotate_mri(
         pd.DataFrame([
             row(None, protocol="T2 FS AX BLADE PACE DOME"),
             row(None, protocol="T1 VIBE DIXON SANS IV CAIPI_W", volume_id="V2", series_id="SER2"),
         ])
     )
-    assert out.loc[0, "mri_sequence"] == "T2"
-    assert out.loc[1, "mri_sequence"] == "T1"
+    assert out["mri_sequence"].tolist() == ["OTHER", "OTHER"]
 
 
 def test_build_series_text_normalizes_case_whitespace_and_lists():
@@ -121,10 +120,7 @@ def test_build_series_text_normalizes_case_whitespace_and_lists():
         }
     )
 
-    assert (
-        mc.build_series_text(series)
-        == "ax t1 dixon | portal venous water | original\\primary"
-    )
+    assert mc.build_series_text(series) == "ax t1 dixon"
 
 
 # -----------------------------------------------------------------------------
@@ -360,6 +356,18 @@ def test_art_port_single_volume_falls_back_to_portal_transition():
     assert out.loc[0, "mri_perfusion_source"] == "explicit_text_art_port_single"
 
 
+def test_ssoustration_art_port_is_treated_as_subtraction():
+    results = curate([
+        row("T1 VIBE DIXON SSOUSTRATION ART-PORT CAIPI_W"),
+    ])
+    curated = results["curated"].iloc[0]
+
+    assert bool(curated["is_subtraction"])
+    assert curated["mri_perfusion_label"] == "OTHER"
+    assert curated["selection_slot"] == "T1_OTHER"
+    assert results["selected_long"].empty
+
+
 def test_mask_multiart_first_native_rest_arterial():
     results = curate([
         row("Ax LAVA Mask+Multiart Fluoro", series_id="SER_MULTIART", volume_id="V1", time="120000"),
@@ -517,7 +525,7 @@ def test_missing_optional_metadata_does_not_crash():
     cur = results["curated"]
 
     assert len(cur) == 2
-    assert set(cur["mri_sequence"]) == {"T1", "T2"}
+    assert set(cur["mri_sequence"]) == {"OTHER", "T2"}
     assert not results["selected_long"].empty
 
 
