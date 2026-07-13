@@ -76,8 +76,9 @@ RX_PHASE_ART_PORT_DYNAMIC = token(
     rf"art{SEP}port|art{SEP}portal|arterio{SEP}portal"
 )
 RX_PHASE_MASK_MULTIART_DYNAMIC = token(
-    rf"mask{SEP}multi{SEP}art|masque{SEP}multi{SEP}art"
-    rf"|masq(?:ue)?{SEP}multi{SEP}art|masq(?:ue)?{SEP}\d+{SEP}art|multi{SEP}art"
+    rf"(?:mask|masq(?:ue)?){SEP}(?:(?:multi{SEP})|(?:\d+{SEP}))"
+    rf"art(?:erial|eriel)?"
+    rf"|multi{SEP}art(?:erial|eriel)?"
 )
 
 RX_PHASE_ARTERIAL = token(
