@@ -964,7 +964,7 @@ def select_best_candidates(
         volume_order = safe_float(row.get("volume_order_in_series"))
         n_volumes = safe_float(row.get("n_volumes_in_series"))
         if pd.notna(volume_order) and pd.notna(n_volumes):
-            details.append(f"volume={volume_order:g}/{n_volumes:g}")
+            details.append(f"vol={volume_order:g}/{n_volumes:g}")
         details.append(f"score={row.get('selection_score'):.1f}")
         return f"{desc} [{', '.join(details)}]"
 

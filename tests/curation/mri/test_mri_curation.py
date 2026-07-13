@@ -473,5 +473,5 @@ def test_candidate_display_includes_volume_ordinal_out_of_series_total():
 
     selected_wide = results["selected_wide"]
 
-    assert "[volume=1/2, score=" in selected_wide.loc[0, "T2"]
-    assert "[volume=2/2, score=" in selected_wide.loc[0, "T2_other_candidates"]
+    assert "[vol=1/2, score=" in selected_wide.loc[0, "T2"]
+    assert "[vol=2/2, score=" in selected_wide.loc[0, "T2_other_candidates"]
