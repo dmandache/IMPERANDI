@@ -814,7 +814,7 @@ def score_t1(row: pd.Series) -> float:
     score = float(rules.T1_PHASE_PRIORITY.get(phase, 0))
     score += rules.T1_PHASE_SOURCE_PRIORITY.get(source, 0)
 
-    score += {"AXIAL": 50, "CORONAL": 20, "SAGITTAL": 5}.get(row.get("plane"), 50)
+    score += {"AXIAL": 50, "CORONAL": 20, "SAGITTAL": 5}.get(row.get("plane"), 30)
     score += 25 if bool(row.get("is_3d_gre")) else 0
 
     # Dynamic containers are useful fallback, but explicit pure phase labels are preferred.
@@ -825,21 +825,21 @@ def score_t1(row: pd.Series) -> float:
     score += 8 if bool(row.get("is_resp_triggered")) else 0
     score += 5 if bool(row.get("is_breath_hold")) else 0
 
-    score -= 1000 if bool(row.get("is_subtraction")) else 0
+    score -= 150 if bool(row.get("is_subtraction")) else 0
     score -= 100 if bool(row.get("is_mip_mpr")) else 0
-    score -= 150 if bool(row.get("is_quant_or_report")) else 0
+    score -= 200 if bool(row.get("is_quant_or_report")) else 0
     return float(score)
 
 
 def score_t2(row: pd.Series) -> float:
-    score = {"AXIAL": 50, "CORONAL": 20, "SAGITTAL": 5}.get(row.get("plane"), 50)
+    score = {"AXIAL": 50, "CORONAL": 20, "SAGITTAL": 5}.get(row.get("plane"), 30)
     score += 35 if bool(row.get("is_t2_fatsat")) else 0
     score += 35 if bool(row.get("is_t2_motion_robust")) else 0
     score += 15 if bool(row.get("is_t2_haste_ssfse")) else 0
     score += 10 if bool(row.get("is_t2_tse_fse")) else 0
     score += 8 if bool(row.get("is_resp_triggered")) else 0
     score += 5 if bool(row.get("is_breath_hold")) else 0
-    score -= 40 if bool(row.get("is_t2_mrcp_biliary")) else 0
+    score -= 60 if bool(row.get("is_t2_mrcp_biliary")) else 0
     score -= 100 if bool(row.get("is_mip_mpr")) else 0
     score -= 150 if bool(row.get("is_quant_or_report")) else 0
     return float(score)
