@@ -84,7 +84,7 @@ RX_PHASE_MASK_MULTIART_DYNAMIC = token(
 RX_PHASE_ARTERIAL = token(
     r"late[\s_-]*arterial|early[\s_-]*arterial|multi[\s_-]*art|multiart"
     r"|multi[\s_-]*art(?:eriel|erial)?|art(?:eriel|erial|[eé]rielle?)?|artériel|artérielle"
-    r"|arterial|artery|aorte|hepatic\s*arter|phase[\s_-]*a"
+    r"|arterial|artery|aorte|hepatic\s*arter"
     r"|(?:1[5-9]|[2-4][0-9])[\s_.+\-]*(?:s|sec|secs|second|seconds)"
     r"|0[\s_.+\-]*(?:15|20|25|30|35|40|45)[\s_.+\-]*(?:min|mn)"
 )
