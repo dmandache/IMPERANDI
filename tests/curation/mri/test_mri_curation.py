@@ -432,3 +432,24 @@ def test_invalid_time_and_pixel_spacing_do_not_crash_selection():
 
     assert len(results["curated"]) == 2
     assert {"T2", "T1_NATIVE"}.issubset(set(results["selected_long"]["selection_slot"]))
+
+
+def test_selected_wide_includes_ranked_other_candidates_per_slot():
+    results = curate([
+        row("T2 FS AX BLADE", series_id="T2_BEST", volume_id="T2_BEST"),
+        row("T2 AX", series_id="T2_SECOND", volume_id="T2_SECOND"),
+        row("T2 COR", series_id="T2_THIRD", volume_id="T2_THIRD"),
+        row(
+            "T1 VIBE DIXON SANS IV CAIPI_W",
+            series_id="T1_ONLY",
+            volume_id="T1_ONLY",
+        ),
+    ])
+
+    selected_wide = results["selected_wide"]
+
+    assert selected_wide.loc[0, "T2"].startswith("T2 FS AX BLADE")
+    assert selected_wide.loc[0, "T2_other_candidates"].startswith("T2 AX")
+    assert "; T2 COR" in selected_wide.loc[0, "T2_other_candidates"]
+    assert "T1_NATIVE_other_candidates" in selected_wide.columns
+    assert pd.isna(selected_wide.loc[0, "T1_NATIVE_other_candidates"])

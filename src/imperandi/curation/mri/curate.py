@@ -953,12 +953,7 @@ def select_best_candidates(
     ]
     ascending = [True] * len(exam_cols) + [True, False, False, False, False, True, True]
 
-    selected_long = (
-        selectable.sort_values(sort_cols, ascending=ascending, na_position="last")
-        .groupby([*exam_cols, "selection_slot"], as_index=False)
-        .head(1)
-        .reset_index(drop=True)
-    )
+    ranked = selectable.sort_values(sort_cols, ascending=ascending, na_position="last")
 
     def _display(row: pd.Series) -> str:
         desc = row.get("SeriesDescription")
@@ -966,9 +961,17 @@ def select_best_candidates(
             desc = row.get("ProtocolName", row.get("series_text", ""))
         return f"{desc} [score={row.get('selection_score'):.1f}]"
 
-    selected_long["selected_candidate"] = selected_long.apply(_display, axis=1)
+    ranked["selected_candidate"] = ranked.apply(_display, axis=1)
+    ranked["_candidate_rank"] = ranked.groupby([*exam_cols, "selection_slot"]).cumcount()
 
-    selected_wide = (
+    selected_long = (
+        ranked
+        .groupby([*exam_cols, "selection_slot"], as_index=False)
+        .head(1)
+        .reset_index(drop=True)
+    )
+
+    selected_columns = (
         selected_long[[*exam_cols, "selection_slot", "selected_candidate"]]
         .pivot_table(
             index=exam_cols,
@@ -978,7 +981,31 @@ def select_best_candidates(
         )
         .reset_index()
     )
+    other_candidates = (
+        ranked.loc[ranked["_candidate_rank"] > 0]
+        .groupby([*exam_cols, "selection_slot"], as_index=False)["selected_candidate"]
+        .agg("; ".join)
+        .pivot_table(
+            index=exam_cols,
+            columns="selection_slot",
+            values="selected_candidate",
+            aggfunc="first",
+        )
+        .rename(columns=lambda slot: f"{slot}_other_candidates")
+        .reset_index()
+    )
+
+    selected_wide = selected_columns.merge(other_candidates, on=exam_cols, how="left")
     selected_wide.columns.name = None
+
+    slots = [col for col in selected_columns.columns if col not in exam_cols]
+    candidate_cols = [f"{slot}_other_candidates" for slot in slots]
+    for col in candidate_cols:
+        if col not in selected_wide.columns:
+            selected_wide[col] = pd.NA
+    selected_wide = selected_wide[
+        [*exam_cols, *(col for slot in slots for col in (slot, f"{slot}_other_candidates"))]
+    ]
 
     return selected_long, selected_wide
 
