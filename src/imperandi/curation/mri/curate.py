@@ -210,14 +210,13 @@ def add_volume_order_features(
     time_col: str = "time",
 ) -> pd.DataFrame:
     """Add volume_order_in_series and n_volumes_in_series if possible."""
-    out = df.copy()
+    out = df.drop(columns=["volume_index_in_series"], errors="ignore").copy()
 
     if "volume_order_in_series" in out.columns and "n_volumes_in_series" in out.columns:
         return out
 
     if series_col not in out.columns or volume_col not in out.columns:
         out["volume_order_in_series"] = 1
-        out["volume_index_in_series"] = 0
         out["n_volumes_in_series"] = 1
         out["is_multivolume_series"] = False
         return out
@@ -265,14 +264,14 @@ def add_volume_order_features(
         .copy()
     )
 
-    rep["volume_index_in_series"] = rep.groupby("_series_group_key", dropna=False).cumcount()
-    rep["volume_order_in_series"] = rep["volume_index_in_series"] + 1
+    rep["volume_order_in_series"] = (
+        rep.groupby("_series_group_key", dropna=False).cumcount() + 1
+    )
     rep["n_volumes_in_series"] = rep.groupby("_series_group_key", dropna=False)["_volume_group_key"].transform("size")
     rep["is_multivolume_series"] = rep["n_volumes_in_series"] > 1
 
     order_cols = [
         "_volume_group_key",
-        "volume_index_in_series",
         "volume_order_in_series",
         "n_volumes_in_series",
         "is_multivolume_series",
@@ -281,7 +280,6 @@ def add_volume_order_features(
     out = out.drop(
         columns=[
             c for c in [
-                "volume_index_in_series",
                 "volume_order_in_series",
                 "n_volumes_in_series",
                 "is_multivolume_series",
@@ -296,7 +294,6 @@ def add_volume_order_features(
     )
     ordered = ordered.set_index("_row_order_for_volume_order").reindex(range(len(out)))
     for col in [
-        "volume_index_in_series",
         "volume_order_in_series",
         "n_volumes_in_series",
         "is_multivolume_series",

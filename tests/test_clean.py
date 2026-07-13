@@ -345,7 +345,8 @@ def test_split_multivolume_series_by_repeated_slices_creates_volume_ids():
     )
 
     assert out["volume_split_method"].eq("repeated_slice_stack").all()
-    assert set(out["volume_index_in_series"]) == {0, 1}
+    assert set(out["volume_order_in_series"]) == {1, 2}
+    assert "volume_index_in_series" not in out.columns
     assert out["n_detected_volumes_in_series"].dropna().unique().tolist() == [2]
     assert out["volume_id"].nunique() == 2
     assert set(out.groupby("volume_id").size()) == {8}

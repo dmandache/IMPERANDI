@@ -39,7 +39,7 @@ def test_add_volume_order_features_handles_list_acquisition_numbers():
     out = add_volume_order_features(df)
 
     assert out["volume_order_in_series"].tolist() == [1, 2]
-    assert out["volume_index_in_series"].tolist() == [0, 1]
+    assert "volume_index_in_series" not in out.columns
 
 
 def test_add_volume_order_features_preserves_existing_order_columns():
@@ -57,7 +57,7 @@ def test_add_volume_order_features_preserves_existing_order_columns():
 
     assert out["volume_order_in_series"].tolist() == [7]
     assert out["n_volumes_in_series"].tolist() == [9]
-    assert out["volume_index_in_series"].tolist() == [6]
+    assert "volume_index_in_series" not in out.columns
     assert out["is_multivolume_series"].tolist() == [True]
 
 
@@ -70,7 +70,7 @@ def test_add_volume_order_features_handles_minimal_dataframe():
     out = add_volume_order_features(df)
 
     assert out["volume_order_in_series"].tolist() == [1, 1]
-    assert out["volume_index_in_series"].tolist() == [0, 0]
+    assert "volume_index_in_series" not in out.columns
     assert out["n_volumes_in_series"].tolist() == [1, 1]
     assert out["is_multivolume_series"].tolist() == [False, False]
 

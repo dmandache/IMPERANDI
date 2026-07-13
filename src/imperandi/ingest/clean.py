@@ -605,7 +605,7 @@ def split_multivolume_series_by_repeated_slices(
 
     out["_slice_coord"] = out.apply(_slice_coordinate, axis=1)
     out["_slice_key"] = np.round(out["_slice_coord"] / z_tolerance).astype("Int64")
-    out["volume_index_in_series"] = pd.NA
+    out["volume_order_in_series"] = pd.NA
     out["volume_split_method"] = "metadata_hash_or_existing"
     out["n_detected_volumes_in_series"] = pd.NA
 
@@ -760,7 +760,7 @@ def split_multivolume_series_by_repeated_slices(
 
         new_ids = g.apply(_make_volume_id, axis=1)
         out.loc[g.index, volume_col] = new_ids
-        out.loc[g.index, "volume_index_in_series"] = g["_repeat_index"].values
+        out.loc[g.index, "volume_order_in_series"] = g["_repeat_index"].values + 1
         out.loc[g.index, "volume_split_method"] = "repeated_slice_stack"
         out.loc[g.index, "n_detected_volumes_in_series"] = n_volumes
 
@@ -1811,7 +1811,7 @@ def _get_step_outputs(step: dict) -> set[str]:
     if step_type == "build_volume_id":
         return {
             "volume_id",
-            "volume_index_in_series",
+            "volume_order_in_series",
             "volume_split_method",
             "n_detected_volumes_in_series",
         }
@@ -1820,7 +1820,7 @@ def _get_step_outputs(step: dict) -> set[str]:
     if step_type == "split_multivolume_series":
         return {
             "volume_id",
-            "volume_index_in_series",
+            "volume_order_in_series",
             "volume_split_method",
             "n_detected_volumes_in_series",
         }
