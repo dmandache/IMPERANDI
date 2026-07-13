@@ -604,6 +604,42 @@ def infer_phase_from_ordinal_context(
     )
 
 
+def infer_two_series_art_port_phases(exam_rows: pd.DataFrame) -> list[tuple[int, str, str]]:
+    """Resolve two single-volume ART-PORT series by acquisition order."""
+    is_single_volume = exam_rows["n_volumes_in_series"].apply(safe_float).eq(1)
+    is_unresolved_art_port = exam_rows["mri_perfusion_source"].eq(
+        "explicit_text_art_port_single"
+    )
+    candidates = exam_rows.loc[is_single_volume & is_unresolved_art_port]
+    if len(candidates) != 2:
+        return []
+
+    row_order = {idx: order for order, idx in enumerate(candidates.index)}
+
+    def _acquisition_sort_key(idx: int) -> tuple[float, float, float, int]:
+        row = candidates.loc[idx]
+        acquisition_number = _first_numeric(row.get("AcquisitionNumber"))
+        acquisition_time = parse_time_to_seconds(row.get("time"))
+        series_number = _first_numeric(row.get("SeriesNumber"))
+        return (
+            acquisition_number if pd.notna(acquisition_number) else np.inf,
+            acquisition_time if pd.notna(acquisition_time) else np.inf,
+            series_number if pd.notna(series_number) else np.inf,
+            row_order[idx],
+        )
+
+    ranked = sorted(candidates.index, key=_acquisition_sort_key)
+    labels = ["ARTERIAL", "PORTAL_VENOUS"]
+    return [
+        (
+            row_idx,
+            label,
+            f"inferred {label} from ART-PORT acquisition {rank}/{len(ranked)} across two single-volume series",
+        )
+        for rank, (row_idx, label) in enumerate(zip(ranked, labels), start=1)
+    ]
+
+
 def is_native_fallback_candidate(row: pd.Series) -> bool:
     if norm_label(row.get("mri_sequence")) != "T1":
         return False
@@ -639,7 +675,13 @@ def _exam_has_post_contrast_dynamic_phase(exam_rows: pd.DataFrame) -> bool:
     phase = exam_rows["mri_perfusion_label"].map(norm_label)
     source = exam_rows["mri_perfusion_source"].fillna("none")
     resolved_dynamic = phase.isin(["ARTERIAL", "PORTAL_VENOUS", "DELAYED"]) & source.isin(
-        ["ordinal_context", "volume_order", "volume_order_art_port", "volume_order_mask_multiart"]
+        [
+            "ordinal_context",
+            "acquisition_order_art_port",
+            "volume_order",
+            "volume_order_art_port",
+            "volume_order_mask_multiart",
+        ]
     )
     post_text_dynamic = exam_rows.apply(
         lambda r: has_post_contrast_text(r)
@@ -713,6 +755,14 @@ def add_mri_perfusion_columns(
         grouped = [out.index]
 
     for idx in grouped:
+        exam_rows = out.loc[idx].copy()
+
+        for row_idx, label, reason in infer_two_series_art_port_phases(exam_rows):
+            out.loc[row_idx, "mri_perfusion_label"] = label
+            out.loc[row_idx, "mri_perfusion_reason"] = reason
+            out.loc[row_idx, "mri_perfusion_confidence"] = "inferred"
+            out.loc[row_idx, "mri_perfusion_source"] = "acquisition_order_art_port"
+
         exam_rows = out.loc[idx].copy()
 
         for row_idx, row in exam_rows.iterrows():

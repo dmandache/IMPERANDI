@@ -257,6 +257,33 @@ def test_art_port_two_independent_volumes_first_arterial_second_portal():
     assert cur["mri_perfusion_source"].tolist() == ["volume_order_art_port", "volume_order_art_port"]
 
 
+def test_art_port_two_single_volume_series_use_acquisition_order():
+    results = curate([
+        row(
+            "T1 VIBE DIXON ART-PORT CAIPI_W",
+            series_id="SER_LATER",
+            volume_id="V_LATER",
+            time="110000",
+            AcquisitionNumber=20,
+        ),
+        row(
+            "T1 VIBE DIXON ART-PORT CAIPI_W",
+            series_id="SER_FIRST",
+            volume_id="V_FIRST",
+            time="120000",
+            AcquisitionNumber=10,
+        ),
+    ])
+    cur = results["curated"].sort_values("AcquisitionNumber")
+
+    assert cur["n_volumes_in_series"].tolist() == [1, 1]
+    assert cur["mri_perfusion_label"].tolist() == ["ARTERIAL", "PORTAL_VENOUS"]
+    assert cur["mri_perfusion_source"].tolist() == [
+        "acquisition_order_art_port",
+        "acquisition_order_art_port",
+    ]
+
+
 def test_art_port_single_volume_falls_back_to_portal_transition():
     out = mc.annotate_mri(pd.DataFrame([row("T1 VIBE DIXON ART-PORT CAIPI_W")]))
     assert out.loc[0, "mri_perfusion_label"] == "PORTAL_VENOUS"
