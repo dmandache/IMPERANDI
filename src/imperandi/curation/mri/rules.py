@@ -52,13 +52,15 @@ RX_SEQUENCE_T1_CONTRAST = token(
     r"t1[\w\s_/\-+]{0,50}(?:post|gd|gado|gad|gadolinium|contrast|c\+|fs[\s_-]*post)"
     r"|gado|gad|gadolinium|post\s*(?:iv|gado|gad|contrast)|ce\s*t1"
 )
-
 RX_SEQUENCE_T2 = token(
-    r"t2|t2[\s_-]*weighted|tse|fse|frfse|ssfse|essfse|haste|ssh|blade|fblade"
-    r"|propeller|prop|spir|spair|aspir|mrcp|s[\s_-]*mrcp|bili|biliary|biliaire"
-    r"|chol|cholangio|cs[\s_-]*bili|bhte"
+    r"t2(?:[\s_-]*weighted)?"
+    r"|tse|fse|frfse|ssfse|essfse"
+    r"|haste|ssh"
+    r"|blade|fblade"
+    r"|propeller|prop"
+    r"|spir|spair|aspir"
+    r"|bhte"
 )
-
 
 # Perfusion / contrast phase labels ------------------------------------------
 RX_PHASE_NATIVE = token(
