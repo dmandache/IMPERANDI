@@ -89,30 +89,25 @@ RX_PHASE_ARTERIAL = token(
     r"|0[\s_.+\-]*(?:15|20|25|30|35|40|45)[\s_.+\-]*(?:min|mn)"
 )
 RX_PHASE_PORTAL = token(
-    # Explicit portal/venous labels
     r"port(?:al)?|porto|porte|portovenous"
     r"|portal[\s_-]*venous"
     r"|vein|veine|venous|veneux|veineux|veineuse"
     r"|parenchymateux|parenchymal"
     r"|phase[\s_-]*p|vp|pv"
 
-    # Duration-only portal phase: 60–99 seconds
-    r"|(?<!\d)(?:[6-9]\d)[\s_.+\-]*"
-    r"(?:s|sec(?:ond)?s?)"
+    # 60–99 seconds
+    r"|(?<!\d)[6-9]\d[\s_.+\-]*(?:s|sec(?:ond)?s?)(?!\d)"
 
     # Exactly 1 minute
-    r"|(?<!\d)1[\s_.+\-]*"
-    r"(?:mn|min(?:ute)?s?)"
+    r"|(?<!\d)1[\s_.+\-]*(?:mn|min(?:ute)?s?)(?!\d)"
 
-    # Clock-like notation:
-    # 1.10 min / 1:10 min / 1,10 min = 1 min 10 sec
-    r"|(?<!\d)1[.:,](?:10|20|30)[\s_.+\-]*"
-    r"(?:mn|min(?:ute)?s?)"
-
-    # Explicit notation: 1 min 10 s
-    r"|(?<!\d)1[\s_.+\-]*(?:mn|min(?:ute)?s?)"
-    r"[\s_.+\-]*(?:10|20|30)[\s_.+\-]*"
-    r"(?:s|sec(?:ond)?s?)"
+    # 1.10 min / 1:25 min / 1 min 45 s
+    r"|(?<!\d)1(?:"
+        r"[.:,][0-5]?\d[\s_.+\-]*(?:mn|min(?:ute)?s?)"
+        r"|"
+        r"[\s_.+\-]*(?:mn|min(?:ute)?s?)"
+        r"[\s_.+\-]*[0-5]?\d[\s_.+\-]*(?:s|sec(?:ond)?s?)"
+    r")(?!\d)"
 )
 # Must be evaluated before generic delayed-phase rules.
 RX_PHASE_HEPATOBILIARY = token(
