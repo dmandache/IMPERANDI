@@ -36,7 +36,7 @@ RX_QUANT_OR_REPORT = token(
 
 # Sequence families -----------------------------------------------------------
 RX_SEQUENCE_DWI = token(
-    r"dwi|dw[\s_-]*epi|dwepi|diff|diffusion|dif|adc|apparent[\s_-]*diffusion[\s_-]*coefficient"
+    r"dwi|dw[\s_-]*epi|dwepi|diff|diffusion|dif|(?:e|d)?adc|apparent[\s_-]*diffusion[\s_-]*coefficient"
     r"|trace|ivim|dti|ep2d|b\s*[=_-]?\s*\d{1,4}"
 )
 
