@@ -18,7 +18,7 @@ def token(pattern: str) -> str:
 
 # Generic/non-diagnostic ------------------------------------------------------
 RX_LOCALIZER = token(
-    r"loc|loca|locali[sz]er|localiser|scout|survey|rep[eè]rage|topogram|calibration|cal\s*body"
+    r"loc|loca|locali[sz]er|localiser|scout|survey|rep[eè]rage|topogram|calibration|cal\s*body|test|phantom|dummy"
 )
 RX_KEY_IMAGES = token(
     r"key\s*(?:images?|objects?)|key[\s_-]*object[\s_-]*selection"
