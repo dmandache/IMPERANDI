@@ -847,6 +847,21 @@ def test_selected_wide_handles_an_empty_other_candidates_table():
     assert pd.isna(selected_wide.loc[0, "T2_other_candidates"])
 
 
+def test_selected_wide_uses_text_cols_default_display_fields(monkeypatch):
+    monkeypatch.setattr(mc, "TEXT_COLS_DEFAULT", ["SeriesDescription", "ProtocolName"])
+
+    selected_wide = curate([
+        row(
+            "T2 FS AX BLADE",
+            protocol="Abdomen MR",
+            series_id="T2_ONLY",
+            volume_id="T2_ONLY",
+        ),
+    ])["selected_wide"]
+
+    assert selected_wide.loc[0, "T2"].startswith("T2 FS AX BLADE | Abdomen MR")
+
+
 def test_candidate_display_includes_volume_ordinal_out_of_series_total():
     results = curate([
         row(

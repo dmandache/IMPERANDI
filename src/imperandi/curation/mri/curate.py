@@ -98,6 +98,16 @@ def safe_str(x) -> str:
     return clean_text(x) if pd.notna(x) else ""
 
 
+def _display_str(x) -> str:
+    if isinstance(x, (list, tuple, set, np.ndarray)):
+        values = sorted(x, key=str) if isinstance(x, set) else x
+        parts = [_display_str(v) for v in values]
+        return " / ".join(part for part in parts if part)
+    if _is_missing(x):
+        return ""
+    return re.sub(r"\s+", " ", str(x).strip())
+
+
 def norm_label(x, default: str = "OTHER") -> str:
     if isinstance(x, (list, tuple, set, np.ndarray)):
         x = next((v for v in x if not _is_missing(v)), "")
@@ -184,6 +194,13 @@ def build_series_text(row: pd.Series, cols: Sequence[str] | None = None) -> str:
     """Use all useful text fields, not only SeriesDescription."""
     cols = list(cols or TEXT_COLS_DEFAULT)
     parts = [safe_str(row.get(c)) for c in cols if c in row.index]
+    return " | ".join(part for part in parts if part)
+
+
+def build_display_text(row: pd.Series, cols: Sequence[str] | None = None) -> str:
+    """Return display text from configured raw text columns."""
+    cols = list(cols or TEXT_COLS_DEFAULT)
+    parts = [_display_str(row.get(c)) for c in cols if c in row.index]
     return " | ".join(part for part in parts if part)
 
 
@@ -1438,9 +1455,9 @@ def select_best_candidates(
     ranked = selectable.sort_values(sort_cols, ascending=ascending, na_position="last")
 
     def _display(row: pd.Series) -> str:
-        desc = row.get("SeriesDescription")
-        if pd.isna(desc) or str(desc).strip() == "":
-            desc = row.get("ProtocolName", row.get("series_text", ""))
+        desc = build_display_text(row, cols=TEXT_COLS_DEFAULT)
+        if not desc:
+            desc = _display_str(row.get("ProtocolName")) or row.get("series_text", "")
 
         details = []
         volume_order = safe_float(row.get("volume_order_in_series"))
