@@ -89,18 +89,51 @@ RX_PHASE_ARTERIAL = token(
     r"|0[\s_.+\-]*(?:15|20|25|30|35|40|45)[\s_.+\-]*(?:min|mn)"
 )
 RX_PHASE_PORTAL = token(
-    r"port(?:al)?|porto|porte|portal[\s_-]*venous|portovenous|vein|veine|venous|ven|vp|pv"
-    r"|phase[\s_-]*p|veneux|veineux|veineuse|parenchymateux|parenchymal"
-    r"|[6-9]0[\s_.+\-]*(?:s|sec|secs|second|seconds)|1[\s_.+\-]*(?:min|mn)"
-    r"|1[\s_.+\-]*(?:10|20|30)[\s_.+\-]*(?:min|mn)"
-)
+    # Explicit portal/venous labels
+    r"port(?:al)?|porto|porte|portovenous"
+    r"|portal[\s_-]*venous"
+    r"|vein|veine|venous|veneux|veineux|veineuse"
+    r"|parenchymateux|parenchymal"
+    r"|phase[\s_-]*p|vp|pv"
 
-# Put 2h/hepatobiliary before generic delayed in code.
+    # Duration-only portal phase: 60–99 seconds
+    r"|(?<!\d)(?:[6-9]\d)[\s_.+\-]*"
+    r"(?:s|sec(?:ond)?s?)"
+
+    # Exactly 1 minute
+    r"|(?<!\d)1[\s_.+\-]*"
+    r"(?:mn|min(?:ute)?s?)"
+
+    # Clock-like notation:
+    # 1.10 min / 1:10 min / 1,10 min = 1 min 10 sec
+    r"|(?<!\d)1[.:,](?:10|20|30)[\s_.+\-]*"
+    r"(?:mn|min(?:ute)?s?)"
+
+    # Explicit notation: 1 min 10 s
+    r"|(?<!\d)1[\s_.+\-]*(?:mn|min(?:ute)?s?)"
+    r"[\s_.+\-]*(?:10|20|30)[\s_.+\-]*"
+    r"(?:s|sec(?:ond)?s?)"
+)
+# Must be evaluated before generic delayed-phase rules.
 RX_PHASE_HEPATOBILIARY = token(
+    # Explicit hepatobiliary terminology
     r"hepato[\s_-]*biliary|hepato[\s_-]*biliaire"
-    r"|hbp|bhp|eovist|primovist|gadoxetate|gadoxetic|tardif\s*\+?\s*2\s*h|2\s*h"
-    r"|10[\s_-]*(?:min|mn)|15[\s_-]*(?:min|mn)|20[\s_-]*(?:min|mn)|120\s*min"
-    r"|hb|hbhr|voie[\s_-]*biliaire|transitionnel"
+    r"|hepatobiliary|hepatobiliaire"
+    r"|hbp|bhp"
+    r"|eovist|primovist|gadoxetate|gadoxetic"
+    r"|voie[\s_-]*biliaire"
+    r"|transitionnel"
+
+    # Standalone 10, 15, 20 or 120 minutes.
+    # The left guard prevents matching "10 min" inside "1.10 min".
+    r"|(?<![\d:.,_+\-])(?:10|15|20|120)"
+    r"[\s_.+\-]*(?:mn|min(?:ute)?s?)(?!\w)"
+
+    # 2h / 2 h / 2h30 / 2 h 40 / 2h30min
+    r"|(?<!\d)2[\s_.+\-]*h"
+    r"(?:[\s_.+\-]*(?:[0-5]?\d)"
+    r"(?:[\s_.+\-]*(?:mn|min(?:ute)?s?))?)?"
+    r"(?!\w)"
 )
 RX_PHASE_DELAYED = token(
     r"tard(?:if|ive)?|delay(?:ed)?|delai|délai|late|equilibrium|equilibre|équilibre|eq|interstitiel"

@@ -403,14 +403,14 @@ def detect_explicit_phase_from_text(row: pd.Series) -> tuple[str | None, str, st
             "explicit_text",
         )
 
-    if re.search(rules.RX_PHASE_DELAYED, text):
-        return "DELAYED", "matched explicit delayed/tardif keyword", "explicit", "explicit_text"
-
     if re.search(rules.RX_PHASE_PORTAL, text):
         return "PORTAL_VENOUS", "matched explicit portal/venous keyword", "explicit", "explicit_text"
 
     if re.search(rules.RX_PHASE_ARTERIAL, text):
         return "ARTERIAL", "matched explicit arterial keyword", "explicit", "explicit_text"
+    
+    if re.search(rules.RX_PHASE_DELAYED, text):
+        return "DELAYED", "matched explicit delayed/tardif keyword", "explicit", "explicit_text"
 
     return None, "no explicit T1 perfusion phase keyword matched", "unknown", "none"
 
