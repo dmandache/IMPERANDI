@@ -21,7 +21,8 @@ RX_LOCALIZER = token(
     r"loc|loca|locali[sz]er|localiser|scout|survey|rep[eè]rage|topogram|calibration|cal\s*body|test|phantom|dummy"
 )
 RX_KEY_IMAGES = token(
-    r"key\s*(?:images?|objects?)|key[\s_-]*object[\s_-]*selection"
+    rf"key{SEP}(?:images?|objects?)"
+    rf"|key{SEP}object{SEP}selection"
     r"|ko|kos|kin|kon|snapshot|screen\s*save|capture|processed\s*images?"
     r"|screen[\s_-]*saves?|images?[\s_-]*cl[eé]s?|objets?[\s_-]*cl[eé]s?"
 )
