@@ -51,6 +51,7 @@ TEXT_COLS_DEFAULT = [
 
 DIXON_TEXT_COLS = [col for col in TEXT_COLS_DEFAULT if col != "ImageType"]
 
+ART_PORT_LATE_CONTEXT_PENDING = "art_port_late_context_pending"
 ART_PORT_CONTEXT_PENDING = "art_port_context_pending"
 MASK_MULTIART_CONTEXT_PENDING = "mask_multiart_context_pending"
 
@@ -360,6 +361,16 @@ def text_matches_art_port(row: pd.Series) -> bool:
     return bool(re.search(rules.RX_PHASE_ART_PORT_DYNAMIC, build_series_text(row)))
 
 
+def text_matches_art_port_late(row: pd.Series) -> bool:
+    text = build_series_text(row)
+    return bool(
+        re.search(rules.RX_PHASE_ARTERIAL, text)
+        and re.search(rules.RX_PHASE_PORTAL, text)
+        and re.search(rules.RX_PHASE_DELAYED, text)
+        and not re.search(rules.RX_PHASE_HEPATOBILIARY, text)
+    )
+
+
 def text_matches_mask_multiart(row: pd.Series) -> bool:
     return bool(re.search(rules.RX_PHASE_MASK_MULTIART_DYNAMIC, build_series_text(row)))
 
@@ -416,6 +427,28 @@ def infer_special_t1_phase_from_volume_order(row: pd.Series) -> tuple[str | None
 
     order = int(order)
     n_volumes = int(n_volumes)
+
+    if text_matches_art_port_late(row):
+        if order == 1:
+            return (
+                "ARTERIAL",
+                f"inferred ARTERIAL from first ART/PORT/LATE volume {order}/{n_volumes}",
+                "inferred",
+                "volume_order_art_port_late",
+            )
+        if order == 2:
+            return (
+                "PORTAL_VENOUS",
+                f"inferred PORTAL_VENOUS from second ART/PORT/LATE volume {order}/{n_volumes}",
+                "inferred",
+                "volume_order_art_port_late",
+            )
+        return (
+            "DELAYED",
+            f"inferred DELAYED from later ART/PORT/LATE volume {order}/{n_volumes}",
+            "inferred",
+            "volume_order_art_port_late",
+        )
 
     if text_matches_art_port(row):
         if order == 1:
@@ -499,8 +532,8 @@ def detect_t1_perfusion_phase(row: pd.Series) -> tuple[str, str, str, str]:
     Volume-aware T1 phase classifier.
 
     Priority:
-      1. Special multivolume ART-PORT / Mask+Multiart order inference.
-      2. Defer single-volume ART-PORT candidates to exam context.
+      1. Special multivolume ART/PORT/LATE, ART-PORT, or Mask+Multiart order inference.
+      2. Defer single-volume special dynamic candidates to exam context.
       3. Explicit pure phase text, e.g. SANS IV, ART, PORT, TARDIF.
       4. Generic dynamic volume order inference.
       5. OTHER.
@@ -518,6 +551,17 @@ def detect_t1_perfusion_phase(row: pd.Series) -> tuple[str, str, str, str]:
         or re.search(rules.RX_QUANT_OR_REPORT, text)
     ):
         return "OTHER", "matched subtraction/derived/non-diagnostic marker", "unknown", "none"
+
+    if text_matches_art_port_late(row):
+        special_label, special_reason, special_conf, special_source = infer_special_t1_phase_from_volume_order(row)
+        if special_label is not None:
+            return special_label, special_reason, special_conf, special_source
+        return (
+            "OTHER",
+            "matched single-volume ART/PORT/LATE text; awaiting exam acquisition context",
+            "unknown",
+            ART_PORT_LATE_CONTEXT_PENDING,
+        )
 
     if text_matches_art_port(row):
         special_label, special_reason, special_conf, special_source = infer_special_t1_phase_from_volume_order(row)
@@ -628,19 +672,27 @@ def _acquisition_sort_key(row: pd.Series, row_order: int) -> tuple:
     )
 
 
-def infer_two_series_art_port_phases(exam_rows: pd.DataFrame) -> list[tuple[int, str, str]]:
-    """Resolve paired single-volume ART-PORT series by acquisition order."""
-    n_volumes = exam_rows.get(
-        "n_volumes_in_series", pd.Series(1, index=exam_rows.index)
-    )
-    is_single_volume = n_volumes.apply(safe_float).eq(1)
-    is_unresolved_art_port = exam_rows["mri_perfusion_source"].eq(ART_PORT_CONTEXT_PENDING)
-    candidates = exam_rows.loc[is_single_volume & is_unresolved_art_port]
+def _infer_special_profile_phases_by_acquisition_order(
+    exam_rows: pd.DataFrame,
+    *,
+    candidate_sources: set[str],
+    profile_name: str,
+    rank_to_label,
+) -> list[tuple[int, str, str]]:
+    """Resolve special dynamic profiles by acquisition order within Dixon component."""
+    candidates = exam_rows.loc[
+        exam_rows["mri_perfusion_source"].isin(candidate_sources)
+    ].copy()
     if candidates.empty:
         return []
 
-    row_order = {idx: order for order, idx in enumerate(candidates.index)}
+    n_volumes = candidates.get(
+        "n_volumes_in_series", pd.Series(1, index=candidates.index)
+    ).apply(safe_float)
+    candidates["_is_single_volume"] = n_volumes.eq(1)
+    candidates["_is_multivolume"] = n_volumes.gt(1)
 
+    row_order = {idx: order for order, idx in enumerate(candidates.index)}
     component = (
         candidates["dixon_component"].fillna("UNKNOWN")
         if "dixon_component" in candidates.columns
@@ -648,69 +700,86 @@ def infer_two_series_art_port_phases(exam_rows: pd.DataFrame) -> list[tuple[int,
     )
     assignments = []
     for component_name, component_rows in candidates.groupby(component, sort=False):
-        if len(component_rows) < 2:
+        has_single_volume = bool(component_rows["_is_single_volume"].any())
+        has_multivolume = bool(component_rows["_is_multivolume"].any())
+        if not has_single_volume:
             continue
+        if not has_multivolume and len(component_rows) < 2:
+            continue
+
         ranked = sorted(
             component_rows.index,
             key=lambda row_idx: _acquisition_sort_key(
                 component_rows.loc[row_idx], row_order[row_idx]
             ),
         )
-        for rank, (row_idx, label) in enumerate(
-            zip(ranked, ["ARTERIAL", "PORTAL_VENOUS"]),
-            start=1,
-        ):
-            assignments.append((
-                row_idx,
-                label,
-                (
-                    f"inferred {label} from ART-PORT acquisition {rank}/2 "
-                    f"for paired {component_name} single-volume series"
-                ),
-            ))
-    return assignments
-
-
-def infer_single_volume_mask_multiart_phases(
-    exam_rows: pd.DataFrame,
-) -> list[tuple[int, str, str]]:
-    """Resolve single-volume Mask+Multiart series within each Dixon component."""
-    n_volumes = exam_rows.get(
-        "n_volumes_in_series", pd.Series(1, index=exam_rows.index)
-    )
-    is_single_volume = n_volumes.apply(safe_float).eq(1)
-    is_pending = exam_rows["mri_perfusion_source"].eq(MASK_MULTIART_CONTEXT_PENDING)
-    candidates = exam_rows.loc[is_single_volume & is_pending]
-    if candidates.empty:
-        return []
-
-    row_order = {idx: order for order, idx in enumerate(candidates.index)}
-    component = (
-        candidates["dixon_component"].fillna("UNKNOWN")
-        if "dixon_component" in candidates.columns
-        else pd.Series("UNKNOWN", index=candidates.index)
-    )
-    assignments = []
-    for component_name, component_rows in candidates.groupby(component, sort=False):
-        if len(component_rows) < 2:
-            continue
-        ranked = sorted(
-            component_rows.index,
-            key=lambda row_idx: _acquisition_sort_key(
-                component_rows.loc[row_idx], row_order[row_idx]
-            ),
+        context = (
+            "mixed multivolume and single-volume matches"
+            if has_multivolume
+            else "single-volume series"
         )
         for rank, row_idx in enumerate(ranked, start=1):
-            label = "NATIVE" if rank == 1 else "ARTERIAL"
+            label = rank_to_label(rank)
             assignments.append((
                 row_idx,
                 label,
                 (
-                    f"inferred {label} from Mask+Multiart acquisition {rank}/{len(ranked)} "
-                    f"for {component_name} single-volume series"
+                    f"inferred {label} from {profile_name} acquisition {rank}/{len(ranked)} "
+                    f"for {component_name} {context}"
                 ),
             ))
     return assignments
+
+
+def infer_art_port_phases_by_acquisition_order(
+    exam_rows: pd.DataFrame,
+) -> list[tuple[int, str, str]]:
+    """Resolve ART-PORT rows by acquisition order when series context requires it."""
+    return _infer_special_profile_phases_by_acquisition_order(
+        exam_rows,
+        candidate_sources={
+            ART_PORT_CONTEXT_PENDING,
+            "volume_order_art_port",
+        },
+        profile_name="ART-PORT",
+        rank_to_label=lambda rank: {
+            1: "ARTERIAL",
+            2: "PORTAL_VENOUS",
+        }.get(rank, "DELAYED"),
+    )
+
+
+def infer_art_port_late_phases_by_acquisition_order(
+    exam_rows: pd.DataFrame,
+) -> list[tuple[int, str, str]]:
+    """Resolve ART/PORT/LATE rows by acquisition order when series context requires it."""
+    return _infer_special_profile_phases_by_acquisition_order(
+        exam_rows,
+        candidate_sources={
+            ART_PORT_LATE_CONTEXT_PENDING,
+            "volume_order_art_port_late",
+        },
+        profile_name="ART/PORT/LATE",
+        rank_to_label=lambda rank: {
+            1: "ARTERIAL",
+            2: "PORTAL_VENOUS",
+        }.get(rank, "DELAYED"),
+    )
+
+
+def infer_mask_multiart_phases_by_acquisition_order(
+    exam_rows: pd.DataFrame,
+) -> list[tuple[int, str, str]]:
+    """Resolve Mask+Multiart rows by acquisition order when series context requires it."""
+    return _infer_special_profile_phases_by_acquisition_order(
+        exam_rows,
+        candidate_sources={
+            MASK_MULTIART_CONTEXT_PENDING,
+            "volume_order_mask_multiart",
+        },
+        profile_name="Mask+Multiart",
+        rank_to_label=lambda rank: "NATIVE" if rank == 1 else "ARTERIAL",
+    )
 
 
 def infer_generic_dynamic_phases_from_exam_context(
@@ -822,9 +891,11 @@ def _exam_has_post_contrast_dynamic_phase(exam_rows: pd.DataFrame) -> bool:
     resolved_dynamic = phase.isin(["ARTERIAL", "PORTAL_VENOUS", "DELAYED"]) & source.isin(
         [
             "ordinal_context",
+            "acquisition_order_art_port_late",
             "acquisition_order_art_port",
             "acquisition_order_mask_multiart",
             "acquisition_order_dixon_component",
+            "volume_order_art_port_late",
             "volume_order",
             "volume_order_art_port",
             "volume_order_mask_multiart",
@@ -904,7 +975,35 @@ def add_mri_perfusion_columns(
     for idx in grouped:
         exam_rows = out.loc[idx].copy()
 
-        for row_idx, label, reason in infer_two_series_art_port_phases(exam_rows):
+        for row_idx, label, reason in infer_art_port_late_phases_by_acquisition_order(
+            exam_rows
+        ):
+            out.loc[row_idx, "mri_perfusion_label"] = label
+            out.loc[row_idx, "mri_perfusion_reason"] = reason
+            out.loc[row_idx, "mri_perfusion_confidence"] = "inferred"
+            out.loc[row_idx, "mri_perfusion_source"] = (
+                "acquisition_order_art_port_late"
+            )
+
+        unresolved_art_port_late = out.loc[idx, "mri_perfusion_source"].eq(
+            ART_PORT_LATE_CONTEXT_PENDING
+        )
+        for row_idx in out.loc[idx].index[unresolved_art_port_late]:
+            out.loc[row_idx, "mri_perfusion_label"] = "DELAYED"
+            out.loc[row_idx, "mri_perfusion_reason"] = (
+                "ART/PORT/LATE exam context did not resolve multiple single-volume "
+                "acquisitions; treated as delayed"
+            )
+            out.loc[row_idx, "mri_perfusion_confidence"] = "inferred"
+            out.loc[row_idx, "mri_perfusion_source"] = (
+                "explicit_text_art_port_late_single"
+            )
+
+        exam_rows = out.loc[idx].copy()
+
+        for row_idx, label, reason in infer_art_port_phases_by_acquisition_order(
+            exam_rows
+        ):
             out.loc[row_idx, "mri_perfusion_label"] = label
             out.loc[row_idx, "mri_perfusion_reason"] = reason
             out.loc[row_idx, "mri_perfusion_confidence"] = "inferred"
@@ -922,7 +1021,7 @@ def add_mri_perfusion_columns(
 
         exam_rows = out.loc[idx].copy()
 
-        for row_idx, label, reason in infer_single_volume_mask_multiart_phases(
+        for row_idx, label, reason in infer_mask_multiart_phases_by_acquisition_order(
             exam_rows
         ):
             out.loc[row_idx, "mri_perfusion_label"] = label

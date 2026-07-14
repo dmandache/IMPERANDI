@@ -280,6 +280,48 @@ def test_art_port_two_single_volume_series_use_acquisition_order():
     ]
 
 
+def test_art_port_mixed_multivolume_and_single_volume_uses_acquisition_order():
+    results = curate([
+        row(
+            "T1 VIBE DIXON ART-PORT CAIPI_W",
+            series_id="SER_SINGLE_FIRST",
+            volume_id="VS1",
+            time="120000",
+            acquisition_order=0,
+        ),
+        row(
+            "T1 VIBE DIXON ART-PORT CAIPI_W",
+            series_id="SER_MULTI",
+            volume_id="VM1",
+            time="120100",
+            acquisition_order=1,
+        ),
+        row(
+            "T1 VIBE DIXON ART-PORT CAIPI_W",
+            series_id="SER_SINGLE_SECOND",
+            volume_id="VS2",
+            time="120200",
+            acquisition_order=2,
+        ),
+        row(
+            "T1 VIBE DIXON ART-PORT CAIPI_W",
+            series_id="SER_MULTI",
+            volume_id="VM2",
+            time="120300",
+            acquisition_order=3,
+        ),
+    ])
+    cur = results["curated"].sort_values("acquisition_order")
+
+    assert cur["mri_perfusion_label"].tolist() == [
+        "ARTERIAL",
+        "PORTAL_VENOUS",
+        "DELAYED",
+        "DELAYED",
+    ]
+    assert set(cur["mri_perfusion_source"]) == {"acquisition_order_art_port"}
+
+
 def test_single_volume_art_port_row_defers_to_exam_context():
     candidate = pd.Series({
         **row("T1 VIBE DIXON ART-PORT CAIPI_W"),
@@ -356,6 +398,113 @@ def test_art_port_single_volume_falls_back_to_portal_transition():
     assert out.loc[0, "mri_perfusion_source"] == "explicit_text_art_port_single"
 
 
+def test_art_port_late_multivolume_resolves_arterial_portal_delayed():
+    results = curate([
+        row("T1 VIBE DIXON ART / PORT / LATE_W", series_id="SER_APL", volume_id="V1", time="120000"),
+        row("T1 VIBE DIXON ART / PORT / LATE_W", series_id="SER_APL", volume_id="V2", time="120100"),
+        row("T1 VIBE DIXON ART / PORT / LATE_W", series_id="SER_APL", volume_id="V3", time="120200"),
+    ])
+    cur = results["curated"].sort_values("volume_order_in_series")
+
+    assert cur["n_volumes_in_series"].tolist() == [3, 3, 3]
+    assert cur["mri_perfusion_label"].tolist() == [
+        "ARTERIAL",
+        "PORTAL_VENOUS",
+        "DELAYED",
+    ]
+    assert set(cur["mri_perfusion_source"]) == {"volume_order_art_port_late"}
+
+
+def test_art_port_late_dynamic_context_enables_native_fallback():
+    results = curate([
+        row("WATER: Ax LAVA-Flex APNEE", series_id="SER_PRE", volume_id="VPRE", time="115900"),
+        row("T1 VIBE DIXON ART / PORT / LATE_W", series_id="SER_APL", volume_id="V1", time="120000"),
+        row("T1 VIBE DIXON ART / PORT / LATE_W", series_id="SER_APL", volume_id="V2", time="120100"),
+        row("T1 VIBE DIXON ART / PORT / LATE_W", series_id="SER_APL", volume_id="V3", time="120200"),
+    ])
+    cur = results["curated"].set_index("volume_id")
+
+    assert cur.loc["VPRE", "mri_perfusion_label"] == "NATIVE"
+    assert cur.loc["VPRE", "mri_perfusion_source"] == "exam_context"
+
+
+def test_art_port_late_mixed_multivolume_and_single_volume_uses_acquisition_order():
+    results = curate([
+        row(
+            "T1 VIBE DIXON ART / PORT / LATE_W",
+            series_id="SER_SINGLE_FIRST",
+            volume_id="VS1",
+            time="120000",
+            acquisition_order=0,
+        ),
+        row(
+            "T1 VIBE DIXON ART / PORT / LATE_W",
+            series_id="SER_MULTI",
+            volume_id="VM1",
+            time="120100",
+            acquisition_order=1,
+        ),
+        row(
+            "T1 VIBE DIXON ART / PORT / LATE_W",
+            series_id="SER_SINGLE_SECOND",
+            volume_id="VS2",
+            time="120200",
+            acquisition_order=2,
+        ),
+        row(
+            "T1 VIBE DIXON ART / PORT / LATE_W",
+            series_id="SER_MULTI",
+            volume_id="VM2",
+            time="120300",
+            acquisition_order=3,
+        ),
+    ])
+    cur = results["curated"].sort_values("acquisition_order")
+
+    assert cur["mri_perfusion_label"].tolist() == [
+        "ARTERIAL",
+        "PORTAL_VENOUS",
+        "DELAYED",
+        "DELAYED",
+    ]
+    assert set(cur["mri_perfusion_source"]) == {
+        "acquisition_order_art_port_late"
+    }
+
+
+def test_art_port_late_single_volume_series_use_acquisition_order_per_component():
+    rows = []
+    for component_index, component in enumerate(["W", "in"]):
+        for acquisition, label in [(1, "FIRST"), (2, "SECOND"), (3, "THIRD")]:
+            rows.append(row(
+                f"T1 VIBE DIXON ART / PORT / LATE_{component}",
+                series_id=f"SER_{component}_{label}",
+                volume_id=f"VOL_{component}_{label}",
+                AcquisitionNumber=10 - acquisition,
+                acquisition_order=(acquisition - 1) * 2 + component_index,
+                time=f"120{acquisition - 1}00",
+            ))
+
+    results = curate(rows)
+    cur = results["curated"].set_index("volume_id")
+
+    for component in ["W", "in"]:
+        assert cur.loc[f"VOL_{component}_FIRST", "mri_perfusion_label"] == "ARTERIAL"
+        assert cur.loc[f"VOL_{component}_SECOND", "mri_perfusion_label"] == "PORTAL_VENOUS"
+        assert cur.loc[f"VOL_{component}_THIRD", "mri_perfusion_label"] == "DELAYED"
+    assert set(cur["mri_perfusion_source"]) == {
+        "acquisition_order_art_port_late"
+    }
+
+
+def test_art_port_late_single_volume_falls_back_to_delayed():
+    out = mc.annotate_mri(pd.DataFrame([row("T1 VIBE DIXON ART / PORT / LATE_W")]))
+    assert out.loc[0, "mri_perfusion_label"] == "DELAYED"
+    assert out.loc[0, "mri_perfusion_source"] == (
+        "explicit_text_art_port_late_single"
+    )
+
+
 def test_ssoustration_art_port_is_treated_as_subtraction():
     results = curate([
         row("T1 VIBE DIXON SSOUSTRATION ART-PORT CAIPI_W"),
@@ -404,6 +553,50 @@ def test_mask_multiart_single_volume_series_use_acquisition_order_per_component(
     }
 
 
+def test_mask_multiart_mixed_multivolume_and_single_volume_uses_acquisition_order():
+    results = curate([
+        row(
+            "Ax LAVA Mask+Multiart Fluoro_W",
+            series_id="SER_SINGLE_FIRST",
+            volume_id="VS1",
+            time="120000",
+            acquisition_order=0,
+        ),
+        row(
+            "Ax LAVA Mask+Multiart Fluoro_W",
+            series_id="SER_MULTI",
+            volume_id="VM1",
+            time="120100",
+            acquisition_order=1,
+        ),
+        row(
+            "Ax LAVA Mask+Multiart Fluoro_W",
+            series_id="SER_SINGLE_SECOND",
+            volume_id="VS2",
+            time="120200",
+            acquisition_order=2,
+        ),
+        row(
+            "Ax LAVA Mask+Multiart Fluoro_W",
+            series_id="SER_MULTI",
+            volume_id="VM2",
+            time="120300",
+            acquisition_order=3,
+        ),
+    ])
+    cur = results["curated"].sort_values("acquisition_order")
+
+    assert cur["mri_perfusion_label"].tolist() == [
+        "NATIVE",
+        "ARTERIAL",
+        "ARTERIAL",
+        "ARTERIAL",
+    ]
+    assert set(cur["mri_perfusion_source"]) == {
+        "acquisition_order_mask_multiart"
+    }
+
+
 def test_mask_multiart_single_volume_falls_back_to_arterial():
     out = mc.annotate_mri(pd.DataFrame([row("Ax LAVA Mask+Multiart Fluoro_W")]))
 
@@ -429,6 +622,58 @@ def test_generic_4d_mdixon_volume_order_pre_art_port_delayed():
         "DELAYED",
     ]
     assert set(cur["mri_perfusion_source"]) == {"volume_order"}
+
+
+def test_generic_4d_mdixon_mixed_multivolume_and_single_volume_uses_acquisition_order():
+    results = curate([
+        row(
+            "4D mDIXON-W",
+            series_id="SER_SINGLE_PRE",
+            volume_id="VS1",
+            time="120000",
+            acquisition_order=0,
+        ),
+        row(
+            "4D mDIXON-W",
+            series_id="SER_MULTI",
+            volume_id="VM1",
+            time="120100",
+            acquisition_order=1,
+        ),
+        row(
+            "4D mDIXON-W",
+            series_id="SER_SINGLE_PORT",
+            volume_id="VS2",
+            time="120200",
+            acquisition_order=2,
+        ),
+        row(
+            "4D mDIXON-W",
+            series_id="SER_MULTI",
+            volume_id="VM2",
+            time="120300",
+            acquisition_order=3,
+        ),
+        row(
+            "4D mDIXON-W",
+            series_id="SER_MULTI",
+            volume_id="VM3",
+            time="120400",
+            acquisition_order=4,
+        ),
+    ])
+    cur = results["curated"].sort_values("acquisition_order")
+
+    assert cur["mri_perfusion_label"].tolist() == [
+        "NATIVE",
+        "ARTERIAL",
+        "PORTAL_VENOUS",
+        "DELAYED",
+        "DELAYED",
+    ]
+    assert set(cur["mri_perfusion_source"]) == {
+        "acquisition_order_dixon_component"
+    }
 
 
 # -----------------------------------------------------------------------------

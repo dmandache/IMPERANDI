@@ -171,12 +171,15 @@ T1_PHASE_PRIORITY = {
 # Explicit phase labels should beat phases inferred from a dynamic container.
 T1_PHASE_SOURCE_PRIORITY = {
     "explicit_text": 40,
+    "explicit_text_art_port_late_single": 25,
     "explicit_text_art_port_single": 25,
     "explicit_text_mask_multiart_single": 25,
     "ordinal_context": 15,
+    "acquisition_order_art_port_late": 10,
     "acquisition_order_art_port": 10,
     "acquisition_order_mask_multiart": 10,
     "acquisition_order_dixon_component": 5,
+    "volume_order_art_port_late": 10,
     "volume_order_art_port": 10,
     "volume_order_mask_multiart": 10,
     "volume_order": 0,
