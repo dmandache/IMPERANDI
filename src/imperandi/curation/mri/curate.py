@@ -190,16 +190,97 @@ def parse_pixel_spacing(x) -> tuple[float, float, float, float]:
     return sx, sy, mean_spacing, pixel_area
 
 
+def _resolve_text_cols(cols: Sequence[str] | None = None) -> list[str]:
+    return list(TEXT_COLS_DEFAULT if cols is None else cols)
+
+
+def get_dixon_text_cols(cols: Sequence[str] | None = None) -> list[str]:
+    return [col for col in _resolve_text_cols(cols) if col != "ImageType"]
+
+
+def iter_series_text_columns(
+    row: pd.Series,
+    cols: Sequence[str] | None = None,
+):
+    for col in _resolve_text_cols(cols):
+        if col not in row.index:
+            continue
+        text = safe_str(row.get(col))
+        if text:
+            yield col, text
+
+
+def _first_text_column_value(
+    row: pd.Series,
+    evaluator,
+    cols: Sequence[str] | None = None,
+):
+    for _, text in iter_series_text_columns(row, cols=cols):
+        value = evaluator(text)
+        if value is not None:
+            return value
+    return None
+
+
+def _row_matches_pattern(
+    row: pd.Series,
+    pattern: str,
+    cols: Sequence[str] | None = None,
+) -> bool:
+    return bool(
+        _first_text_column_value(
+            row,
+            lambda text: True if re.search(pattern, text) else None,
+            cols=cols,
+        )
+    )
+
+
+def _row_matches_any_patterns(
+    row: pd.Series,
+    patterns: Sequence[str],
+    cols: Sequence[str] | None = None,
+) -> bool:
+    return bool(
+        _first_text_column_value(
+            row,
+            lambda text: True if any(re.search(pattern, text) for pattern in patterns) else None,
+            cols=cols,
+        )
+    )
+
+
+def _row_matches_all_patterns(
+    row: pd.Series,
+    required_patterns: Sequence[str],
+    excluded_patterns: Sequence[str] | None = None,
+    cols: Sequence[str] | None = None,
+) -> bool:
+    excluded_patterns = list(excluded_patterns or [])
+    return bool(
+        _first_text_column_value(
+            row,
+            lambda text: (
+                True
+                if all(re.search(pattern, text) for pattern in required_patterns)
+                and not any(re.search(pattern, text) for pattern in excluded_patterns)
+                else None
+            ),
+            cols=cols,
+        )
+    )
+
+
 def build_series_text(row: pd.Series, cols: Sequence[str] | None = None) -> str:
     """Use all useful text fields, not only SeriesDescription."""
-    cols = list(cols or TEXT_COLS_DEFAULT)
+    cols = _resolve_text_cols(cols)
     parts = [safe_str(row.get(c)) for c in cols if c in row.index]
     return " | ".join(part for part in parts if part)
 
 
 def build_display_text(row: pd.Series, cols: Sequence[str] | None = None) -> str:
     """Return display text from configured raw text columns."""
-    cols = list(cols or TEXT_COLS_DEFAULT)
+    cols = _resolve_text_cols(cols)
     parts = [_display_str(row.get(c)) for c in cols if c in row.index]
     return " | ".join(part for part in parts if part)
 
@@ -330,23 +411,40 @@ def add_volume_order_features(
 
 
 def detect_mri_sequence(row: pd.Series) -> tuple[str, str, str]:
-    text = build_series_text(row)
     modality = safe_str(row.get("Modality")).upper()
 
-    if re.search(rules.RX_LOCALIZER, text):
-        return "LOCALIZER", "matched localizer/scout/survey keyword", "high"
+    text_match = _first_text_column_value(
+        row,
+        lambda text: (
+            ("LOCALIZER", "matched localizer/scout/survey keyword", "high")
+            if re.search(rules.RX_LOCALIZER, text)
+            else (
+                ("KEY_IMAGES", "matched key-image/processed marker", "high")
+                if modality == "KO" or re.search(rules.RX_KEY_IMAGES, text)
+                else (
+                    ("DWI", "matched DWI/diffusion/ADC/b-value keyword", "high")
+                    if re.search(rules.RX_SEQUENCE_DWI, text)
+                    else (
+                        ("T1", "matched T1 / VIBE-LAVA-THRIVE-Dixon-GRE family", "high")
+                        if (
+                            re.search(rules.RX_SEQUENCE_T1, text)
+                            or re.search(rules.RX_SEQUENCE_T1_CONTRAST, text)
+                        )
+                        else (
+                            ("T2", "matched T2/TSE/FSE/HASTE/BLADE/MRCP family", "high")
+                            if re.search(rules.RX_SEQUENCE_T2, text)
+                            else None
+                        )
+                    )
+                )
+            )
+        ),
+    )
+    if text_match is not None:
+        return text_match
 
-    if modality == "KO" or re.search(rules.RX_KEY_IMAGES, text):
+    if modality == "KO":
         return "KEY_IMAGES", "matched key-image/processed marker", "high"
-
-    if re.search(rules.RX_SEQUENCE_DWI, text):
-        return "DWI", "matched DWI/diffusion/ADC/b-value keyword", "high"
-
-    if re.search(rules.RX_SEQUENCE_T1, text) or re.search(rules.RX_SEQUENCE_T1_CONTRAST, text):
-        return "T1", "matched T1 / VIBE-LAVA-THRIVE-Dixon-GRE family", "high"
-
-    if re.search(rules.RX_SEQUENCE_T2, text):
-        return "T2", "matched T2/TSE/FSE/HASTE/BLADE/MRCP family", "high"
 
     # Weak TR/TE fallback, if available.
     tr = safe_float(row.get("RepetitionTime"))
@@ -375,59 +473,82 @@ def add_mri_sequence_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def text_matches_art_port(row: pd.Series) -> bool:
-    return bool(re.search(rules.RX_PHASE_ART_PORT_DYNAMIC, build_series_text(row)))
+    return _row_matches_pattern(row, rules.RX_PHASE_ART_PORT_DYNAMIC)
 
 
 def text_matches_art_port_late(row: pd.Series) -> bool:
-    text = build_series_text(row)
-    return bool(
-        re.search(rules.RX_PHASE_ARTERIAL, text)
-        and re.search(rules.RX_PHASE_PORTAL, text)
-        and re.search(rules.RX_PHASE_DELAYED, text)
-        and not re.search(rules.RX_PHASE_HEPATOBILIARY, text)
+    return _row_matches_all_patterns(
+        row,
+        required_patterns=[
+            rules.RX_PHASE_ARTERIAL,
+            rules.RX_PHASE_PORTAL,
+            rules.RX_PHASE_DELAYED,
+        ],
+        excluded_patterns=[rules.RX_PHASE_HEPATOBILIARY],
     )
 
 
 def text_matches_mask_multiart(row: pd.Series) -> bool:
-    return bool(re.search(rules.RX_PHASE_MASK_MULTIART_DYNAMIC, build_series_text(row)))
+    return _row_matches_pattern(row, rules.RX_PHASE_MASK_MULTIART_DYNAMIC)
 
 
 def has_post_contrast_text(row: pd.Series) -> bool:
-    return bool(re.search(rules.RX_PHASE_POST_CONTRAST, build_series_text(row)))
+    return _row_matches_pattern(row, rules.RX_PHASE_POST_CONTRAST)
 
 
 def detect_ordinal_phase_index(row: pd.Series) -> int | None:
-    match = re.search(rules.RX_PHASE_ORDINAL, build_series_text(row))
-    if not match:
-        return None
-    for group in match.groups():
-        if group is not None:
-            return int(group)
-    return None
+    return _first_text_column_value(
+        row,
+        lambda text: next(
+            (
+                int(group)
+                for group in re.search(rules.RX_PHASE_ORDINAL, text).groups()
+                if group is not None
+            ),
+            None,
+        )
+        if re.search(rules.RX_PHASE_ORDINAL, text)
+        else None,
+    )
 
 
 def detect_explicit_phase_from_text(row: pd.Series) -> tuple[str | None, str, str, str]:
-    text = build_series_text(row)
-
-    if re.search(rules.RX_PHASE_NATIVE, text):
-        return "NATIVE", "matched explicit native/non-injected keyword", "explicit", "explicit_text"
-
-    if re.search(rules.RX_PHASE_HEPATOBILIARY, text):
-        return (
-            "HEPATOBILIARY",
-            "matched explicit hepatobiliary/2h keyword",
-            "explicit",
-            "explicit_text",
-        )
-
-    if re.search(rules.RX_PHASE_PORTAL, text):
-        return "PORTAL_VENOUS", "matched explicit portal/venous keyword", "explicit", "explicit_text"
-
-    if re.search(rules.RX_PHASE_ARTERIAL, text):
-        return "ARTERIAL", "matched explicit arterial keyword", "explicit", "explicit_text"
-    
-    if re.search(rules.RX_PHASE_DELAYED, text):
-        return "DELAYED", "matched explicit delayed/tardif keyword", "explicit", "explicit_text"
+    match = _first_text_column_value(
+        row,
+        lambda text: (
+            ("NATIVE", "matched explicit native/non-injected keyword", "explicit", "explicit_text")
+            if re.search(rules.RX_PHASE_NATIVE, text)
+            else (
+                (
+                    "HEPATOBILIARY",
+                    "matched explicit hepatobiliary/2h keyword",
+                    "explicit",
+                    "explicit_text",
+                )
+                if re.search(rules.RX_PHASE_HEPATOBILIARY, text)
+                else (
+                    (
+                        "PORTAL_VENOUS",
+                        "matched explicit portal/venous keyword",
+                        "explicit",
+                        "explicit_text",
+                    )
+                    if re.search(rules.RX_PHASE_PORTAL, text)
+                    else (
+                        ("ARTERIAL", "matched explicit arterial keyword", "explicit", "explicit_text")
+                        if re.search(rules.RX_PHASE_ARTERIAL, text)
+                        else (
+                            ("DELAYED", "matched explicit delayed/tardif keyword", "explicit", "explicit_text")
+                            if re.search(rules.RX_PHASE_DELAYED, text)
+                            else None
+                        )
+                    )
+                )
+            )
+        ),
+    )
+    if match is not None:
+        return match
 
     return None, "no explicit T1 perfusion phase keyword matched", "unknown", "none"
 
@@ -515,7 +636,7 @@ def has_generic_dynamic_t1_evidence(row: pd.Series) -> bool:
     if pd.isna(n_volumes) or n_volumes < 3:
         return False
 
-    return bool(re.search(rules.RX_PHASE_GENERIC_DYNAMIC, build_series_text(row)))
+    return _row_matches_pattern(row, rules.RX_PHASE_GENERIC_DYNAMIC)
 
 
 def infer_generic_t1_phase_from_volume_order(row: pd.Series) -> tuple[str | None, str, str, str]:
@@ -555,7 +676,6 @@ def detect_t1_perfusion_phase(row: pd.Series) -> tuple[str, str, str, str]:
       4. Generic dynamic volume order inference.
       5. OTHER.
     """
-    text = build_series_text(row)
     seq = norm_label(row.get("mri_sequence"))
 
     if seq != "T1":
@@ -563,9 +683,9 @@ def detect_t1_perfusion_phase(row: pd.Series) -> tuple[str, str, str, str]:
 
     # Derived/subtraction rows are kept as T1 candidates but not valid phase labels.
     if (
-        re.search(rules.RX_SUBTRACTION, text)
-        or re.search(rules.RX_MIP_MPR, text)
-        or re.search(rules.RX_QUANT_OR_REPORT, text)
+        _row_matches_pattern(row, rules.RX_SUBTRACTION)
+        or _row_matches_pattern(row, rules.RX_MIP_MPR)
+        or _row_matches_pattern(row, rules.RX_QUANT_OR_REPORT)
     ):
         return "OTHER", "matched subtraction/derived/non-diagnostic marker", "unknown", "none"
 
@@ -633,9 +753,9 @@ def infer_phase_from_ordinal_context(
     if norm_label(row.get("mri_sequence")) != "T1":
         return None, "ordinal phase ignored because sequence is not T1", "unknown", "ordinal_context"
 
-    text = build_series_text(row)
-    has_dynamic_text = bool(
-        re.search(rules.RX_T1_DYNAMIC, text) or re.search(rules.RX_T1_3D_GRE, text)
+    has_dynamic_text = _row_matches_any_patterns(
+        row,
+        [rules.RX_T1_DYNAMIC, rules.RX_T1_3D_GRE],
     )
     has_post_text = has_post_contrast_text(row)
     exam_has_post_ordinal = bool(
@@ -809,17 +929,16 @@ def infer_generic_dynamic_phases_from_exam_context(
             return False
         if safe_str(row.get("mri_perfusion_source")) not in {"none", "volume_order"}:
             return False
-        text = build_series_text(row)
-        if not re.search(rules.RX_PHASE_GENERIC_DYNAMIC, text):
+        if not _row_matches_pattern(row, rules.RX_PHASE_GENERIC_DYNAMIC):
             return False
         if text_matches_art_port(row) or text_matches_mask_multiart(row):
             return False
         if detect_ordinal_phase_index(row) is not None:
             return False
         if (
-            re.search(rules.RX_SUBTRACTION, text)
-            or re.search(rules.RX_MIP_MPR, text)
-            or re.search(rules.RX_QUANT_OR_REPORT, text)
+            _row_matches_pattern(row, rules.RX_SUBTRACTION)
+            or _row_matches_pattern(row, rules.RX_MIP_MPR)
+            or _row_matches_pattern(row, rules.RX_QUANT_OR_REPORT)
         ):
             return False
         explicit_label, *_ = detect_explicit_phase_from_text(row)
@@ -877,11 +996,10 @@ def is_native_fallback_candidate(row: pd.Series) -> bool:
     if norm_label(row.get("mri_perfusion_label")) != "OTHER":
         return False
 
-    text = build_series_text(row)
     if (
-        re.search(rules.RX_SUBTRACTION, text)
-        or re.search(rules.RX_MIP_MPR, text)
-        or re.search(rules.RX_QUANT_OR_REPORT, text)
+        _row_matches_pattern(row, rules.RX_SUBTRACTION)
+        or _row_matches_pattern(row, rules.RX_MIP_MPR)
+        or _row_matches_pattern(row, rules.RX_QUANT_OR_REPORT)
         or has_post_contrast_text(row)
         or detect_ordinal_phase_index(row) is not None
     ):
@@ -897,7 +1015,7 @@ def is_native_fallback_candidate(row: pd.Series) -> bool:
 
     return bool(
         row.get("is_3d_gre")
-        or re.search(rules.RX_T1_3D_GRE, text)
+        or _row_matches_pattern(row, rules.RX_T1_3D_GRE)
         or dixon_component in {"WATER", "IN_PHASE", "DIXON_UNKNOWN"}
     )
 
@@ -928,7 +1046,6 @@ def _exam_has_post_contrast_dynamic_phase(exam_rows: pd.DataFrame) -> bool:
 
 
 def _sort_key_for_native_fallback(row: pd.Series) -> tuple:
-    text = build_series_text(row)
     component = row.get("dixon_component")
     component_score = {
         "WATER": 4,
@@ -938,7 +1055,7 @@ def _sort_key_for_native_fallback(row: pd.Series) -> tuple:
     }.get(component, 0)
     quality_score = 0
     quality_score += 4 if row.get("plane") == "AXIAL" else 0
-    quality_score += 3 if bool(row.get("is_3d_gre")) or re.search(rules.RX_T1_3D_GRE, text) else 0
+    quality_score += 3 if bool(row.get("is_3d_gre")) or _row_matches_pattern(row, rules.RX_T1_3D_GRE) else 0
     quality_score += 1 if bool(row.get("is_breath_hold")) else 0
 
     time_seconds = parse_time_to_seconds(row.get("time"))
@@ -1108,7 +1225,26 @@ def add_mri_perfusion_columns(
 # -----------------------------------------------------------------------------
 
 
-def detect_plane(text: str) -> str:
+def detect_plane(value: pd.Series | str, cols: Sequence[str] | None = None) -> str:
+    if isinstance(value, pd.Series):
+        plane = _first_text_column_value(
+            value,
+            lambda text: (
+                "AXIAL"
+                if re.search(rules.RX_PLANE_AXIAL, text)
+                else (
+                    "CORONAL"
+                    if re.search(rules.RX_PLANE_CORONAL, text)
+                    else (
+                        "SAGITTAL" if re.search(rules.RX_PLANE_SAGITTAL, text) else None
+                    )
+                )
+            ),
+            cols=cols,
+        )
+        return plane or "UNKNOWN"
+
+    text = safe_str(value)
     if re.search(rules.RX_PLANE_AXIAL, text):
         return "AXIAL"
     if re.search(rules.RX_PLANE_CORONAL, text):
@@ -1208,35 +1344,7 @@ def _free_text_component_tokens(text: str) -> set[str]:
     }
 
 
-def detect_dixon_component(row: pd.Series) -> tuple[str, str, str]:
-    """Return normalized Dixon component, reason, and evidence source."""
-    text = build_series_text(row, cols=DIXON_TEXT_COLS)
-
-    if re.search(rules.RX_DIXON_FAT_FRACTION, text):
-        return "FAT_FRACTION", "matched explicit fat-fraction/PDFF text", "explicit_text"
-    if re.search(rules.RX_DIXON_R2STAR, text):
-        return "R2STAR", "matched explicit R2*/T2* map text", "explicit_text"
-
-    image_component, image_tokens = _image_type_dixon_details(row.get("ImageType"))
-    if image_component is not None:
-        matched_tokens = [
-            token for token in image_tokens if token in IMAGE_TYPE_DIXON_COMPONENTS
-        ]
-        if image_component == "DIXON_UNKNOWN":
-            return (
-                image_component,
-                f"contradictory ImageType Dixon tokens: {', '.join(matched_tokens)}",
-                "image_type",
-            )
-        return (
-            image_component,
-            f"matched ImageType token {matched_tokens[0]}",
-            "image_type",
-        )
-
-    if re.search(rules.RX_DIXON_ALL, text):
-        return "DIXON_ALL", "matched explicit all-reconstructions text", "explicit_text"
-
+def _detect_dixon_component_from_text(text: str) -> tuple[str, str, str] | None:
     explicit_components = []
     for component, pattern in [
         ("WATER", rules.RX_DIXON_WATER),
@@ -1274,34 +1382,94 @@ def detect_dixon_component(row: pd.Series) -> tuple[str, str, str]:
         )
     if has_dixon_context:
         return "DIXON_UNKNOWN", "Dixon context detected without component", "dixon_context"
+    return None
+
+
+def detect_dixon_component(row: pd.Series) -> tuple[str, str, str]:
+    """Return normalized Dixon component, reason, and evidence source."""
+    image_component, image_tokens = _image_type_dixon_details(row.get("ImageType"))
+    if image_component is not None:
+        matched_tokens = [
+            token for token in image_tokens if token in IMAGE_TYPE_DIXON_COMPONENTS
+        ]
+        if image_component == "DIXON_UNKNOWN":
+            return (
+                image_component,
+                f"contradictory ImageType Dixon tokens: {', '.join(matched_tokens)}",
+                "image_type",
+            )
+        return (
+            image_component,
+            f"matched ImageType token {matched_tokens[0]}",
+            "image_type",
+        )
+
+    text_match = _first_text_column_value(
+        row,
+        lambda text: (
+            ("FAT_FRACTION", "matched explicit fat-fraction/PDFF text", "explicit_text")
+            if re.search(rules.RX_DIXON_FAT_FRACTION, text)
+            else (
+                ("R2STAR", "matched explicit R2*/T2* map text", "explicit_text")
+                if re.search(rules.RX_DIXON_R2STAR, text)
+                else (
+                    ("DIXON_ALL", "matched explicit all-reconstructions text", "explicit_text")
+                    if re.search(rules.RX_DIXON_ALL, text)
+                    else _detect_dixon_component_from_text(text)
+                )
+            )
+        ),
+        cols=get_dixon_text_cols(),
+    )
+    if text_match is not None:
+        return text_match
+
     return "NOT_DIXON", "no Dixon context or component token", "none"
 
 
 def add_basic_feature_columns(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     out["series_text"] = out.apply(build_series_text, axis=1)
-    out["plane"] = out["series_text"].apply(detect_plane)
+    out["plane"] = out.apply(detect_plane, axis=1)
 
-    out["is_subtraction"] = out["series_text"].str.contains(rules.RX_SUBTRACTION, regex=True, na=False)
-    out["is_mip_mpr"] = out["series_text"].str.contains(rules.RX_MIP_MPR, regex=True, na=False)
-    out["is_quant_or_report"] = out["series_text"].str.contains(rules.RX_QUANT_OR_REPORT, regex=True, na=False)
+    out["is_subtraction"] = out.apply(lambda row: _row_matches_pattern(row, rules.RX_SUBTRACTION), axis=1)
+    out["is_mip_mpr"] = out.apply(lambda row: _row_matches_pattern(row, rules.RX_MIP_MPR), axis=1)
+    out["is_quant_or_report"] = out.apply(
+        lambda row: _row_matches_pattern(row, rules.RX_QUANT_OR_REPORT),
+        axis=1,
+    )
 
     # T1 features.
     dixon = out.apply(detect_dixon_component, axis=1)
     out[["dixon_component", "dixon_component_reason", "dixon_component_source"]] = (
         pd.DataFrame(dixon.tolist(), index=out.index)
     )
-    out["is_3d_gre"] = out["series_text"].str.contains(rules.RX_T1_3D_GRE, regex=True, na=False)
-    out["is_dynamic_t1_text"] = out["series_text"].str.contains(rules.RX_T1_DYNAMIC, regex=True, na=False)
-    out["is_breath_hold"] = out["series_text"].str.contains(rules.RX_BREATH_HOLD, regex=True, na=False)
-    out["is_resp_triggered"] = out["series_text"].str.contains(rules.RX_RESP_TRIGGERED, regex=True, na=False)
+    out["is_3d_gre"] = out.apply(lambda row: _row_matches_pattern(row, rules.RX_T1_3D_GRE), axis=1)
+    out["is_dynamic_t1_text"] = out.apply(
+        lambda row: _row_matches_pattern(row, rules.RX_T1_DYNAMIC),
+        axis=1,
+    )
+    out["is_breath_hold"] = out.apply(lambda row: _row_matches_pattern(row, rules.RX_BREATH_HOLD), axis=1)
+    out["is_resp_triggered"] = out.apply(
+        lambda row: _row_matches_pattern(row, rules.RX_RESP_TRIGGERED),
+        axis=1,
+    )
 
     # T2 features.
-    out["is_t2_fatsat"] = out["series_text"].str.contains(rules.RX_T2_FATSAT, regex=True, na=False)
-    out["is_t2_motion_robust"] = out["series_text"].str.contains(rules.RX_T2_MOTION_ROBUST, regex=True, na=False)
-    out["is_t2_haste_ssfse"] = out["series_text"].str.contains(rules.RX_T2_HASTE_SSFSE, regex=True, na=False)
-    out["is_t2_tse_fse"] = out["series_text"].str.contains(rules.RX_T2_TSE_FSE, regex=True, na=False)
-    out["is_t2_mrcp_biliary"] = out["series_text"].str.contains(rules.RX_T2_MRCP_BILIARY, regex=True, na=False)
+    out["is_t2_fatsat"] = out.apply(lambda row: _row_matches_pattern(row, rules.RX_T2_FATSAT), axis=1)
+    out["is_t2_motion_robust"] = out.apply(
+        lambda row: _row_matches_pattern(row, rules.RX_T2_MOTION_ROBUST),
+        axis=1,
+    )
+    out["is_t2_haste_ssfse"] = out.apply(
+        lambda row: _row_matches_pattern(row, rules.RX_T2_HASTE_SSFSE),
+        axis=1,
+    )
+    out["is_t2_tse_fse"] = out.apply(lambda row: _row_matches_pattern(row, rules.RX_T2_TSE_FSE), axis=1)
+    out["is_t2_mrcp_biliary"] = out.apply(
+        lambda row: _row_matches_pattern(row, rules.RX_T2_MRCP_BILIARY),
+        axis=1,
+    )
 
     return out
 
@@ -1345,11 +1513,10 @@ def score_t2(row: pd.Series) -> float:
 
 
 def score_dwi(row: pd.Series) -> float:
-    text = row.get("series_text", "")
     score = 70.0
-    score += 10 if re.search(rules.RX_PLANE_AXIAL, text) else 0
-    score += 10 if re.search(rules.RX_SEQUENCE_DWI, text) else 0
-    score -= 50 if re.search(rules.RX_MIP_MPR, text) else 0
+    score += 10 if row.get("plane") == "AXIAL" else 0
+    score += 10 if _row_matches_pattern(row, rules.RX_SEQUENCE_DWI) else 0
+    score -= 50 if bool(row.get("is_mip_mpr")) else 0
     return score
 
 

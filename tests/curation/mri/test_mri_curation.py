@@ -123,6 +123,26 @@ def test_build_series_text_normalizes_case_whitespace_and_lists():
     assert mc.build_series_text(series) == "ax t1 dixon"
 
 
+def test_sequence_detection_uses_first_matching_text_column(monkeypatch):
+    monkeypatch.setattr(mc, "TEXT_COLS_DEFAULT", ["SeriesDescription", "ProtocolName"])
+
+    out = mc.annotate_mri(pd.DataFrame([
+        row("T2 FS AX BLADE PACE DOME", protocol="T1 VIBE DIXON SANS IV CAIPI_W"),
+    ]))
+
+    assert out.loc[0, "mri_sequence"] == "T2"
+
+
+def test_sequence_detection_falls_back_to_next_text_column_when_first_has_no_match(monkeypatch):
+    monkeypatch.setattr(mc, "TEXT_COLS_DEFAULT", ["SeriesDescription", "ProtocolName"])
+
+    out = mc.annotate_mri(pd.DataFrame([
+        row("abdomen liver", protocol="T1 VIBE DIXON SANS IV CAIPI_W"),
+    ]))
+
+    assert out.loc[0, "mri_sequence"] == "T1"
+
+
 # -----------------------------------------------------------------------------
 # Explicit T1 phase labels
 # -----------------------------------------------------------------------------
@@ -234,6 +254,39 @@ def test_hepatobiliary_2h_takes_priority_over_delayed_tardif():
     out = mc.annotate_mri(pd.DataFrame([row("mDIXON tardif 2h")]))
     assert out.loc[0, "mri_perfusion_label"] == "HEPATOBILIARY"
     assert "hepatobiliary" in out.loc[0, "mri_perfusion_reason"].lower()
+
+
+def test_explicit_phase_matching_uses_first_matching_text_column(monkeypatch):
+    monkeypatch.setattr(mc, "TEXT_COLS_DEFAULT", ["SeriesDescription", "ProtocolName"])
+
+    out = mc.annotate_mri(pd.DataFrame([
+        row("AX T1 DIXON ART_W", protocol="PORT"),
+    ]))
+
+    assert out.loc[0, "mri_perfusion_label"] == "ARTERIAL"
+    assert out.loc[0, "mri_perfusion_source"] == "explicit_text"
+
+
+def test_explicit_phase_matching_falls_back_to_next_text_column_when_first_has_no_phase(monkeypatch):
+    monkeypatch.setattr(mc, "TEXT_COLS_DEFAULT", ["SeriesDescription", "ProtocolName"])
+
+    out = mc.annotate_mri(pd.DataFrame([
+        row("AX T1 DIXON CAIPI_W", protocol="PORT"),
+    ]))
+
+    assert out.loc[0, "mri_perfusion_label"] == "PORTAL_VENOUS"
+    assert out.loc[0, "mri_perfusion_source"] == "explicit_text"
+
+
+def test_art_port_late_profile_is_not_synthesized_across_text_columns(monkeypatch):
+    monkeypatch.setattr(mc, "TEXT_COLS_DEFAULT", ["SeriesDescription", "ProtocolName"])
+
+    out = mc.annotate_mri(pd.DataFrame([
+        row("AX T1 DIXON ART_W", protocol="PORT LATE"),
+    ]))
+
+    assert out.loc[0, "mri_perfusion_label"] == "ARTERIAL"
+    assert out.loc[0, "mri_perfusion_source"] == "explicit_text"
 
 
 # -----------------------------------------------------------------------------
@@ -730,6 +783,36 @@ def test_explicit_native_selected_over_inferred_4d_native():
 def test_dixon_component_detection(desc: str, expected_component: str):
     out = mc.annotate_mri(pd.DataFrame([row(desc)]))
     assert out.loc[0, "dixon_component"] == expected_component
+
+
+def test_dixon_component_uses_first_matching_text_column(monkeypatch):
+    monkeypatch.setattr(mc, "TEXT_COLS_DEFAULT", ["SeriesDescription", "ProtocolName"])
+
+    out = mc.annotate_mri(pd.DataFrame([
+        row("mDIXON water only", protocol="mDIXON fat only"),
+    ]))
+
+    assert out.loc[0, "dixon_component"] == "WATER"
+
+
+def test_dixon_component_falls_back_to_next_text_column_when_first_has_no_match(monkeypatch):
+    monkeypatch.setattr(mc, "TEXT_COLS_DEFAULT", ["SeriesDescription", "ProtocolName"])
+
+    out = mc.annotate_mri(pd.DataFrame([
+        row("abdomen liver", protocol="mDIXON fat only"),
+    ]))
+
+    assert out.loc[0, "dixon_component"] == "FAT"
+
+
+def test_plane_detection_uses_first_matching_text_column(monkeypatch):
+    monkeypatch.setattr(mc, "TEXT_COLS_DEFAULT", ["SeriesDescription", "ProtocolName"])
+
+    out = mc.annotate_mri(pd.DataFrame([
+        row("T2 COR", protocol="T2 AX"),
+    ]))
+
+    assert out.loc[0, "plane"] == "CORONAL"
 
 
 def test_water_component_scores_higher_than_in_phase_and_fat_for_same_phase():
