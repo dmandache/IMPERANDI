@@ -118,7 +118,6 @@ RX_PHASE_HEPATOBILIARY = token(
     r"hepato[\s_-]*biliary|hepato[\s_-]*biliaire"
     r"|hepatobiliary|hepatobiliaire"
     r"|hbp|bhp"
-    r"|eovist|primovist|gadoxetate|gadoxetic"
     r"|voie[\s_-]*biliaire"
     r"|transitionnel"
 
@@ -140,6 +139,7 @@ RX_PHASE_DELAYED = token(
 RX_PHASE_ORDINAL = token(r"ph(?:ase)?[\s_-]*([1-9])|ph([1-9])")
 RX_PHASE_POST_CONTRAST = token(
     r"gado|gad|gadolinium|contrast|contraste|inject(?:ed|ion|e|ee|é|ée)?|post|c\+"
+    r"|eovist|primovist|gadoxetate|gadoxetic"
 )
 RX_PHASE_GENERIC_DYNAMIC = token(
     r"dyn|dynamic|dynamique|dce|dsc|pwi|perfusion|perf|multi\s*phase|multiphase"

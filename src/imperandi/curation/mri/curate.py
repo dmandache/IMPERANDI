@@ -1495,6 +1495,8 @@ def score_t1(row: pd.Series) -> float:
     score -= 150 if bool(row.get("is_subtraction")) else 0
     score -= 100 if bool(row.get("is_mip_mpr")) else 0
     score -= 200 if bool(row.get("is_quant_or_report")) else 0
+
+    #score -= 20 if bool(row.get("SliceThickness")>5) else 0
     return float(score)
 
 
