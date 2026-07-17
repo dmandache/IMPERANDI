@@ -46,7 +46,7 @@ RX_SEQUENCE_T1 = token(
     r"t1|vibe|lava|thrive|ethrive|twist|grasp|dynava|fspgr|spgr|tfe"
     r"|twist[\s_-]*vibe|twistvibe|lava[\s_-]*flex|lavaflex"
     r"|dixon|mdixon|qdixon|edixon|m[\s_-]*dixon|q[\s_-]*dixon|e[\s_-]*dixon"
-    r"|ideal|t1[\s_-]*weighted|3d\s*t1"
+    r"|idea|disco|t1[\s_-]*weighted|3d\s*t1"
 )
 RX_SEQUENCE_T1_CONTRAST = token(
     r"t1[\w\s_/\-+]{0,50}(?:post|gd|gado|gad|gadolinium|contrast|c\+|fs[\s_-]*post)"
@@ -175,7 +175,7 @@ RX_RESP_TRIGGERED = token(r"pace|trigger|triggered|resp|respi|rtr|rt|nav|navigat
 # Dixon components ------------------------------------------------------------
 RX_DIXON_CONTEXT = token(
     r"dixon|mdixon|m[\s_-]*dixon|qdixon|q[\s_-]*dixon|edixon|e[\s_-]*dixon"
-    r"|lava\s*flex|lavaflex|flex|ideal"
+    r"|lava\s*flex|lavaflex|flex|idea|disco"
 )
 RX_DIXON_ALL = token(r"all|all_bh|m[\s_-]*dixon[\s_-]*all|mdixon[\s_-]*all|dixon[\s_-]*all")
 RX_DIXON_WATER = token(r"w|water|wat|eau")
