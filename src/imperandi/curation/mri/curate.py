@@ -1585,8 +1585,19 @@ def select_best_candidates(
     patient_col: str = "patient_key",
     study_col: str | None = "study_id",
     date_col: str = "date",
+    display_text_col_count: int | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Return selected_long and selected_wide."""
+    """Return selected_long and selected_wide.
+
+    ``display_text_col_count`` limits candidate display text to the first N
+    configured ``TEXT_COLS_DEFAULT`` fields. ``None`` retains all fields.
+    """
+    if display_text_col_count is not None:
+        if isinstance(display_text_col_count, bool) or not isinstance(display_text_col_count, int):
+            raise TypeError("display_text_col_count must be a positive integer or None")
+        if display_text_col_count < 1:
+            raise ValueError("display_text_col_count must be at least 1 or None")
+
     data = curated.copy()
     if date_col in data.columns:
         data[date_col] = pd.to_datetime(data[date_col], errors="coerce").dt.date
@@ -1624,8 +1635,9 @@ def select_best_candidates(
     ranked = selectable.sort_values(sort_cols, ascending=ascending, na_position="last")
 
     def _display(row: pd.Series) -> str:
-        desc = build_display_text(row, cols=TEXT_COLS_DEFAULT)
-        if not desc:
+        display_cols = TEXT_COLS_DEFAULT[:display_text_col_count]
+        desc = build_display_text(row, cols=display_cols)
+        if not desc and display_text_col_count is None:
             desc = _display_str(row.get("ProtocolName")) or row.get("series_text", "")
 
         details = []
@@ -1730,8 +1742,13 @@ def curate_mri(
     series_col: str = "series_id",
     volume_col: str = "volume_id",
     date_col: str = "date",
+    display_text_col_count: int | None = None,
 ) -> dict[str, pd.DataFrame]:
-    """Full MRI curation pipeline."""
+    """Full MRI curation pipeline.
+
+    Set ``display_text_col_count`` to limit selected-candidate displays to the
+    first N fields in ``TEXT_COLS_DEFAULT``; ``None`` displays all fields.
+    """
     curated = annotate_mri(
         df,
         patient_col=patient_col,
@@ -1745,6 +1762,7 @@ def curate_mri(
         patient_col=patient_col,
         study_col=study_col,
         date_col=date_col,
+        display_text_col_count=display_text_col_count,
     )
 
     return {

@@ -974,6 +974,38 @@ def test_selected_wide_uses_text_cols_default_display_fields(monkeypatch):
     assert selected_wide.loc[0, "T2"].startswith("T2 FS AX BLADE | Abdomen MR")
 
 
+@pytest.mark.parametrize(
+    "display_text_col_count, expected_display",
+    [
+        (None, "T2 FS AX BLADE | Abdomen MR"),
+        (1, "T2 FS AX BLADE"),
+        (2, "T2 FS AX BLADE | Abdomen MR"),
+    ],
+)
+def test_curate_mri_limits_selected_wide_display_text_columns(
+    monkeypatch, display_text_col_count, expected_display
+):
+    monkeypatch.setattr(mc, "TEXT_COLS_DEFAULT", ["SeriesDescription", "ProtocolName"])
+
+    selected_wide = mc.curate_mri(
+        pd.DataFrame([
+            row("T2 FS AX BLADE", protocol="Abdomen MR", series_id="T2_ONLY", volume_id="T2_ONLY"),
+        ]),
+        display_text_col_count=display_text_col_count,
+    )["selected_wide"]
+
+    assert selected_wide.loc[0, "T2"].startswith(expected_display)
+
+
+@pytest.mark.parametrize("display_text_col_count", [0, -1, True, "1"])
+def test_curate_mri_rejects_invalid_display_text_column_counts(display_text_col_count):
+    with pytest.raises((TypeError, ValueError)):
+        mc.curate_mri(
+            pd.DataFrame([row("T2 FS AX BLADE")]),
+            display_text_col_count=display_text_col_count,
+        )
+
+
 def test_candidate_display_includes_volume_ordinal_out_of_series_total():
     results = curate([
         row(
