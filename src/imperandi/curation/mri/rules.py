@@ -88,8 +88,9 @@ RX_PHASE_ARTERIAL = token(
     r"late[\s_-]*arterial|early[\s_-]*arterial|multi[\s_-]*art|multiart"
     r"|multi[\s_-]*art(?:eriel|erial)?|art(?:eriel|erial|[eé]rielle?)?|artériel|artérielle"
     r"|arterial|artery|aorte|hepatic\s*arter"
-    r"|(?:1[5-9]|[2-4][0-9])[\s_.+\-]*(?:s|sec|secs|second|seconds)"
-    r"|0[\s_.+\-]*(?:15|20|25|30|35|40|45)[\s_.+\-]*(?:min|mn)"
+    # 20-35 seconds.
+    r"|(?:2[0-9]|3[0-5])[\s_.+\-]*(?:s|sec|secs|second|seconds)"
+    r"|0[.:,](?:20|25|30|35)[\s_.+\-]*(?:min|mn)"
 )
 RX_PHASE_PORTAL = token(
     r"port(?:al)?|porto|porte|portovenous"
@@ -98,18 +99,18 @@ RX_PHASE_PORTAL = token(
     #r"|parenchymateux|parenchymal"
     r"|phase[\s_-]*p|vp|pv"
 
-    # 60–99 seconds
-    r"|(?<!\d)[6-9]\d[\s_.+\-]*(?:s|sec(?:ond)?s?)(?!\d)"
+    # 60-90 seconds.
+    r"|(?<!\d)(?:6\d|7\d|8\d|90)[\s_.+\-]*(?:s|sec(?:ond)?s?)(?!\d)"
 
     # Exactly 1 minute
     r"|(?<!\d)1[\s_.+\-]*(?:mn|min(?:ute)?s?)(?!\d)"
 
-    # 1.10 min / 1:25 min / 1 min 45 s
+    # 1:00-1:30 min / 1 min 0-30 s
     r"|(?<!\d)1(?:"
-        r"[.:,][0-5]?\d[\s_.+\-]*(?:mn|min(?:ute)?s?)"
+        r"[.:,](?:0?\d|[12]\d|30)[\s_.+\-]*(?:mn|min(?:ute)?s?)"
         r"|"
         r"[\s_.+\-]*(?:mn|min(?:ute)?s?)"
-        r"[\s_.+\-]*[0-5]?\d[\s_.+\-]*(?:s|sec(?:ond)?s?)"
+        r"[\s_.+\-]*(?:0?\d|[12]\d|30)[\s_.+\-]*(?:s|sec(?:ond)?s?)"
     r")(?!\d)"
 )
 # Must be evaluated before generic delayed-phase rules.
@@ -121,9 +122,9 @@ RX_PHASE_HEPATOBILIARY = token(
     r"|voie[\s_-]*biliaire"
     r"|transitionnel"
 
-    # Standalone 10, 15, 20 or 120 minutes.
-    # The left guard prevents matching "10 min" inside "1.10 min".
-    r"|(?<![\d:.,_+\-])(?:10|15|20|120)"
+    # Standalone 20 or 120 minutes. Ten and fifteen minutes are delayed
+    # acquisitions, not hepatobiliary phases, in this curation policy.
+    r"|(?<![\d:.,_+\-])(?:20|120)"
     r"[\s_.+\-]*(?:mn|min(?:ute)?s?)(?!\w)"
 
     # 2h / 2 h / 2h30 / 2 h 40 / 2h30min
@@ -133,8 +134,11 @@ RX_PHASE_HEPATOBILIARY = token(
     r"(?!\w)"
 )
 RX_PHASE_DELAYED = token(
-    r"tard(?:if|ive)?|delay(?:ed)?|delai|délai|late|equilibrium|equilibre|équilibre|eq|interstitiel"
-    r"|phase[\s_-]*d|[2-9]\s*(?:min|mn)"
+    # Named delayed phases without a stated duration remain valid. If a
+    # duration is stated, it must be covered by the 3-15 minute rule below.
+    r"(?:tard(?:if|ive)?|delay(?:ed)?|delai|délai|late|equilibrium|equilibre|équilibre|eq|interstitiel)"
+    r"(?![\s_.+\-]*\d+\s*(?:min|mn))"
+    r"|phase[\s_-]*d|(?:[3-9]|1[0-5])\s*(?:min|mn)"
 )
 RX_PHASE_ORDINAL = token(r"ph(?:ase)?[\s_-]*([1-9])|ph([1-9])")
 RX_PHASE_POST_CONTRAST = token(
