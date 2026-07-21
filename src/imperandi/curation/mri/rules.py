@@ -95,7 +95,7 @@ RX_PHASE_PORTAL = token(
     r"port(?:al)?|porto|porte|portovenous"
     r"|portal[\s_-]*venous"
     r"|vein|veine|venous|veneux|veineux|veineuse"
-    r"|parenchymateux|parenchymal"
+    #r"|parenchymateux|parenchymal"
     r"|phase[\s_-]*p|vp|pv"
 
     # 60–99 seconds
