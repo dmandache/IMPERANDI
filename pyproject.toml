@@ -12,6 +12,9 @@ dependencies = [
   "numpy",
   "scipy",
   "pandas",
+  "pyarrow>=14",
+  "pydantic>=2",
+  "PyYAML>=6",
   "pandarallel",
   "python-dateutil",
   "unidecode",
@@ -58,6 +61,9 @@ package-dir = {"" = "src"}
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"imperandi.config" = ["profiles/*.yaml"]
+
 [tool.pytest.ini_options]
 markers = [
   "slow: IRCAD dataset integration tests",
@@ -65,3 +71,10 @@ markers = [
 
 [tool.ruff]
 extend-exclude = ["*.ipynb", "**/*legacy*"]
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+[tool.black]
+target-version = ["py310"]

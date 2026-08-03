@@ -1,5 +1,5 @@
 Welcome to IMPERANDI’s documentation!
-=========
+=====================================
 
 .. figure:: https://raw.githubusercontent.com/dmandache/IMPERANDI/main/static/imperandi-logo.png
    :alt: Viewer interface example
@@ -8,11 +8,12 @@ Welcome to IMPERANDI’s documentation!
 
 IMPERANDI [IMaging PREprocessing And Normalization for Diagnostic
 Interoperability] is a Python framework and command-line interface for
-turning heterogeneous CT DICOM exports into traceable, analysis-ready cohorts.
+turning heterogeneous CT and MRI DICOM exports into traceable, analysis-ready
+cohorts.
 
-IMPERANDI discovers DICOM data, curates metadata,
-converts volumes to NIfTI, runs configurable segmentation and contrast-phase
-analysis, extracts radiomics, and supports interactive quality control.
+One typed project YAML controls DICOM discovery, identity resolution,
+modality-aware curation, conversion, optional contrast-phase prediction,
+segmentation, registration, radiomics, and publication.
 
 .. note::
 
@@ -24,6 +25,7 @@ Start here
 
 * :doc:`installation` — install the base package and optional feature sets.
 * :doc:`quickstart` — run a first end-to-end cohort.
+* :doc:`architecture` — understand modules, evidence, routing, and tests.
 * :doc:`workflow` — understand stage boundaries, resuming, and data flow.
 * :doc:`cli` — find command and option details.
 
@@ -33,6 +35,7 @@ Start here
 
    installation
    quickstart
+   architecture
    workflow
    cli
    outputs
@@ -55,4 +58,3 @@ Indices and tables
 * :ref:`genindex`
 * :ref:`modindex`
 * :ref:`search`
-

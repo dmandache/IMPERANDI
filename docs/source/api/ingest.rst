@@ -1,5 +1,5 @@
 Ingestion API
-==========
+=============
 
 Parsing
 -------
@@ -21,4 +21,3 @@ Manifest hooks
 .. automodule:: imperandi.ingest.apply_hook_manifests
    :members:
    :undoc-members:
-

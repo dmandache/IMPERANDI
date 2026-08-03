@@ -388,7 +388,7 @@ def get_dicom_path_entries(
     Strategy:
     1) Resolve root_path as directories and/or archive files.
     2) Recursively discover DICOM sources, including nested archives.
-    3) Prefer *.dcm and fallback to header validation when needed.
+    3) Prefer files ending in ``.dcm`` and fall back to header validation.
     """
     resolved_roots = resolve_root_paths(root_path)
     return discover_dicom_sources(resolved_roots, max_depth=archive_max_depth)

@@ -1,117 +1,86 @@
-# CLI Commands
+# CLI commands
 
 The installed entry point is `imperandi`; `python -m imperandi` is equivalent.
 
 ```bash
-imperandi [--log-level LEVEL] [--log-file PATH] [--quiet] COMMAND [OPTIONS]
+imperandi [--log-level LEVEL] [--log-file PATH] [--quiet] COMMAND
 ```
 
-Global options must appear before the subcommand. `--log-level` accepts normal
-Python logging levels such as `DEBUG`, `INFO`, and `WARNING`.
+Global logging options appear before the command. Project execution options
+such as workers, checkpoint cadence, and resume belong in project YAML so a run
+can be reproduced from its resolved configuration.
 
-Run `imperandi COMMAND --help` for the authoritative option list in your
-installed version.
-
-## `parse`
+## `init`
 
 ```bash
-imperandi parse [ROOT_PATH] [OUTPUT_DIR] [OPTIONS]
+imperandi init [PATH] [--force]
 ```
 
-Reads selected DICOM headers and writes `dicom_index.csv`. Important options:
+Creates a starter project at `PATH` (default `imperandi.yaml`). It will not
+overwrite an existing file unless `--force` is supplied.
 
-- `--root_path`, `--output_dir`: named alternatives to positional paths; named
-  values win when both forms are supplied.
-- `--manifest NAME_OR_JSON`: dataset configuration.
-- `--id_source {auto,tags,path}` and `--patient_key_from`, `--study_id_from`,
-  `--series_id_from`: ID derivation.
-- `--tags A,B,C`: additional DICOM keywords.
-- `--force_dicom_read`: tolerate non-conformant DICOM files.
-- `--snapshot_tags`, `--snapshot_sample_size`, `--snapshot_seed`: recursive tag
-  snapshot controls.
-- `--num_workers`: header-reading process count.
-- `--archive_max_depth`, `--archive_cache_dir`, `--keep_archive_cache`: archive
-  controls.
-
-## `clean`
+## `validate`
 
 ```bash
-imperandi clean [CSV_PATH] [CSV_PATH_OUT] [OPTIONS]
+imperandi validate imperandi.yaml
 ```
 
-Curates parsed instance metadata into a volume-level table. `--csv_path`
-accepts one or more CSVs. Use `--volume-length-min-mm` and
-`--volume-length-max-mm` to change reconstructed-length bounds.
+Loads the built-in profile, merges project overrides, resolves paths, validates
+strict typed models, and checks the stage dependency graph. On success it prints
+the effective configuration SHA-256 hash.
 
-## `ingest`
+Unknown, misspelled, and removed fields are errors. In particular,
+`csv_warning_threshold_files` is an internal product heuristic and is not valid
+project configuration.
+
+## `config resolve`
 
 ```bash
-imperandi ingest [ROOT_PATH] [OUTPUT_DIR] [OPTIONS]
+imperandi config resolve imperandi.yaml
 ```
 
-Combines `parse` and `clean`. It accepts parse/archive options plus clean's
-length bounds and `--csv_dict_path`. `--csv_path_out` selects the final cleaned
-table; it defaults to `<output_dir>/dicom_index_clean.csv`.
+Prints the complete effective YAML after profile application, default filling,
+and path resolution. Review or archive this output when changing a profile or
+site policy.
 
-## `convert`
+## `plan`
 
 ```bash
-imperandi convert [CSV_PATH] [OUTPUT_DIR] [OPTIONS]
+imperandi plan imperandi.yaml
 ```
 
-Converts series listed in one or more CSV files. The default final table is
-`nifti_index.csv` and the default failure table is `conv_errors.csv`, both next
-to the input CSV. Use `--num_workers` to control conversion parallelism.
+Prints the configuration hash and ordered stage graph, including required and
+produced artifacts. It does not execute the pipeline.
 
-## `segment`
+## `run`
 
 ```bash
-imperandi segment [CSV_PATH] [CSV_PATH_OUT] [OPTIONS]
+imperandi run imperandi.yaml
 ```
 
-Requires `imperandi[segment]`. It reads `nifti_path` and runs the selected
-manifest's `segmentation` configuration.
+Executes the fixed dependency graph and prints the final `cohort_index` path.
+The run directory is `<output.root>/runs/<config-hash-prefix>`.
 
-- `--manifest NAME_OR_JSON`: task and post-processing configuration.
-- `--num_workers`: process count.
-- `--start_method {spawn,fork,forkserver}`: multiprocessing strategy; `spawn`
-  is the robust default.
-- `--timeout_sec`: per-volume timeout.
-- `--force`: rerun when output masks already exist.
-- `--error_csv_path`: defaults to `seg_errors.csv` beside the input.
+With `execution.resume: true`, a completed stage is reused only when its
+`stage.json` exists and every recorded artifact still exists. A changed
+effective configuration receives a different run directory.
 
-The output table overwrites the input unless `--csv_path_out` is supplied.
-
-## `phase`
+## `status`
 
 ```bash
-imperandi phase [CSV_PATH] [CSV_PATH_OUT] [OPTIONS]
+imperandi status ./results/runs/<config-hash-prefix>
 ```
 
-Requires `imperandi[segment]` and an input `nifti_path` column. It updates the
-input table by default. Existing populated `totalseg_phase` values are skipped;
-`--force` recomputes them. Failures default to `phase_errors.csv`.
+Prints every discovered stage state, including status, artifacts, and metrics.
+Use `run.json` for the overall state and `stage.json` for failure detail.
 
-## `radiomics`
+## Exit behavior
 
-```bash
-imperandi radiomics [CSV_PATH] [CSV_PATH_OUT] [OPTIONS]
-```
+Configuration, path, validation, and runtime setup errors return exit status 2
+and are logged. Processing-stage exceptions mark both the current stage and the
+overall run as failed before propagating to the caller.
 
-Requires `imperandi[radiomics]`, `nifti_path`, and `mask_*` columns.
-
-- `--manifest NAME_OR_JSON`: load settings and filters from `radiomics`.
-- `--pyradiomics_settings PARAMS.yaml`: use explicit PyRadiomics settings.
-- `--filter column=value1,value2`: filter rows; repeat for more columns.
-- `--skip_filter`: ignore both CLI and manifest filters.
-- `--error_csv_path`: defaults to `radiomics_errors.csv`.
-
-When a manifest contains PyRadiomics settings, they take precedence over an
-explicit YAML path and a warning is emitted.
-
-## Shared long-running options
-
-`parse`, `convert`, `segment`, `phase`, and `radiomics` accept checkpoint and
-resume options described in [Workflow](workflow.md). All commands support
-`--dry-run`.
-
+The old step-by-step `parse`, `clean`, `ingest`, `convert`, `phase`, `segment`,
+and `radiomics` commands are not part of the public CLI. Their algorithms are
+orchestrated by `run`, ensuring that the same configuration and artifact
+contracts govern the full cohort.

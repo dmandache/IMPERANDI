@@ -530,19 +530,13 @@ def filter_by_acquisition_plane(df, angle_thresh_deg=10.0):
 
 
 def correct_volume_ids(df, z_tolerance=1e-3):
-    """
-    Merge "pseudo-volumes" (multiple volume_id values) that actually belong to the same volume,
-    but do it robustly when DICOM tags/columns are missing.
+    """Merge pseudo-volumes that represent one consistently spaced volume.
 
-    Strategy:
-    - If volume_id missing -> return df unchanged.
-    - Group by the *maximum available* columns from a preferred list.
-      If none available -> fallback to grouping by patient_key, study_id, series_id (subset that exists).
-    - Determine z positions using the best available source:
-        1) ImagePositionPatient (z component)
-        2) SliceLocation
-      If neither usable -> skip that group.
-    - If spacing between sorted z positions is consistent (within tolerance) -> merge volume_ids.
+    The grouping uses the maximum available subset of the preferred metadata
+    columns, falling back to patient, study, and series identifiers. Z positions
+    come from ``ImagePositionPatient`` and then ``SliceLocation``. Groups without
+    usable positions are left unchanged. Consistently spaced groups within
+    ``z_tolerance`` receive one volume identifier.
     """
 
     if "volume_id" not in df.columns:
@@ -871,6 +865,7 @@ def group_volumes(df):
 
 def calculate_volume_length(df):
     """Compute reconstructed volume length in millimetres from slice geometry."""
+
     def calculate_total_volume_length(row):
         try:
             n_files = row["n_files"]

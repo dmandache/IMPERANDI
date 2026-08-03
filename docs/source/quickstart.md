@@ -1,89 +1,171 @@
 # Quickstart
 
-This example keeps raw DICOM data, tabular indexes, and generated NIfTI files
-in separate directories:
+IMPERANDI runs from one project YAML. Raw DICOM inputs remain read-only and
+every run is written below the configured output root.
 
-```text
-project/
-├── dicom/          # source data; do not modify
-├── tables/         # CSV indexes and error reports
-└── nifti/          # converted images and masks
-```
-
-## 1. Inspect the plan
-
-Most pipeline commands support `--dry-run`. Use it to confirm resolved paths
-and settings before processing a cohort:
+## 1. Create a project
 
 ```bash
-imperandi ingest \
-  --root_path ./project/dicom \
-  --output_dir ./project/tables \
-  --manifest generic \
-  --dry-run
+imperandi init imperandi.yaml
 ```
 
-## 2. Ingest DICOM metadata
+Edit the generated file:
 
-`ingest` runs `parse` and then `clean`:
+```yaml
+version: 1
+
+project:
+  name: first-cohort
+  profile: liver_ct_mri
+
+input:
+  sources:
+    - /data/dicom
+
+output:
+  root: ./results
+  table_format: parquet
+  publish_formats: [parquet, csv]
+
+identity:
+  source:
+    patient_id_columns: [PatientID]
+    namespace_columns: [site_id, IssuerOfPatientID]
+    fallback:
+      columns: []
+      on_missing: error
+  canonical:
+    strategy: source
+
+phase_prediction:
+  enabled: false
+
+conversion: {enabled: false}
+segmentation: {enabled: false}
+registration: {enabled: false}
+radiomics: {enabled: false}
+
+execution:
+  workers: 4
+  resume: true
+```
+
+Relative paths are resolved from the directory containing `imperandi.yaml`.
+
+## 2. Validate and inspect
 
 ```bash
-imperandi ingest \
-  --root_path ./project/dicom \
-  --output_dir ./project/tables \
-  --manifest generic
+imperandi validate imperandi.yaml
+imperandi config resolve imperandi.yaml
+imperandi plan imperandi.yaml
 ```
 
-The main result is `project/tables/dicom_index_clean.csv`, with one curated row
-per reconstructed volume. To inspect uncommon tags on a deterministic sample,
-add `--snapshot_tags`.
+Validation rejects unknown fields. The resolved configuration shows all profile
+defaults and absolute paths; the plan shows stage dependencies without reading
+or writing cohort data.
 
-## 3. Convert volumes to NIfTI
+## 3. Start safely with metadata only
+
+For a first site validation, disable expensive image stages:
+
+```yaml
+conversion: {enabled: false}
+phase_prediction: {enabled: false}
+segmentation: {enabled: false}
+registration: {enabled: false}
+radiomics: {enabled: false}
+```
+
+Then run:
 
 ```bash
-imperandi convert \
-  --csv_path ./project/tables/dicom_index_clean.csv \
-  --output_dir ./project/nifti \
-  --csv_path_out ./project/tables/nifti_index.csv
+imperandi run imperandi.yaml
 ```
 
-Successful rows gain a `nifti_path`. Conversion failures are written to
-`conv_errors.csv` without aborting all other rows.
+Inspect these artifacts first:
 
-## 4. Segment images
+- `04_annotate/volumes_annotated.*`: all evidence and exclusion decisions;
+- `04_annotate/volumes_shortlist.*`: rows eligible for image processing;
+- `07_resolve_select/volumes_resolved.*`: resolved phase/slot plus provenance;
+- `07_resolve_select/selected_volumes.*`: deterministic final choices;
+- `11_publish/cohort_index.*`: published table.
 
-Install the `segment` extra first, then run the tasks from the selected
-manifest:
+This is the smallest safe implementation and validation slice: it covers input,
+identity, CT/MRI routing, ontology/rules, evidence resolution, and output formats
+without requiring TotalSegmentator, SimpleITK, or PyRadiomics.
+
+## 4. Add site-specific ontology and rules
+
+Reference mapping tables and rule packs from project YAML:
+
+```yaml
+annotations:
+  ontologies:
+    - id: site_slots
+      source: ./protocol_slots.csv
+      keys:
+        SeriesDescription: {match: normalized_exact}
+        AcquisitionNumber: {match: numeric_exact}
+      output:
+        source_column: clinical_slot
+        target_column: slot_ontology
+        vocabulary: clinical_slot
+      unmatched: keep
+      conflicts: error
+  rule_packs:
+    - builtin:liver_ct
+    - builtin:liver_mri
+    - ./site_rules.yaml
+```
+
+Re-run `validate`, `config resolve`, and the metadata-only pipeline on a small,
+representative sample. Review conflicts and exclusions before enabling image
+processing.
+
+## 5. Enable image stages
+
+Install the required extras and enable only the needed features:
 
 ```bash
-imperandi segment \
-  --csv_path ./project/tables/nifti_index.csv \
-  --csv_path_out ./project/tables/nifti_index_segmented.csv \
-  --manifest generic
+python -m pip install -e ".[segment,radiomics]"
 ```
 
-Mask columns are named `mask_<output>`, such as `mask_liver` and
-`mask_liver_tumor`.
+```yaml
+conversion:
+  enabled: true
 
-## 5. Extract phase and radiomics
+phase_prediction:
+  enabled: true
+  modalities: [CT]
+  scope: unresolved
+  minimum_confidence: 0.70
+
+segmentation:
+  enabled: true
+
+registration:
+  enabled: false
+
+radiomics:
+  enabled: true
+  settings: ./Params.yaml
+  slots: [CT_PORTAL_VENOUS, MR_T2]
+  masks: [liver]
+```
+
+Image prediction adds fallback evidence before final selection. Segmentation,
+registration, and radiomics process selected volumes, limiting unnecessary
+compute.
+
+## 6. Check run status
+
+The run directory is named with the first 12 characters of the effective
+configuration hash:
 
 ```bash
-imperandi phase \
-  --csv_path ./project/tables/nifti_index_segmented.csv \
-  --csv_path_out ./project/tables/nifti_index_phased.csv
-
-imperandi radiomics \
-  --csv_path ./project/tables/nifti_index_phased.csv \
-  --csv_path_out ./project/tables/nifti_index_radiomics.csv \
-  --manifest generic
+imperandi status ./results/runs/<config-hash-prefix>
 ```
 
-The phase command adds `totalseg_*` fields. Radiomics discovers all populated
-`mask_*` columns and appends feature columns to the table.
-
-## 6. Check failures before analysis
-
-Each heavy stage writes a command-specific error CSV. Review those reports and
-row counts rather than treating a zero process exit alone as proof that every
-volume succeeded. See [Outputs](outputs.md) for the complete file map.
-
+Do not treat a completed process alone as cohort validation. Review `run.json`,
+stage metrics, error tables, QC tables, missing required-slot flags, and final
+row counts before analysis.

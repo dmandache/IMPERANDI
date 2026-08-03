@@ -1,347 +1,190 @@
+"""User-facing CLI for project-based IMPERANDI pipelines."""
+
 from __future__ import annotations
 
 import argparse
+import json
 import logging
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Optional, Sequence
 
-from imperandi.ingest import clean as clean_module
-from imperandi.ingest import parse as parse_module
-from imperandi.process import convert as convert_module
+import yaml
+from pydantic import ValidationError
+
+from imperandi.config import config_hash, load_config, resolved_config
+from imperandi.pipeline.defaults import build_default_runner
 from imperandi.utils.logging import setup_logging
-from imperandi.utils.manifest import load_manifest
-from imperandi.utils.misc import print_args
 
 logger = logging.getLogger(__name__)
 
 
-def _log_script_namespace(script_file: str, args: argparse.Namespace) -> None:
-    namespace = argparse.Namespace(
-        **{k: v for k, v in vars(args).items() if not k.startswith("_")}
-    )
-    logger.info("🚀 Running %s with namespace: %s", Path(script_file).name, namespace)
+STARTER_CONFIG = """version: 1
 
+project:
+  name: my-cohort
+  profile: liver_ct_mri
 
-def _load_phase_module():
-    from imperandi.extract import phase as phase_module
+input:
+  sources:
+    - /path/to/dicom
 
-    return phase_module
+output:
+  root: ./imperandi-results
+  table_format: parquet
+  publish_formats: [parquet, csv]
 
+identity:
+  source:
+    patient_id_columns: [PatientID]
+    namespace_columns: [site_id, IssuerOfPatientID]
+    fallback:
+      columns: []
+      on_missing: error
+  canonical:
+    strategy: source
 
-def _load_radiomics_module():
-    from imperandi.extract import radiomics as radiomics_module
+phase_prediction:
+  enabled: false
 
-    return radiomics_module
+conversion:
+  enabled: false
 
+segmentation:
+  enabled: false
 
-def _load_segment_module():
-    try:
-        from imperandi.process import segment as segment_module
-    except ModuleNotFoundError as exc:
-        raise RuntimeError(
-            "The 'segment' command requires optional dependencies. "
-            "Install with: pip install -e .[segment]"
-        ) from exc
-    return segment_module
+registration:
+  enabled: false
 
+radiomics:
+  enabled: false
 
-def _add_parse_subcommand(subparsers: argparse._SubParsersAction) -> None:
-    parser = subparsers.add_parser(
-        "parse",
-        help="Parse DICOM headers into an index CSV.",
-    )
-    parse_module.add_parse_arguments(parser)
-    parser.set_defaults(_handler=_handle_parse)
-
-
-def _add_clean_subcommand(subparsers: argparse._SubParsersAction) -> None:
-    parser = subparsers.add_parser(
-        "clean",
-        help="Clean DICOM metadata CSVs.",
-    )
-    clean_module.add_clean_arguments(parser)
-    parser.set_defaults(_handler=_handle_clean)
-
-
-def _add_ingest_subcommand(subparsers: argparse._SubParsersAction) -> None:
-    parser = subparsers.add_parser(
-        "ingest",
-        help="Run parse then clean in a single step.",
-    )
-    parse_module.add_parse_arguments(parser, include_manifest=True)
-    clean_module.add_clean_arguments(
-        parser,
-        include_manifest=False,
-        include_csv_path=False,
-        include_csv_path_out=False,
-        include_dry_run=False,
-    )
-    parser.add_argument(
-        "--csv_path_out",
-        "--csv-path-out",
-        dest="csv_path_out",
-        type=str,
-        default=None,
-        help=(
-            "Optional path to save the cleaned CSV file. "
-            "Defaults to <output_dir>/dicom_index_clean.csv."
-        ),
-    )
-    parser.set_defaults(_handler=_handle_ingest)
-
-
-def _add_convert_subcommand(subparsers: argparse._SubParsersAction) -> None:
-    parser = subparsers.add_parser(
-        "convert",
-        help="Convert DICOM series to NIfTI files.",
-    )
-    convert_module.add_convert_arguments(parser)
-    parser.set_defaults(_handler=_handle_convert)
-
-
-def _add_phase_subcommand(subparsers: argparse._SubParsersAction) -> None:
-    parser = subparsers.add_parser(
-        "phase",
-        help="Extract contrast phase metadata from NIfTI volumes.",
-    )
-    phase_module = _load_phase_module()
-    phase_module.add_phase_arguments(parser)
-    parser.set_defaults(_handler=_handle_phase)
-
-
-def _add_radiomics_subcommand(subparsers: argparse._SubParsersAction) -> None:
-    parser = subparsers.add_parser(
-        "radiomics",
-        help="Extract radiomics features from NIfTI volumes and masks.",
-    )
-    radiomics_module = _load_radiomics_module()
-    radiomics_module.add_radiomics_arguments(parser)
-    parser.set_defaults(_handler=_handle_radiomics)
-
-
-def _add_segment_subcommand(subparsers: argparse._SubParsersAction) -> None:
-    parser = subparsers.add_parser(
-        "segment",
-        help="Segment NIfTI volumes with configurable tasks.",
-    )
-    try:
-        segment_module = _load_segment_module()
-    except RuntimeError as exc:
-        parser.add_argument(
-            "segment_args", nargs=argparse.REMAINDER, help=argparse.SUPPRESS
-        )
-        parser.set_defaults(
-            _handler=_handle_segment_unavailable,
-            _segment_unavailable_msg=str(exc),
-        )
-        return
-
-    segment_module.add_segment_arguments(parser)
-    parser.set_defaults(_handler=_handle_segment)
+execution:
+  workers: 4
+  resume: true
+"""
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Build the top-level IMPERANDI command-line parser.
-
-    Returns:
-        A parser containing global logging options and every pipeline
-        subcommand.
-    """
     parser = argparse.ArgumentParser(
         prog="imperandi",
-        description="IMPERANDI CLI for ingest parsing and cleaning.",
+        description="Build traceable analysis-ready CT/MR imaging cohorts.",
     )
-    parser.add_argument(
-        "--log-level",
-        type=str,
-        default=None,
-        help="Set logging level (e.g. DEBUG, INFO, WARNING).",
-    )
-    parser.add_argument(
-        "--log-file",
-        type=str,
-        default=None,
-        help="Optional path to a log file.",
-    )
-    parser.add_argument(
-        "--quiet",
-        action="store_true",
-        default=False,
-        help="Reduce log verbosity (sets WARNING level unless overridden).",
-    )
+    parser.add_argument("--log-level", default=None)
+    parser.add_argument("--log-file", default=None)
+    parser.add_argument("--quiet", action="store_true")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    _add_parse_subcommand(subparsers)
-    _add_clean_subcommand(subparsers)
-    _add_ingest_subcommand(subparsers)
-    _add_convert_subcommand(subparsers)
-    _add_phase_subcommand(subparsers)
-    _add_radiomics_subcommand(subparsers)
-    _add_segment_subcommand(subparsers)
+    init_parser = subparsers.add_parser("init", help="Create a starter project YAML.")
+    init_parser.add_argument("path", nargs="?", default="imperandi.yaml")
+    init_parser.add_argument("--force", action="store_true")
+    init_parser.set_defaults(_handler=_handle_init)
 
+    validate_parser = subparsers.add_parser(
+        "validate", help="Validate and resolve a project YAML."
+    )
+    validate_parser.add_argument("config")
+    validate_parser.set_defaults(_handler=_handle_validate)
+
+    plan_parser = subparsers.add_parser(
+        "plan", help="Show the resolved stage plan without executing it."
+    )
+    plan_parser.add_argument("config")
+    plan_parser.set_defaults(_handler=_handle_plan)
+
+    run_parser = subparsers.add_parser("run", help="Execute a project pipeline.")
+    run_parser.add_argument("config")
+    run_parser.set_defaults(_handler=_handle_run)
+
+    config_parser = subparsers.add_parser("config", help="Configuration utilities.")
+    config_subparsers = config_parser.add_subparsers(
+        dest="config_command", required=True
+    )
+    resolve_parser = config_subparsers.add_parser(
+        "resolve", help="Print the fully resolved configuration."
+    )
+    resolve_parser.add_argument("config")
+    resolve_parser.set_defaults(_handler=_handle_config_resolve)
+
+    status_parser = subparsers.add_parser("status", help="Show stage states for a run.")
+    status_parser.add_argument("run_dir")
+    status_parser.set_defaults(_handler=_handle_status)
     return parser
 
 
-def _handle_parse(args: argparse.Namespace) -> int:
-    args = parse_module.normalize_parse_args(args)
-    _log_script_namespace(parse_module.__file__, args)
-    if args.dry_run:
-        logger.info("Dry run: parse")
-        print_args(args)
-        return 0
-    parse_module.main(args)
+def _handle_init(args: argparse.Namespace) -> int:
+    path = Path(args.path).expanduser()
+    if path.exists() and not args.force:
+        raise FileExistsError(f"Configuration already exists: {path}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(STARTER_CONFIG, encoding="utf-8")
+    print(f"Created {path}")
     return 0
 
 
-def _handle_clean(args: argparse.Namespace) -> int:
-    args = clean_module.normalize_clean_args(args)
-    _log_script_namespace(clean_module.__file__, args)
-    if args.dry_run:
-        logger.info("Dry run: clean")
-        print_args(args)
-        return 0
-    manifest = load_manifest(
-        args.manifest, base_path=Path(__file__).resolve().parents[0]
-    )
-    clean_module.clean_and_save_data(
-        args.csv_path,
-        args.csv_path_out,
-        args.csv_dict_path,
-        manifest,
-        args.volume_length_min_mm,
-        args.volume_length_max_mm,
-    )
+def _validated(path: str):
+    return load_config(path)
+
+
+def _handle_validate(args: argparse.Namespace) -> int:
+    config = _validated(args.config)
+    build_default_runner(config)
+    print(f"Configuration is valid (sha256:{config_hash(config)})")
     return 0
 
 
-def _handle_ingest(args: argparse.Namespace) -> int:
-    args = parse_module.normalize_parse_args(args)
-    output_dir = Path(args.output_dir)
-    parsed_csv = output_dir / "dicom_index.csv"
-    clean_out = (
-        Path(args.csv_path_out)
-        if args.csv_path_out
-        else output_dir / "dicom_index_clean.csv"
-    )
-    _log_script_namespace(parse_module.__file__, args)
-    _log_script_namespace(
-        clean_module.__file__,
-        argparse.Namespace(
-            csv_path=[str(parsed_csv)],
-            csv_path_out=str(clean_out),
-            csv_dict_path=args.csv_dict_path,
-            manifest=args.manifest,
-            volume_length_min_mm=args.volume_length_min_mm,
-            volume_length_max_mm=args.volume_length_max_mm,
-        ),
-    )
-    if args.dry_run:
-        logger.info("Dry run: ingest (parse -> clean)")
-        print_args(args)
-        return 0
-    parse_module.main(args)
-    manifest = load_manifest(
-        args.manifest, base_path=Path(__file__).resolve().parents[0]
-    )
-
-    clean_module.clean_and_save_data(
-        [str(parsed_csv)],
-        str(clean_out),
-        args.csv_dict_path,
-        manifest,
-        args.volume_length_min_mm,
-        args.volume_length_max_mm,
+def _handle_plan(args: argparse.Namespace) -> int:
+    config = _validated(args.config)
+    runner = build_default_runner(config)
+    print(
+        yaml.safe_dump(
+            {"config_hash": config_hash(config), "stages": runner.plan()},
+            sort_keys=False,
+        )
     )
     return 0
 
 
-def _handle_convert(args: argparse.Namespace) -> int:
-    args = convert_module.normalize_convert_args(args)
-    _log_script_namespace(convert_module.__file__, args)
-    if args.dry_run:
-        logger.info("Dry run: convert")
-        print_args(args)
-        return 0
-    convert_module.main(args)
+def _handle_run(args: argparse.Namespace) -> int:
+    config = _validated(args.config)
+    setup_logging(level=args.log_level or config.execution.log_level)
+    runner = build_default_runner(config)
+    results = runner.run()
+    cohort = results["11_publish"].artifacts["cohort_index"]
+    print(f"Pipeline completed: {cohort}")
     return 0
 
 
-def _handle_phase(args: argparse.Namespace) -> int:
-    phase_module = _load_phase_module()
-    args = phase_module.normalize_phase_args(args)
-    _log_script_namespace(phase_module.__file__, args)
-    if args.dry_run:
-        logger.info("Dry run: phase")
-        print_args(args)
-        return 0
-    try:
-        phase_module.main(args)
-    except RuntimeError as exc:
-        message = str(exc)
-        if "requires optional dependencies" in message:
-            logger.error("%s", message)
-            return 2
-        raise
+def _handle_config_resolve(args: argparse.Namespace) -> int:
+    config = _validated(args.config)
+    print(yaml.safe_dump(resolved_config(config), sort_keys=False))
     return 0
 
 
-def _handle_radiomics(args: argparse.Namespace) -> int:
-    radiomics_module = _load_radiomics_module()
-    args = radiomics_module.normalize_radiomics_args(args)
-    _log_script_namespace(radiomics_module.__file__, args)
-    if args.dry_run:
-        logger.info("Dry run: radiomics")
-        print_args(args)
-        return 0
-    try:
-        radiomics_module.main(args)
-    except RuntimeError as exc:
-        message = str(exc)
-        if "requires optional dependencies" in message:
-            logger.error("%s", message)
-            return 2
-        raise
+def _handle_status(args: argparse.Namespace) -> int:
+    run_dir = Path(args.run_dir).expanduser()
+    states = []
+    for path in sorted(run_dir.glob("*/stage.json")):
+        state = json.loads(path.read_text(encoding="utf-8"))
+        states.append({"stage": path.parent.name, **state})
+    if not states:
+        raise FileNotFoundError(f"No stage state files found under {run_dir}")
+    print(yaml.safe_dump(states, sort_keys=False))
     return 0
 
 
-def _handle_segment(args: argparse.Namespace) -> int:
-    segment_module = _load_segment_module()
-    args = segment_module.normalize_segment_args(args)
-    _log_script_namespace(segment_module.__file__, args)
-    if args.dry_run:
-        logger.info("Dry run: segment")
-        print_args(args)
-        return 0
-    segment_module.main(args)
-    return 0
-
-
-def _handle_segment_unavailable(args: argparse.Namespace) -> int:
-    logger.error(
-        "%s", getattr(args, "_segment_unavailable_msg", "Segment command unavailable.")
-    )
-    return 2
-
-
-def main(argv: Optional[Sequence[str]] = None) -> int:
-    """Parse command-line arguments and dispatch the selected command.
-
-    Args:
-        argv: Arguments excluding the executable name. When ``None``, arguments
-            are read from :data:`sys.argv`.
-
-    Returns:
-        The command's process-style exit code.
-    """
+def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    setup_logging(
-        level=args.log_level,
-        verbose=getattr(args, "verbose", False),
-        quiet=args.quiet,
-        log_file=args.log_file,
-    )
-    return args._handler(args)
+    try:
+        setup_logging(
+            level=args.log_level,
+            quiet=args.quiet,
+            log_file=args.log_file,
+        )
+        return args._handler(args)
+    except (OSError, TypeError, ValueError, RuntimeError, ValidationError) as exc:
+        logger.error("%s", exc)
+        return 2
 
 
 if __name__ == "__main__":

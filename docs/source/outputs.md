@@ -1,51 +1,100 @@
 # Outputs
 
-CSV tables are the pipeline's audit spine. Each stage preserves existing
-columns and adds or normalizes the fields needed downstream.
+Every effective configuration receives a deterministic run directory:
 
-| Stage | Main output | Error/auxiliary output | Key additions |
-|---|---|---|---|
-| `parse` | `dicom_index.csv` | `dicom_index_errors.csv`; optional `dicom_tags_snapshot.ndjson` | IDs, `dicom_path`, selected DICOM tags |
-| `clean` | `<input>_clean.csv` | — | volume grouping, normalized date/time, ordering and geometry fields |
-| `ingest` | `dicom_index_clean.csv` | parse artifacts | parsed and curated volume rows |
-| `convert` | `nifti_index.csv` | `conv_errors.csv` | `nifti_path` |
-| `segment` | input CSV in place, or `--csv_path_out` | `seg_errors.csv` and warning report when applicable | `mask_<output>` paths |
-| `phase` | input CSV in place, or `--csv_path_out` | `phase_errors.csv` | `totalseg_*`, including `totalseg_phase` |
-| `radiomics` | `<input>_radiomics.csv` | `radiomics_errors.csv` | ROI-prefixed PyRadiomics features |
+```text
+<output.root>/runs/<first-12-config-hash>/
+├── run.json
+├── resolved_config.yaml
+├── environment.json
+├── 01_index/
+├── 02_identity/
+├── 03_assemble/
+├── 04_annotate/
+├── 05_convert/
+├── 06_predict_phase/
+├── 07_resolve_select/
+├── 08_segment/
+├── 09_register/
+├── 10_radiomics/
+└── 11_publish/
+```
 
-Defaults are relative to the input CSV or selected output directory. Explicit
-paths are recommended in scheduled pipelines.
+`run.json` records overall status and the final artifact registry.
+`resolved_config.yaml` is the complete profile-plus-project configuration.
+`environment.json` records IMPERANDI, Python, platform, and configuration hash.
+Each stage directory contains `stage.json` with status, artifact paths, and
+metrics.
 
-## Identity and traceability
+## Artifact map
 
-The core identifiers are `patient_key`, `study_id`, and `series_id`. Parse also
-retains `_patient_key_raw` when standardization is applied. `dicom_path` may
-serialize multiple files for a volume or contain archive-aware locations;
-consumers should not assume it is a single ordinary filesystem path.
+| Stage | Primary tables | Optional tables/files |
+|---|---|---|
+| `01_index` | `instances_raw` | `index_errors`, per-source parser checkpoints |
+| `02_identity` | `instances`, `identity_map` | `identity_qc`, `instances_unresolved_identity` |
+| `03_assemble` | `volumes` | — |
+| `04_annotate` | `volumes_annotated`, `volumes_shortlist` | `volumes_rejected`, `annotation_qc` |
+| `05_convert` | `volumes_converted` | `convert_errors`, NIfTI images |
+| `06_predict_phase` | `volumes_predicted` | `phase_prediction_errors` |
+| `07_resolve_select` | `volumes_resolved`, `selected_volumes` | `selection_qc` |
+| `08_segment` | `volumes_segmented` | `segment_errors`, masks |
+| `09_register` | `volumes_registered` | `registration_pairs`, `registration_errors`, transforms, registered images |
+| `10_radiomics` | `radiomics_table` | `radiomics_errors` |
+| `11_publish` | `cohort_index.<format>` | additional requested publication formats |
 
-Long-running stages use an internal `_source_idx` for stable resume and merge
-behavior. It is removed from finalized user-facing tables.
+File extensions follow `output.table_format` for intermediate tables and
+`output.publish_formats` for final tables.
 
-## Image and mask paths
+## Identity and provenance
 
-`nifti_path` identifies the converted CT image. Segmentation outputs are stored
-in columns beginning with `mask_`; their exact set follows the manifest tasks.
-Paths may be absolute depending on the supplied output directory, so moving a
-dataset can invalidate a table. If portability matters, move artifacts and
-rewrite paths as one controlled operation.
+`patient_id` is the canonical cohort identifier. Companion columns include
+`patient_id_method`, `identity_confidence`, and `identity_config_version`.
 
-## Error tables
+`identity_map` is intentionally separate from `instances`. Under
+`secure_table_only` it contains raw-to-canonical mapping fields and must be
+handled according to the project's data-protection controls. Under `never` it
+contains only canonical IDs. Under `cohort`, raw identity fields are also kept
+in cohort tables. A `source` canonical strategy may itself expose a source ID;
+choose HMAC or a pseudonymized crosswalk when canonical IDs must be opaque.
 
-Error CSVs contain the failed source row plus an error message. A command can
-complete while some rows fail, making these tables part of the expected output
-rather than disposable logs. Check all of the following before downstream use:
+Annotation provenance remains explicit:
 
-1. expected input and output row counts;
-2. missing `nifti_path` or `mask_*` values;
-3. command-specific error and warning tables;
-4. whether filtering intentionally reduced radiomics rows.
+- `<target>_ontology_id`, `<target>_ontology_row`, and `<target>_conflict` for
+  ontology results;
+- `<target>_rule_id` and `<target>_evidence` for custom rules;
+- `phase_source`/`phase_conflict` and
+  `clinical_slot_source`/`clinical_slot_conflict` for final resolution;
+- `exclusion_reason` and `exclusion_rule_id` for rule-based exclusions.
 
-Checkpoint files and JSON state may appear beside the configured main/error
-outputs during resumable runs. They are implementation artifacts, not cohort
-tables, and should not be passed to the next stage.
+## CSV and Parquet schemas
 
+IMPERANDI writes `<table>.<format>.schema.json` beside each table. The sidecar
+lists original dtypes and JSON-encoded structured columns. This permits DICOM
+metadata columns containing lists, mappings, or mixed scalar/list values to
+round-trip consistently in CSV and Parquet.
+
+Use `imperandi.io.read_table` when consuming intermediate artifacts in Python;
+plain Pandas readers do not apply the sidecar decoding.
+
+## Errors and QC
+
+Errors and QC are different contracts:
+
+- error tables record a processing failure for a source row or pair;
+- QC tables record a completed decision that still requires review, such as a
+  missing required slot or identity collision;
+- conflict columns retain disagreement between evidence sources even when a
+  value is resolved.
+
+A pipeline can finish with isolated row errors. Before analysis, review:
+
+1. `run.json` and every stage status;
+2. input/output/error row counts;
+3. identity and selection QC tables;
+4. exclusion reasons and evidence conflicts;
+5. missing image, mask, transform, or feature paths;
+6. expected CT and MRI clinical-slot coverage.
+
+Checkpoint and temporary bridge files inside heavy-stage directories are
+implementation artifacts. Use the named tables recorded by `stage.json` as the
+public artifacts.
