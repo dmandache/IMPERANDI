@@ -22,7 +22,8 @@ Every effective configuration receives a deterministic run directory:
 
 `run.json` records overall status and the final artifact registry.
 `resolved_config.yaml` is the complete profile-plus-project configuration.
-`environment.json` records IMPERANDI, Python, platform, and configuration hash.
+`environment.json` records IMPERANDI, Python, platform, pipeline-contract
+version, and configuration hash.
 Each stage directory contains `stage.json` with status, artifact paths, and
 metrics.
 
@@ -48,14 +49,16 @@ File extensions follow `output.table_format` for intermediate tables and
 ## Identity and provenance
 
 `patient_id` is the canonical cohort identifier. Companion columns include
-`patient_id_method`, `identity_confidence`, and `identity_config_version`.
+`patient_id_method`, `identity_confidence`, and `identity_algorithm_version`.
 
 `identity_map` is intentionally separate from `instances`. Under
-`secure_table_only` it contains raw-to-canonical mapping fields and must be
+`separate_table` it contains raw-to-canonical mapping fields and must be
 handled according to the project's data-protection controls. Under `never` it
 contains only canonical IDs. Under `cohort`, raw identity fields are also kept
 in cohort tables. A `source` canonical strategy may itself expose a source ID;
 choose HMAC or a pseudonymized crosswalk when canonical IDs must be opaque.
+`separate_table` describes logical separation, not automatic access control;
+protect the configured output root with suitable filesystem permissions.
 
 Annotation provenance remains explicit:
 

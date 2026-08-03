@@ -9,9 +9,12 @@ from typing import Any
 
 import pandas as pd
 
+from imperandi import __version__
 from imperandi.config.loader import config_hash
 from imperandi.config.models import ImperandiConfig
 from imperandi.io.tables import table_suffix, write_table
+
+PIPELINE_CONTRACT_VERSION = 2
 
 
 @dataclass
@@ -62,7 +65,7 @@ class PipelineStage(ABC):
         return "active"
 
     def resume_token(self, config: ImperandiConfig) -> str | None:
-        return None
+        return f"imperandi:{__version__}:pipeline-contract:{PIPELINE_CONTRACT_VERSION}"
 
     @abstractmethod
     def run(self, context: RunContext) -> StageResult:

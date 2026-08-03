@@ -27,7 +27,7 @@ from imperandi.curation.mri import curate as mc
 def row(
     desc: str | None = None,
     *,
-    patient_key: str = "P1",
+    patient_id: str = "P1",
     study_id: str = "S1",
     series_id: str = "SER1",
     volume_id: str = "V1",
@@ -42,7 +42,7 @@ def row(
 ) -> dict:
     """Small row factory with realistic default metadata."""
     out = {
-        "patient_key": patient_key,
+        "patient_id": patient_id,
         "study_id": study_id,
         "series_id": series_id,
         "volume_id": volume_id,
@@ -1133,13 +1133,13 @@ def test_missing_optional_metadata_does_not_crash():
     minimal = pd.DataFrame(
         [
             {
-                "patient_key": "P1",
+                "patient_id": "P1",
                 "date": "2020-01-01",
                 "SeriesDescription": np.nan,
                 "ProtocolName": "T1 VIBE DIXON SANS IV CAIPI_W",
             },
             {
-                "patient_key": "P1",
+                "patient_id": "P1",
                 "date": "2020-01-01",
                 "SeriesDescription": "T2 FS AX BLADE PACE DOME",
             },

@@ -10,7 +10,7 @@ Core functionality:
 
 Expected input: one row per MRI volume/series candidate, ideally volume-level.
 Important columns when available:
-    patient_key, study_id, series_id, volume_id, date, time,
+    patient_id, study_id, series_id, volume_id, date, time,
     SeriesDescription, ProtocolName, StudyDescription, ImageType,
     SliceThickness, PixelSpacing, n_rows_in_volume
 
@@ -43,7 +43,11 @@ def _contextual_strategy_set(
 ) -> frozenset[str]:
     if contextual_strategies is None:
         return DEFAULT_CONTEXTUAL_STRATEGIES
-    return frozenset(contextual_strategies)
+    strategies = frozenset(contextual_strategies)
+    unknown = strategies - DEFAULT_CONTEXTUAL_STRATEGIES
+    if unknown:
+        raise ValueError(f"Unknown MRI contextual strategies: {sorted(unknown)}")
+    return strategies
 
 
 # -----------------------------------------------------------------------------
@@ -301,7 +305,7 @@ def build_display_text(row: pd.Series, cols: Sequence[str] | None = None) -> str
 
 def get_exam_group_cols(
     df: pd.DataFrame,
-    patient_col: str = "patient_key",
+    patient_col: str = "patient_id",
     study_col: str | None = "study_id",
     date_col: str = "date",
 ) -> list[str]:
@@ -320,7 +324,7 @@ def get_exam_group_cols(
 
 def add_volume_order_features(
     df: pd.DataFrame,
-    patient_col: str = "patient_key",
+    patient_col: str = "patient_id",
     study_col: str | None = "study_id",
     series_col: str = "series_id",
     volume_col: str = "volume_id",
@@ -611,14 +615,16 @@ def infer_special_t1_phase_from_volume_order(
         if order == 1:
             return (
                 "ARTERIAL",
-                f"inferred ARTERIAL from first ART/PORT/LATE volume {order}/{n_volumes}",
+                "inferred ARTERIAL from first ART/PORT/LATE volume "
+                f"{order}/{n_volumes}",
                 "inferred",
                 "volume_order_art_port_late",
             )
         if order == 2:
             return (
                 "PORTAL_VENOUS",
-                f"inferred PORTAL_VENOUS from second ART/PORT/LATE volume {order}/{n_volumes}",
+                "inferred PORTAL_VENOUS from second ART/PORT/LATE volume "
+                f"{order}/{n_volumes}",
                 "inferred",
                 "volume_order_art_port_late",
             )
@@ -640,7 +646,8 @@ def infer_special_t1_phase_from_volume_order(
         if order == 2:
             return (
                 "PORTAL_VENOUS",
-                f"inferred PORTAL_VENOUS from second ART-PORT volume {order}/{n_volumes}",
+                "inferred PORTAL_VENOUS from second ART-PORT volume "
+                f"{order}/{n_volumes}",
                 "inferred",
                 "volume_order_art_port",
             )
@@ -749,7 +756,8 @@ def detect_t1_perfusion_phase(
             return special_label, special_reason, special_conf, special_source
         return (
             "OTHER",
-            "matched single-volume ART/PORT/LATE text; awaiting exam acquisition context",
+            "matched single-volume ART/PORT/LATE text; awaiting exam "
+            "acquisition context",
             "unknown",
             ART_PORT_LATE_CONTEXT_PENDING,
         )
@@ -775,7 +783,8 @@ def detect_t1_perfusion_phase(
             return special_label, special_reason, special_conf, special_source
         return (
             "OTHER",
-            "matched single-volume Mask+Multiart text; awaiting exam acquisition context",
+            "matched single-volume Mask+Multiart text; awaiting exam "
+            "acquisition context",
             "unknown",
             MASK_MULTIART_CONTEXT_PENDING,
         )
@@ -797,7 +806,8 @@ def detect_t1_perfusion_phase(
         if ordinal_index is not None:
             return (
                 "OTHER",
-                f"ordinal phase Ph{ordinal_index} detected but exam context has not resolved it",
+                f"ordinal phase Ph{ordinal_index} detected but exam context has not "
+                "resolved it",
                 "unknown",
                 "ordinal_context",
             )
@@ -931,7 +941,8 @@ def _infer_special_profile_phases_by_acquisition_order(
                     row_idx,
                     label,
                     (
-                        f"inferred {label} from {profile_name} acquisition {rank}/{len(ranked)} "
+                        f"inferred {label} from {profile_name} acquisition "
+                        f"{rank}/{len(ranked)} "
                         f"for {component_name} {context}"
                     ),
                 )
@@ -960,7 +971,7 @@ def infer_art_port_phases_by_acquisition_order(
 def infer_art_port_late_phases_by_acquisition_order(
     exam_rows: pd.DataFrame,
 ) -> list[tuple[int, str, str]]:
-    """Resolve ART/PORT/LATE rows by acquisition order when series context requires it."""
+    """Resolve ART/PORT/LATE rows by acquisition order when context requires it."""
     return _infer_special_profile_phases_by_acquisition_order(
         exam_rows,
         candidate_sources={
@@ -978,7 +989,7 @@ def infer_art_port_late_phases_by_acquisition_order(
 def infer_mask_multiart_phases_by_acquisition_order(
     exam_rows: pd.DataFrame,
 ) -> list[tuple[int, str, str]]:
-    """Resolve Mask+Multiart rows by acquisition order when series context requires it."""
+    """Resolve Mask+Multiart rows by acquisition order when context requires it."""
     return _infer_special_profile_phases_by_acquisition_order(
         exam_rows,
         candidate_sources={
@@ -1055,7 +1066,8 @@ def infer_generic_dynamic_phases_from_exam_context(
                     row_idx,
                     label,
                     (
-                        f"inferred {label} from generic dynamic acquisition {rank}/{len(ranked)} "
+                        f"inferred {label} from generic dynamic acquisition "
+                        f"{rank}/{len(ranked)} "
                         f"within Dixon component {component}"
                     ),
                 )
@@ -1166,7 +1178,8 @@ def infer_missing_native_fallback(exam_rows: pd.DataFrame) -> tuple[int | None, 
     return (
         idx,
         (
-            "selected fallback native/precontrast from exam context because no explicit "
+            "selected fallback native/precontrast from exam context because no "
+            "explicit "
             f"native series was found and post-contrast dynamic phases exist: {desc}"
         ),
     )
@@ -1465,7 +1478,8 @@ def _detect_dixon_component_from_text(text: str) -> tuple[str, str, str] | None:
     if len(explicit_components) > 1:
         return (
             "DIXON_UNKNOWN",
-            f"contradictory explicit Dixon components: {', '.join(explicit_components)}",
+            "contradictory explicit Dixon components: "
+            f"{', '.join(explicit_components)}",
             "explicit_text",
         )
     if has_dixon_context:
@@ -1598,7 +1612,8 @@ def score_t1(row: pd.Series) -> float:
     score += {"AXIAL": 50, "CORONAL": 20, "SAGITTAL": 5}.get(row.get("plane"), 30)
     score += 25 if bool(row.get("is_3d_gre")) else 0
 
-    # Dynamic containers are useful fallback, but explicit pure phase labels are preferred.
+    # Dynamic containers are useful fallback, but explicit pure phase labels are
+    # preferred.
     if bool(row.get("is_dynamic_t1_text")) and source == "explicit_text":
         score += 5
 
@@ -1717,7 +1732,7 @@ def add_tiebreaker_columns(df: pd.DataFrame, time_col: str = "time") -> pd.DataF
 
 def select_best_candidates(
     curated: pd.DataFrame,
-    patient_col: str = "patient_key",
+    patient_col: str = "patient_id",
     study_col: str | None = "study_id",
     date_col: str = "date",
     display_text_col_count: int | None = None,
@@ -1849,7 +1864,7 @@ def select_best_candidates(
 
 def annotate_mri(
     df: pd.DataFrame,
-    patient_col: str = "patient_key",
+    patient_col: str = "patient_id",
     study_col: str | None = "study_id",
     series_col: str = "series_id",
     volume_col: str = "volume_id",
@@ -1887,7 +1902,7 @@ def annotate_mri(
 
 def curate_mri(
     df: pd.DataFrame,
-    patient_col: str = "patient_key",
+    patient_col: str = "patient_id",
     study_col: str | None = "study_id",
     series_col: str = "series_id",
     volume_col: str = "volume_id",

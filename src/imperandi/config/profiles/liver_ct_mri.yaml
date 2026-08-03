@@ -1,4 +1,4 @@
-version: 1
+version: 2
 
 project:
   name: liver-cohort
@@ -9,7 +9,6 @@ input:
 output:
   root: ./imperandi-results
   table_format: parquet
-  publish_formats: [parquet]
 
 annotations:
   rule_packs:
@@ -25,16 +24,24 @@ selection:
     CT: [CT_NATIVE, CT_ARTERIAL, CT_PORTAL_VENOUS]
     MR: [MR_T2, MR_DWI, MR_T1_NATIVE, MR_T1_ARTERIAL, MR_T1_PORTAL_VENOUS]
 
+conversion:
+  enabled: true
+
 segmentation:
   enabled: true
   tasks:
-    - id: liver
+    - id: liver_ct
       backend: totalsegmentator
-      modalities: [CT, MR]
+      modality: CT
       task: total
       output: liver
-    - id: liver_tumor
+    - id: liver_mr
       backend: totalsegmentator
-      modalities: [CT]
+      modality: MR
+      task: total_mr
+      output: liver
+    - id: liver_tumor_ct
+      backend: totalsegmentator
+      modality: CT
       task: liver_lesions
       output: liver_tumor

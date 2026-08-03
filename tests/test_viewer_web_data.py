@@ -11,10 +11,10 @@ from imperandi.qc.viewer_web_data import (
     FILTER_ALL_COLUMNS,
     filter_dataframe,
     get_image_path_columns,
-    is_image_path_value,
     guess_ct_scan_col,
     guess_phase_col,
     guess_segmentation_cols,
+    is_image_path_value,
     load_dataframe,
     validate_image_path_column,
 )

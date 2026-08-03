@@ -34,8 +34,8 @@ def _load_phase_extractor() -> Callable[[Any], Dict[str, Any]]:
         from totalsegmentator.bin.totalseg_get_phase import get_ct_contrast_phase
     except ModuleNotFoundError as exc:
         raise RuntimeError(
-            "The 'phase' command requires optional dependencies. "
-            "Install with: pip install -e .[segment]"
+            "Image-based phase prediction requires optional dependencies. "
+            "Install with: pip install -e .[imaging]"
         ) from exc
     return get_ct_contrast_phase
 

@@ -81,7 +81,7 @@ value; it never deletes competing evidence.
 ```python
 def curate_by_modality(
     df: pandas.DataFrame,
-    patient_col: str = "patient_key",
+    patient_col: str = "patient_id",
     study_col: str | None = "study_id",
     date_col: str = "date",
     contextual_strategies: Collection[str] | None = None,

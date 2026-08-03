@@ -9,7 +9,6 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import yaml
-from pydantic import ValidationError
 
 from imperandi.config import config_hash, load_config, resolved_config
 from imperandi.pipeline.defaults import build_default_runner
@@ -18,7 +17,7 @@ from imperandi.utils.logging import setup_logging
 logger = logging.getLogger(__name__)
 
 
-STARTER_CONFIG = """version: 1
+STARTER_CONFIG = """version: 2
 
 project:
   name: my-cohort
@@ -182,8 +181,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             log_file=args.log_file,
         )
         return args._handler(args)
-    except (OSError, TypeError, ValueError, RuntimeError, ValidationError) as exc:
+    except Exception as exc:  # Keep CLI failures concise; stage state retains details.
         logger.error("%s", exc)
+        logger.debug("Command failed", exc_info=True)
         return 2
 
 

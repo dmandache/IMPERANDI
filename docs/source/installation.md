@@ -25,10 +25,13 @@ the heavier feature sets needed by your workflow:
 
 ```bash
 # TotalSegmentator-based segmentation and phase extraction
-python -m pip install -e ".[segment]"
+python -m pip install -e ".[imaging]"
 
 # PyRadiomics extraction
 python -m pip install -e ".[radiomics]"
+
+# Jupyter and web quality-control viewers
+python -m pip install -e ".[qc]"
 
 # Tests, linting, and Jupyter tools
 python -m pip install -e ".[dev]"
@@ -57,12 +60,11 @@ editing, but CI should treat documentation warnings as errors.
 
 ## Jupyter quality-control viewer
 
-The classic viewer uses the widget backend. After installing the development
-dependencies, an optional named kernel can be registered with:
+The classic viewer uses the widget backend. After installing the `qc` feature,
+an optional named kernel can be registered with:
 
 ```bash
 python -m ipykernel install --user \
   --name imperandi \
   --display-name "IMPERANDI"
 ```
-

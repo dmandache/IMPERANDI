@@ -83,7 +83,15 @@ def _source_identity_frame(df: pd.DataFrame, config: IdentityConfig) -> pd.DataF
                 "identity_confidence": confidence if raw_id else "none",
             }
         )
-    return pd.DataFrame(records).set_index("_row_index")
+    columns = [
+        "_row_index",
+        "dicom_patient_id",
+        "source_patient_key",
+        "patient_id_source_column",
+        "patient_id_method",
+        "identity_confidence",
+    ]
+    return pd.DataFrame(records, columns=columns).set_index("_row_index")
 
 
 def _hmac_patient_id(source_key: str, config) -> str:
@@ -114,14 +122,37 @@ def _normalized_crosswalk(config: IdentityConfig) -> pd.DataFrame:
 
     for column in canonical.crosswalk_keys:
         crosswalk[column] = crosswalk[column].apply(norm)
+    incomplete_keys = crosswalk[canonical.crosswalk_keys].eq("").any(axis=1)
+    if incomplete_keys.any():
+        raise ValueError(
+            "Identity crosswalk contains empty key values in "
+            f"{int(incomplete_keys.sum())} row(s)"
+        )
+
+    def canonical_value(value):
+        if value is None or pd.isna(value):
+            return pd.NA
+        text = str(value).strip()
+        return text or pd.NA
+
+    value_column = canonical.crosswalk_value
+    crosswalk[value_column] = crosswalk[value_column].apply(canonical_value)
+    if crosswalk[value_column].isna().any():
+        raise ValueError("Identity crosswalk contains empty canonical patient IDs")
     duplicates = crosswalk.groupby(canonical.crosswalk_keys, dropna=False)[
-        canonical.crosswalk_value
+        value_column
     ].nunique()
     if (duplicates > 1).any():
         raise ValueError(
             "Identity crosswalk maps a source identity to multiple patients"
         )
     return crosswalk.drop_duplicates(canonical.crosswalk_keys)
+
+
+def validate_identity_crosswalk(config: IdentityConfig) -> None:
+    """Validate crosswalk keys and canonical IDs without resolving a cohort."""
+    if config.canonical.crosswalk is not None:
+        _normalized_crosswalk(config)
 
 
 def _apply_crosswalk(
@@ -161,32 +192,42 @@ def _validate_identity_mapping(
             {
                 "qc_code": "IDENTITY_SOURCE_COLLISION",
                 "source_patient_key": source_key,
-                "severity": "error",
+                "severity": (
+                    "error"
+                    if config.validation.source_collision == "error"
+                    else "warning"
+                ),
             }
         )
-    if not config.validation.allow_multiple_source_ids_per_patient:
+    multiple_source_policy = config.validation.multiple_source_ids_per_patient
+    if multiple_source_policy != "allow":
         canonical_counts = valid.groupby("patient_id")["source_patient_key"].nunique()
         for patient_id in canonical_counts[canonical_counts > 1].index:
             flags.append(
                 {
-                    "qc_code": "IDENTITY_CANONICAL_COLLISION",
+                    "qc_code": "IDENTITY_MULTIPLE_SOURCE_IDS",
                     "patient_id": patient_id,
-                    "severity": "error",
+                    "severity": (
+                        "error" if multiple_source_policy == "error" else "warning"
+                    ),
                 }
             )
     result = pd.DataFrame(flags)
     if (
-        config.validation.fail_on_source_collision
+        config.validation.source_collision == "error"
         and not result.empty
         and result["qc_code"].eq("IDENTITY_SOURCE_COLLISION").any()
     ):
         raise ValueError("A source identity resolved to multiple canonical patients")
     if (
-        config.validation.fail_on_canonical_collision
+        multiple_source_policy == "error"
         and not result.empty
-        and result["qc_code"].eq("IDENTITY_CANONICAL_COLLISION").any()
+        and result["qc_code"].eq("IDENTITY_MULTIPLE_SOURCE_IDS").any()
     ):
-        raise ValueError("Multiple source identities resolved to one canonical patient")
+        raise ValueError(
+            "Multiple source identities resolved to one canonical patient while "
+            "identity policy is 'error'"
+        )
     return result
 
 
@@ -219,18 +260,21 @@ def resolve_patient_identities(
         identity.loc[missing, "patient_id_method"] = "hmac"
         identity.loc[missing, "identity_confidence"] = "high"
 
+    identity["patient_id"] = identity["patient_id"].astype("string")
+
     missing_identity = identity["patient_id"].isna()
     policy = config.source.fallback.on_missing
     if missing_identity.any() and policy == "error":
         raise ValueError(
-            f"Could not resolve patient identity for {int(missing_identity.sum())} row(s)"
+            "Could not resolve patient identity for "
+            f"{int(missing_identity.sum())} row(s)"
         )
 
-    identity["identity_config_version"] = 1
+    identity["identity_algorithm_version"] = 1
     out["patient_id"] = identity["patient_id"]
     out["patient_id_method"] = identity["patient_id_method"]
     out["identity_confidence"] = identity["identity_confidence"]
-    out["identity_config_version"] = identity["identity_config_version"]
+    out["identity_algorithm_version"] = identity["identity_algorithm_version"]
 
     sensitive_policy = config.sensitive_fields.persist_raw_identifiers
     if sensitive_policy == "never":
@@ -251,12 +295,15 @@ def resolve_patient_identities(
     if sensitive_policy == "cohort":
         out["dicom_patient_id"] = identity["dicom_patient_id"]
         out["source_patient_key"] = identity["source_patient_key"]
-    else:
-        raw_columns = set(config.source.patient_id_columns) | set(
-            config.source.fallback.columns
-        )
+
+    raw_columns = {"patient_key", "_patient_key_raw"}
+    if sensitive_policy != "cohort":
+        raw_columns.update(config.source.patient_id_columns)
+        raw_columns.update(config.source.fallback.columns)
         raw_columns.discard("patient_id")
-        out = out.drop(columns=list(raw_columns), errors="ignore")
+    # Legacy parser aliases are never public v2 cohort fields. Under `cohort`,
+    # the equivalent raw values use the explicit names above.
+    out = out.drop(columns=list(raw_columns), errors="ignore")
 
     qc_flags = _validate_identity_mapping(identity, config)
     if missing_identity.any():

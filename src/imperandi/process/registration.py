@@ -33,7 +33,7 @@ def _sitk():
     except ModuleNotFoundError as exc:
         raise RuntimeError(
             "Registration requires SimpleITK. Install IMPERANDI with its "
-            "registration/segment dependencies."
+            "imaging dependencies: pip install -e .[imaging]"
         ) from exc
     return sitk
 
@@ -153,7 +153,20 @@ def register_pairs(
         )
     if "volume_id" not in volumes.columns or "nifti_path" not in volumes.columns:
         raise ValueError("Registration requires volume_id and nifti_path columns")
+    duplicate_volume_ids = volumes["volume_id"].notna() & volumes[
+        "volume_id"
+    ].duplicated(keep=False)
+    if duplicate_volume_ids.any():
+        duplicates = sorted(
+            set(volumes.loc[duplicate_volume_ids, "volume_id"].astype(str))
+        )
+        raise ValueError(f"Registration requires unique volume_id values: {duplicates}")
     lookup = volumes.set_index("volume_id")["nifti_path"].to_dict()
+    patient_lookup = (
+        volumes.set_index("volume_id")["patient_id"].to_dict()
+        if "patient_id" in volumes.columns
+        else {}
+    )
     output_columns = [
         "pair_id",
         "fixed_volume_id",
@@ -188,6 +201,17 @@ def register_pairs(
             fixed_path = row.get("fixed_nifti_path")
             if pd.isna(fixed_path) or not str(fixed_path).strip():
                 fixed_path = lookup[fixed_id]
+                fixed_patient = patient_lookup.get(fixed_id)
+                moving_patient = patient_lookup.get(moving_id)
+                if (
+                    pd.notna(fixed_patient)
+                    and pd.notna(moving_patient)
+                    and fixed_patient != moving_patient
+                ):
+                    raise ValueError(
+                        "Registration cohort pairs must remain within one patient: "
+                        f"{fixed_id!r} -> {moving_id!r}"
+                    )
             moving_path = row.get("moving_nifti_path")
             if pd.isna(moving_path) or not str(moving_path).strip():
                 moving_path = lookup[moving_id]
@@ -210,7 +234,7 @@ def register_pairs(
             )
         # A pair table is a batch boundary: record any backend or I/O failure
         # for this pair and continue processing the remaining independent pairs.
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             errors.append(
                 {
                     "pair_id": pair_id,

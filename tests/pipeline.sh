@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Default value for DIR_PATH is "./tests/data" if not provided as an argument
-DIR_PATH="${1:-"./tests/data"}"
+# Supply a v2 project file; the default is suitable for a local IRCAD fixture.
+CONFIG_PATH="${1:-./tests/data/imperandi.yaml}"
 
-imperandi ingest "${DIR_PATH}/IRCAD_DICOM" --snapshot_tags --manifest generic
-imperandi convert "${DIR_PATH}/dicom_index_clean.csv" "${DIR_PATH}/IRCAD_nifti"
-imperandi segment "${DIR_PATH}/nifti_index.csv" --manifest generic
-imperandi phase "${DIR_PATH}/nifti_index.csv"
-imperandi radiomics "${DIR_PATH}/nifti_index.csv" --manifest generic
+if [[ ! -f "$CONFIG_PATH" ]]; then
+  echo "Missing project configuration: $CONFIG_PATH" >&2
+  echo "Create one with: imperandi init $CONFIG_PATH" >&2
+  exit 2
+fi
 
-echo "Pipeline executed successfully!"
+imperandi validate "$CONFIG_PATH"
+imperandi plan "$CONFIG_PATH"
+imperandi run "$CONFIG_PATH"
+
+echo "Pipeline executed successfully."

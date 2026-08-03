@@ -112,7 +112,7 @@ def test_dixon_components_are_independent_from_acquisition_order():
             first_instance = offset + phase + 1
             rows.append(
                 {
-                    "patient_key": "p1",
+                    "patient_id": "p1",
                     "study_id": "s1",
                     "volume_id": f"{component}_{phase + 1}",
                     "SeriesDescription": "4D mDIXON dynamic",
@@ -123,7 +123,9 @@ def test_dixon_components_are_independent_from_acquisition_order():
                 }
             )
 
-    ordered = compute_acquisition_order(pd.DataFrame(rows))
+    frame = pd.DataFrame(rows)
+    frame["patient_key"] = frame["patient_id"]  # transient legacy helper alias
+    ordered = compute_acquisition_order(frame)
     classified = mc.add_basic_feature_columns(ordered)
     ip_rows = classified[classified["volume_id"].str.startswith("IP_")]
     water_rows = classified[classified["volume_id"].str.startswith("W_")]
@@ -138,7 +140,7 @@ def test_dixon_components_are_independent_from_acquisition_order():
     phase_input = mc.add_mri_sequence_columns(classified)
     phased = mc.add_mri_perfusion_columns(
         phase_input,
-        exam_group_cols=["patient_key", "study_id"],
+        exam_group_cols=["patient_id", "study_id"],
     )
     ip_phases = phased[phased["volume_id"].str.startswith("IP_")]
     water_phases = phased[phased["volume_id"].str.startswith("W_")]

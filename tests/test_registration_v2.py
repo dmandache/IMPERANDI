@@ -64,6 +64,31 @@ def test_registration_pair_failures_are_isolated_with_stable_empty_schema(
     assert "cannot register" in errors.loc[0, "error_message"]
 
 
+def test_registration_rejects_cross_patient_cohort_pairs(tmp_path, monkeypatch):
+    def unexpected_register(**_kwargs):
+        raise AssertionError("cross-patient registration reached the backend")
+
+    monkeypatch.setattr(registration, "register_pair", unexpected_register)
+    volumes = pd.DataFrame(
+        {
+            "patient_id": ["P-001", "P-002"],
+            "volume_id": ["fixed", "moving"],
+            "nifti_path": ["fixed.nii.gz", "moving.nii.gz"],
+        }
+    )
+    pairs = pd.DataFrame({"fixed_volume_id": ["fixed"], "moving_volume_id": ["moving"]})
+
+    outputs, errors = registration.register_pairs(
+        pairs,
+        volumes,
+        output_dir=tmp_path,
+        transform="rigid_affine",
+    )
+
+    assert outputs.empty
+    assert "within one patient" in errors.loc[0, "error_message"]
+
+
 def test_rigid_affine_registration_writes_transform_and_image(tmp_path):
     sitk = pytest.importorskip("SimpleITK")
     values = np.random.default_rng(42).normal(size=(32, 32, 32)).astype("float32")

@@ -6,9 +6,9 @@ import json
 import logging
 import platform
 import sys
-from importlib.metadata import PackageNotFoundError, version
 from collections.abc import Iterable
 from datetime import datetime, timezone
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 import yaml
@@ -22,7 +22,7 @@ from imperandi.config.loader import (
 from imperandi.config.models import ImperandiConfig
 from imperandi.io.tables import table_schema_path
 
-from .base import PipelineStage, RunContext, StageResult
+from .base import PIPELINE_CONTRACT_VERSION, PipelineStage, RunContext, StageResult
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +92,7 @@ class PipelineRunner:
             run_dir / "environment.json",
             {
                 "imperandi_version": __version__,
+                "pipeline_contract_version": PIPELINE_CONTRACT_VERSION,
                 "python": sys.version,
                 "platform": platform.platform(),
                 "config_hash": digest,

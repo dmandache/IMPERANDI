@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -47,7 +48,13 @@ class ConvertStage(PipelineStage):
         from imperandi.process import convert as convert_module
 
         stage_dir = context.stage_dir(self.name)
-        input_csv = _bridge_csv(stage_dir, "volumes_shortlist", volumes)
+        if "patient_id" not in volumes.columns:
+            raise ValueError("Conversion input requires canonical patient_id")
+        # The conversion backend still uses patient_key to construct its private
+        # image directory layout. Keep that alias inside the bridge only.
+        backend_input = volumes.copy()
+        backend_input["patient_key"] = backend_input["patient_id"]
+        input_csv = _bridge_csv(stage_dir, "volumes_shortlist", backend_input)
         output_csv = stage_dir / "_volumes_converted.csv"
         error_csv = stage_dir / "_convert_errors.csv"
         image_dir = stage_dir / "images"
@@ -71,8 +78,10 @@ class ConvertStage(PipelineStage):
         args = convert_module.build_parser().parse_args(argv)
         args = convert_module.normalize_convert_args(args)
         convert_module.main(args)
-        converted = pd.read_csv(output_csv)
-        errors = _load_error(error_csv)
+        converted = pd.read_csv(output_csv).drop(
+            columns=["patient_key"], errors="ignore"
+        )
+        errors = _load_error(error_csv).drop(columns=["patient_key"], errors="ignore")
         output = context.write_table(self.name, "volumes_converted", converted)
         artifacts = {"volumes_converted": output}
         if not errors.empty:
@@ -103,7 +112,8 @@ PHASE_LABELS = {
 def _canonical_image_phase(value):
     if pd.isna(value):
         return pd.NA
-    return PHASE_LABELS.get(str(value).strip().lower(), str(value).strip().upper())
+    key = re.sub(r"[^a-z0-9]+", "_", str(value).strip().lower()).strip("_")
+    return PHASE_LABELS.get(key, pd.NA)
 
 
 class PredictPhaseStage(PipelineStage):
@@ -235,21 +245,16 @@ class PredictPhaseStage(PipelineStage):
         )
 
 
-def _legacy_segmentation_config(context: RunContext, modality: str) -> dict:
+def _segmentation_backend_config(context: RunContext, modality: str) -> dict:
     tasks = []
     for task in context.config.segmentation.tasks:
-        if modality not in task.modalities:
+        if modality != task.modality:
             continue
-        task_name = task.task or task.id
-        if modality == "MR":
-            task_name = {
-                "total": "total_mr",
-                "liver_lesions": "liver_lesions_mr",
-                "liver_segments": "liver_segments_mr",
-            }.get(task_name, task_name)
-        item = {"task": task_name, "extra": task.parameters}
-        if task.output:
-            item["output"] = task.output
+        item = {
+            "task": task.task,
+            "output": task.output,
+            "extra": task.parameters,
+        }
         if task.fetch_output:
             item["fetch_output"] = task.fetch_output
         tasks.append(item)
@@ -294,17 +299,18 @@ class SegmentStage(PipelineStage):
         )
         for modality in sorted(set(modality_series.dropna())):
             subset = selected[modality_series.eq(modality)].copy()
-            legacy = _legacy_segmentation_config(context, modality)
-            if not legacy["tasks"]:
+            backend_config = _segmentation_backend_config(context, modality)
+            if not backend_config["tasks"]:
                 outputs.append(subset)
                 continue
             prefix = modality.lower()
             input_csv = _bridge_csv(stage_dir, f"{prefix}_selected", subset)
             output_csv = stage_dir / f"_{prefix}_segmented.csv"
             error_csv = stage_dir / f"_{prefix}_segment_errors.csv"
-            manifest_path = stage_dir / f"_{prefix}_segment.json"
-            manifest_path.write_text(
-                json.dumps({"segmentation": legacy}, indent=2), encoding="utf-8"
+            backend_config_path = stage_dir / f"_{prefix}_segment_backend.json"
+            backend_config_path.write_text(
+                json.dumps({"segmentation": backend_config}, indent=2),
+                encoding="utf-8",
             )
             argv = [
                 str(input_csv),
@@ -312,7 +318,7 @@ class SegmentStage(PipelineStage):
                 "--error_csv_path",
                 str(error_csv),
                 "--manifest",
-                str(manifest_path),
+                str(backend_config_path),
                 "--num_workers",
                 str(context.config.execution.workers),
                 "--checkpoint_every_rows",

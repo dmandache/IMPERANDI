@@ -1,15 +1,14 @@
 import argparse
-from html import escape
 import warnings
+from contextlib import suppress
+from html import escape
 
+import matplotlib
 import numpy as np
 import pandas as pd
 
-import matplotlib
-
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-
 import panel as pn
 import param
 
@@ -26,8 +25,8 @@ try:
         guess_ct_scan_col,
         guess_phase_col,
         guess_segmentation_cols,
-        validate_image_path_column,
         load_dataframe,
+        validate_image_path_column,
     )
 except ModuleNotFoundError:
     from viewer_resample import (
@@ -42,8 +41,8 @@ except ModuleNotFoundError:
         guess_ct_scan_col,
         guess_phase_col,
         guess_segmentation_cols,
-        validate_image_path_column,
         load_dataframe,
+        validate_image_path_column,
     )
 
 warnings.filterwarnings("ignore")
@@ -52,7 +51,7 @@ pn.extension(sizing_mode="stretch_width")
 
 
 DICOM_TAGS_TO_DISPLAY = [
-    "patient_key",
+    "patient_id",
     "date",
     "visit_order",
     "phase",
@@ -181,7 +180,7 @@ class CTScanPanelViewer(param.Parameterized):
         self.ct_scan_col = ct_scan_col
         self.orientation = orientation
 
-        self.patient_col = "patient_key" if "patient_key" in self.df.columns else None
+        self.patient_col = "patient_id" if "patient_id" in self.df.columns else None
         self.date_col = "date" if "date" in self.df.columns else None
 
         if phase_col is not None and phase_col in self.df.columns:
@@ -590,10 +589,8 @@ class CTScanPanelViewer(param.Parameterized):
             cmap = COLORMAPS[i % len(COLORMAPS)]
             ax.imshow(masked, cmap=cmap, alpha=self.alpha)
 
-            try:
+            with suppress(Exception):
                 ax.contour(seg_slice > 0, levels=[0.5], linewidths=0.8)
-            except Exception:
-                pass
 
         ax.set_title(
             f"Scan {self.current_index + 1}/{len(self.df)} | "
@@ -727,7 +724,8 @@ class CTScanPanelApp:
         self.viewer_container = pn.Column(
             pn.pane.HTML(
                 "<div style='padding:24px; border:1px dashed #ccc; border-radius:8px;'>"
-                "Load a dataframe, choose the NIfTI column, then apply filters if needed."
+                "Load a dataframe, choose the NIfTI column, then apply filters "
+                "if needed."
                 "</div>",
                 sizing_mode="stretch_width",
             ),
@@ -846,7 +844,8 @@ class CTScanPanelApp:
         self.viewer_container.objects = [
             pn.pane.HTML(
                 (
-                    "<div style='padding:24px; border:1px dashed #ccc; border-radius:8px;'>"
+                    "<div style='padding:24px; border:1px dashed #ccc; "
+                    "border-radius:8px;'>"
                     f"{escape(str(message))}"
                     "</div>"
                 ),
@@ -863,7 +862,10 @@ class CTScanPanelApp:
     def _update_counts(self):
         total = len(self.source_df)
         active = len(self.filtered_df)
-        self.count_pane.object = f"<div style='font-size:13px; color:#555;'>Active rows: {active} / {total}</div>"
+        self.count_pane.object = (
+            "<div style='font-size:13px; color:#555;'>"
+            f"Active rows: {active} / {total}</div>"
+        )
 
     def _configure_dataframe_widgets(self):
         columns = list(self.source_df.columns)
@@ -894,7 +896,8 @@ class CTScanPanelApp:
 
         if not path_columns:
             self._set_status(
-                "No image path columns were detected. CT and segmentation selections require file path columns.",
+                "No image path columns were detected. CT and segmentation "
+                "selections require file path columns.",
                 kind="error",
             )
 
@@ -1111,7 +1114,8 @@ class CTScanPanelApp:
 # Example entry point
 #
 # Run the viewer with :
-# panel serve src/imperandi/qc/viewer_web.py --args --csv /mnt/Data/Code/IMPERANDI/tests/data/nifti_index.csv
+# panel serve src/imperandi/qc/viewer_web.py --args \
+#   --csv /mnt/Data/Code/IMPERANDI/tests/data/nifti_index.csv
 #
 # ----------------------------------------------------------------------
 

@@ -26,7 +26,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install -U pip
-          python -m pip install -e ".[segment,dev]"
+          python -m pip install -e ".[imaging,dev]"
       - name: Run lint
         run: |
           python -m ruff check .
@@ -39,3 +39,21 @@ jobs:
           files: ./coverage.xml
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install documentation dependencies
+        run: |
+          python -m pip install -U pip
+          python -m pip install -e .
+          python -m pip install -r docs/requirements.txt
+      - name: Build documentation with warnings as errors
+        run: |
+          sphinx-build -W --keep-going -b html docs/source docs/build/html

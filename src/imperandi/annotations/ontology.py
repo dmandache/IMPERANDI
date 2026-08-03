@@ -8,31 +8,12 @@ import unicodedata
 import numpy as np
 import pandas as pd
 
-from imperandi.config.models import OntologyConfig
+from imperandi.config.models import CLINICAL_SLOTS, CONTRAST_PHASES, OntologyConfig
 from imperandi.io.tables import read_table
 
 VOCABULARIES = {
-    "contrast_phase": {
-        "NATIVE",
-        "ARTERIAL",
-        "PORTAL_VENOUS",
-        "DELAYED",
-        "HEPATOBILIARY",
-        "OTHER",
-    },
-    "clinical_slot": {
-        "CT_NATIVE",
-        "CT_ARTERIAL",
-        "CT_PORTAL_VENOUS",
-        "CT_DELAYED",
-        "MR_T2",
-        "MR_DWI",
-        "MR_T1_NATIVE",
-        "MR_T1_ARTERIAL",
-        "MR_T1_PORTAL_VENOUS",
-        "MR_T1_DELAYED",
-        "MR_T1_HEPATOBILIARY",
-    },
+    "contrast_phase": CONTRAST_PHASES,
+    "clinical_slot": CLINICAL_SLOTS,
 }
 
 
@@ -101,19 +82,19 @@ def _validate_vocabulary(values: pd.Series, config: OntologyConfig) -> None:
 
 def apply_ontology(df: pd.DataFrame, config: OntologyConfig) -> pd.DataFrame:
     ontology = read_table(config.source)
-    source_column = config.output.source_column
+    value_column = config.output.value_column
     target_column = config.output.target_column
-    if source_column not in ontology.columns:
+    if value_column not in ontology.columns:
         raise ValueError(
-            f"Ontology {config.id!r} is missing output column {source_column!r}"
+            f"Ontology {config.id!r} is missing value column {value_column!r}"
         )
-    _validate_vocabulary(ontology[source_column], config)
+    _validate_vocabulary(ontology[value_column], config)
 
     left_keys = _normalized_keys(df, config)
     right_keys = _normalized_keys(ontology, config)
     key_columns = list(left_keys.columns)
     lookup = right_keys.copy()
-    lookup["_ontology_value"] = ontology[source_column].values
+    lookup["_ontology_value"] = ontology[value_column].values
     lookup["_ontology_row"] = ontology.index.astype(str)
 
     conflicts = lookup.groupby(key_columns, dropna=False)["_ontology_value"].nunique()

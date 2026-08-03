@@ -39,7 +39,7 @@ Start here
    workflow
    cli
    outputs
-   manifests
+   configuration
    troubleshooting
 
 .. toctree::
@@ -47,6 +47,7 @@ Start here
    :caption: Python API
 
    api/imperandi
+   api/workflow
    api/ingest
    api/process
    api/extract

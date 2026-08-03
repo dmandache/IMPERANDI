@@ -3,11 +3,11 @@
 import time
 import warnings
 
+import ipywidgets as widgets
+import matplotlib.patches as mpatches
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
-import ipywidgets as widgets
 from IPython.display import clear_output, display
 
 from imperandi.qc.viewer_resample import (
@@ -20,7 +20,7 @@ warnings.filterwarnings("ignore")  # Ignore warnings
 
 # List of DICOM tags to display
 DICOM_TAGS_TO_DISPLAY = [
-    "patient_key",
+    "patient_id",
     "date",
     "visit_order",
     "phase",
@@ -81,6 +81,7 @@ class CTScanViewer:
     The viewer navigates cohort rows, patients, exams, phases, and anatomical
     planes while applying configurable HU windows and isotropic resampling.
     """
+
     def __init__(
         self,
         df,
@@ -94,7 +95,7 @@ class CTScanViewer:
     ):
         self.df = df
         self.ct_scan_col = ct_scan_col
-        self.patient_col = "patient_key" if "patient_key" in df.columns else None
+        self.patient_col = "patient_id" if "patient_id" in df.columns else None
         self.date_col = "date" if "date" in df.columns else None
         if phase_col is not None and phase_col in df.columns:
             self.phase_col = phase_col
@@ -204,7 +205,7 @@ class CTScanViewer:
         self.plane_selector.observe(self.on_plane_change, names="value")
 
         self.window_preset = widgets.Dropdown(
-            options=["Custom"] + list(WINDOW_PRESETS.keys()),
+            options=["Custom", *WINDOW_PRESETS],
             value="Custom",
             description="HU Window",
             layout=widgets.Layout(width="100%", min_width="0px"),
@@ -689,15 +690,24 @@ class CTScanViewer:
 
         for pos in range(len(self.df)):
             row = self.df.iloc[pos]
-            if self.patient_col and patient_value is not None:
-                if self._format_value(row.get(self.patient_col)) != patient_value:
-                    continue
-            if self.date_col and date_value is not None:
-                if self._format_date(row.get(self.date_col)) != date_value:
-                    continue
-            if self.phase_col and phase_value is not None:
-                if self._format_value(row.get(self.phase_col)) != phase_value:
-                    continue
+            if (
+                self.patient_col
+                and patient_value is not None
+                and self._format_value(row.get(self.patient_col)) != patient_value
+            ):
+                continue
+            if (
+                self.date_col
+                and date_value is not None
+                and self._format_date(row.get(self.date_col)) != date_value
+            ):
+                continue
+            if (
+                self.phase_col
+                and phase_value is not None
+                and self._format_value(row.get(self.phase_col)) != phase_value
+            ):
+                continue
             if int(pos) == int(self.current_index):
                 return
             self.current_index = int(pos)
@@ -746,9 +756,7 @@ class CTScanViewer:
                 return True
         except Exception:
             pass
-        if isinstance(value, (list, tuple, dict)) and len(value) == 0:
-            return True
-        return False
+        return isinstance(value, (list, tuple, dict)) and len(value) == 0
 
     def _get_selected_segmentation(self):
         if not self.segmentation_cols:
@@ -1025,6 +1033,7 @@ class CTScanViewer:
     def update_info_display(self):
         row = self.df.iloc[self.current_index]
         rows = []
+        cell_style = "word-wrap: break-word; overflow-wrap: anywhere;"
         for column in DICOM_TAGS_TO_DISPLAY:
             if column not in row.index:
                 continue
@@ -1036,16 +1045,13 @@ class CTScanViewer:
                 continue
             rows.append(
                 "<tr>"
-                f"<td style='word-wrap: break-word; overflow-wrap: anywhere;'><b>{column}</b></td>"
-                f"<td style='word-wrap: break-word; overflow-wrap: anywhere;'>{formatted}</td>"
+                f"<td style='{cell_style}'><b>{column}</b></td>"
+                f"<td style='{cell_style}'>{formatted}</td>"
                 "</tr>"
             )
         if rows:
-            html = (
-                "<table style='width: 100%; table-layout: fixed; border-collapse: collapse;'>"
-                + "".join(rows)
-                + "</table>"
-            )
+            table_style = "width: 100%; table-layout: fixed; border-collapse: collapse;"
+            html = f"<table style='{table_style}'>" + "".join(rows) + "</table>"
         else:
             html = "<i>No metadata</i>"
         self.info_display.value = html

@@ -9,7 +9,7 @@ from imperandi import cli
 
 def _write_config(tmp_path: Path, **overrides) -> Path:
     data = {
-        "version": 1,
+        "version": 2,
         "project": {"name": "cli-test", "profile": "liver_ct_mri"},
         "input": {"sources": ["instances.csv"]},
         "output": {
@@ -34,6 +34,7 @@ def test_cli_init_creates_a_valid_starter_project(tmp_path, capsys):
     assert cli.main(["init", str(path)]) == 0
 
     created = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert created["version"] == 2
     assert created["project"]["profile"] == "liver_ct_mri"
     assert created["output"]["table_format"] == "parquet"
     assert created["conversion"]["enabled"] is False
@@ -132,3 +133,29 @@ def test_cli_status_reports_stage_state(tmp_path, capsys):
 def test_removed_step_by_step_commands_are_not_public():
     with pytest.raises(SystemExit):
         cli.main(["parse"])
+
+
+def test_cli_returns_a_clean_error_for_unexpected_backend_exceptions(
+    monkeypatch, caplog
+):
+    def fail(_args):
+        raise KeyError("backend-key")
+
+    class FailingParser:
+        @staticmethod
+        def parse_args(_argv):
+            return type(
+                "Args",
+                (),
+                {
+                    "log_level": None,
+                    "log_file": None,
+                    "quiet": False,
+                    "_handler": staticmethod(fail),
+                },
+            )()
+
+    monkeypatch.setattr(cli, "build_parser", FailingParser)
+
+    assert cli.main(["status", "missing"]) == 2
+    assert "backend-key" in caplog.text

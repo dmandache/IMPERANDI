@@ -5,7 +5,7 @@ from imperandi.curation.mri.curate import add_volume_order_features, curate_mri
 
 def _volume_row(volume_id, **extra):
     row = {
-        "patient_key": "p1",
+        "patient_id": "p1",
         "study_id": "s1",
         "series_id": "series1",
         "volume_id": volume_id,
@@ -70,8 +70,8 @@ def test_add_volume_order_features_preserves_existing_order_columns():
 def test_add_volume_order_features_handles_minimal_dataframe():
     df = pd.DataFrame(
         [
-            {"patient_key": "p1", "SeriesDescription": "T2 FS AX"},
-            {"patient_key": "p1", "SeriesDescription": "T1 VIBE pre"},
+            {"patient_id": "p1", "SeriesDescription": "T2 FS AX"},
+            {"patient_id": "p1", "SeriesDescription": "T1 VIBE pre"},
         ]
     )
 

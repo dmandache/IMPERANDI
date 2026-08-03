@@ -21,7 +21,7 @@ directory. Use `imperandi config resolve` to inspect the exact result.
 ## Reference project
 
 ```yaml
-version: 1
+version: 2
 
 project:
   name: site-a-liver
@@ -55,11 +55,10 @@ identity:
       prefix: P
       length: 20
   validation:
-    fail_on_source_collision: true
-    fail_on_canonical_collision: true
-    allow_multiple_source_ids_per_patient: true
+    source_collision: error
+    multiple_source_ids_per_patient: allow
   sensitive_fields:
-    persist_raw_identifiers: secure_table_only
+    persist_raw_identifiers: separate_table
 
 annotations:
   ontologies: []
@@ -102,10 +101,15 @@ conversion:
 segmentation:
   enabled: true
   tasks:
-    - id: liver
+    - id: liver_ct
       backend: totalsegmentator
-      modalities: [CT, MR]
+      modality: CT
       task: total
+      output: liver
+    - id: liver_mr
+      backend: totalsegmentator
+      modality: MR
+      task: total_mr
       output: liver
 
 registration:
@@ -134,8 +138,8 @@ tables. Archives are discovered through the existing bounded archive reader.
 
 `output.table_format` accepts exactly `csv` or `parquet` and controls stage
 tables. `output.publish_formats` controls final cohort copies and can contain
-either or both formats. A large explicit CSV inventory triggers a warning and
-still runs as CSV.
+either or both formats; when omitted, it defaults to `output.table_format`. A
+large explicit CSV inventory triggers a warning and still runs as CSV.
 
 The CSV warning threshold is deliberately not configurable per project. Adding
 `csv_warning_threshold_files` or any other unknown field causes validation to
@@ -151,6 +155,13 @@ Identity configuration separates four decisions:
 | `normalization` | Deterministic whitespace/case normalization before lookup or hashing |
 | `canonical` | `source`, `crosswalk`, `hmac`, or `crosswalk_then_hmac` resolution |
 | `sensitive_fields` | Whether raw values are absent, isolated in `identity_map`, or retained in cohort data |
+
+`validation.source_collision` is `error` or `flag`.
+`validation.multiple_source_ids_per_patient` is `allow`, `flag`, or `error`;
+many-to-one mappings are often legitimate when a crosswalk reconciles IDs
+across systems, so the default is `allow`. `separate_table` keeps raw mapping
+fields out of normal cohort artifacts, but filesystem permissions for the run
+directory remain the operator's responsibility.
 
 For a crosswalk:
 
@@ -185,12 +196,15 @@ annotations:
         SeriesDescription: {match: normalized_exact}
         AcquisitionNumber: {match: numeric_exact}
       output:
-        source_column: clinical_slot
+        value_column: clinical_slot
         target_column: slot_ontology
         vocabulary: clinical_slot
       unmatched: keep
       conflicts: error
 ```
+
+`value_column` is the column read from the ontology table after its keys match;
+`target_column` is the new evidence or project column written to cohort rows.
 
 Supported key matching:
 
@@ -251,6 +265,9 @@ rules:
           value: scout
 ```
 
+Rule packs retain their independent `version: 1` schema; project files require
+`version: 2`.
+
 Actions are `set`, `exclude`, and `qc`. Operators are `eq`, `normalized_eq`,
 `contains`, `regex`, `in`, `exists`, `lt`, `lte`, `gt`, and `gte`. Higher
 priority wins; different values at equal priority are an error.
@@ -290,8 +307,8 @@ and contextual dynamic-series strategies.
 ## Heavy stages
 
 - `conversion`: DICOM-to-NIfTI settings;
-- `segmentation.tasks`: backend, modalities, task, output name, and backend
-  `parameters`;
+- `segmentation.tasks`: backend, modality, explicit backend task, output name,
+  and backend `parameters`;
 - `registration`: explicit pair table, transform type (`rigid`,
   `rigid_affine`, or `deformable`), and saved forward transforms;
 - `radiomics`: PyRadiomics settings path plus clinical-slot and mask filters.
@@ -299,10 +316,22 @@ and contextual dynamic-series strategies.
 Disabled heavy stages pass their input artifact forward so downstream contracts
 and publication remain stable.
 
+Without a profile, conversion and segmentation default to disabled. Enabling
+segmentation requires at least one task. The `liver_ct_mri` profile explicitly
+enables conversion and supplies its modality-routed segmentation tasks; project
+overrides can disable either stage for a metadata-only validation run.
+
+TotalSegmentator task names are never rewritten implicitly. Every task has one
+explicit `modality`; configure CT and MR as separate entries. For example, CT
+liver segmentation uses `task: total`,
+whereas MR liver segmentation uses `task: total_mr`. The shared logical
+`output: liver` still produces a consistent `mask_liver` cohort column.
+
 An intra-patient pair table uses `fixed_volume_id` and `moving_volume_id`. A
 template pair can use `fixed_nifti_path` plus `moving_volume_id`; an optional
 `moving_nifti_path` can override the cohort lookup. `pair_id` is optional and is
-generated deterministically when absent.
+generated deterministically when absent. When both images are cohort volumes,
+their `patient_id` values must match; an external fixed template is exempt.
 
 ## Validation workflow
 

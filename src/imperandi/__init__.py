@@ -1,11 +1,6 @@
 """Public package interface for imperandi."""
 
-from importlib.metadata import PackageNotFoundError, version
-
-try:
-    __version__ = version("imperandi")
-except PackageNotFoundError:
-    __version__ = "0.0.0"
+from ._version import __version__
 
 
 def main(*args, **kwargs):

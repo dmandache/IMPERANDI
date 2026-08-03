@@ -1,17 +1,24 @@
-Processing API
-==============
+Image-stage API
+===============
 
 DICOM conversion
 ----------------
 
-.. automodule:: imperandi.process.convert
+.. autoclass:: imperandi.pipeline.stages.imaging.ConvertStage
    :members:
-   :undoc-members:
 
 Segmentation
 ------------
 
-.. automodule:: imperandi.process.segment
+.. autoclass:: imperandi.pipeline.stages.imaging.SegmentStage
    :members:
-   :undoc-members:
 
+Registration
+------------
+
+.. autoclass:: imperandi.pipeline.stages.imaging.RegistrationStage
+   :members:
+
+.. autofunction:: imperandi.process.registration.register_pair
+
+.. autofunction:: imperandi.process.registration.register_pairs

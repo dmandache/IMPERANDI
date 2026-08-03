@@ -6,7 +6,7 @@ from imperandi.curation.ct.curate import curate_ct
 
 def _base(desc, **extra):
     row = {
-        "patient_key": "p1",
+        "patient_id": "p1",
         "study_id": "s1",
         "series_id": desc,
         "volume_id": desc,

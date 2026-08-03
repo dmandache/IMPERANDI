@@ -1,17 +1,14 @@
-Extraction API
-==============
+Evidence and feature-stage API
+==============================
 
 Contrast phase
 --------------
 
-.. automodule:: imperandi.extract.phase
+.. autoclass:: imperandi.pipeline.stages.imaging.PredictPhaseStage
    :members:
-   :undoc-members:
 
 Radiomics
 ----------
 
-.. automodule:: imperandi.extract.radiomics
+.. autoclass:: imperandi.pipeline.stages.imaging.RadiomicsStage
    :members:
-   :undoc-members:
-

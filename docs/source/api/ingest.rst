@@ -1,23 +1,29 @@
-Ingestion API
-=============
+Metadata-stage API
+==================
 
-Parsing
--------
-
-.. automodule:: imperandi.ingest.parse
-   :members:
-   :undoc-members:
-
-Cleaning
+Indexing
 --------
 
-.. automodule:: imperandi.ingest.clean
+.. autoclass:: imperandi.pipeline.stages.core.IndexStage
    :members:
-   :undoc-members:
 
-Manifest hooks
---------------
+Identity
+--------
 
-.. automodule:: imperandi.ingest.apply_hook_manifests
+.. autoclass:: imperandi.pipeline.stages.core.IdentityStage
    :members:
-   :undoc-members:
+
+Volume assembly
+---------------
+
+.. autoclass:: imperandi.pipeline.stages.core.AssembleStage
+   :members:
+
+Annotation and selection
+------------------------
+
+.. autoclass:: imperandi.pipeline.stages.core.AnnotateStage
+   :members:
+
+.. autoclass:: imperandi.pipeline.stages.core.ResolveSelectStage
+   :members:

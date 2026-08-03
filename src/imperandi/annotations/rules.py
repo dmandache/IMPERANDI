@@ -9,7 +9,18 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from imperandi.config.models import CLINICAL_SLOTS, CONTRAST_PHASES
+
+CONTROLLED_RULE_TARGETS = {
+    "phase_rules_explicit": CONTRAST_PHASES,
+    "phase_rules_inferred": CONTRAST_PHASES,
+    "phase_image": CONTRAST_PHASES,
+    "slot_rules_explicit": CLINICAL_SLOTS,
+    "slot_rules_inferred": CLINICAL_SLOTS,
+    "slot_image": CLINICAL_SLOTS,
+}
 
 
 class RuleCondition(BaseModel):
@@ -28,6 +39,37 @@ class RuleCondition(BaseModel):
         "gte",
     ]
     value: Any = None
+
+    @field_validator("column")
+    @classmethod
+    def non_empty_column(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("rule condition column must not be empty")
+        return value
+
+    @model_validator(mode="after")
+    def validate_value(self):
+        if self.operator == "exists":
+            if self.value is not None:
+                raise ValueError("Rule operator 'exists' does not accept value")
+            return self
+        if self.value is None:
+            raise ValueError(f"Rule operator {self.operator!r} requires value")
+        if self.operator == "in" and not isinstance(self.value, (list, tuple, set)):
+            raise ValueError("Rule operator 'in' requires a list-like value")
+        if self.operator in {"lt", "lte", "gt", "gte"} and (
+            isinstance(self.value, bool) or not isinstance(self.value, (int, float))
+        ):
+            raise ValueError(
+                f"Rule operator {self.operator!r} requires a numeric value"
+            )
+        if self.operator == "regex":
+            try:
+                re.compile(str(self.value))
+            except re.error as exc:
+                raise ValueError(f"Invalid rule regular expression: {exc}") from exc
+        return self
 
 
 class RuleWhen(BaseModel):
@@ -55,16 +97,35 @@ class AnnotationRule(BaseModel):
 
     @model_validator(mode="after")
     def validate_action(self):
-        if self.action == "set" and not self.target:
-            raise ValueError("set rules require target")
-        if self.action in {"exclude", "qc"} and not self.reason:
-            raise ValueError(f"{self.action} rules require reason")
+        self.id = self.id.strip()
+        if not self.id:
+            raise ValueError("rule id must not be empty")
+        if self.action == "set":
+            self.target = self.target.strip() if self.target else ""
+            if not self.target:
+                raise ValueError("set rules require target")
+            if self.value is None:
+                raise ValueError("set rules require value")
+            allowed = CONTROLLED_RULE_TARGETS.get(self.target)
+            if allowed is not None and (
+                not isinstance(self.value, str) or self.value not in allowed
+            ):
+                raise ValueError(
+                    f"Rule {self.id!r} has invalid value {self.value!r} for "
+                    f"controlled target {self.target!r}"
+                )
+        if self.action in {"exclude", "qc"}:
+            if self.target is not None or self.value is not None:
+                raise ValueError(f"{self.action} rules do not accept target or value")
+            self.reason = self.reason.strip() if self.reason else ""
+            if not self.reason:
+                raise ValueError(f"{self.action} rules require reason")
         return self
 
 
 class RulePack(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    version: Literal[1] = 1
+    version: Literal[1]
     rules: list[AnnotationRule]
 
     @model_validator(mode="after")
@@ -78,6 +139,8 @@ class RulePack(BaseModel):
 def _normalize(value) -> str:
     if isinstance(value, (list, tuple, set, np.ndarray)):
         values = value.tolist() if isinstance(value, np.ndarray) else list(value)
+        if isinstance(value, set):
+            values = sorted(values, key=str)
         return " | ".join(_normalize(item) for item in values)
     return re.sub(r"\s+", " ", str(value).strip().lower()) if pd.notna(value) else ""
 
@@ -90,6 +153,19 @@ def _values(value) -> list[Any]:
     return [value]
 
 
+def _scalar_equal(left: Any, right: Any) -> bool:
+    try:
+        if pd.isna(left):
+            return False
+    except (TypeError, ValueError):
+        pass
+    try:
+        result = left == right
+        return False if result is pd.NA else bool(result)
+    except (TypeError, ValueError):
+        return False
+
+
 def _condition_mask(df: pd.DataFrame, condition: RuleCondition) -> pd.Series:
     if condition.column not in df.columns:
         return pd.Series(False, index=df.index)
@@ -98,7 +174,11 @@ def _condition_mask(df: pd.DataFrame, condition: RuleCondition) -> pd.Series:
     if op == "exists":
         return values.notna()
     if op == "eq":
-        return values.apply(lambda value: condition.value in _values(value))
+        return values.apply(
+            lambda value: any(
+                _scalar_equal(item, condition.value) for item in _values(value)
+            )
+        )
     if op == "normalized_eq":
         return values.apply(_normalize).eq(_normalize(condition.value))
     if op == "contains":
@@ -148,8 +228,13 @@ def _rule_mask(df: pd.DataFrame, rule: AnnotationRule) -> pd.Series:
 
 
 def load_rule_pack(path: str | Path) -> RulePack:
-    with Path(path).open("r", encoding="utf-8") as handle:
-        return RulePack.model_validate(yaml.safe_load(handle) or {})
+    path = Path(path)
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            data = yaml.safe_load(handle) or {}
+    except yaml.YAMLError as exc:
+        raise ValueError(f"Invalid annotation rule pack {path}: {exc}") from exc
+    return RulePack.model_validate(data)
 
 
 def apply_rule_pack(df: pd.DataFrame, pack: RulePack) -> pd.DataFrame:
@@ -165,12 +250,34 @@ def apply_rule_pack(df: pd.DataFrame, pack: RulePack) -> pd.DataFrame:
         if not mask.any():
             continue
         if rule.action == "exclude":
+            existing_reason = out.get(
+                "exclusion_reason", pd.Series(pd.NA, index=out.index)
+            )
+            tie_conflict = (
+                mask
+                & exclusion_priority.eq(rule.priority)
+                & existing_reason.notna()
+                & existing_reason.ne(rule.reason)
+            )
+            if tie_conflict.any():
+                raise ValueError(
+                    f"Exclusion rules conflict at equal priority: {rule.id}"
+                )
             apply_mask = mask & exclusion_priority.lt(rule.priority)
             out.loc[apply_mask, "eligible"] = False
             out.loc[apply_mask, "exclusion_reason"] = rule.reason
             out.loc[apply_mask, "exclusion_rule_id"] = rule.id
             exclusion_priority.loc[apply_mask] = rule.priority
         elif rule.action == "qc":
+            existing_reason = out.get("qc_rule", pd.Series(pd.NA, index=out.index))
+            tie_conflict = (
+                mask
+                & qc_priority.eq(rule.priority)
+                & existing_reason.notna()
+                & existing_reason.ne(rule.reason)
+            )
+            if tie_conflict.any():
+                raise ValueError(f"QC rules conflict at equal priority: {rule.id}")
             apply_mask = mask & qc_priority.lt(rule.priority)
             out.loc[apply_mask, "qc_rule"] = rule.reason
             out.loc[apply_mask, "qc_rule_id"] = rule.id
@@ -207,4 +314,4 @@ def apply_rule_packs(df: pd.DataFrame, references: list[str]) -> pd.DataFrame:
             # Built-in CT/MR rules are executed by imperandi.curation.
             continue
         rules.extend(load_rule_pack(reference).rules)
-    return apply_rule_pack(df, RulePack(rules=rules))
+    return apply_rule_pack(df, RulePack(version=1, rules=rules))

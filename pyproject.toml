@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "imperandi"
-version = "0.0.0"
+dynamic = ["version"]
 description = "IMaging PREprocessing And Normalization for Diagnostic Interoperability"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -25,7 +25,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-segment = [
+imaging = [
   "matplotlib",
   "TotalSegmentator",
   "torchio",
@@ -37,7 +37,16 @@ segment = [
 
 radiomics = [
   "pywavelets",
+  "SimpleITK",
   "pyradiomics@git+https://github.com/radiomics/pyradiomics.git",   # because 3.1.0 sdist metadata is broken on PyPI right now
+]
+
+qc = [
+  "matplotlib",
+  "ipympl",
+  "ipywidgets",
+  "panel",
+  "param",
 ]
 
 dev = [
@@ -50,7 +59,7 @@ dev = [
   "ipywidgets"
 ]
 
-all = ["imperandi[dev,segment,radiomics]"]
+all = ["imperandi[dev,imaging,qc,radiomics]"]
 
 [project.scripts]
 imperandi = "imperandi.cli:main"
@@ -63,6 +72,9 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "imperandi.config" = ["profiles/*.yaml"]
+
+[tool.setuptools.dynamic]
+version = {attr = "imperandi._version.__version__"}
 
 [tool.pytest.ini_options]
 markers = [

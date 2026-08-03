@@ -5,7 +5,6 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
@@ -16,7 +15,7 @@ copyright = "2026, Diana Mandache"
 try:
     from imperandi import __version__
 except ImportError:
-    __version__ = "0.0.0"
+    __version__ = "2.0.0"
 
 version = release = __version__
 

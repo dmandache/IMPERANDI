@@ -12,7 +12,7 @@ imperandi init imperandi.yaml
 Edit the generated file:
 
 ```yaml
-version: 1
+version: 2
 
 project:
   name: first-cohort
@@ -107,7 +107,7 @@ annotations:
         SeriesDescription: {match: normalized_exact}
         AcquisitionNumber: {match: numeric_exact}
       output:
-        source_column: clinical_slot
+        value_column: clinical_slot
         target_column: slot_ontology
         vocabulary: clinical_slot
       unmatched: keep
@@ -127,7 +127,7 @@ processing.
 Install the required extras and enable only the needed features:
 
 ```bash
-python -m pip install -e ".[segment,radiomics]"
+python -m pip install -e ".[imaging,radiomics]"
 ```
 
 ```yaml

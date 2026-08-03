@@ -26,6 +26,10 @@ imperandi run imperandi.yaml
 IMPERANDI is research software, not a certified medical device. Validate its
 outputs for the intended research setting before use.
 
+IMPERANDI v2 uses a breaking project contract: project files require
+`version: 2`, the public CLI is project-based, and legacy step-by-step manifests
+are not accepted as configuration.
+
 ## Design principles
 
 - Project configuration expresses cohort intent, not a hand-written sequence of
@@ -66,11 +70,12 @@ final selection.
 python -m pip install -e .
 ```
 
-Install optional image-processing features as needed:
+Install optional feature sets as needed:
 
 ```bash
-python -m pip install -e ".[segment]"
+python -m pip install -e ".[imaging]"
 python -m pip install -e ".[radiomics]"
+python -m pip install -e ".[qc]"
 python -m pip install -e ".[all]"  # development plus all optional features
 ```
 
@@ -79,7 +84,7 @@ python -m pip install -e ".[all]"  # development plus all optional features
 Create `imperandi.yaml` with `imperandi init`, then replace the input source:
 
 ```yaml
-version: 1
+version: 2
 
 project:
   name: liver-cohort
@@ -127,8 +132,9 @@ imperandi run imperandi.yaml
 ```
 
 The built-in `liver_ct_mri` profile supplies CT/MRI rules, required clinical
-slots, and modality-aware liver segmentation tasks. Project values override
-profile values; mappings merge recursively and lists replace profile lists.
+slots, and separate single-modality liver segmentation tasks (`total` for CT
+and `total_mr` for MR). Project values override profile values; mappings merge
+recursively and lists replace profile lists.
 
 ## Phase and clinical-slot evidence
 
@@ -158,14 +164,15 @@ annotations:
         SeriesDescription: {match: normalized_exact}
         AcquisitionNumber: {match: numeric_exact}
       output:
-        source_column: clinical_slot
+        value_column: clinical_slot
         target_column: slot_ontology
         vocabulary: clinical_slot
       unmatched: keep
       conflicts: error
 ```
 
-For a generic new column, use any `target_column`, for example
+`value_column` names the lookup-table value; `target_column` names the cohort
+output. For a generic new column, use any `target_column`, for example
 `protocol_family`, and omit `vocabulary`.
 
 ### Extensible rules and exclusions
@@ -204,6 +211,9 @@ rules:
           operator: contains
           value: scout
 ```
+
+Rule packs have their own `version: 1` schema; this is independent of the
+project file's required `version: 2`.
 
 Rules support `set`, `exclude`, and `qc` actions; exact, normalized, text,
 regular-expression, membership, existence, and numeric conditions; and stable
@@ -253,7 +263,7 @@ identity:
       prefix: P
       length: 20
   sensitive_fields:
-    persist_raw_identifiers: secure_table_only
+    persist_raw_identifiers: separate_table
 ```
 
 Use ontology mappings—not identifier parsing hooks—to derive clinical/project
@@ -284,12 +294,12 @@ Runs are stored under:
   11_publish/cohort_index.parquet
 ```
 
-The effective hash includes external crosswalk, ontology, rule, registration,
-and radiomics-settings file contents. Each completed stage records artifact
-paths and metrics. A matching completed stage is reused only when resume is
-enabled, its source fingerprint still matches, and all table/schema artifacts
-still exist. If one stage reruns, every downstream stage reruns. Failures update
-both the stage state and overall run state.
+The effective hash includes external crosswalk, ontology, rule, and enabled
+registration/radiomics resource contents. Each completed stage records
+artifact paths and metrics. A matching completed stage is reused only when
+resume is enabled, its source fingerprint still matches, and all table/schema
+artifacts still exist. If one stage reruns, every downstream stage reruns.
+Failures update both the stage state and overall run state.
 
 Inspect a run with:
 

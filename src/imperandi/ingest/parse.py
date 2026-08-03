@@ -1271,7 +1271,7 @@ def process_with_checkpoint(
 
                 tags_chunk = pd.DataFrame.from_records(records)
                 chunk_out = chunk.merge(tags_chunk, on="_source_idx", how="left")
-                chunk_out = chunk_out.replace("", pd.NA).infer_objects(copy=False)
+                chunk_out = chunk_out.replace("", pd.NA).infer_objects()
                 if transform_chunk is not None:
                     chunk_out = transform_chunk(chunk_out)
                     if "_source_idx" not in chunk_out.columns:

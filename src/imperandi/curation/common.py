@@ -94,7 +94,7 @@ def build_series_text(
 
 def get_exam_group_cols(
     df: pd.DataFrame,
-    patient_col: str = "patient_key",
+    patient_col: str = "patient_id",
     study_col: str | None = "study_id",
     date_col: str = "date",
 ) -> list[str]:

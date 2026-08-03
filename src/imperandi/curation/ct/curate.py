@@ -118,7 +118,7 @@ def annotate_ct(df: pd.DataFrame, date_col: str = "date") -> pd.DataFrame:
 
 def select_ct_per_exam(
     curated: pd.DataFrame,
-    patient_col: str = "patient_key",
+    patient_col: str = "patient_id",
     study_col: str | None = "study_id",
     date_col: str = "date",
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -177,7 +177,7 @@ def select_ct_per_exam(
 
 def curate_ct(
     df: pd.DataFrame,
-    patient_col: str = "patient_key",
+    patient_col: str = "patient_id",
     study_col: str | None = "study_id",
     date_col: str = "date",
 ) -> dict[str, pd.DataFrame]:

@@ -9,6 +9,8 @@ import pandas as pd
 from imperandi.curation.ct import curate_ct
 from imperandi.curation.mri import curate_mri
 
+SUPPORTED_CURATORS = frozenset({"builtin:liver_ct", "builtin:liver_mri"})
+
 
 def _modality_label(value) -> str:
     if isinstance(value, (list, tuple, set)):
@@ -41,18 +43,17 @@ def split_by_modality(
 
 def curate_by_modality(
     df: pd.DataFrame,
-    patient_col: str = "patient_key",
+    patient_col: str = "patient_id",
     study_col: str | None = "study_id",
     date_col: str = "date",
     contextual_strategies: Collection[str] | None = None,
     curators: Collection[str] | None = None,
 ) -> dict[str, object]:
     ct_df, mri_df, other_df = split_by_modality(df)
-    enabled_curators = (
-        frozenset({"builtin:liver_ct", "builtin:liver_mri"})
-        if curators is None
-        else frozenset(curators)
-    )
+    enabled_curators = SUPPORTED_CURATORS if curators is None else frozenset(curators)
+    unknown_curators = enabled_curators - SUPPORTED_CURATORS
+    if unknown_curators:
+        raise ValueError(f"Unknown modality curators: {sorted(unknown_curators)}")
 
     ct_results = (
         curate_ct(

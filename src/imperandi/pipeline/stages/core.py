@@ -13,6 +13,7 @@ import pandas as pd
 from pydicom.datadict import tag_for_keyword
 
 from imperandi.annotations import apply_ontologies, apply_rule_packs, resolve_annotation
+from imperandi.config.models import CLINICAL_SLOTS, CONTRAST_PHASES
 from imperandi.curation import curate_by_modality
 from imperandi.identity import resolve_patient_identities
 from imperandi.ingest import clean as clean_module
@@ -48,6 +49,7 @@ class IndexStage(PipelineStage):
     def resume_token(self, config) -> str:
         """Fingerprint source inventory paths, sizes, and modification times."""
         digest = hashlib.sha256()
+        digest.update(str(super().resume_token(config)).encode())
 
         def add_path(path: Path) -> None:
             try:
@@ -379,8 +381,16 @@ class AnnotateStage(PipelineStage):
         other = results["other"].copy()
         if not other.empty:
             other["curation_modality"] = "OTHER"
+            previously_eligible = other.get(
+                "eligible", pd.Series(True, index=other.index)
+            ).fillna(True)
+            missing_reason = other.get(
+                "exclusion_reason", pd.Series(pd.NA, index=other.index)
+            ).isna()
             other["eligible"] = False
-            other["exclusion_reason"] = "unsupported_modality"
+            other.loc[previously_eligible | missing_reason, "exclusion_reason"] = (
+                "unsupported_modality"
+            )
         annotated = pd.concat([supported, other], ignore_index=True, sort=False)
         annotated = _copy_builtin_annotations(annotated)
         annotated["eligible"] = annotated["eligible"].fillna(True).astype(bool)
@@ -439,6 +449,15 @@ def _phase_to_slot(row: pd.Series) -> str | None:
     return None
 
 
+def _validate_controlled_values(
+    values: pd.Series, allowed: frozenset[str], label: str
+) -> None:
+    present = values.dropna().astype(str)
+    invalid = set(present) - allowed
+    if invalid:
+        raise ValueError(f"Invalid {label} values: {sorted(invalid)}")
+
+
 class ResolveSelectStage(PipelineStage):
     name = "07_resolve_select"
     requires = frozenset({"volumes_predicted"})
@@ -455,6 +474,9 @@ class ResolveSelectStage(PipelineStage):
             conflict_target="phase_conflict",
             disagreement=resolution.disagreement,
         )
+        _validate_controlled_values(
+            resolved["phase_resolved"], CONTRAST_PHASES, "contrast phase"
+        )
         resolved["slot_image"] = resolved.apply(_phase_to_slot, axis=1)
         selection_config = context.config.selection
         resolved = resolve_annotation(
@@ -465,6 +487,39 @@ class ResolveSelectStage(PipelineStage):
             conflict_target="clinical_slot_conflict",
             disagreement=selection_config.disagreement,
         )
+        _validate_controlled_values(
+            resolved["clinical_slot"], CLINICAL_SLOTS, "clinical slot"
+        )
+        route = (
+            resolved.get(
+                "curation_modality",
+                resolved.get("Modality", pd.Series("", index=resolved.index)),
+            )
+            .astype("string")
+            .str.upper()
+            .replace({"MRI": "MR"})
+        )
+        slot_route = resolved["clinical_slot"].astype("string").str.split("_").str[0]
+        route_mismatch = (
+            resolved["clinical_slot"].notna()
+            & route.isin(["CT", "MR"])
+            & slot_route.ne(route)
+        )
+        if route_mismatch.any():
+            mismatches = sorted(
+                {
+                    f"{route_value}->{slot_value}"
+                    for route_value, slot_value in zip(
+                        route[route_mismatch],
+                        resolved.loc[route_mismatch, "clinical_slot"],
+                        strict=True,
+                    )
+                }
+            )
+            raise ValueError(
+                "Clinical slot modality does not match routed modality: "
+                f"{mismatches}"
+            )
 
         evidence_order = {
             source: len(selection_config.precedence) - index

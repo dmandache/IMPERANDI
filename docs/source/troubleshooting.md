@@ -22,12 +22,12 @@ Install optional features in the same environment that owns the `imperandi`
 executable:
 
 ```bash
-python -m pip install -e ".[segment]"
+python -m pip install -e ".[imaging]"
 python -m pip install -e ".[radiomics]"
 python -m imperandi --help
 ```
 
-The segment extra supplies TotalSegmentator and SimpleITK. Radiomics currently
+The imaging extra supplies TotalSegmentator and SimpleITK. Radiomics currently
 installs PyRadiomics from Git, so installation requires Git and network access.
 
 ## No DICOM files are found

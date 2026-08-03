@@ -8,6 +8,25 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+CONTRAST_PHASES = frozenset(
+    {"NATIVE", "ARTERIAL", "PORTAL_VENOUS", "DELAYED", "HEPATOBILIARY", "OTHER"}
+)
+CLINICAL_SLOTS = frozenset(
+    {
+        "CT_NATIVE",
+        "CT_ARTERIAL",
+        "CT_PORTAL_VENOUS",
+        "CT_DELAYED",
+        "MR_T2",
+        "MR_DWI",
+        "MR_T1_NATIVE",
+        "MR_T1_ARTERIAL",
+        "MR_T1_PORTAL_VENOUS",
+        "MR_T1_DELAYED",
+        "MR_T1_HEPATOBILIARY",
+    }
+)
+
 
 class StrictModel(BaseModel):
     """Base model that rejects misspelled or obsolete configuration fields."""
@@ -40,9 +59,12 @@ class InputConfig(StrictModel):
     @field_validator("sources")
     @classmethod
     def validate_sources(cls, value: list[str]) -> list[str]:
-        if not value:
+        normalized = [source.strip() for source in value]
+        if not normalized or any(not source for source in normalized):
             raise ValueError("input.sources must contain at least one path or glob")
-        return value
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("input.sources must not contain duplicates")
+        return normalized
 
 
 class OutputConfig(StrictModel):
@@ -51,6 +73,14 @@ class OutputConfig(StrictModel):
     publish_formats: list[TableFormat] = Field(
         default_factory=lambda: [TableFormat.PARQUET]
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def default_publication_to_table_format(cls, value):
+        if isinstance(value, dict) and "publish_formats" not in value:
+            value = dict(value)
+            value["publish_formats"] = [value.get("table_format", TableFormat.PARQUET)]
+        return value
 
     @field_validator("publish_formats")
     @classmethod
@@ -64,6 +94,14 @@ class IdentityFallbackConfig(StrictModel):
     columns: list[str] = Field(default_factory=list)
     on_missing: Literal["error", "keep"] = "error"
 
+    @field_validator("columns")
+    @classmethod
+    def normalize_columns(cls, value: list[str]) -> list[str]:
+        normalized = [column.strip() for column in value]
+        if any(not column for column in normalized):
+            raise ValueError("identity fallback columns must not be empty")
+        return list(dict.fromkeys(normalized))
+
 
 class IdentitySourceConfig(StrictModel):
     patient_id_columns: list[str] = Field(default_factory=lambda: ["PatientID"])
@@ -71,6 +109,14 @@ class IdentitySourceConfig(StrictModel):
         default_factory=lambda: ["site_id", "IssuerOfPatientID"]
     )
     fallback: IdentityFallbackConfig = Field(default_factory=IdentityFallbackConfig)
+
+    @field_validator("patient_id_columns", "namespace_columns")
+    @classmethod
+    def normalize_columns(cls, value: list[str]) -> list[str]:
+        normalized = [column.strip() for column in value]
+        if any(not column for column in normalized):
+            raise ValueError("identity source columns must not be empty")
+        return list(dict.fromkeys(normalized))
 
     @model_validator(mode="after")
     def require_identity_source(self):
@@ -120,16 +166,31 @@ class CanonicalIdentityConfig(StrictModel):
             raise ValueError(f"identity strategy {self.strategy!r} requires hmac")
         return self
 
+    @field_validator("crosswalk_keys")
+    @classmethod
+    def normalize_crosswalk_keys(cls, value: list[str]) -> list[str]:
+        normalized = [column.strip() for column in value]
+        if any(not column for column in normalized):
+            raise ValueError("identity crosswalk keys must not be empty")
+        return list(dict.fromkeys(normalized))
+
+    @field_validator("crosswalk_value")
+    @classmethod
+    def normalize_crosswalk_value(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("identity canonical crosswalk_value must not be empty")
+        return value
+
 
 class IdentityValidationConfig(StrictModel):
-    fail_on_source_collision: bool = True
-    fail_on_canonical_collision: bool = True
-    allow_multiple_source_ids_per_patient: bool = True
+    source_collision: Literal["error", "flag"] = "error"
+    multiple_source_ids_per_patient: Literal["allow", "flag", "error"] = "allow"
 
 
 class SensitiveIdentityConfig(StrictModel):
-    persist_raw_identifiers: Literal["never", "secure_table_only", "cohort"] = (
-        "secure_table_only"
+    persist_raw_identifiers: Literal["never", "separate_table", "cohort"] = (
+        "separate_table"
     )
 
 
@@ -152,9 +213,17 @@ class OntologyKeyConfig(StrictModel):
 
 
 class OntologyOutputConfig(StrictModel):
-    source_column: str
+    value_column: str
     target_column: str
-    vocabulary: str | None = None
+    vocabulary: Literal["clinical_slot", "contrast_phase"] | None = None
+
+    @field_validator("value_column", "target_column")
+    @classmethod
+    def non_empty_columns(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("ontology value and target columns must not be empty")
+        return value
 
 
 class OntologyConfig(StrictModel):
@@ -165,12 +234,38 @@ class OntologyConfig(StrictModel):
     unmatched: Literal["keep", "error"] = "keep"
     conflicts: Literal["error", "flag", "first"] = "error"
 
+    @field_validator("id")
+    @classmethod
+    def validate_id(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("ontology id must not be empty")
+        return value
+
     @field_validator("keys")
     @classmethod
     def validate_keys(cls, value: dict[str, OntologyKeyConfig]):
         if not value:
             raise ValueError("ontology keys must not be empty")
-        return value
+        normalized = {column.strip(): key for column, key in value.items()}
+        if any(not column for column in normalized):
+            raise ValueError("ontology key columns must not be empty")
+        if len(normalized) != len(value):
+            raise ValueError("ontology key columns must be unique after trimming")
+        return normalized
+
+    @model_validator(mode="after")
+    def require_standard_vocabulary(self):
+        expected = {
+            "phase_ontology": "contrast_phase",
+            "slot_ontology": "clinical_slot",
+        }.get(self.output.target_column)
+        if expected is not None and self.output.vocabulary != expected:
+            raise ValueError(
+                f"ontology target {self.output.target_column!r} requires "
+                f"vocabulary {expected!r}"
+            )
+        return self
 
 
 class AnnotationConfig(StrictModel):
@@ -180,9 +275,20 @@ class AnnotationConfig(StrictModel):
         Literal["art_port", "mask_multiart", "generic_dynamic_volume_order"]
     ] = Field(default_factory=list)
 
+    @field_validator("ontologies")
+    @classmethod
+    def unique_ontology_ids(cls, value: list[OntologyConfig]):
+        ids = [ontology.id for ontology in value]
+        if len(set(ids)) != len(ids):
+            raise ValueError("ontology ids must be unique")
+        return value
+
     @field_validator("rule_packs")
     @classmethod
     def validate_builtin_rule_packs(cls, value: list[str]) -> list[str]:
+        value = [reference.strip() for reference in value]
+        if any(not reference for reference in value):
+            raise ValueError("annotation rule-pack references must not be empty")
         allowed = {"builtin:liver_ct", "builtin:liver_mri"}
         invalid = {
             reference
@@ -213,8 +319,11 @@ class PhaseResolutionConfig(StrictModel):
     @field_validator("precedence")
     @classmethod
     def validate_precedence(cls, value: list[str]) -> list[str]:
+        value = [column.strip() for column in value]
         if not value:
             raise ValueError("phase resolution precedence must not be empty")
+        if any(not column for column in value):
+            raise ValueError("phase resolution precedence contains an empty column")
         if len(set(value)) != len(value):
             raise ValueError("phase resolution precedence must not contain duplicates")
         return value
@@ -239,7 +348,7 @@ class PhasePredictionConfig(StrictModel):
 
 
 class SelectionConfig(StrictModel):
-    required_slots: dict[str, list[str]] = Field(default_factory=dict)
+    required_slots: dict[Literal["CT", "MR"], list[str]] = Field(default_factory=dict)
     precedence: list[str] = Field(
         default_factory=lambda: [
             "slot_ontology",
@@ -250,49 +359,77 @@ class SelectionConfig(StrictModel):
     )
     disagreement: Literal["flag", "error", "ignore"] = "flag"
 
+    @field_validator("required_slots")
+    @classmethod
+    def validate_required_slots(cls, value):
+        normalized = {}
+        for modality, slots in value.items():
+            cleaned = [slot.strip() for slot in slots]
+            if any(not slot for slot in cleaned):
+                raise ValueError("selection required slots must not be empty")
+            if len(set(cleaned)) != len(cleaned):
+                raise ValueError("selection required slots must not contain duplicates")
+            invalid = set(cleaned) - CLINICAL_SLOTS
+            if invalid:
+                raise ValueError(f"Unknown clinical slots: {sorted(invalid)}")
+            wrong_modality = [
+                slot for slot in cleaned if not slot.startswith(f"{modality}_")
+            ]
+            if wrong_modality:
+                raise ValueError(
+                    f"Clinical slots do not match {modality}: {wrong_modality}"
+                )
+            normalized[modality] = cleaned
+        return normalized
+
     @field_validator("precedence")
     @classmethod
     def validate_precedence(cls, value: list[str]) -> list[str]:
+        value = [column.strip() for column in value]
         if not value:
             raise ValueError("selection precedence must not be empty")
+        if any(not column for column in value):
+            raise ValueError("selection precedence contains an empty column")
         if len(set(value)) != len(value):
             raise ValueError("selection precedence must not contain duplicates")
         return value
 
 
 class ConversionConfig(StrictModel):
-    enabled: bool = True
+    enabled: bool = False
     workers: int | None = Field(default=None, ge=1)
 
 
 class SegmentationTaskConfig(StrictModel):
     id: str
     backend: Literal["totalsegmentator"] = "totalsegmentator"
-    modalities: list[Literal["CT", "MR"]] = Field(default_factory=lambda: ["CT"])
-    task: str | None = None
-    output: str | None = None
+    modality: Literal["CT", "MR"]
+    task: str
+    output: str
     fetch_output: str | None = None
     parameters: dict[str, Any] = Field(default_factory=dict)
 
-    @field_validator("id")
+    @field_validator("id", "task", "output")
     @classmethod
-    def non_empty_id(cls, value: str) -> str:
+    def non_empty_names(cls, value: str) -> str:
         if not value.strip():
-            raise ValueError("segmentation task id must not be empty")
+            raise ValueError("segmentation task id, task, and output must not be empty")
         return value.strip()
 
-    @field_validator("modalities")
+    @field_validator("fetch_output")
     @classmethod
-    def non_empty_task_modalities(cls, value):
-        if not value:
-            raise ValueError("segmentation task modalities must not be empty")
-        return list(dict.fromkeys(value))
+    def non_empty_fetch_output(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("segmentation fetch_output must not be empty")
+        return value.strip() if value is not None else None
 
 
 class SegmentationConfig(StrictModel):
-    enabled: bool = True
+    enabled: bool = False
     tasks: list[SegmentationTaskConfig] = Field(default_factory=list)
-    postprocess: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    postprocess: dict[Literal["CT", "MR", "default"], dict[str, Any]] = Field(
+        default_factory=dict
+    )
 
     @field_validator("tasks")
     @classmethod
@@ -300,7 +437,18 @@ class SegmentationConfig(StrictModel):
         ids = [task.id for task in value]
         if len(set(ids)) != len(ids):
             raise ValueError("segmentation task ids must be unique")
+        routed_outputs = [(task.modality, task.output) for task in value]
+        if len(set(routed_outputs)) != len(routed_outputs):
+            raise ValueError(
+                "segmentation outputs must be unique within each modality route"
+            )
         return value
+
+    @model_validator(mode="after")
+    def require_tasks_when_enabled(self):
+        if self.enabled and not self.tasks:
+            raise ValueError("segmentation.tasks must not be empty when enabled")
+        return self
 
 
 class RegistrationConfig(StrictModel):
@@ -321,6 +469,14 @@ class RadiomicsConfig(StrictModel):
     slots: list[str] = Field(default_factory=list)
     masks: list[str] = Field(default_factory=list)
 
+    @field_validator("slots", "masks")
+    @classmethod
+    def unique_non_empty_names(cls, value: list[str]) -> list[str]:
+        normalized = [name.strip() for name in value]
+        if any(not name for name in normalized):
+            raise ValueError("radiomics slot and mask names must not be empty")
+        return list(dict.fromkeys(normalized))
+
 
 class ExecutionConfig(StrictModel):
     workers: int = Field(default=4, ge=1)
@@ -331,7 +487,7 @@ class ExecutionConfig(StrictModel):
 
 
 class ImperandiConfig(StrictModel):
-    version: Literal[1] = 1
+    version: Literal[2]
     project: ProjectConfig
     input: InputConfig
     output: OutputConfig

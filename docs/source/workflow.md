@@ -93,15 +93,18 @@ unrelated exams.
 ### Segment
 
 `08_segment` routes each selected volume by CT or MR and runs only tasks whose
-`modalities` include that route. Outputs are stored as mask-path columns.
-Failures are isolated per source row.
+explicit `modality` matches that route. Outputs are stored as mask-path columns.
+Backend task names remain exactly as configured: use separate task entries such
+as `total` for CT liver and `total_mr` for MR liver. Failures are isolated per
+source row.
 
 ### Register
 
 `09_register` consumes an explicit registration pair table. Each pair names a
 fixed and moving volume. Rigid, rigid-plus-affine, and deformable transforms are
 supported. The forward transform and resampled image are always persisted for
-successful pairs; failures do not stop independent pairs.
+successful pairs; failures do not stop independent pairs. Cohort-to-cohort
+pairs are rejected when their canonical `patient_id` values differ.
 
 ### Radiomics and publish
 
@@ -113,15 +116,18 @@ cohort in each requested format.
 
 The effective configuration is SHA-256 hashed together with the contents of
 external crosswalk, ontology, rule, registration-pair, and radiomics-settings
-files. Its first 12 characters name the run directory. Each stage transitions
-through `running`, `completed`, or `failed` in `stage.json`.
+files that affect enabled stages. Its first 12 characters name the run
+directory. Each stage transitions through `running`, `completed`, or `failed`
+in `stage.json`.
 
 With `execution.resume: true`, a completed stage is skipped only if its resume
 token matches and every recorded table plus schema sidecar still exists. Input
 inventory paths, sizes, and modification times form the index-stage token.
 Deleting an artifact or changing an input forces that stage and every downstream
 stage to run again. Changing configuration or a policy-file content creates a
-different run directory.
+different run directory. The installed IMPERANDI version and pipeline contract
+are also part of stage resume tokens, preventing artifacts created by an older
+implementation from being silently reused after an upgrade.
 
 Heavy adapters also receive `checkpoint_every_rows` and
 `checkpoint_every_seconds`, allowing their backend algorithms to recover within
