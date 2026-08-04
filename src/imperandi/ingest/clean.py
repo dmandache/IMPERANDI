@@ -443,10 +443,10 @@ def clean_pixel_spacing(df):
     return df
 
 
-def generate_volume_id(df):
-    """Add a deterministic identifier for each candidate imaging volume."""
+def build_volume_id_naive(df, preferred_cols=None, fallback_cols=None):
+    """Add a deterministic metadata-based identifier for each candidate volume."""
 
-    preferred_cols = [
+    preferred_cols = preferred_cols or [
         "patient_key",
         "study_id",
         "series_id",
@@ -456,14 +456,12 @@ def generate_volume_id(df):
         "SliceThickness",
         "PixelSpacingXY",
     ]
-    fallback_cols = ["patient_key", "study_id", "series_id"]
+    fallback_cols = fallback_cols or ["patient_key", "study_id", "series_id"]
 
+    df = df.copy()
     if "ImageOrientationPatient" in df.columns:
-        df = df.copy()
         df["ImageOrientationPatient"] = df["ImageOrientationPatient"].apply(
-            lambda x: (
-                tuple(x) if isinstance(x, (list, tuple)) else tuple(literal_eval(x))
-            )
+            standardize_iop
         )
 
     # Choose the maximum available columns among preferred
@@ -485,7 +483,6 @@ def generate_volume_id(df):
         logger.info(
             "For unique volume ID generation, using no columns (all rows get same ID)"
         )
-        df = df.copy()
         df["volume_id"] = hashlib.sha1(b"volume").hexdigest()
         return df
 
@@ -506,11 +503,16 @@ def generate_volume_id(df):
     # Build a per-row stable string and hash it
     joined = df[cols_to_use].map(_to_stable_str).agg("||".join, axis=1)
 
-    df = df.copy()
     df["volume_id"] = joined.apply(
         lambda s: hashlib.sha1(s.encode("utf-8")).hexdigest()
     )
     return df
+
+
+def generate_volume_id(df):
+    """Backward-compatible alias for metadata-only volume ID generation."""
+
+    return build_volume_id_naive(df)
 
 
 def filter_by_acquisition_plane(df, angle_thresh_deg=10.0):
@@ -529,7 +531,137 @@ def filter_by_acquisition_plane(df, angle_thresh_deg=10.0):
     return df
 
 
-def correct_volume_ids(df, z_tolerance=1e-3):
+def _parse_vector(value):
+    """Parse a DICOM vector stored as an array, sequence, or string."""
+
+    if value is None:
+        return None
+    if not isinstance(value, (list, tuple, np.ndarray)) and pd.isna(value):
+        return None
+
+    if isinstance(value, np.ndarray):
+        values = value.tolist()
+    elif isinstance(value, (list, tuple)):
+        values = list(value)
+    else:
+        text = str(value).strip()
+        if not text:
+            return None
+        try:
+            values = literal_eval(text)
+        except Exception:
+            values = re.split(r"[\\,;\s]+", text.strip("[]()"))
+
+    try:
+        return [float(item) for item in values]
+    except (TypeError, ValueError):
+        return None
+
+
+def _slice_coordinate(row):
+    """Return the slice coordinate along the acquisition-plane normal."""
+
+    ipp = _parse_vector(row.get("ImagePositionPatient"))
+    iop = _parse_vector(row.get("ImageOrientationPatient"))
+    if ipp is not None and iop is not None and len(ipp) >= 3 and len(iop) >= 6:
+        normal = np.cross(
+            np.asarray(iop[:3], dtype=float), np.asarray(iop[3:6], dtype=float)
+        )
+        norm = np.linalg.norm(normal)
+        if norm > 0:
+            return float(np.dot(np.asarray(ipp[:3], dtype=float), normal / norm))
+
+    if "SliceLocation" in row.index and pd.notna(row.get("SliceLocation")):
+        try:
+            return float(row.get("SliceLocation"))
+        except (TypeError, ValueError):
+            pass
+    return np.nan
+
+
+def split_multivolume_series_by_repeated_slices(
+    df: pd.DataFrame,
+    series_group_cols=("patient_key", "study_id", "series_id"),
+    z_tolerance: float = 1e-2,
+    min_slices: int = 8,
+    min_repeated_slice_fraction: float = 0.7,
+    volume_col: str = "volume_id",
+    logger: logging.Logger | None = None,
+) -> pd.DataFrame:
+    """Split repeated 3D slice stacks stored under one DICOM series."""
+
+    log = logger or logging.getLogger(__name__)
+    out = df.copy()
+    group_cols = [column for column in series_group_cols if column in out.columns]
+    if not group_cols:
+        raise ValueError("No valid series grouping columns found.")
+    if z_tolerance <= 0:
+        raise ValueError("z_tolerance must be positive.")
+    if min_slices <= 0:
+        raise ValueError("min_slices must be positive.")
+
+    if volume_col not in out.columns:
+        out[volume_col] = pd.NA
+
+    out["_slice_coord"] = out.apply(_slice_coordinate, axis=1)
+    out["_slice_key"] = np.round(out["_slice_coord"] / z_tolerance).astype("Int64")
+    out["volume_order_in_series"] = pd.NA
+    out["volume_split_method"] = "metadata_hash_or_existing"
+    out["n_detected_volumes_in_series"] = pd.NA
+
+    possible_sort_cols = [
+        "TemporalPositionIdentifier",
+        "AcquisitionNumber",
+        "AcquisitionTime",
+        "ContentTime",
+        "InstanceNumber",
+        "SOPInstanceUID",
+    ]
+    sort_cols = [column for column in possible_sort_cols if column in out.columns]
+
+    for group_key, indices in out.groupby(group_cols, dropna=False).groups.items():
+        group = out.loc[indices].copy()
+        valid = group["_slice_key"].notna()
+        if valid.sum() < min_slices:
+            continue
+
+        slice_counts = group.loc[valid, "_slice_key"].value_counts().sort_index()
+        if len(slice_counts) < min_slices:
+            continue
+        repeated_fraction = float((slice_counts > 1).mean())
+        if repeated_fraction < min_repeated_slice_fraction:
+            continue
+
+        n_volumes = int(slice_counts.mode().iloc[0])
+        if n_volumes <= 1:
+            continue
+
+        if sort_cols:
+            group = group.sort_values(sort_cols, na_position="last").copy()
+        else:
+            group = group.sort_index().copy()
+        group["_repeat_index"] = group.groupby("_slice_key", dropna=False).cumcount()
+
+        def _make_volume_id(row):
+            key_parts = [str(row[column]) for column in group_cols]
+            key_parts.append(f"vol{int(row['_repeat_index'])}")
+            return hashlib.sha1("||".join(key_parts).encode("utf-8")).hexdigest()
+
+        out.loc[group.index, volume_col] = group.apply(_make_volume_id, axis=1)
+        out.loc[group.index, "volume_order_in_series"] = group["_repeat_index"] + 1
+        out.loc[group.index, "volume_split_method"] = "repeated_slice_stack"
+        out.loc[group.index, "n_detected_volumes_in_series"] = n_volumes
+        log.info(
+            "Split repeated-slice series %s into %s volumes (%s unique slices)",
+            group_key,
+            n_volumes,
+            len(slice_counts),
+        )
+
+    return out.drop(columns=["_slice_coord", "_slice_key"], errors="ignore")
+
+
+def correct_volume_ids(df, z_tolerance=1e-3, group_columns=None, z_sources=None):
     """Merge pseudo-volumes that represent one consistently spaced volume.
 
     The grouping uses the maximum available subset of the preferred metadata
@@ -542,7 +674,7 @@ def correct_volume_ids(df, z_tolerance=1e-3):
     if "volume_id" not in df.columns:
         return df
 
-    preferred_group_cols = [
+    preferred_group_cols = group_columns or [
         "patient_key",
         "study_id",
         "series_id",
@@ -552,6 +684,7 @@ def correct_volume_ids(df, z_tolerance=1e-3):
         "PixelSpacingXY",
     ]
     fallback_group_cols = ["patient_key", "study_id", "series_id"]
+    z_sources = z_sources or ["ImagePositionPatient", "SliceLocation"]
 
     # Choose grouping columns: maximum available
     group_cols = [c for c in preferred_group_cols if c in df.columns]
@@ -606,7 +739,10 @@ def correct_volume_ids(df, z_tolerance=1e-3):
         # --- get z positions robustly ---
         z_positions = None
 
-        if "ImagePositionPatient" in group_df.columns:
+        if (
+            "ImagePositionPatient" in z_sources
+            and "ImagePositionPatient" in group_df.columns
+        ):
             z_values = []
             ipp_parse_failures = 0
             for value in group_df["ImagePositionPatient"]:
@@ -626,8 +762,10 @@ def correct_volume_ids(df, z_tolerance=1e-3):
             )
 
         if (
-            z_positions is None or len(z_positions) < 2
-        ) and "SliceLocation" in group_df.columns:
+            (z_positions is None or len(z_positions) < 2)
+            and "SliceLocation" in z_sources
+            and "SliceLocation" in group_df.columns
+        ):
             logger.debug(
                 "Falling back to SliceLocation for z_positions: "
                 "ipp_z_count=%s, rows=%s",
@@ -703,6 +841,46 @@ def correct_volume_ids(df, z_tolerance=1e-3):
 
     df["volume_id"] = df["volume_id"].apply(lambda vid: updated_ids.get(vid, vid))
     return df
+
+
+def build_volume_id(
+    df,
+    preferred_cols=None,
+    fallback_cols=None,
+    series_group_cols=("patient_key", "study_id", "series_id"),
+    split_z_tolerance: float = 1e-2,
+    min_slices: int = 8,
+    min_repeated_slice_fraction: float = 0.7,
+    merge_z_tolerance: float = 1e-3,
+    merge_group_columns=None,
+    merge_z_sources=None,
+    volume_col: str = "volume_id",
+    logger: logging.Logger | None = None,
+):
+    """Establish volume IDs by hashing, splitting repeated stacks, and merging."""
+
+    out = build_volume_id_naive(
+        df, preferred_cols=preferred_cols, fallback_cols=fallback_cols
+    )
+    out = split_multivolume_series_by_repeated_slices(
+        out,
+        series_group_cols=series_group_cols,
+        z_tolerance=split_z_tolerance,
+        min_slices=min_slices,
+        min_repeated_slice_fraction=min_repeated_slice_fraction,
+        volume_col="volume_id",
+        logger=logger,
+    )
+    out = correct_volume_ids(
+        out,
+        z_tolerance=merge_z_tolerance,
+        group_columns=merge_group_columns,
+        z_sources=merge_z_sources,
+    )
+    if volume_col != "volume_id":
+        out = out.drop(columns=[volume_col], errors="ignore")
+        out = out.rename(columns={"volume_id": volume_col})
+    return out
 
 
 def _is_nan(value):
@@ -853,6 +1031,8 @@ def group_volumes(df):
         if len(vals) == 0:
             return float("NaN")
         unique_vals = _sorted_unique(vals, col.name)
+        if col.name == "dicom_path":
+            return unique_vals
         if len(unique_vals) == 1:
             return unique_vals[0]
         return unique_vals
@@ -1323,13 +1503,8 @@ def clean_and_save_data(
         report_change(df, df_prev)
 
     df_prev = df.copy()
-    df = generate_volume_id(df)
+    df = build_volume_id(df)
     report_volumes(df, "generating volume IDs")
-    report_change(df, df_prev)
-
-    df_prev = df.copy()
-    df = correct_volume_ids(df)
-    report_volumes(df, "merging multi-acquisition volumes IDs")
     report_change(df, df_prev)
 
     df = group_volumes(df)

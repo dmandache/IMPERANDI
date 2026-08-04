@@ -257,8 +257,7 @@ class AssembleStage(PipelineStage):
                 standardize_iop
             )
 
-        df = clean_module.generate_volume_id(df)
-        df = clean_module.correct_volume_ids(df)
+        df = clean_module.build_volume_id(df)
         volumes = clean_module.group_volumes(df)
         if "dicom_path" in volumes.columns:
             volumes = clean_module.calculate_volume_length(volumes)

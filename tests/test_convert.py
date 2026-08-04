@@ -65,6 +65,18 @@ def test_configure_dicom2nifti_convert_logger_one_level_lower():
         target_logger.setLevel(old_target_level)
 
 
+def test_normalize_volume_dicom_paths_wraps_singleton_string():
+    assert convert_module._normalize_volume_dicom_paths("/data/one.dcm") == [
+        "/data/one.dcm"
+    ]
+
+
+def test_normalize_volume_dicom_paths_preserves_multi_file_list():
+    paths = ["/data/one.dcm", "/data/two.dcm"]
+
+    assert convert_module._normalize_volume_dicom_paths(paths) is paths
+
+
 def make_series(tmp_path, output_dir, create_nifti=False):
     # create a dummy series_dir with files
     series_dir = tmp_path / "series"

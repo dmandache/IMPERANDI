@@ -56,6 +56,12 @@ def _configure_dicom2nifti_convert_logger(base_logger: logging.Logger) -> None:
     logging.getLogger("dicom2nifti.convert_dicom").setLevel(dicom2nifti_level)
 
 
+def _normalize_volume_dicom_paths(paths):
+    """Keep legacy singleton volume paths from being iterated as strings."""
+
+    return [paths] if isinstance(paths, str) else paths
+
+
 # Function to parse command-line arguments
 def add_convert_arguments(
     parser: argparse.ArgumentParser,
@@ -371,7 +377,7 @@ def process_single_volume(k, row, output_dir, verbose, return_status=False):
 
     try:
         dicom_dir_path = row["series_dir"]
-        files_in_vol = row["dicom_path"]
+        files_in_vol = _normalize_volume_dicom_paths(row["dicom_path"])
         files_in_dir = list(Path(dicom_dir_path).iterdir())
 
         n_files_in_vol = len(files_in_vol) if isinstance(files_in_vol, list) else 1

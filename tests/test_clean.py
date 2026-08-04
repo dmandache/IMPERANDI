@@ -288,6 +288,31 @@ def test_generate_volume_id_and_filter_by_acquisition_plane():
     assert filtered.shape[0] == with_sup.shape[0]
 
 
+def test_build_volume_id_splits_repeated_slice_stacks():
+    rows = []
+    for acquisition_number in (1, 2):
+        for z in range(8):
+            rows.append(
+                {
+                    "patient_key": "p",
+                    "study_id": "s",
+                    "series_id": "multivolume-series",
+                    "ImageOrientationPatient": "[1, 0, 0, 0, 1, 0]",
+                    "ImagePositionPatient": f"[0, 0, {z}]",
+                    "AcquisitionNumber": acquisition_number,
+                    "InstanceNumber": (acquisition_number - 1) * 8 + z + 1,
+                }
+            )
+
+    out = clean.build_volume_id(pd.DataFrame(rows))
+
+    assert out["volume_id"].nunique() == 2
+    assert set(out.groupby("volume_id").size()) == {8}
+    assert set(out["volume_order_in_series"]) == {1, 2}
+    assert out["volume_split_method"].eq("repeated_slice_stack").all()
+    assert out["n_detected_volumes_in_series"].dropna().unique().tolist() == [2]
+
+
 def test_correct_volume_ids_merging(tmp_path, capsys):
     # Prepare group with same unique_cols but two different volume_ids and consistent z spacing
     df = pd.DataFrame(
@@ -336,6 +361,39 @@ def test_group_volumes_and_calculate_length_and_filter_by_size():
     )
     # both volumes should be kept (v2 has NaN volume_length => kept)
     assert set(filtered["volume_id"]) == set(grouped["volume_id"])
+
+
+def test_group_volumes_keeps_singleton_dicom_path_as_list():
+    grouped = clean.group_volumes(
+        pd.DataFrame(
+            {
+                "volume_id": ["v1"],
+                "dicom_path": ["/data/one.dcm"],
+                "Modality": ["CT"],
+            }
+        )
+    )
+
+    assert grouped.loc[0, "dicom_path"] == ["/data/one.dcm"]
+    assert grouped.loc[0, "Modality"] == "CT"
+
+
+def test_group_volumes_keeps_multiple_dicom_paths_as_list():
+    grouped = clean.group_volumes(
+        pd.DataFrame(
+            {
+                "volume_id": ["v1", "v1"],
+                "dicom_path": ["/data/two.dcm", "/data/one.dcm"],
+                "Modality": ["CT", "CT"],
+            }
+        )
+    )
+
+    assert grouped.loc[0, "dicom_path"] == [
+        "/data/one.dcm",
+        "/data/two.dcm",
+    ]
+    assert grouped.loc[0, "Modality"] == "CT"
 
 
 def test_calculate_volume_length_accepts_csv_string_metadata():
