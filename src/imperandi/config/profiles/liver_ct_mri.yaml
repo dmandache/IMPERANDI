@@ -56,3 +56,11 @@ segmentation:
       task: liver_lesions_mr
       output: liver_tumor
       fetch_output: liver_lesions
+  postprocess:
+    default:
+      merge_keys: [liver, liver_tumor]
+      output: liver_merged
+      radius_mm: 5.0
+      largest_cc: true
+      fill_holes: true
+      close: true

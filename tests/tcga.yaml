@@ -1,0 +1,50 @@
+version: 2
+
+project:
+  name: tcga-liver
+  profile: liver_ct_mri
+
+# Relative paths are resolved from this file, not from the invoking shell.
+input:
+  sources:
+    - ./data/TCGA_LIHC_DICOM
+
+output:
+  root: ./data/TCGA_tables
+  imaging_root: ./data/TCGA_images
+  table_format: csv
+  publish_formats: [csv]
+
+identity:
+  source:
+    patient_id_columns: [PatientName]
+    namespace_columns: []
+    fallback:
+      columns: [PatientID]
+      on_missing: error
+  normalization:
+    case: preserve
+  canonical:
+    strategy: source
+
+# These stages reproduce the real image-processing workflow. The profile
+# supplies modality-specific liver and liver-tumor segmentation tasks.
+phase_prediction:
+  enabled: true
+
+conversion:
+  enabled: true
+
+segmentation:
+  enabled: true
+
+registration:
+  enabled: false
+
+radiomics:
+  enabled: true
+  masks: [liver, liver_tumor]
+
+execution:
+  workers: 2
+  resume: true
