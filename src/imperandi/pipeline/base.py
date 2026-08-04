@@ -40,6 +40,14 @@ class RunContext:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
+    @property
+    def imaging_root(self) -> Path:
+        path = self.config.output.imaging_root
+        if path is None:
+            path = self.config.output.root / self.config.project.name
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
     def table_path(self, stage_name: str, artifact_name: str) -> Path:
         suffix = table_suffix(self.config.output.table_format)
         return self.stage_dir(stage_name) / f"{artifact_name}{suffix}"

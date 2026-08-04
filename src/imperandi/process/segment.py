@@ -196,13 +196,12 @@ class TotalSegmentatorBackend:
         **kwargs: Any,
     ) -> None:
         self._ensure_imported()
+        options = {"quiet": True, "verbose": False, **kwargs}
         self._ts(
             input=input_path,
             output=output_dir,
             task=task,
-            quiet=True,
-            verbose=False,
-            **kwargs,
+            **options,
         )
 
 

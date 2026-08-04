@@ -83,6 +83,9 @@ python -m pip install -e ".[all]"  # development plus all optional features
 
 Create `imperandi.yaml` with `imperandi init`, then replace the input source:
 
+For a fully annotated reference containing every accepted configuration
+section, field, and enum, start from [`imperandi.blueprint.yaml`](imperandi.blueprint.yaml).
+
 ```yaml
 version: 2
 
@@ -96,6 +99,8 @@ input:
 
 output:
   root: ./imperandi-results
+  # Defaults to ./imperandi-results/<project.name> when omitted.
+  imaging_root: ./cohort-images
   table_format: parquet
   publish_formats: [parquet, csv]
 
@@ -135,6 +140,16 @@ The built-in `liver_ct_mri` profile supplies CT/MRI rules, required clinical
 slots, and separate single-modality liver segmentation tasks (`total` for CT
 and `total_mr` for MR). Project values override profile values; mappings merge
 recursively and lists replace profile lists.
+
+TotalSegmentator keyword arguments can be passed per task through
+`segmentation.tasks[].parameters`, for example:
+
+```yaml
+parameters:
+  roi_subset: [liver]
+```
+
+See the IRCAD project example in `tests/ircad.yaml`.
 
 ## Phase and clinical-slot evidence
 

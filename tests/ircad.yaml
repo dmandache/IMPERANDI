@@ -1,0 +1,72 @@
+version: 2
+
+project:
+  name: ircad
+  profile: liver_ct_mri
+
+# Relative paths are resolved from this file, not from the invoking shell.
+input:
+  sources:
+    - ./data/IRCAD_DICOM
+
+output:
+  root: ./data/IRCAD_v2
+  imaging_root: ./data/IRCAD_images
+  table_format: csv
+  publish_formats: [csv]
+
+identity:
+  source:
+    patient_id_columns: [PatientName]
+    namespace_columns: []
+    fallback:
+      columns: []
+      on_missing: error
+  normalization:
+    case: preserve
+  canonical:
+    strategy: source
+
+# These stages reproduce the real image-processing workflow. The profile
+# supplies modality-specific liver and liver-tumor segmentation tasks.
+phase_prediction:
+  enabled: true
+
+conversion:
+  enabled: true
+
+segmentation:
+  enabled: true
+  tasks:
+    - id: liver_ct
+      backend: totalsegmentator
+      modality: CT
+      task: total
+      output: liver
+      parameters:
+        roi_subset: [liver]
+    - id: liver_tumor_ct
+      backend: totalsegmentator
+      task: liver_lesions
+      modality: CT
+      output: liver_tumor
+      fetch_output: liver_lesions
+  postprocess:
+    default:
+      merge_keys: [liver, liver_tumor]
+      output: liver_all
+      radius_mm: 5.0
+      largest_cc: true
+      fill_holes: true
+      close: true
+
+registration:
+  enabled: false
+
+radiomics:
+  enabled: true
+  masks: [liver, liver_tumor]
+
+execution:
+  workers: 2
+  resume: true

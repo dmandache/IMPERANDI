@@ -218,6 +218,7 @@ def test_conversion_uses_patient_key_only_inside_backend_bridge(tmp_path, monkey
     def fake_convert(args):
         backend_input = pd.read_csv(args.csv_path[0])
         assert backend_input.loc[0, "patient_key"] == "P-001"
+        assert Path(args.output_dir) == tmp_path / "out" / "convert-bridge"
         backend_input["nifti_path"] = "/images/P-001/scan.nii.gz"
         backend_input.to_csv(args.csv_path_out, index=False)
 
@@ -249,6 +250,7 @@ def test_mixed_modality_segmentation_routes_explicit_backend_tasks(
                             "modality": "CT",
                             "task": "total",
                             "output": "liver",
+                            "parameters": {"roi_subset": ["liver"]},
                         },
                         {
                             "id": "liver_mr",
@@ -277,6 +279,7 @@ def test_mixed_modality_segmentation_routes_explicit_backend_tasks(
         ),
     )
     routes = {}
+    parameters = {}
 
     def fake_segment(args):
         backend_config = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
@@ -284,6 +287,7 @@ def test_mixed_modality_segmentation_routes_explicit_backend_tasks(
         modality = frame.loc[0, "curation_modality"]
         tasks = backend_config["segmentation"]["tasks"]
         routes[modality] = [task["task"] for task in tasks]
+        parameters[modality] = tasks[0]["extra"]
         frame["mask_liver"] = frame["volume_id"].map(
             lambda volume_id: f"/masks/{volume_id}/liver.nii.gz"
         )
@@ -295,5 +299,6 @@ def test_mixed_modality_segmentation_routes_explicit_backend_tasks(
     segmented = read_table(result.artifacts["volumes_segmented"])
 
     assert routes == {"CT": ["total"], "MR": ["total_mr"]}
+    assert parameters == {"CT": {"roi_subset": ["liver"]}, "MR": {}}
     assert set(segmented["volume_id"]) == {"ct-volume", "mr-volume"}
     assert segmented["mask_liver"].notna().all()

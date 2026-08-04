@@ -37,6 +37,7 @@ def test_cli_init_creates_a_valid_starter_project(tmp_path, capsys):
     assert created["version"] == 2
     assert created["project"]["profile"] == "liver_ct_mri"
     assert created["output"]["table_format"] == "parquet"
+    assert created["output"]["imaging_root"] is None
     assert created["conversion"]["enabled"] is False
     assert created["segmentation"]["enabled"] is False
     assert "csv_warning_threshold_files" not in created["output"]

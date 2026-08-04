@@ -24,6 +24,8 @@ input:
 
 output:
   root: ./results
+  # Optional; defaults to ./results/<project.name>.
+  imaging_root: ./cohort-images
   table_format: parquet
   publish_formats: [parquet, csv]
 

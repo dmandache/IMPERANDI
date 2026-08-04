@@ -57,7 +57,7 @@ class ConvertStage(PipelineStage):
         input_csv = _bridge_csv(stage_dir, "volumes_shortlist", backend_input)
         output_csv = stage_dir / "_volumes_converted.csv"
         error_csv = stage_dir / "_convert_errors.csv"
-        image_dir = stage_dir / "images"
+        image_dir = context.imaging_root
         workers = context.config.conversion.workers or context.config.execution.workers
         argv = [
             str(input_csv),
@@ -253,7 +253,9 @@ def _segmentation_backend_config(context: RunContext, modality: str) -> dict:
         item = {
             "task": task.task,
             "output": task.output,
-            "extra": task.parameters,
+            # The legacy backend calls this mapping `extra`; v2 exposes the
+            # clearer `parameters` name and forwards every value unchanged.
+            "extra": dict(task.parameters),
         }
         if task.fetch_output:
             item["fetch_output"] = task.fetch_output
@@ -378,7 +380,7 @@ class RegistrationStage(PipelineStage):
         registrations, errors = register_pairs(
             pairs,
             volumes,
-            output_dir=context.stage_dir(self.name) / "images",
+            output_dir=context.imaging_root / "registrations",
             transform=config.transform,
         )
         if registrations.empty:

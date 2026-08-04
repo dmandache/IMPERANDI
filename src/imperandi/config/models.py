@@ -69,6 +69,7 @@ class InputConfig(StrictModel):
 
 class OutputConfig(StrictModel):
     root: Path
+    imaging_root: Path | None = None
     table_format: TableFormat = TableFormat.PARQUET
     publish_formats: list[TableFormat] = Field(
         default_factory=lambda: [TableFormat.PARQUET]
@@ -422,6 +423,21 @@ class SegmentationTaskConfig(StrictModel):
         if value is not None and not value.strip():
             raise ValueError("segmentation fetch_output must not be empty")
         return value.strip() if value is not None else None
+
+    @field_validator("parameters")
+    @classmethod
+    def validate_backend_parameters(cls, value: dict[str, Any]) -> dict[str, Any]:
+        normalized = {str(name).strip(): parameter for name, parameter in value.items()}
+        if any(not name for name in normalized):
+            raise ValueError("segmentation parameter names must not be empty")
+        reserved = {"input", "output", "task", "input_path", "output_dir"}
+        invalid = reserved & set(normalized)
+        if invalid:
+            raise ValueError(
+                "segmentation parameters cannot override routing arguments: "
+                f"{sorted(invalid)}"
+            )
+        return normalized
 
 
 class SegmentationConfig(StrictModel):

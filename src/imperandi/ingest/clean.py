@@ -868,13 +868,13 @@ def calculate_volume_length(df):
 
     def calculate_total_volume_length(row):
         try:
-            n_files = row["n_files"]
-            thickness = abs(row["SliceThickness"])
+            n_files = int(row["n_files"])
+            thickness = abs(float(row["SliceThickness"]))
             spacing = row.get("SpacingBetweenSlices", thickness)
-            spacing = abs(spacing) if pd.notna(spacing) else thickness
+            spacing = abs(float(spacing)) if pd.notna(spacing) else thickness
             total_length = thickness + (n_files - 1) * abs(spacing)
             return total_length
-        except Exception:
+        except (TypeError, ValueError):
             return None
 
     df["n_files"] = df["dicom_path"].apply(

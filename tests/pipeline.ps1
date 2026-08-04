@@ -1,15 +1,22 @@
 param(
-    [string]$ConfigPath = ".\tests\data\imperandi.yaml"
+    [string]$ConfigPath = (Join-Path $PSScriptRoot "ircad.yaml")
 )
 
 $ErrorActionPreference = "Stop"
 
-if (-not (Test-Path -Path $ConfigPath -PathType Leaf)) {
-    throw "Missing project configuration: $ConfigPath. Create one with: imperandi init $ConfigPath"
+# End-to-end IRCAD usage example for pipeline v2. Pass another project file to
+# run the same validate/plan/run workflow against a different real dataset.
+if (-not (Test-Path -LiteralPath $ConfigPath -PathType Leaf)) {
+    throw "Missing project configuration: $ConfigPath"
 }
 
 imperandi validate $ConfigPath
-imperandi plan $ConfigPath
-imperandi run $ConfigPath
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-Write-Output "Pipeline test completed successfully."
+imperandi plan $ConfigPath
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+imperandi run $ConfigPath
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+Write-Output "IRCAD v2 pipeline completed successfully."

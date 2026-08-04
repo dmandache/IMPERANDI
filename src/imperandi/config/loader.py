@@ -55,6 +55,11 @@ def _resolve_relative_paths(config: ImperandiConfig, base_dir: Path) -> None:
         for source in config.input.sources
     ]
     config.output.root = _resolve_path(config.output.root, base_dir)  # type: ignore[assignment]
+    config.output.imaging_root = (
+        _resolve_path(config.output.imaging_root, base_dir)
+        if config.output.imaging_root is not None
+        else config.output.root / config.project.name
+    )
     canonical = config.identity.canonical
     canonical.crosswalk = _resolve_path(canonical.crosswalk, base_dir)
     for ontology in config.annotations.ontologies:

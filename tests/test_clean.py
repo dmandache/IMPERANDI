@@ -338,6 +338,21 @@ def test_group_volumes_and_calculate_length_and_filter_by_size():
     assert set(filtered["volume_id"]) == set(grouped["volume_id"])
 
 
+def test_calculate_volume_length_accepts_csv_string_metadata():
+    volumes = pd.DataFrame(
+        {
+            "dicom_path": [["a.dcm", "b.dcm", "c.dcm"]],
+            "SliceThickness": ["1.5"],
+            "SpacingBetweenSlices": ["2.0"],
+        }
+    )
+
+    result = clean.calculate_volume_length(volumes)
+
+    assert result.loc[0, "n_files"] == 3
+    assert result.loc[0, "volume_length"] == 5.5
+
+
 def test_group_volumes_deterministic_ordering():
     df = pd.DataFrame(
         {

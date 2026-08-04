@@ -309,6 +309,38 @@ def test_segment_volume_infers_outputs_from_created_segmentations(tmp_path):
     assert resolved == {"inferred_mask": "inferred_mask"}
 
 
+def test_segment_volume_forwards_totalsegmentator_parameters(tmp_path):
+    nifti = tmp_path / "vol.nii.gz"
+    nifti.write_text("nifti")
+    calls = []
+
+    class CapturingBackend:
+        def run(self, *, input_path, output_dir, task, **kwargs):
+            calls.append(kwargs)
+            (Path(output_dir) / "liver.nii.gz").write_text("mask")
+
+    segment_module.segment_volume(
+        nifti,
+        tmp_path,
+        {
+            "backend": "totalsegmentator",
+            "tasks": [
+                {
+                    "task": "total",
+                    "output": "liver",
+                    "extra": {"roi_subset": ["liver"], "device": "gpu"},
+                }
+            ],
+        },
+        force=True,
+        backend=CapturingBackend(),
+    )
+
+    assert calls == [
+        {"roi_subset": ["liver"], "device": "gpu", "nr_thr_saving": 2}
+    ]
+
+
 def test_segment_volume_uses_fetch_output_alias_for_expected_and_merge_paths(
     tmp_path, monkeypatch
 ):

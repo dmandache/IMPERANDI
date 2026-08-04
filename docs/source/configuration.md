@@ -4,6 +4,10 @@ IMPERANDI uses strict YAML project files validated by Pydantic. Configuration
 describes intended cohort policy and backend settings; stage order and artifact
 wiring are owned by the pipeline.
 
+The repository-level `imperandi.blueprint.yaml` is a runnable, comprehensively
+commented inventory of every accepted project field and enum. Optional
+resource-backed alternatives remain commented until their files are supplied.
+
 ## Profiles and overrides
 
 Set `project.profile` to load a built-in baseline:
@@ -33,6 +37,7 @@ input:
 
 output:
   root: ./results
+  imaging_root: ./cohort-images
   table_format: parquet
   publish_formats: [parquet, csv]
 
@@ -106,6 +111,9 @@ segmentation:
       modality: CT
       task: total
       output: liver
+      parameters:
+        roi_subset: [liver]
+        fast: true
     - id: liver_mr
       backend: totalsegmentator
       modality: MR
@@ -326,6 +334,11 @@ explicit `modality`; configure CT and MR as separate entries. For example, CT
 liver segmentation uses `task: total`,
 whereas MR liver segmentation uses `task: total_mr`. The shared logical
 `output: liver` still produces a consistent `mask_liver` cohort column.
+Arbitrary TotalSegmentator Python API keyword arguments belong in each task's
+`parameters` mapping. They are forwarded unchanged, so options such as
+`roi_subset`, `fast`, `device`, `quiet`, and `verbose` can be configured per
+modality and task. Pipeline-owned routing arguments (`input`, `output`, and
+`task`) cannot be overridden there.
 
 An intra-patient pair table uses `fixed_volume_id` and `moving_volume_id`. A
 template pair can use `fixed_nifti_path` plus `moving_volume_id`; an optional

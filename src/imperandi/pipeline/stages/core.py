@@ -138,6 +138,9 @@ class IndexStage(PipelineStage):
             str(context.config.execution.checkpoint_every_seconds),
         ]
         args = parse_module.build_parser(include_manifest=False).parse_args(argv)
+        # The v2 project contract does not expose legacy dataset manifests, but
+        # the parser backend still records this field in its run state.
+        args.manifest = None
         args = parse_module.normalize_parse_args(args)
         parse_module.main(args)
         return source_dir / "dicom_index.csv", source_dir / "dicom_index_errors.csv"

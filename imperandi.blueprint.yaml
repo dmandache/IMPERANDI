@@ -1,0 +1,182 @@
+# IMPERANDI v2 configuration blueprint
+#
+# This file contains every user-facing configuration section and field accepted
+# by ImperandiConfig. It is intentionally runnable with optional/resource-backed
+# features disabled. Replace placeholder paths and enable only the stages needed.
+# Relative paths are resolved from the directory containing this file.
+
+version: 2                         # only accepted value: 2
+
+project:
+  name: my-cohort                  # required, non-empty
+  profile: null                    # null | liver_ct_mri
+
+input:
+  sources:                         # required; files, directories, archives, or globs
+    - /path/to/dicom
+    # - /path/to/preindexed.csv
+    # - /path/to/preindexed.parquet
+    # - /path/to/site-*.zip
+  archive_depth: 3                 # integer >= 0
+
+output:
+  root: ./imperandi-results        # required
+  # null defaults to <output.root>/<project.name>. Set a path to override it.
+  # NIfTI scans, masks, transforms, and registered images are stored here.
+  imaging_root: null
+  table_format: parquet            # parquet | csv
+  publish_formats: [parquet, csv]  # one or both; must not be empty
+
+identity:
+  source:
+    patient_id_columns: [PatientID]
+    namespace_columns: [site_id, IssuerOfPatientID]
+    fallback:
+      columns: []                  # e.g. [PatientName, AccessionNumber]
+      on_missing: error            # error | keep
+  normalization:
+    strip: true
+    case: upper                    # preserve | upper | lower
+    collapse_whitespace: true
+  canonical:
+    strategy: source               # source | crosswalk | hmac | crosswalk_then_hmac
+    crosswalk: null                # CSV/Parquet; required by crosswalk strategies
+    crosswalk_keys: [site_id, dicom_patient_id]
+    crosswalk_value: patient_id
+    hmac: null                     # required by hmac strategies; example below
+    # hmac:
+    #   secret_env: IMPERANDI_ID_SECRET
+    #   namespace: institution/cohort/version
+    #   prefix: P
+    #   length: 16                 # 12..64
+  validation:
+    source_collision: error        # error | flag
+    multiple_source_ids_per_patient: allow  # allow | flag | error
+  sensitive_fields:
+    persist_raw_identifiers: separate_table # never | separate_table | cohort
+
+annotations:
+  # Ontology resources are validated when present. Each item accepts all fields
+  # shown in the commented example below.
+  ontologies: []
+  # ontologies:
+  #   - id: site-phase-map
+  #     source: ./phase_ontology.csv
+  #     keys:
+  #       SeriesDescription:
+  #         match: normalized_exact # exact | normalized_exact | numeric_exact
+  #       SeriesNumber:
+  #         match: numeric_exact
+  #     output:
+  #       value_column: phase
+  #       target_column: phase_ontology
+  #       vocabulary: contrast_phase # null | contrast_phase | clinical_slot
+  #       # contrast_phase values: NATIVE, ARTERIAL, PORTAL_VENOUS, DELAYED,
+  #       #                        HEPATOBILIARY, OTHER
+  #       # clinical_slot values are enumerated under selection.required_slots.
+  #     unmatched: keep              # keep | error
+  #     conflicts: error             # error | flag | first
+  rule_packs: []
+  # Built-ins: builtin:liver_ct, builtin:liver_mri. File paths are also accepted.
+  # rule_packs: [builtin:liver_ct, builtin:liver_mri, ./site_rules.yaml]
+  contextual_strategies: []
+  # Accepted: art_port, mask_multiart, generic_dynamic_volume_order
+
+phase_prediction:
+  enabled: false
+  backend: totalsegmentator          # only accepted backend
+  modalities: [CT]                  # currently CT only; must not be empty
+  scope: unresolved                 # unresolved | all_eligible | selected_and_unresolved
+  minimum_confidence: 0.6           # 0..1
+  resolution:
+    # Ordered, highest precedence first. Custom evidence column names are allowed.
+    precedence:
+      - phase_ontology
+      - phase_rules_explicit
+      - phase_rules_inferred
+      - phase_image
+    disagreement: flag              # flag | error | ignore
+
+selection:
+  required_slots:
+    # CT: CT_NATIVE, CT_ARTERIAL, CT_PORTAL_VENOUS, CT_DELAYED
+    CT: [CT_NATIVE, CT_ARTERIAL, CT_PORTAL_VENOUS, CT_DELAYED]
+    # MR: MR_T2, MR_DWI, MR_T1_NATIVE, MR_T1_ARTERIAL,
+    #     MR_T1_PORTAL_VENOUS, MR_T1_DELAYED, MR_T1_HEPATOBILIARY
+    MR: [MR_T2, MR_DWI, MR_T1_NATIVE, MR_T1_ARTERIAL]
+  # Ordered, highest precedence first. Custom evidence column names are allowed.
+  precedence:
+    - slot_ontology
+    - slot_rules_explicit
+    - slot_rules_inferred
+    - slot_image
+  disagreement: flag                # flag | error | ignore
+
+conversion:
+  enabled: false
+  workers: null                     # null uses execution.workers; otherwise >= 1
+
+segmentation:
+  enabled: false                    # true requires at least one task
+  tasks:
+    - id: liver_ct                  # unique task ID
+      backend: totalsegmentator     # only accepted backend
+      modality: CT                  # CT | MR; exactly one modality per task
+      task: total                   # TotalSegmentator task name
+      output: liver                 # logical mask name -> mask_liver column
+      fetch_output: null            # backend filename alias, without/with .nii.gz
+      # Every non-reserved TotalSegmentator Python API keyword is accepted here
+      # and forwarded unchanged. Availability depends on the installed version.
+      # Reserved: input, output, task, input_path, output_dir.
+      parameters:
+        roi_subset: [liver]
+        # roi_subset_robust: [liver]
+        # device: gpu
+        # fast: false
+        # fastest: false
+        # quiet: true
+        # verbose: false
+        # nr_thr_saving: 2
+    - id: liver_mr
+      backend: totalsegmentator
+      modality: MR
+      task: total_mr
+      output: liver
+      fetch_output: null
+      parameters:
+        roi_subset: [liver]
+  # Optional mask post-processing. Routes may be CT, MR, and/or default.
+  postprocess:
+    default:
+      merge_keys: [liver]
+      output: liver_all
+      radius_mm: 5.0
+      largest_cc: true
+      fill_holes: true
+      close: true
+    # CT: {merge_keys: [liver, liver_tumor], output: liver_all}
+    # MR: {merge_keys: [liver], output: liver_clean}
+
+registration:
+  enabled: false
+  transform: rigid_affine            # rigid | rigid_affine | deformable
+  pairs: null                        # CSV/Parquet; required when enabled
+  # Pair table columns:
+  #   moving_volume_id (required)
+  #   fixed_volume_id OR fixed_nifti_path (one required)
+  #   moving_nifti_path (optional override), pair_id (optional)
+
+radiomics:
+  enabled: false
+  settings: null                     # null | path to PyRadiomics YAML settings
+  slots: []                          # empty means all; otherwise clinical slots
+  # slots: [CT_PORTAL_VENOUS, MR_T2]
+  masks: []                          # empty means all mask_* columns
+  # masks: [liver, liver_tumor]      # names omit the mask_ prefix
+
+execution:
+  workers: 4                         # integer >= 1
+  resume: true
+  checkpoint_every_rows: 100         # integer >= 1
+  checkpoint_every_seconds: 300      # integer >= 1
+  log_level: INFO                    # DEBUG | INFO | WARNING | ERROR

@@ -35,13 +35,24 @@ segmentation:
       modality: CT
       task: total
       output: liver
+      parameters:
+        roi_subset: [liver]
     - id: liver_mr
       backend: totalsegmentator
       modality: MR
       task: total_mr
       output: liver
+      parameters:
+        roi_subset: [liver]
     - id: liver_tumor_ct
       backend: totalsegmentator
       modality: CT
       task: liver_lesions
       output: liver_tumor
+      fetch_output: liver_lesions
+    - id: liver_tumor_mr
+      backend: totalsegmentator
+      modality: MR
+      task: liver_lesions_mr
+      output: liver_tumor
+      fetch_output: liver_lesions

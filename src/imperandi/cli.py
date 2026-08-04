@@ -29,6 +29,8 @@ input:
 
 output:
   root: ./imperandi-results
+  # Defaults to <root>/<project.name> when null or omitted.
+  imaging_root: null
   table_format: parquet
   publish_formats: [parquet, csv]
 

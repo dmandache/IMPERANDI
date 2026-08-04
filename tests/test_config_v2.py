@@ -6,7 +6,7 @@ import yaml
 from pydantic import ValidationError
 
 from imperandi.config import config_hash, load_config, resolved_config
-from imperandi.config.models import TableFormat
+from imperandi.config.models import ImperandiConfig, TableFormat
 from imperandi.pipeline.stages.imaging import _segmentation_backend_config
 
 
@@ -25,15 +25,44 @@ def _write_config(tmp_path: Path, extra: dict | None = None) -> Path:
     return path
 
 
+def test_blueprint_is_valid_and_covers_every_top_level_section():
+    path = Path(__file__).resolve().parents[1] / "imperandi.blueprint.yaml"
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+
+    config = load_config(path)
+
+    assert config.project.name == "my-cohort"
+    assert set(raw) == set(ImperandiConfig.model_fields)
+
+
 def test_config_resolves_profile_and_relative_paths(tmp_path):
     config = load_config(_write_config(tmp_path))
 
     assert config.output.table_format is TableFormat.CSV
     assert config.output.publish_formats == [TableFormat.CSV]
     assert config.output.root == (tmp_path / "results").resolve()
+    assert config.output.imaging_root == (tmp_path / "results" / "test").resolve()
     assert config.input.sources == [str(tmp_path / "input.csv")]
     assert "builtin:liver_ct" in config.annotations.rule_packs
     assert config.segmentation.enabled is False
+
+
+def test_output_imaging_root_can_be_configured_separately(tmp_path):
+    config = load_config(
+        _write_config(
+            tmp_path,
+            {
+                "output": {
+                    "root": "results",
+                    "imaging_root": "cohort-images",
+                    "table_format": "csv",
+                }
+            },
+        )
+    )
+
+    assert config.output.root == (tmp_path / "results").resolve()
+    assert config.output.imaging_root == (tmp_path / "cohort-images").resolve()
 
 
 def test_profile_keeps_ct_and_mr_totalsegmentator_tasks_explicit(tmp_path):
@@ -47,7 +76,67 @@ def test_profile_keeps_ct_and_mr_totalsegmentator_tasks_explicit(tmp_path):
     assert [task["task"] for task in mr_tasks] == ["total_mr"]
     assert ct_tasks[0]["output"] == "liver"
     assert mr_tasks[0]["output"] == "liver"
+    assert ct_tasks[0]["extra"] == {"roi_subset": ["liver"]}
+    assert mr_tasks[0]["extra"] == {"roi_subset": ["liver"]}
+    assert ct_tasks[1]["extra"] == {}
     assert {task.modality for task in config.segmentation.tasks} == {"CT", "MR"}
+
+
+def test_totalsegmentator_task_parameters_are_forwarded_to_backend_config(tmp_path):
+    config = load_config(
+        _write_config(
+            tmp_path,
+            {
+                "segmentation": {
+                    "enabled": True,
+                    "tasks": [
+                        {
+                            "id": "liver_ct",
+                            "modality": "CT",
+                            "task": "total",
+                            "output": "liver",
+                            "parameters": {
+                                "roi_subset": ["liver"],
+                                "fast": True,
+                                "device": "gpu",
+                            },
+                        }
+                    ],
+                }
+            },
+        )
+    )
+
+    backend = _segmentation_backend_config(SimpleNamespace(config=config), "CT")
+
+    assert backend["tasks"][0]["extra"] == {
+        "roi_subset": ["liver"],
+        "fast": True,
+        "device": "gpu",
+    }
+
+
+def test_totalsegmentator_parameters_cannot_override_pipeline_routing(tmp_path):
+    path = _write_config(
+        tmp_path,
+        {
+            "segmentation": {
+                "enabled": True,
+                "tasks": [
+                    {
+                        "id": "invalid",
+                        "modality": "CT",
+                        "task": "total",
+                        "output": "liver",
+                        "parameters": {"input": "another-image.nii.gz"},
+                    }
+                ],
+            }
+        },
+    )
+
+    with pytest.raises(ValidationError, match="cannot override routing arguments"):
+        load_config(path)
 
 
 def test_segmentation_task_requires_one_explicit_modality(tmp_path):

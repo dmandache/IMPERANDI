@@ -1,6 +1,6 @@
 # Outputs
 
-Every effective configuration receives a deterministic run directory:
+Tables, logs, checkpoints, and provenance receive a deterministic run directory:
 
 ```text
 <output.root>/runs/<first-12-config-hash>/
@@ -18,6 +18,19 @@ Every effective configuration receives a deterministic run directory:
 ├── 09_register/
 ├── 10_radiomics/
 └── 11_publish/
+```
+
+Cohort imaging is stored separately. By default its root is
+`<output.root>/<project.name>/`; set `output.imaging_root` to place it elsewhere:
+
+```text
+<output.imaging_root>/
+├── <patient_id>/<study_id>/<series_id>/
+│   ├── scan.nii.gz
+│   └── <mask>.nii.gz
+└── registrations/
+    ├── <pair_id>.tfm
+    └── <pair_id>_registered.nii.gz
 ```
 
 `run.json` records overall status and the final artifact registry.
