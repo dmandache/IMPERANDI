@@ -11,10 +11,12 @@ from imperandi.qc.viewer_web_data import (
     FILTER_ALL_COLUMNS,
     filter_dataframe,
     get_image_path_columns,
-    is_image_path_value,
     guess_ct_scan_col,
     guess_phase_col,
     guess_segmentation_cols,
+    is_empty_value,
+    is_image_path_column,
+    is_image_path_value,
     load_dataframe,
     validate_image_path_column,
 )
@@ -162,3 +164,146 @@ def test_filter_dataframe_raises_for_unknown_column():
 
     with pytest.raises(KeyError, match="Column not found"):
         filter_dataframe(df, text="P1", column="missing", mode="contains")
+
+
+def test_load_dataframe_validates_uploaded_sources():
+    with pytest.raises(ValueError, match="No dataframe source"):
+        load_dataframe(None)
+    with pytest.raises(ValueError, match="source name is required"):
+        load_dataframe(b"patient_key\nP1\n")
+    with pytest.raises(ValueError, match="Unsupported dataframe format"):
+        load_dataframe(b"data", source_name="index.xlsx")
+
+
+@pytest.mark.parametrize(
+    ("suffix", "writer"),
+    [
+        (".tab", lambda df, path: df.to_csv(path, sep="\t", index=False)),
+        (".txt", lambda df, path: df.to_csv(path, sep=";", index=False)),
+        (".json", lambda df, path: df.to_json(path, orient="records")),
+        (".pkl", lambda df, path: df.to_pickle(path)),
+        (".pickle", lambda df, path: df.to_pickle(path)),
+    ],
+)
+def test_load_dataframe_supports_additional_formats(tmp_path, suffix, writer):
+    expected = pd.DataFrame({"patient_key": ["P1"], "visit_order": [1]})
+    path = tmp_path / f"index{suffix}"
+    writer(expected, path)
+
+    result = load_dataframe(path)
+
+    pd.testing.assert_frame_equal(result, expected)
+
+
+def test_load_dataframe_dispatches_parquet_reader(tmp_path, monkeypatch):
+    expected = pd.DataFrame({"patient_key": ["P1"]})
+    path = tmp_path / "index.parquet"
+    path.touch()
+    seen = []
+
+    def fake_read_parquet(source):
+        seen.append(source)
+        return expected
+
+    monkeypatch.setattr(pd, "read_parquet", fake_read_parquet)
+
+    assert load_dataframe(path) is expected
+    assert seen == [path.resolve()]
+
+
+def test_empty_and_image_path_detection_edge_cases(tmp_path, monkeypatch):
+    image = tmp_path / "scan.nii.gz"
+    image.touch()
+    folder = tmp_path / "images"
+    folder.mkdir()
+
+    assert is_empty_value(None)
+    assert is_empty_value(pd.NA)
+    assert is_empty_value("  ")
+    assert not is_empty_value([1, 2])
+    assert not is_image_path_value(None)
+    assert is_image_path_value(f"file://{image}")
+    assert not is_image_path_value(folder)
+    assert is_image_path_value("relative/scan.without_known_suffix")
+    assert is_image_path_value("scan.MGZ")
+
+    monkeypatch.setattr(Path, "exists", lambda _self: (_ for _ in ()).throw(OSError()))
+    assert not is_image_path_value("plain_value")
+
+
+def test_image_path_column_ratio_and_empty_controls():
+    assert not is_image_path_column(pd.Series([None, ""]))
+    assert not is_image_path_column(
+        pd.Series(["scan.nii.gz", "not-a-path"]), min_valid_ratio=0.75
+    )
+    assert not is_image_path_column(pd.Series(["scan.nii.gz", None]), allow_empty=False)
+    assert is_image_path_column(pd.Series(["scan.nii.gz", None]), allow_empty=True)
+
+
+def test_validate_image_path_column_reports_selection_and_empty_errors():
+    df = pd.DataFrame({"mask_liver": [None, ""]})
+
+    with pytest.raises(KeyError, match="Column not found"):
+        validate_image_path_column(df, "missing", allow_empty=True)
+    with pytest.raises(ValueError, match="contains empty values"):
+        validate_image_path_column(
+            df,
+            "mask_liver",
+            allow_empty=False,
+            label="Liver mask",
+        )
+    with pytest.raises(ValueError, match="does not contain any usable paths"):
+        validate_image_path_column(df, "mask_liver", allow_empty=True)
+
+
+def test_guess_column_fallbacks_and_preferences():
+    assert guess_ct_scan_col(["custom", "ct_path"], preferred="custom") == "custom"
+    assert guess_ct_scan_col(["patient", "derived_nifti_path"]) == "derived_nifti_path"
+    assert guess_ct_scan_col(["patient", "volume_path"]) == "volume_path"
+    assert guess_ct_scan_col(["patient", "description"]) == "patient"
+    assert guess_ct_scan_col([]) is None
+
+    assert guess_phase_col(["reviewed", "phase"], preferred="reviewed") == "reviewed"
+    assert guess_phase_col(["totalseg_phase"]) == "totalseg_phase"
+    assert guess_phase_col(["description"]) is None
+
+
+def test_guess_segmentation_columns_supports_legacy_and_explicit_preferences():
+    df = pd.DataFrame(
+        {
+            "liver_path": ["liver.nii.gz"],
+            "liver_tumor_path": [None],
+            "custom_mask": ["custom.nii.gz"],
+        }
+    )
+
+    assert guess_segmentation_cols(df) == ["liver_path"]
+    assert guess_segmentation_cols(df, preferred="custom_mask") == ["custom_mask"]
+    assert guess_segmentation_cols(
+        df, preferred=["missing", "liver_tumor_path", "custom_mask"]
+    ) == ["custom_mask"]
+
+
+def test_filter_dataframe_supports_empty_regex_case_and_validation_paths():
+    df = pd.DataFrame(
+        [
+            {"patient_key": "P1", "phase": "Portal"},
+            {"patient_key": "P2", "phase": "arterial"},
+        ]
+    )
+
+    unchanged = filter_dataframe(df, text=" ", query="patient_key == 'P2'")
+    regex = filter_dataframe(df, text="^P[12]$", column="patient_key", mode="regex")
+    case_sensitive = filter_dataframe(
+        df,
+        text="portal",
+        column="phase",
+        mode="exact",
+        case_sensitive=True,
+    )
+
+    assert unchanged["patient_key"].tolist() == ["P2"]
+    assert regex["patient_key"].tolist() == ["P1", "P2"]
+    assert case_sensitive.empty
+    with pytest.raises(ValueError, match="Unsupported filter mode"):
+        filter_dataframe(df, text="P1", column="patient_key", mode="fuzzy")
