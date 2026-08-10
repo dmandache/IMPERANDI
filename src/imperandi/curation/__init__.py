@@ -21,9 +21,15 @@ def _modality_label(value) -> str:
     return str(value).strip().upper()
 
 
-def split_by_modality(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def split_by_modality(
+    df: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     if "Modality" not in df.columns:
-        return df.copy(), pd.DataFrame(columns=df.columns), pd.DataFrame(columns=df.columns)
+        return (
+            df.copy(),
+            pd.DataFrame(columns=df.columns),
+            pd.DataFrame(columns=df.columns),
+        )
 
     modality = df["Modality"].apply(_modality_label)
     ct = df[modality.eq("CT")].copy()
@@ -69,14 +75,26 @@ def curate_by_modality(
 
     if ct_results is not None:
         curated_parts.append(ct_results["curated"].assign(curation_modality="CT"))
-        selected_parts.append(ct_results["selected_long"].assign(curation_modality="CT"))
+        selected_parts.append(
+            ct_results["selected_long"].assign(curation_modality="CT")
+        )
 
     if mri_results is not None:
         curated_parts.append(mri_results["curated"].assign(curation_modality="MR"))
-        selected_parts.append(mri_results["selected_long"].assign(curation_modality="MR"))
+        selected_parts.append(
+            mri_results["selected_long"].assign(curation_modality="MR")
+        )
 
-    curated_all = pd.concat(curated_parts, ignore_index=True, sort=False) if curated_parts else pd.DataFrame()
-    selected_long_all = pd.concat(selected_parts, ignore_index=True, sort=False) if selected_parts else pd.DataFrame()
+    curated_all = (
+        pd.concat(curated_parts, ignore_index=True, sort=False)
+        if curated_parts
+        else pd.DataFrame()
+    )
+    selected_long_all = (
+        pd.concat(selected_parts, ignore_index=True, sort=False)
+        if selected_parts
+        else pd.DataFrame()
+    )
 
     return {
         "ct": ct_results,

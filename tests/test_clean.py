@@ -169,33 +169,35 @@ def test_filter_supported_modality_image_storage_and_remove_pet_ct():
 
 
 def test_run_modality_curation_step_keeps_ct_and_mri_annotations():
-    df = pd.DataFrame([
-        {
-            "patient_key": "p1",
-            "study_id": "ct-study",
-            "series_id": "ct-series",
-            "volume_id": "ct-vol",
-            "date": "2020-01-01",
-            "Modality": "CT",
-            "SeriesDescription": "Abdomen portal venous",
-            "ImageType": "ORIGINAL PRIMARY AXIAL",
-            "Rows": 512,
-            "Columns": 512,
-            "SliceThickness": 2.0,
-            "n_files": 120,
-        },
-        {
-            "patient_key": "p1",
-            "study_id": "mr-study",
-            "series_id": "mr-series",
-            "volume_id": "mr-vol",
-            "date": "2020-01-01",
-            "Modality": "MR",
-            "SeriesDescription": "AX T1 DIXON VEIN_W",
-            "ImageType": "ORIGINAL\\PRIMARY",
-            "n_files": 80,
-        },
-    ])
+    df = pd.DataFrame(
+        [
+            {
+                "patient_key": "p1",
+                "study_id": "ct-study",
+                "series_id": "ct-series",
+                "volume_id": "ct-vol",
+                "date": "2020-01-01",
+                "Modality": "CT",
+                "SeriesDescription": "Abdomen portal venous",
+                "ImageType": "ORIGINAL PRIMARY AXIAL",
+                "Rows": 512,
+                "Columns": 512,
+                "SliceThickness": 2.0,
+                "n_files": 120,
+            },
+            {
+                "patient_key": "p1",
+                "study_id": "mr-study",
+                "series_id": "mr-series",
+                "volume_id": "mr-vol",
+                "date": "2020-01-01",
+                "Modality": "MR",
+                "SeriesDescription": "AX T1 DIXON VEIN_W",
+                "ImageType": "ORIGINAL\\PRIMARY",
+                "n_files": 80,
+            },
+        ]
+    )
 
     out = clean.run_clean_pipeline(df.copy(), [{"type": "modality_curation"}])
 
@@ -758,9 +760,7 @@ def test_phase_curation_sources_are_loaded_for_modality_curation():
     }
 
     steps = clean.validate_cleaning_manifest(manifest)
-    required = clean._collect_required_input_columns(
-        steps, manifest["phase_curation"]
-    )
+    required = clean._collect_required_input_columns(steps, manifest["phase_curation"])
 
     assert {"reviewed_phase", "predicted_phase"}.issubset(required)
     assert {"TemporalPositionIdentifier", "InstanceNumber"}.issubset(required)
@@ -819,10 +819,30 @@ def test_validate_cleaning_manifest_rejects_invalid_step_configs(step, message):
 @pytest.mark.parametrize(
     ("column", "values", "rule", "expected_patients"),
     [
-        ("value", ["CT", "MR", "PT"], {"column": "value", "op": "eq", "value": "CT"}, ["p1"]),
-        ("value", ["CT", "MR", "PT"], {"column": "value", "op": "ne", "value": "CT"}, ["p2", "p3"]),
-        ("value", ["CT", "MR", "PT"], {"column": "value", "op": "in", "value": ["CT", "PT"]}, ["p1", "p3"]),
-        ("value", ["CT", "MR", "PT"], {"column": "value", "op": "not_in", "value": ["CT", "PT"]}, ["p2"]),
+        (
+            "value",
+            ["CT", "MR", "PT"],
+            {"column": "value", "op": "eq", "value": "CT"},
+            ["p1"],
+        ),
+        (
+            "value",
+            ["CT", "MR", "PT"],
+            {"column": "value", "op": "ne", "value": "CT"},
+            ["p2", "p3"],
+        ),
+        (
+            "value",
+            ["CT", "MR", "PT"],
+            {"column": "value", "op": "in", "value": ["CT", "PT"]},
+            ["p1", "p3"],
+        ),
+        (
+            "value",
+            ["CT", "MR", "PT"],
+            {"column": "value", "op": "not_in", "value": ["CT", "PT"]},
+            ["p2"],
+        ),
         (
             "value",
             ["LOCALIZER", "scout", "Portal Venous"],
@@ -842,9 +862,19 @@ def test_validate_cleaning_manifest_rejects_invalid_step_configs(step, message):
             ["p3"],
         ),
         ("value", [1, 2, 3], {"column": "value", "op": "lt", "value": 2}, ["p1"]),
-        ("value", [1, 2, 3], {"column": "value", "op": "lte", "value": 2}, ["p1", "p2"]),
+        (
+            "value",
+            [1, 2, 3],
+            {"column": "value", "op": "lte", "value": 2},
+            ["p1", "p2"],
+        ),
         ("value", [1, 2, 3], {"column": "value", "op": "gt", "value": 2}, ["p3"]),
-        ("value", [1, 2, 3], {"column": "value", "op": "gte", "value": 2}, ["p2", "p3"]),
+        (
+            "value",
+            [1, 2, 3],
+            {"column": "value", "op": "gte", "value": 2},
+            ["p2", "p3"],
+        ),
         ("value", [1, None, 3], {"column": "value", "op": "is_null"}, ["p2"]),
         ("value", [1, None, 3], {"column": "value", "op": "not_null"}, ["p1", "p3"]),
     ],
@@ -1032,7 +1062,7 @@ def test_run_clean_pipeline_executes_all_supported_step_types(monkeypatch):
                 {"type": "compute_acquisition_order"},
                 {"type": "finalize"},
             ],
-        }
+        },
     }
 
     steps = clean.validate_cleaning_manifest(manifest)

@@ -4,7 +4,6 @@ from typing import Optional
 
 import yaml
 
-
 YAML_SUFFIXES = (".yaml", ".yml")
 
 

@@ -400,9 +400,7 @@ def main(args: argparse.Namespace) -> None:
         processed_rows=len(row_indices),
         succeeded_rows=max(0, len(row_indices) - run_failed_count),
         skipped_rows=(
-            resume_skipped_count
-            + prefilled_skipped_count
-            + prediction_skipped_count
+            resume_skipped_count + prefilled_skipped_count + prediction_skipped_count
         ),
         failed_rows=run_failed_count,
         success_label="phase extracted",

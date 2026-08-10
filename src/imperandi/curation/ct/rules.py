@@ -7,7 +7,9 @@ def token(pattern: str) -> str:
     return rf"(?<![a-z0-9])(?:{pattern})(?![a-z0-9])"
 
 
-RX_CT_LOCALIZER = token(r"locali[sz]er|scout|survey|topogram|surview|rep[eè]rage|calibration")
+RX_CT_LOCALIZER = token(
+    r"locali[sz]er|scout|survey|topogram|surview|rep[eè]rage|calibration"
+)
 RX_CT_DERIVED_LOW_VALUE = token(
     r"mip|mpr|vr|vrt|volume\s*render|reformat|recon|reconstruction|dose|report|screen|capture|processed|secondary"
 )

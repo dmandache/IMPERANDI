@@ -33,10 +33,14 @@ def test_detect_dixon_component_from_structured_image_type(image_type, expected)
 
 def _classify(series_description: str, image_type: object = None) -> pd.Series:
     result = mc.add_basic_feature_columns(
-        pd.DataFrame([{
-            "SeriesDescription": series_description,
-            "ImageType": image_type,
-        }])
+        pd.DataFrame(
+            [
+                {
+                    "SeriesDescription": series_description,
+                    "ImageType": image_type,
+                }
+            ]
+        )
     )
     return result.iloc[0]
 
@@ -142,6 +146,4 @@ def test_dixon_components_are_independent_from_acquisition_order():
 
     assert ip_phases["mri_perfusion_label"].tolist() == expected_phases
     assert water_phases["mri_perfusion_label"].tolist() == expected_phases
-    assert set(phased["mri_perfusion_source"]) == {
-        "acquisition_order_dixon_component"
-    }
+    assert set(phased["mri_perfusion_source"]) == {"acquisition_order_dixon_component"}

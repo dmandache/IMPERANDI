@@ -7,7 +7,6 @@ import pandas as pd
 
 from imperandi.utils.manifest import resolve_hook
 
-
 CLEAN_HOOK_OUTPUTS_ATTR = "_imperandi_clean_outputs"
 
 

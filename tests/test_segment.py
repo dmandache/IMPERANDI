@@ -717,12 +717,8 @@ def test_main_dispatches_totalsegmentator_models_by_modality(tmp_path, monkeypat
                 "segmentation": {
                     "backend": "totalsegmentator",
                     "modalities": {
-                        "CT": {
-                            "tasks": [{"task": "total", "output": "liver"}]
-                        },
-                        "MR": {
-                            "tasks": [{"task": "total_mr", "output": "liver"}]
-                        },
+                        "CT": {"tasks": [{"task": "total", "output": "liver"}]},
+                        "MR": {"tasks": [{"task": "total_mr", "output": "liver"}]},
                     },
                 }
             },
@@ -959,9 +955,9 @@ def test_main_adds_mask_columns_for_runtime_inferred_outputs(tmp_path, monkeypat
     write_segmentation_manifest(
         config_path,
         {
-                "backend": "totalsegmentator",
-                "tasks": [{"task": "task_a"}],
-        }
+            "backend": "totalsegmentator",
+            "tasks": [{"task": "task_a"}],
+        },
     )
 
     monkeypatch.setattr(
@@ -1148,9 +1144,9 @@ def test_main_uses_strategy_effective_worker_count(tmp_path, monkeypatch):
     write_segmentation_manifest(
         config_path,
         {
-                "backend": "totalsegmentator",
-                "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
-        }
+            "backend": "totalsegmentator",
+            "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
+        },
     )
 
     monkeypatch.setattr(
@@ -1205,9 +1201,9 @@ def test_main_uses_strategy_effective_start_method(tmp_path, monkeypatch):
     write_segmentation_manifest(
         config_path,
         {
-                "backend": "totalsegmentator",
-                "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
-        }
+            "backend": "totalsegmentator",
+            "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
+        },
     )
 
     monkeypatch.setattr(
@@ -1283,9 +1279,9 @@ def test_main_enables_gpu_worker_pinning_for_multi_gpu(tmp_path, monkeypatch):
     write_segmentation_manifest(
         config_path,
         {
-                "backend": "totalsegmentator",
-                "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
-        }
+            "backend": "totalsegmentator",
+            "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
+        },
     )
 
     monkeypatch.setattr(
@@ -1372,9 +1368,9 @@ def test_main_bounds_in_flight_submissions(tmp_path, monkeypatch):
     write_segmentation_manifest(
         config_path,
         {
-                "backend": "totalsegmentator",
-                "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
-        }
+            "backend": "totalsegmentator",
+            "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
+        },
     )
 
     monkeypatch.setattr(
@@ -1446,9 +1442,9 @@ def test_main_enforces_wall_timeout_per_row(tmp_path, monkeypatch):
     write_segmentation_manifest(
         config_path,
         {
-                "backend": "totalsegmentator",
-                "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
-        }
+            "backend": "totalsegmentator",
+            "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
+        },
     )
 
     monkeypatch.setattr(
@@ -1517,9 +1513,9 @@ def test_main_force_shutdown_terminates_and_joins_workers(tmp_path, monkeypatch)
     write_segmentation_manifest(
         config_path,
         {
-                "backend": "totalsegmentator",
-                "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
-        }
+            "backend": "totalsegmentator",
+            "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
+        },
     )
 
     monkeypatch.setattr(
@@ -1633,9 +1629,9 @@ def test_main_recycles_executor_by_recycle_every(tmp_path, monkeypatch):
     write_segmentation_manifest(
         config_path,
         {
-                "backend": "totalsegmentator",
-                "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
-        }
+            "backend": "totalsegmentator",
+            "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
+        },
     )
 
     monkeypatch.setattr(
@@ -1706,9 +1702,9 @@ def test_main_subprocess_mode_currently_degrades_to_serial(tmp_path, monkeypatch
     write_segmentation_manifest(
         config_path,
         {
-                "backend": "totalsegmentator",
-                "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
-        }
+            "backend": "totalsegmentator",
+            "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
+        },
     )
 
     monkeypatch.setattr(
@@ -1767,9 +1763,9 @@ def test_main_resume_skips_completed_rows(tmp_path, monkeypatch):
     write_segmentation_manifest(
         config_path,
         {
-                "backend": "totalsegmentator",
-                "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
-        }
+            "backend": "totalsegmentator",
+            "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
+        },
     )
 
     prefetch_calls = {"count": 0}
@@ -1839,9 +1835,9 @@ def test_main_resume_uses_source_idx_after_deduplicating_inputs(tmp_path, monkey
     write_segmentation_manifest(
         config_path,
         {
-                "backend": "totalsegmentator",
-                "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
-        }
+            "backend": "totalsegmentator",
+            "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
+        },
     )
 
     monkeypatch.setattr(
@@ -1900,9 +1896,9 @@ def test_main_resume_reprocesses_when_segmentation_config_changes(
     write_segmentation_manifest(
         config_path,
         {
-                "backend": "totalsegmentator",
-                "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
-        }
+            "backend": "totalsegmentator",
+            "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
+        },
     )
 
     monkeypatch.setattr(
@@ -1947,9 +1943,7 @@ def test_main_resume_reprocesses_when_segmentation_config_changes(
         config_path,
         {
             "backend": "totalsegmentator",
-            "tasks": [
-                {"key": "spleen", "task": "total", "output": "spleen.nii.gz"}
-            ],
+            "tasks": [{"key": "spleen", "task": "total", "output": "spleen.nii.gz"}],
         },
     )
     args.resume = True
@@ -1985,9 +1979,7 @@ def test_main_does_not_blank_existing_mask_or_warning_columns(tmp_path, monkeypa
         config_path,
         {
             "backend": "totalsegmentator",
-            "tasks": [
-                {"key": "liver", "task": "total", "output": "liver.nii.gz"}
-            ],
+            "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
         },
     )
 

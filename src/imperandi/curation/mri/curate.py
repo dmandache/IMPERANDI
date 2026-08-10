@@ -246,7 +246,9 @@ def _row_matches_any_patterns(
     return bool(
         _first_text_column_value(
             row,
-            lambda text: True if any(re.search(pattern, text) for pattern in patterns) else None,
+            lambda text: (
+                True if any(re.search(pattern, text) for pattern in patterns) else None
+            ),
             cols=cols,
         )
     )
@@ -327,13 +329,17 @@ def add_volume_order_features(
         return out
 
     series_group_cols = [
-        c for c in [patient_col, study_col, series_col] if c is not None and c in out.columns
+        c
+        for c in [patient_col, study_col, series_col]
+        if c is not None and c in out.columns
     ]
     volume_group_cols = [*series_group_cols, volume_col]
 
     work = out.copy()
     work["_sort_time_seconds"] = (
-        work[time_col].apply(parse_time_to_seconds) if time_col in work.columns else np.nan
+        work[time_col].apply(parse_time_to_seconds)
+        if time_col in work.columns
+        else np.nan
     )
     work["_row_order_for_volume_order"] = np.arange(len(work))
 
@@ -372,7 +378,9 @@ def add_volume_order_features(
     rep["volume_order_in_series"] = (
         rep.groupby("_series_group_key", dropna=False).cumcount() + 1
     )
-    rep["n_volumes_in_series"] = rep.groupby("_series_group_key", dropna=False)["_volume_group_key"].transform("size")
+    rep["n_volumes_in_series"] = rep.groupby("_series_group_key", dropna=False)[
+        "_volume_group_key"
+    ].transform("size")
     rep["is_multivolume_series"] = rep["n_volumes_in_series"] > 1
 
     order_cols = [
@@ -384,11 +392,13 @@ def add_volume_order_features(
 
     out = out.drop(
         columns=[
-            c for c in [
+            c
+            for c in [
                 "volume_order_in_series",
                 "n_volumes_in_series",
                 "is_multivolume_series",
-            ] if c in out.columns
+            ]
+            if c in out.columns
         ],
         errors="ignore",
     )
@@ -463,8 +473,8 @@ def detect_mri_sequence(row: pd.Series) -> tuple[str, str, str]:
 def add_mri_sequence_columns(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     result = out.apply(detect_mri_sequence, axis=1)
-    out[["mri_sequence", "mri_sequence_reason", "mri_sequence_confidence"]] = pd.DataFrame(
-        result.tolist(), index=out.index
+    out[["mri_sequence", "mri_sequence_reason", "mri_sequence_confidence"]] = (
+        pd.DataFrame(result.tolist(), index=out.index)
     )
     return out
 
@@ -501,16 +511,18 @@ def has_post_contrast_text(row: pd.Series) -> bool:
 def detect_ordinal_phase_index(row: pd.Series) -> int | None:
     return _first_text_column_value(
         row,
-        lambda text: next(
-            (
-                int(group)
-                for group in re.search(rules.RX_PHASE_ORDINAL, text).groups()
-                if group is not None
-            ),
-            None,
-        )
-        if re.search(rules.RX_PHASE_ORDINAL, text)
-        else None,
+        lambda text: (
+            next(
+                (
+                    int(group)
+                    for group in re.search(rules.RX_PHASE_ORDINAL, text).groups()
+                    if group is not None
+                ),
+                None,
+            )
+            if re.search(rules.RX_PHASE_ORDINAL, text)
+            else None
+        ),
     )
 
 
@@ -518,7 +530,12 @@ def detect_explicit_phase_from_text(row: pd.Series) -> tuple[str | None, str, st
     match = _first_text_column_value(
         row,
         lambda text: (
-            ("NATIVE", "matched explicit native/non-injected keyword", "explicit", "explicit_text")
+            (
+                "NATIVE",
+                "matched explicit native/non-injected keyword",
+                "explicit",
+                "explicit_text",
+            )
             if re.search(rules.RX_PHASE_NATIVE, text)
             else (
                 (
@@ -537,10 +554,20 @@ def detect_explicit_phase_from_text(row: pd.Series) -> tuple[str | None, str, st
                     )
                     if re.search(rules.RX_PHASE_PORTAL, text)
                     else (
-                        ("ARTERIAL", "matched explicit arterial keyword", "explicit", "explicit_text")
+                        (
+                            "ARTERIAL",
+                            "matched explicit arterial keyword",
+                            "explicit",
+                            "explicit_text",
+                        )
                         if re.search(rules.RX_PHASE_ARTERIAL, text)
                         else (
-                            ("DELAYED", "matched explicit delayed/tardif keyword", "explicit", "explicit_text")
+                            (
+                                "DELAYED",
+                                "matched explicit delayed/tardif keyword",
+                                "explicit",
+                                "explicit_text",
+                            )
                             if re.search(rules.RX_PHASE_DELAYED, text)
                             else None
                         )
@@ -555,7 +582,9 @@ def detect_explicit_phase_from_text(row: pd.Series) -> tuple[str | None, str, st
     return None, "no explicit T1 perfusion phase keyword matched", "unknown", "none"
 
 
-def infer_special_t1_phase_from_volume_order(row: pd.Series) -> tuple[str | None, str, str, str]:
+def infer_special_t1_phase_from_volume_order(
+    row: pd.Series,
+) -> tuple[str | None, str, str, str]:
     """Special same-description/multiple-volume protocols."""
     if norm_label(row.get("mri_sequence")) != "T1":
         return None, "not T1", "unknown", "none"
@@ -641,7 +670,9 @@ def has_generic_dynamic_t1_evidence(row: pd.Series) -> bool:
     return _row_matches_pattern(row, rules.RX_PHASE_GENERIC_DYNAMIC)
 
 
-def infer_generic_t1_phase_from_volume_order(row: pd.Series) -> tuple[str | None, str, str, str]:
+def infer_generic_t1_phase_from_volume_order(
+    row: pd.Series,
+) -> tuple[str | None, str, str, str]:
     if not has_generic_dynamic_t1_evidence(row):
         return None, "no generic dynamic multivolume T1 evidence", "unknown", "none"
 
@@ -689,10 +720,17 @@ def detect_t1_perfusion_phase(row: pd.Series) -> tuple[str, str, str, str]:
         or _row_matches_pattern(row, rules.RX_MIP_MPR)
         or _row_matches_pattern(row, rules.RX_QUANT_OR_REPORT)
     ):
-        return "OTHER", "matched subtraction/derived/non-diagnostic marker", "unknown", "none"
+        return (
+            "OTHER",
+            "matched subtraction/derived/non-diagnostic marker",
+            "unknown",
+            "none",
+        )
 
     if text_matches_art_port_late(row):
-        special_label, special_reason, special_conf, special_source = infer_special_t1_phase_from_volume_order(row)
+        special_label, special_reason, special_conf, special_source = (
+            infer_special_t1_phase_from_volume_order(row)
+        )
         if special_label is not None:
             return special_label, special_reason, special_conf, special_source
         return (
@@ -703,7 +741,9 @@ def detect_t1_perfusion_phase(row: pd.Series) -> tuple[str, str, str, str]:
         )
 
     if text_matches_art_port(row):
-        special_label, special_reason, special_conf, special_source = infer_special_t1_phase_from_volume_order(row)
+        special_label, special_reason, special_conf, special_source = (
+            infer_special_t1_phase_from_volume_order(row)
+        )
         if special_label is not None:
             return special_label, special_reason, special_conf, special_source
         return (
@@ -714,7 +754,9 @@ def detect_t1_perfusion_phase(row: pd.Series) -> tuple[str, str, str, str]:
         )
 
     if text_matches_mask_multiart(row):
-        special_label, special_reason, special_conf, special_source = infer_special_t1_phase_from_volume_order(row)
+        special_label, special_reason, special_conf, special_source = (
+            infer_special_t1_phase_from_volume_order(row)
+        )
         if special_label is not None:
             return special_label, special_reason, special_conf, special_source
         return (
@@ -724,11 +766,15 @@ def detect_t1_perfusion_phase(row: pd.Series) -> tuple[str, str, str, str]:
             MASK_MULTIART_CONTEXT_PENDING,
         )
 
-    explicit_label, explicit_reason, explicit_conf, explicit_source = detect_explicit_phase_from_text(row)
+    explicit_label, explicit_reason, explicit_conf, explicit_source = (
+        detect_explicit_phase_from_text(row)
+    )
     if explicit_label is not None:
         return explicit_label, explicit_reason, explicit_conf, explicit_source
 
-    generic_label, generic_reason, generic_conf, generic_source = infer_generic_t1_phase_from_volume_order(row)
+    generic_label, generic_reason, generic_conf, generic_source = (
+        infer_generic_t1_phase_from_volume_order(row)
+    )
     if generic_label is not None:
         return generic_label, generic_reason, generic_conf, generic_source
 
@@ -753,7 +799,12 @@ def infer_phase_from_ordinal_context(
         return None, "no ordinal phase index detected", "unknown", "none"
 
     if norm_label(row.get("mri_sequence")) != "T1":
-        return None, "ordinal phase ignored because sequence is not T1", "unknown", "ordinal_context"
+        return (
+            None,
+            "ordinal phase ignored because sequence is not T1",
+            "unknown",
+            "ordinal_context",
+        )
 
     has_dynamic_text = _row_matches_any_patterns(
         row,
@@ -762,7 +813,8 @@ def infer_phase_from_ordinal_context(
     has_post_text = has_post_contrast_text(row)
     exam_has_post_ordinal = bool(
         exam_rows.apply(
-            lambda r: detect_ordinal_phase_index(r) is not None and has_post_contrast_text(r),
+            lambda r: detect_ordinal_phase_index(r) is not None
+            and has_post_contrast_text(r),
             axis=1,
         ).any()
     )
@@ -859,14 +911,16 @@ def _infer_special_profile_phases_by_acquisition_order(
         )
         for rank, row_idx in enumerate(ranked, start=1):
             label = rank_to_label(rank)
-            assignments.append((
-                row_idx,
-                label,
+            assignments.append(
                 (
-                    f"inferred {label} from {profile_name} acquisition {rank}/{len(ranked)} "
-                    f"for {component_name} {context}"
-                ),
-            ))
+                    row_idx,
+                    label,
+                    (
+                        f"inferred {label} from {profile_name} acquisition {rank}/{len(ranked)} "
+                        f"for {component_name} {context}"
+                    ),
+                )
+            )
     return assignments
 
 
@@ -981,14 +1035,16 @@ def infer_generic_dynamic_phases_from_exam_context(
             label = {1: "NATIVE", 2: "ARTERIAL", 3: "PORTAL_VENOUS"}.get(
                 rank, "DELAYED"
             )
-            assignments.append((
-                row_idx,
-                label,
+            assignments.append(
                 (
-                    f"inferred {label} from generic dynamic acquisition {rank}/{len(ranked)} "
-                    f"within Dixon component {component}"
-                ),
-            ))
+                    row_idx,
+                    label,
+                    (
+                        f"inferred {label} from generic dynamic acquisition {rank}/{len(ranked)} "
+                        f"within Dixon component {component}"
+                    ),
+                )
+            )
     return assignments
 
 
@@ -1025,7 +1081,9 @@ def is_native_fallback_candidate(row: pd.Series) -> bool:
 def _exam_has_post_contrast_dynamic_phase(exam_rows: pd.DataFrame) -> bool:
     phase = exam_rows["mri_perfusion_label"].map(norm_label)
     source = exam_rows["mri_perfusion_source"].fillna("none")
-    resolved_dynamic = phase.isin(["ARTERIAL", "PORTAL_VENOUS", "DELAYED"]) & source.isin(
+    resolved_dynamic = phase.isin(
+        ["ARTERIAL", "PORTAL_VENOUS", "DELAYED"]
+    ) & source.isin(
         [
             "ordinal_context",
             "acquisition_order_art_port_late",
@@ -1057,7 +1115,11 @@ def _sort_key_for_native_fallback(row: pd.Series) -> tuple:
     }.get(component, 0)
     quality_score = 0
     quality_score += 4 if row.get("plane") == "AXIAL" else 0
-    quality_score += 3 if bool(row.get("is_3d_gre")) or _row_matches_pattern(row, rules.RX_T1_3D_GRE) else 0
+    quality_score += (
+        3
+        if bool(row.get("is_3d_gre")) or _row_matches_pattern(row, rules.RX_T1_3D_GRE)
+        else 0
+    )
     quality_score += 1 if bool(row.get("is_breath_hold")) else 0
 
     time_seconds = parse_time_to_seconds(row.get("time"))
@@ -1080,7 +1142,10 @@ def infer_missing_native_fallback(exam_rows: pd.DataFrame) -> tuple[int | None, 
     if candidates.empty:
         return None, "no suitable native fallback candidate"
 
-    ranked = sorted(candidates.index, key=lambda idx: _sort_key_for_native_fallback(candidates.loc[idx]))
+    ranked = sorted(
+        candidates.index,
+        key=lambda idx: _sort_key_for_native_fallback(candidates.loc[idx]),
+    )
     idx = ranked[0]
     desc = candidates.loc[idx].get("SeriesDescription")
     return (
@@ -1098,9 +1163,14 @@ def add_mri_perfusion_columns(
 ) -> pd.DataFrame:
     out = df.copy()
     result = out.apply(detect_t1_perfusion_phase, axis=1)
-    out[["mri_perfusion_label", "mri_perfusion_reason", "mri_perfusion_confidence", "mri_perfusion_source"]] = pd.DataFrame(
-        result.tolist(), index=out.index
-    )
+    out[
+        [
+            "mri_perfusion_label",
+            "mri_perfusion_reason",
+            "mri_perfusion_confidence",
+            "mri_perfusion_source",
+        ]
+    ] = pd.DataFrame(result.tolist(), index=out.index)
 
     group_cols = [c for c in (exam_group_cols or []) if c in out.columns]
     if group_cols:
@@ -1117,9 +1187,7 @@ def add_mri_perfusion_columns(
             out.loc[row_idx, "mri_perfusion_label"] = label
             out.loc[row_idx, "mri_perfusion_reason"] = reason
             out.loc[row_idx, "mri_perfusion_confidence"] = "inferred"
-            out.loc[row_idx, "mri_perfusion_source"] = (
-                "acquisition_order_art_port_late"
-            )
+            out.loc[row_idx, "mri_perfusion_source"] = "acquisition_order_art_port_late"
 
         unresolved_art_port_late = out.loc[idx, "mri_perfusion_source"].eq(
             ART_PORT_LATE_CONTEXT_PENDING
@@ -1145,7 +1213,9 @@ def add_mri_perfusion_columns(
             out.loc[row_idx, "mri_perfusion_confidence"] = "inferred"
             out.loc[row_idx, "mri_perfusion_source"] = "acquisition_order_art_port"
 
-        unresolved_art_port = out.loc[idx, "mri_perfusion_source"].eq(ART_PORT_CONTEXT_PENDING)
+        unresolved_art_port = out.loc[idx, "mri_perfusion_source"].eq(
+            ART_PORT_CONTEXT_PENDING
+        )
         for row_idx in out.loc[idx].index[unresolved_art_port]:
             out.loc[row_idx, "mri_perfusion_label"] = "PORTAL_VENOUS"
             out.loc[row_idx, "mri_perfusion_reason"] = (
@@ -1163,9 +1233,7 @@ def add_mri_perfusion_columns(
             out.loc[row_idx, "mri_perfusion_label"] = label
             out.loc[row_idx, "mri_perfusion_reason"] = reason
             out.loc[row_idx, "mri_perfusion_confidence"] = "inferred"
-            out.loc[row_idx, "mri_perfusion_source"] = (
-                "acquisition_order_mask_multiart"
-            )
+            out.loc[row_idx, "mri_perfusion_source"] = "acquisition_order_mask_multiart"
 
         unresolved_mask_multiart = out.loc[idx, "mri_perfusion_source"].eq(
             MASK_MULTIART_CONTEXT_PENDING
@@ -1198,7 +1266,9 @@ def add_mri_perfusion_columns(
         for row_idx, row in exam_rows.iterrows():
             if norm_label(row.get("mri_perfusion_label")) != "OTHER":
                 continue
-            label, reason, confidence, source = infer_phase_from_ordinal_context(row, exam_rows)
+            label, reason, confidence, source = infer_phase_from_ordinal_context(
+                row, exam_rows
+            )
             if label is None:
                 if source == "ordinal_context":
                     out.loc[row_idx, "mri_perfusion_reason"] = reason
@@ -1339,11 +1409,7 @@ def detect_dixon_component_from_image_type(value: object) -> str | None:
 
 def _free_text_component_tokens(text: str) -> set[str]:
     """Parse compact reconstruction suffixes only after Dixon context is known."""
-    return {
-        token.upper()
-        for token in re.split(r"[\s_.+\-/]+", text)
-        if token
-    }
+    return {token.upper() for token in re.split(r"[\s_.+\-/]+", text) if token}
 
 
 def _detect_dixon_component_from_text(text: str) -> tuple[str, str, str] | None:
@@ -1383,7 +1449,11 @@ def _detect_dixon_component_from_text(text: str) -> tuple[str, str, str] | None:
             "explicit_text",
         )
     if has_dixon_context:
-        return "DIXON_UNKNOWN", "Dixon context detected without component", "dixon_context"
+        return (
+            "DIXON_UNKNOWN",
+            "Dixon context detected without component",
+            "dixon_context",
+        )
     return None
 
 
@@ -1415,7 +1485,11 @@ def detect_dixon_component(row: pd.Series) -> tuple[str, str, str]:
                 ("R2STAR", "matched explicit R2*/T2* map text", "explicit_text")
                 if re.search(rules.RX_DIXON_R2STAR, text)
                 else (
-                    ("DIXON_ALL", "matched explicit all-reconstructions text", "explicit_text")
+                    (
+                        "DIXON_ALL",
+                        "matched explicit all-reconstructions text",
+                        "explicit_text",
+                    )
                     if re.search(rules.RX_DIXON_ALL, text)
                     else _detect_dixon_component_from_text(text)
                 )
@@ -1434,8 +1508,12 @@ def add_basic_feature_columns(df: pd.DataFrame) -> pd.DataFrame:
     out["series_text"] = out.apply(build_series_text, axis=1)
     out["plane"] = out.apply(detect_plane, axis=1)
 
-    out["is_subtraction"] = out.apply(lambda row: _row_matches_pattern(row, rules.RX_SUBTRACTION), axis=1)
-    out["is_mip_mpr"] = out.apply(lambda row: _row_matches_pattern(row, rules.RX_MIP_MPR), axis=1)
+    out["is_subtraction"] = out.apply(
+        lambda row: _row_matches_pattern(row, rules.RX_SUBTRACTION), axis=1
+    )
+    out["is_mip_mpr"] = out.apply(
+        lambda row: _row_matches_pattern(row, rules.RX_MIP_MPR), axis=1
+    )
     out["is_quant_or_report"] = out.apply(
         lambda row: _row_matches_pattern(row, rules.RX_QUANT_OR_REPORT),
         axis=1,
@@ -1446,19 +1524,25 @@ def add_basic_feature_columns(df: pd.DataFrame) -> pd.DataFrame:
     out[["dixon_component", "dixon_component_reason", "dixon_component_source"]] = (
         pd.DataFrame(dixon.tolist(), index=out.index)
     )
-    out["is_3d_gre"] = out.apply(lambda row: _row_matches_pattern(row, rules.RX_T1_3D_GRE), axis=1)
+    out["is_3d_gre"] = out.apply(
+        lambda row: _row_matches_pattern(row, rules.RX_T1_3D_GRE), axis=1
+    )
     out["is_dynamic_t1_text"] = out.apply(
         lambda row: _row_matches_pattern(row, rules.RX_T1_DYNAMIC),
         axis=1,
     )
-    out["is_breath_hold"] = out.apply(lambda row: _row_matches_pattern(row, rules.RX_BREATH_HOLD), axis=1)
+    out["is_breath_hold"] = out.apply(
+        lambda row: _row_matches_pattern(row, rules.RX_BREATH_HOLD), axis=1
+    )
     out["is_resp_triggered"] = out.apply(
         lambda row: _row_matches_pattern(row, rules.RX_RESP_TRIGGERED),
         axis=1,
     )
 
     # T2 features.
-    out["is_t2_fatsat"] = out.apply(lambda row: _row_matches_pattern(row, rules.RX_T2_FATSAT), axis=1)
+    out["is_t2_fatsat"] = out.apply(
+        lambda row: _row_matches_pattern(row, rules.RX_T2_FATSAT), axis=1
+    )
     out["is_t2_motion_robust"] = out.apply(
         lambda row: _row_matches_pattern(row, rules.RX_T2_MOTION_ROBUST),
         axis=1,
@@ -1467,7 +1551,9 @@ def add_basic_feature_columns(df: pd.DataFrame) -> pd.DataFrame:
         lambda row: _row_matches_pattern(row, rules.RX_T2_HASTE_SSFSE),
         axis=1,
     )
-    out["is_t2_tse_fse"] = out.apply(lambda row: _row_matches_pattern(row, rules.RX_T2_TSE_FSE), axis=1)
+    out["is_t2_tse_fse"] = out.apply(
+        lambda row: _row_matches_pattern(row, rules.RX_T2_TSE_FSE), axis=1
+    )
     out["is_t2_mrcp_biliary"] = out.apply(
         lambda row: _row_matches_pattern(row, rules.RX_T2_MRCP_BILIARY),
         axis=1,
@@ -1498,7 +1584,7 @@ def score_t1(row: pd.Series) -> float:
     score -= 100 if bool(row.get("is_mip_mpr")) else 0
     score -= 200 if bool(row.get("is_quant_or_report")) else 0
 
-    #score -= 20 if bool(row.get("SliceThickness")>5) else 0
+    # score -= 20 if bool(row.get("SliceThickness")>5) else 0
     return float(score)
 
 
@@ -1526,9 +1612,15 @@ def score_dwi(row: pd.Series) -> float:
 
 def add_scores(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
-    out["t1_score"] = np.where(out["mri_sequence"].eq("T1"), out.apply(score_t1, axis=1), np.nan)
-    out["t2_score"] = np.where(out["mri_sequence"].eq("T2"), out.apply(score_t2, axis=1), np.nan)
-    out["dwi_score"] = np.where(out["mri_sequence"].eq("DWI"), out.apply(score_dwi, axis=1), np.nan)
+    out["t1_score"] = np.where(
+        out["mri_sequence"].eq("T1"), out.apply(score_t1, axis=1), np.nan
+    )
+    out["t2_score"] = np.where(
+        out["mri_sequence"].eq("T2"), out.apply(score_t2, axis=1), np.nan
+    )
+    out["dwi_score"] = np.where(
+        out["mri_sequence"].eq("DWI"), out.apply(score_dwi, axis=1), np.nan
+    )
 
     out["selection_slot"] = "OTHER"
     out.loc[out["mri_sequence"].eq("T2"), "selection_slot"] = "T2"
@@ -1541,9 +1633,15 @@ def add_scores(df: pd.DataFrame) -> pd.DataFrame:
     out.loc[is_t1 & t1_phase.eq("OTHER"), "selection_slot"] = "T1_OTHER"
 
     out["selection_score"] = np.nan
-    out.loc[out["mri_sequence"].eq("T1"), "selection_score"] = out.loc[out["mri_sequence"].eq("T1"), "t1_score"]
-    out.loc[out["mri_sequence"].eq("T2"), "selection_score"] = out.loc[out["mri_sequence"].eq("T2"), "t2_score"]
-    out.loc[out["mri_sequence"].eq("DWI"), "selection_score"] = out.loc[out["mri_sequence"].eq("DWI"), "dwi_score"]
+    out.loc[out["mri_sequence"].eq("T1"), "selection_score"] = out.loc[
+        out["mri_sequence"].eq("T1"), "t1_score"
+    ]
+    out.loc[out["mri_sequence"].eq("T2"), "selection_score"] = out.loc[
+        out["mri_sequence"].eq("T2"), "t2_score"
+    ]
+    out.loc[out["mri_sequence"].eq("DWI"), "selection_score"] = out.loc[
+        out["mri_sequence"].eq("DWI"), "dwi_score"
+    ]
     return out
 
 
@@ -1561,14 +1659,23 @@ def add_tiebreaker_columns(df: pd.DataFrame, time_col: str = "time") -> pd.DataF
     else:
         out["_time_seconds"] = np.nan
 
-    for candidate_col in ["n_rows_in_volume", "n_sop_instances_in_volume", "n_rows_in_series", "NumberOfInstances"]:
+    for candidate_col in [
+        "n_rows_in_volume",
+        "n_sop_instances_in_volume",
+        "n_rows_in_series",
+        "NumberOfInstances",
+    ]:
         if candidate_col in out.columns:
             out["_n_rows_proxy"] = out[candidate_col].apply(safe_float)
             break
     else:
         out["_n_rows_proxy"] = np.nan
 
-    out["_slice_thickness"] = out["SliceThickness"].apply(safe_float) if "SliceThickness" in out.columns else np.nan
+    out["_slice_thickness"] = (
+        out["SliceThickness"].apply(safe_float)
+        if "SliceThickness" in out.columns
+        else np.nan
+    )
 
     if "PixelSpacing" in out.columns and not out.empty:
         spacing = out["PixelSpacing"].apply(parse_pixel_spacing).apply(pd.Series)
@@ -1596,7 +1703,9 @@ def select_best_candidates(
     configured ``TEXT_COLS_DEFAULT`` fields. ``None`` retains all fields.
     """
     if display_text_col_count is not None:
-        if isinstance(display_text_col_count, bool) or not isinstance(display_text_col_count, int):
+        if isinstance(display_text_col_count, bool) or not isinstance(
+            display_text_col_count, int
+        ):
             raise TypeError("display_text_col_count must be a positive integer or None")
         if display_text_col_count < 1:
             raise ValueError("display_text_col_count must be at least 1 or None")
@@ -1606,18 +1715,22 @@ def select_best_candidates(
         data[date_col] = pd.to_datetime(data[date_col], errors="coerce").dt.date
 
     data = add_tiebreaker_columns(data)
-    exam_cols = get_exam_group_cols(data, patient_col=patient_col, study_col=study_col, date_col=date_col)
+    exam_cols = get_exam_group_cols(
+        data, patient_col=patient_col, study_col=study_col, date_col=date_col
+    )
 
     selectable = data[
-        data["selection_slot"].isin([
-            "T2",
-            "DWI",
-            "T1_NATIVE",
-            "T1_ARTERIAL",
-            "T1_PORTAL_VENOUS",
-            "T1_DELAYED",
-            "T1_HEPATOBILIARY",
-        ])
+        data["selection_slot"].isin(
+            [
+                "T2",
+                "DWI",
+                "T1_NATIVE",
+                "T1_ARTERIAL",
+                "T1_PORTAL_VENOUS",
+                "T1_DELAYED",
+                "T1_HEPATOBILIARY",
+            ]
+        )
     ].copy()
 
     # Discard clearly invalid derived/subtraction candidates for final selection.
@@ -1652,11 +1765,12 @@ def select_best_candidates(
         return f"{desc} [{', '.join(details)}]"
 
     ranked["selected_candidate"] = ranked.apply(_display, axis=1)
-    ranked["_candidate_rank"] = ranked.groupby([*exam_cols, "selection_slot"]).cumcount()
+    ranked["_candidate_rank"] = ranked.groupby(
+        [*exam_cols, "selection_slot"]
+    ).cumcount()
 
     selected_long = (
-        ranked
-        .groupby([*exam_cols, "selection_slot"], as_index=False)
+        ranked.groupby([*exam_cols, "selection_slot"], as_index=False)
         .head(1)
         .reset_index(drop=True)
     )
@@ -1694,7 +1808,10 @@ def select_best_candidates(
         if col not in selected_wide.columns:
             selected_wide[col] = pd.NA
     selected_wide = selected_wide[
-        [*exam_cols, *(col for slot in slots for col in (slot, f"{slot}_other_candidates"))]
+        [
+            *exam_cols,
+            *(col for slot in slots for col in (slot, f"{slot}_other_candidates")),
+        ]
     ]
 
     return selected_long, selected_wide
@@ -1796,5 +1913,9 @@ if __name__ == "__main__":
     df = read_csv(args.input_csv)
     results = curate_mri(df)
     results["curated"].to_csv(f"{args.output_prefix}_all.csv", index=False)
-    results["selected_long"].to_csv(f"{args.output_prefix}_selected_long.csv", index=False)
-    results["selected_wide"].to_csv(f"{args.output_prefix}_selected_wide.csv", index=False)
+    results["selected_long"].to_csv(
+        f"{args.output_prefix}_selected_long.csv", index=False
+    )
+    results["selected_wide"].to_csv(
+        f"{args.output_prefix}_selected_wide.csv", index=False
+    )

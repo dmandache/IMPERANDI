@@ -231,7 +231,9 @@ def load_data(csv_path, required_columns=None):
 
     df = df.loc[:, ~df.columns.str.startswith("Unnamed")]
     required = set(required_columns or [])
-    empty_cols = [col for col in df.columns if df[col].isna().all() and col not in required]
+    empty_cols = [
+        col for col in df.columns if df[col].isna().all() and col not in required
+    ]
     if empty_cols:
         df = df.drop(columns=empty_cols)
     logger.info("%s %s", df.shape, df.columns)
@@ -455,7 +457,9 @@ def build_volume_id_naive(df, preferred_cols=None, fallback_cols=None):
     fallback_cols = fallback_cols or ["patient_key", "study_id", "series_id"]
 
     if "ImageOrientationPatient" in df.columns:
-        df["ImageOrientationPatient"] = df["ImageOrientationPatient"].apply(standardize_iop)
+        df["ImageOrientationPatient"] = df["ImageOrientationPatient"].apply(
+            standardize_iop
+        )
 
     # Choose the maximum available columns among preferred
     cols_to_use = [c for c in preferred_cols if c in df.columns]
@@ -595,7 +599,9 @@ def split_multivolume_series_by_repeated_slices(
         raise ValueError("No valid series grouping columns found.")
 
     if volume_col not in out.columns:
-        logger.info("Column %r missing; creating it before multivolume split.", volume_col)
+        logger.info(
+            "Column %r missing; creating it before multivolume split.", volume_col
+        )
         out[volume_col] = pd.NA
 
     logger.info(
@@ -878,7 +884,10 @@ def correct_volume_ids(
         # --- get z positions robustly ---
         z_positions = None
 
-        if "ImagePositionPatient" in z_sources and "ImagePositionPatient" in group_df.columns:
+        if (
+            "ImagePositionPatient" in z_sources
+            and "ImagePositionPatient" in group_df.columns
+        ):
             z_values = []
             ipp_parse_failures = 0
             for value in group_df["ImagePositionPatient"]:
@@ -898,8 +907,10 @@ def correct_volume_ids(
             )
 
         if (
-            z_positions is None or len(z_positions) < 2
-        ) and "SliceLocation" in z_sources and "SliceLocation" in group_df.columns:
+            (z_positions is None or len(z_positions) < 2)
+            and "SliceLocation" in z_sources
+            and "SliceLocation" in group_df.columns
+        ):
             logger.debug(
                 "Falling back to SliceLocation for z_positions: "
                 "ipp_z_count=%s, rows=%s",
@@ -1175,6 +1186,7 @@ def group_volumes(df):
 
 def calculate_volume_length(df):
     """Compute reconstructed volume length in millimetres from slice geometry."""
+
     def calculate_total_volume_length(row):
         try:
             n_files = row["n_files"]
@@ -1404,9 +1416,7 @@ def compute_acquisition_order(df: pd.DataFrame) -> pd.DataFrame:
 
     missing = [col for col in grouping_cols if col not in df.columns]
     if missing:
-        raise ValueError(
-            f"compute_acquisition_order requires columns: {missing}"
-        )
+        raise ValueError(f"compute_acquisition_order requires columns: {missing}")
 
     # Avoid duplicate result columns if the function is called more than once.
     df = df.drop(
@@ -1448,14 +1458,16 @@ def compute_acquisition_order(df: pd.DataFrame) -> pd.DataFrame:
 
     time_delta = pd.Series(
         [
-            pd.Timedelta(
-                hours=t.hour,
-                minutes=t.minute,
-                seconds=t.second,
-                microseconds=t.microsecond,
+            (
+                pd.Timedelta(
+                    hours=t.hour,
+                    minutes=t.minute,
+                    seconds=t.second,
+                    microseconds=t.microsecond,
+                )
+                if isinstance(t, dt_time)
+                else pd.NaT
             )
-            if isinstance(t, dt_time)
-            else pd.NaT
             for t in normalized_time
         ],
         index=df.index,
@@ -1485,9 +1497,7 @@ def compute_acquisition_order(df: pd.DataFrame) -> pd.DataFrame:
 
     for source_col, sort_col in dicom_sort_columns.items():
         if source_col in df.columns:
-            df[sort_col] = df[source_col].apply(
-                _normalize_acquisition_sort_number
-            )
+            df[sort_col] = df[source_col].apply(_normalize_acquisition_sort_number)
 
     # ------------------------------------------------------------------
     # One representative row per volume
@@ -1501,15 +1511,12 @@ def compute_acquisition_order(df: pd.DataFrame) -> pd.DataFrame:
         if sort_col in df.columns:
             agg_map[sort_col] = (sort_col, "min")
 
-    df_study = (
-        df.groupby(
-            grouping_cols,
-            as_index=False,
-            dropna=False,
-            sort=False,
-        )
-        .agg(**agg_map)
-    )
+    df_study = df.groupby(
+        grouping_cols,
+        as_index=False,
+        dropna=False,
+        sort=False,
+    ).agg(**agg_map)
 
     # ------------------------------------------------------------------
     # Chronological ordering
@@ -1548,9 +1555,7 @@ def compute_acquisition_order(df: pd.DataFrame) -> pd.DataFrame:
     )
 
     df_study["delay_since_prev_acq_sec"] = (
-        grouped["_acq_timestamp"]
-        .diff()
-        .dt.total_seconds()
+        grouped["_acq_timestamp"].diff().dt.total_seconds()
     )
 
     first_volume_mask = grouped.cumcount() == 0
@@ -1592,6 +1597,7 @@ def compute_acquisition_order(df: pd.DataFrame) -> pd.DataFrame:
     ]
 
     return df.drop(columns=helper_cols, errors="ignore")
+
 
 def drop_irrelevant_dicom_tags(df):
     important_dicom_tags = [
@@ -1680,9 +1686,7 @@ def _resolve_cleaning_config(manifest: dict) -> dict:
     if not isinstance(cleaning, dict):
         raise ValueError("Cleaning manifest must define a 'cleaning' object.")
     if cleaning.get("version") != 1:
-        raise ValueError(
-            "Cleaning manifest must define 'cleaning.version' equal to 1."
-        )
+        raise ValueError("Cleaning manifest must define 'cleaning.version' equal to 1.")
     steps = cleaning.get("steps")
     if not isinstance(steps, list) or not steps:
         raise ValueError("Cleaning manifest must define a non-empty 'steps' list.")
@@ -1744,10 +1748,12 @@ def _get_step_inputs(step: dict) -> set[str]:
             | set(step.get("z_sources") or [])
         )
     if step_type == "split_multivolume_series":
-        return (
-            {"volume_id", "ImagePositionPatient", "ImageOrientationPatient", "SliceLocation"}
-            | set(step.get("series_group_columns") or [])
-        )
+        return {
+            "volume_id",
+            "ImagePositionPatient",
+            "ImageOrientationPatient",
+            "SliceLocation",
+        } | set(step.get("series_group_columns") or [])
     if step_type == "group_volumes":
         return {"volume_id"}
     if step_type == "compute_volume_length":
@@ -1939,7 +1945,9 @@ def _validate_step_config(step: dict) -> None:
         _validate_optional_number(step, "min_repeated_slice_fraction")
         min_slices = step.get("min_slices")
         if min_slices is not None and (
-            isinstance(min_slices, bool) or not isinstance(min_slices, int) or min_slices < 1
+            isinstance(min_slices, bool)
+            or not isinstance(min_slices, int)
+            or min_slices < 1
         ):
             raise ValueError("build_volume_id.min_slices must be a positive integer.")
 
@@ -1969,9 +1977,13 @@ def _validate_step_config(step: dict) -> None:
         _validate_optional_number(step, "min_repeated_slice_fraction")
         min_slices = step.get("min_slices")
         if min_slices is not None and (
-            isinstance(min_slices, bool) or not isinstance(min_slices, int) or min_slices < 1
+            isinstance(min_slices, bool)
+            or not isinstance(min_slices, int)
+            or min_slices < 1
         ):
-            raise ValueError("split_multivolume_series.min_slices must be a positive integer.")
+            raise ValueError(
+                "split_multivolume_series.min_slices must be a positive integer."
+            )
 
 
 def validate_cleaning_manifest(manifest: dict) -> list[dict]:
@@ -2017,13 +2029,13 @@ def validate_cleaning_manifest(manifest: dict) -> list[dict]:
                 if "column" not in rule or "op" not in rule:
                     raise ValueError("Each filter rule must define 'column' and 'op'.")
                 if not isinstance(rule["column"], str) or not rule["column"]:
-                    raise ValueError("Each filter rule must define a non-empty 'column'.")
+                    raise ValueError(
+                        "Each filter rule must define a non-empty 'column'."
+                    )
                 if not isinstance(rule["op"], str) or not rule["op"]:
                     raise ValueError("Each filter rule must define a non-empty 'op'.")
                 if rule["op"] not in SUPPORTED_FILTER_OPERATORS:
-                    raise ValueError(
-                        f"Unsupported filter operator: {rule['op']!r}."
-                    )
+                    raise ValueError(f"Unsupported filter operator: {rule['op']!r}.")
                 if rule["op"] not in {"is_null", "not_null"} and "value" not in rule:
                     raise ValueError(
                         f"Filter operator {rule['op']!r} requires a 'value'."
@@ -2309,14 +2321,11 @@ def _run_build_volume_id_step(df: pd.DataFrame, step: dict) -> pd.DataFrame:
         preferred_cols=step.get("preferred_columns"),
         fallback_cols=step.get("fallback_columns"),
         series_group_cols=tuple(
-            step.get("series_group_columns")
-            or ("patient_key", "study_id", "series_id")
+            step.get("series_group_columns") or ("patient_key", "study_id", "series_id")
         ),
         split_z_tolerance=float(step.get("split_z_tolerance", 1e-2)),
         min_slices=int(step.get("min_slices", 8)),
-        min_repeated_slice_fraction=float(
-            step.get("min_repeated_slice_fraction", 0.7)
-        ),
+        min_repeated_slice_fraction=float(step.get("min_repeated_slice_fraction", 0.7)),
         merge_z_tolerance=float(step.get("merge_z_tolerance", 1e-3)),
         merge_group_columns=step.get("merge_group_columns"),
         merge_z_sources=step.get("merge_z_sources"),
@@ -2330,14 +2339,11 @@ def _run_split_multivolume_series_step(df: pd.DataFrame, step: dict) -> pd.DataF
     return split_multivolume_series_by_repeated_slices(
         df,
         series_group_cols=tuple(
-            step.get("series_group_columns")
-            or ("patient_key", "study_id", "series_id")
+            step.get("series_group_columns") or ("patient_key", "study_id", "series_id")
         ),
         z_tolerance=float(step.get("z_tolerance", 1e-2)),
         min_slices=int(step.get("min_slices", 8)),
-        min_repeated_slice_fraction=float(
-            step.get("min_repeated_slice_fraction", 0.7)
-        ),
+        min_repeated_slice_fraction=float(step.get("min_repeated_slice_fraction", 0.7)),
         volume_col=step.get("volume_column", "volume_id"),
         logger=logger,
     )

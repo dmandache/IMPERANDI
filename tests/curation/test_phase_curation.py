@@ -8,7 +8,6 @@ from imperandi.curation.phase import (
     validate_phase_curation,
 )
 
-
 PHASE_CONFIG = {
     "strategies": [
         {
@@ -67,9 +66,7 @@ def test_phase_curation_order_can_prefer_totalsegmentator():
         ],
         "fallback": None,
     }
-    df = pd.DataFrame(
-        [{"rule_phase": "ARTERIAL", "totalseg_phase": "portal_venous"}]
-    )
+    df = pd.DataFrame([{"rule_phase": "ARTERIAL", "totalseg_phase": "portal_venous"}])
 
     out = apply_phase_curation(df, config)
 

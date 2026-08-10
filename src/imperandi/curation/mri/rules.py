@@ -27,7 +27,9 @@ RX_KEY_IMAGES = token(
     r"|screen[\s_-]*saves?|images?[\s_-]*cl[eé]s?|objets?[\s_-]*cl[eé]s?"
 )
 RX_SUBTRACTION = token(r"s?sub(?:traction)?|s?soustr(?:ac|a)tion|s?sous")
-RX_MIP_MPR = token(r"mip|mpr|reformat|multiplanar[\s_-]*reconstruction|reconstruction|recon")
+RX_MIP_MPR = token(
+    r"mip|mpr|reformat|multiplanar[\s_-]*reconstruction|reconstruction|recon"
+)
 RX_QUANT_OR_REPORT = token(
     r"quant|r2\*|r2star|fat\s*fraction|carto|map|mapping|reports?|results?|reading|histo"
     r"|iron[\s_-]*reports?|elasto|error|dose"
@@ -75,13 +77,9 @@ RX_PHASE_NATIVE = token(
     r"|masque"
 )
 
-RX_PHASE_ART_PORT_DYNAMIC = token(
-    rf"art{SEP}port|art{SEP}portal|arterio{SEP}portal"
-)
+RX_PHASE_ART_PORT_DYNAMIC = token(rf"art{SEP}port|art{SEP}portal|arterio{SEP}portal")
 RX_PHASE_MASK_MULTIART_DYNAMIC = token(
-    rf"mas(?:k|q(?:ue)?){SEP}"
-    rf"(?:(?:multi|\d+){SEP})?"
-    rf"art(?:[ée]ri(?:a|e)l)?"
+    rf"mas(?:k|q(?:ue)?){SEP}" rf"(?:(?:multi|\d+){SEP})?" rf"art(?:[ée]ri(?:a|e)l)?"
 )
 
 RX_PHASE_ARTERIAL = token(
@@ -96,21 +94,18 @@ RX_PHASE_PORTAL = token(
     r"port(?:al)?|porto|porte|portovenous"
     r"|portal[\s_-]*venous"
     r"|vein|veine|venous|veneux|veineux|veineuse"
-    #r"|parenchymateux|parenchymal"
+    # r"|parenchymateux|parenchymal"
     r"|phase[\s_-]*p|vp|pv"
-
     # 60-90 seconds.
     r"|(?<!\d)(?:6\d|7\d|8\d|90)[\s_.+\-]*(?:s|sec(?:ond)?s?)(?!\d)"
-
     # Exactly 1 minute
     r"|(?<!\d)1[\s_.+\-]*(?:mn|min(?:ute)?s?)(?!\d)"
-
     # 1:00-1:30 min / 1 min 0-30 s
     r"|(?<!\d)1(?:"
-        r"[.:,](?:0?\d|[12]\d|30)[\s_.+\-]*(?:mn|min(?:ute)?s?)"
-        r"|"
-        r"[\s_.+\-]*(?:mn|min(?:ute)?s?)"
-        r"[\s_.+\-]*(?:0?\d|[12]\d|30)[\s_.+\-]*(?:s|sec(?:ond)?s?)"
+    r"[.:,](?:0?\d|[12]\d|30)[\s_.+\-]*(?:mn|min(?:ute)?s?)"
+    r"|"
+    r"[\s_.+\-]*(?:mn|min(?:ute)?s?)"
+    r"[\s_.+\-]*(?:0?\d|[12]\d|30)[\s_.+\-]*(?:s|sec(?:ond)?s?)"
     r")(?!\d)"
 )
 # Must be evaluated before generic delayed-phase rules.
@@ -121,12 +116,10 @@ RX_PHASE_HEPATOBILIARY = token(
     r"|hbp|bhp"
     r"|voie[\s_-]*biliaire"
     r"|transitionnel"
-
     # Standalone 20 or 120 minutes. Ten and fifteen minutes are delayed
     # acquisitions, not hepatobiliary phases, in this curation policy.
     r"|(?<![\d:.,_+\-])(?:20|120)"
     r"[\s_.+\-]*(?:mn|min(?:ute)?s?)(?!\w)"
-
     # 2h / 2 h / 2h30 / 2 h 40 / 2h30min
     r"|(?<!\d)2[\s_.+\-]*h"
     r"(?:[\s_.+\-]*(?:[0-5]?\d)"
@@ -158,7 +151,9 @@ RX_PLANE_CORONAL = token(r"cor|coro|coronal|coronale|ecor")
 RX_PLANE_SAGITTAL = token(r"sag|sagi|sagittal|sagittale")
 
 RX_T2_FATSAT = token(r"fs|fat\s*sat|fatsat|spair|spir|stir|tirm")
-RX_T2_MOTION_ROBUST = token(r"blade|fblade|propeller|prop|multivane|radial|pace|navigator|rtr|trigger")
+RX_T2_MOTION_ROBUST = token(
+    r"blade|fblade|propeller|prop|multivane|radial|pace|navigator|rtr|trigger"
+)
 RX_T2_HASTE_SSFSE = token(r"haste|ssfse|essfse|ssh|single\s*shot")
 RX_T2_TSE_FSE = token(r"tse|fse|frfse|sense|te[\s_-]*\d+|fast\s*spin|turbo\s*spin")
 RX_T2_MRCP_BILIARY = token(r"mrcp|bili|biliary|biliaire|chol|cholangio|cholangi")
@@ -181,7 +176,9 @@ RX_DIXON_CONTEXT = token(
     r"dixon|mdixon|m[\s_-]*dixon|qdixon|q[\s_-]*dixon|edixon|e[\s_-]*dixon"
     r"|lava\s*flex|lavaflex|flex|idea|disco"
 )
-RX_DIXON_ALL = token(r"all|all_bh|m[\s_-]*dixon[\s_-]*all|mdixon[\s_-]*all|dixon[\s_-]*all")
+RX_DIXON_ALL = token(
+    r"all|all_bh|m[\s_-]*dixon[\s_-]*all|mdixon[\s_-]*all|dixon[\s_-]*all"
+)
 RX_DIXON_WATER = token(r"w|water|wat|eau")
 RX_DIXON_IN = token(r"in|ip|inphase|in[\s_-]*phase|phase[\s_-]*in|eco\s*0")
 RX_DIXON_OPPOSED = token(

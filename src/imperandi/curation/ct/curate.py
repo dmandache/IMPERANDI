@@ -45,13 +45,17 @@ def detect_ct_features(row: pd.Series) -> dict:
     n_slices = safe_float(
         row.get(
             "n_rows_in_volume",
-            row.get("n_sop_instances_in_volume", row.get("n_rows_in_series", row.get("n_files", np.nan))),
+            row.get(
+                "n_sop_instances_in_volume",
+                row.get("n_rows_in_series", row.get("n_files", np.nan)),
+            ),
         )
     )
 
     return {
         "is_localizer": bool(re.search(rules.RX_CT_LOCALIZER, text)),
-        "is_axial": bool(re.search(rules.RX_CT_AXIAL, text)) or (pd.notna(rows) and pd.notna(cols) and rows == cols),
+        "is_axial": bool(re.search(rules.RX_CT_AXIAL, text))
+        or (pd.notna(rows) and pd.notna(cols) and rows == cols),
         "is_original": "original" in image_type and "primary" in image_type,
         "is_derived_low_value": bool(re.search(rules.RX_CT_DERIVED_LOW_VALUE, text)),
         "rows": rows,
@@ -149,10 +153,17 @@ def select_ct_per_exam(
         return f"{desc} [score={row.get('selection_score'):.1f}]"
 
     selected_long["selected_candidate"] = selected_long.apply(_display, axis=1)
-    exam_lookup = selected_long[[*exam_key_cols, *exam_cols]].drop_duplicates(exam_key_cols)
+    exam_lookup = selected_long[[*exam_key_cols, *exam_cols]].drop_duplicates(
+        exam_key_cols
+    )
     selected_wide = (
         selected_long[[*exam_key_cols, "selection_slot", "selected_candidate"]]
-        .pivot_table(index=exam_key_cols, columns="selection_slot", values="selected_candidate", aggfunc="first")
+        .pivot_table(
+            index=exam_key_cols,
+            columns="selection_slot",
+            values="selected_candidate",
+            aggfunc="first",
+        )
         .reset_index()
     )
     selected_wide.columns.name = None

@@ -9,7 +9,6 @@ from typing import Any
 
 import pandas as pd
 
-
 SUPPORTED_PHASE_STRATEGIES = {"ontology", "rules", "totalsegmentator"}
 DEFAULT_UNRESOLVED_LABELS = ["", "OTHER", "UNKNOWN", "UNCLASSIFIED", "NONE"]
 DEFAULT_PHASE_CURATION = {
@@ -261,9 +260,7 @@ def _resolve_strategy(
 
     if strategy_type == "ontology":
         for column in strategy["columns"]:
-            phase, raw = _map_value(
-                row.get(column), mapping, allow_unmapped=False
-            )
+            phase, raw = _map_value(row.get(column), mapping, allow_unmapped=False)
             if phase is not None:
                 return (
                     phase,
@@ -279,9 +276,7 @@ def _resolve_strategy(
         return phase, row.get("rule_phase_confidence"), row.get("rule_phase_reason")
 
     column = strategy["column"]
-    phase, raw = _map_value(
-        row.get(column), mapping, allow_unmapped=not mapping
-    )
+    phase, raw = _map_value(row.get(column), mapping, allow_unmapped=not mapping)
     confidence = _first_populated(row, strategy["confidence_columns"])
     reason = f"TotalSegmentator mapped {column}={raw!r}" if phase else None
     return phase, confidence, reason
@@ -326,12 +321,8 @@ def apply_phase_curation(
             if phase is None or phase in normalized["unresolved_labels"]:
                 continue
             out.iat[row_position, output_positions["phase"]] = phase
-            out.iat[row_position, output_positions["phase_source"]] = strategy[
-                "name"
-            ]
-            out.iat[row_position, output_positions["phase_confidence"]] = (
-                confidence
-            )
+            out.iat[row_position, output_positions["phase_source"]] = strategy["name"]
+            out.iat[row_position, output_positions["phase_confidence"]] = confidence
             out.iat[row_position, output_positions["phase_reason"]] = reason
             unresolved[row_position] = False
 
@@ -339,9 +330,7 @@ def apply_phase_curation(
         for row_position, is_unresolved in enumerate(unresolved):
             if not is_unresolved:
                 continue
-            out.iat[row_position, output_positions["phase"]] = normalized[
-                "fallback"
-            ]
+            out.iat[row_position, output_positions["phase"]] = normalized["fallback"]
             out.iat[row_position, output_positions["phase_source"]] = "fallback"
             out.iat[row_position, output_positions["phase_reason"]] = (
                 "no phase strategy resolved"
@@ -372,8 +361,7 @@ def phase_needs_strategy(
         apply_fallback=False,
     )
     eligible = [
-        _strategy_applies(df.iloc[position], strategy)
-        for position in range(len(df))
+        _strategy_applies(df.iloc[position], strategy) for position in range(len(df))
     ]
     return pd.Series(
         [

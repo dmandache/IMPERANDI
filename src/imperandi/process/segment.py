@@ -704,8 +704,7 @@ def build_segmentation_output_maps(
                 )
         if resolved.get("postprocess"):
             output_name = (
-                str(resolved["postprocess"].get("output", "merged")).strip()
-                or "merged"
+                str(resolved["postprocess"].get("output", "merged")).strip() or "merged"
             )
             output_to_column.setdefault(output_name, _output_to_column(output_name))
             output_to_fetch.setdefault(output_name, output_name)
@@ -851,8 +850,7 @@ def segment_volume(
         postprocess_config = tasks_config.get("postprocess")
         if postprocess_config:
             merged_output = (
-                str(postprocess_config.get("output", "merged")).strip()
-                or "merged"
+                str(postprocess_config.get("output", "merged")).strip() or "merged"
             )
             resolved[merged_output] = merged_output
         resolved_output_to_fetch.clear()
