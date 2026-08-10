@@ -70,7 +70,8 @@ def test_apply_patient_key_standardization_marks_and_logs_real_failures(caplog):
             log_prefix="custom_hook",
         )
 
-    assert result["patient_key"].tolist()[:2] == ["OK", None]
+    assert result.loc[0, "patient_key"] == "OK"
+    assert pd.isna(result.loc[1, "patient_key"])
     assert result["patient_key_std_failed"].tolist() == [False, True, False, False]
     assert result["_patient_key_raw"].tolist()[:3] == ["ok", "bad", ""]
     assert "[custom_hook] failed on unique raw keys=1" in caplog.text
