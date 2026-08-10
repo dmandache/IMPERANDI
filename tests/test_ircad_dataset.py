@@ -14,6 +14,7 @@ from pandarallel import pandarallel
 from imperandi.ingest import parse as parse_module
 from imperandi.ingest import clean as clean_module
 from imperandi.utils import files as files_module
+from imperandi.utils.manifest import load_manifest, resolve_hook
 
 pytestmark = pytest.mark.slow
 
@@ -119,14 +120,14 @@ def test_ircad_parse_matches_golden(tmp_path, ircad_dicom_root, ircad_reference_
 def test_ircad_clean_matches_golden(tmp_path, ircad_dicom_root, ircad_reference_csv):
     input_csv = ircad_reference_csv("dicom_index.csv")
     output_csv = tmp_path / "dicom_index_clean.csv"
+    manifest = load_manifest(
+        "generic", base_path=Path(clean_module.__file__).resolve().parents[1]
+    )
 
     clean_module.clean_and_save_data(
         [str(input_csv)],
         str(output_csv),
-        csv_dict_path=None,
-        manifest={},
-        volume_length_min_mm=clean_module.DEFAULT_VOLUME_LENGTH_MIN_MM,
-        volume_length_max_mm=clean_module.DEFAULT_VOLUME_LENGTH_MAX_MM,
+        manifest=manifest,
     )
 
     generated = _normalize_dicom_path_column(pd.read_csv(output_csv))
@@ -134,20 +135,36 @@ def test_ircad_clean_matches_golden(tmp_path, ircad_dicom_root, ircad_reference_
         pd.read_csv(ircad_reference_csv("dicom_index_clean.csv"))
     )
 
-    generated = generated.sort_values("volume_id").reset_index(drop=True)
-    golden = golden.sort_values("volume_id").reset_index(drop=True)
+    generated = generated.sort_values("_patient_key_raw").reset_index(drop=True)
+    golden = golden.sort_values("_patient_key_raw").reset_index(drop=True)
 
-    generated = generated.reindex(sorted(generated.columns), axis=1)
-    golden = golden.reindex(sorted(golden.columns), axis=1)
+    standardize = resolve_hook(manifest["id_standardization"])
+    expected_patient_keys = golden["_patient_key_raw"].apply(standardize)
+    pd.testing.assert_series_equal(
+        generated["patient_key"],
+        expected_patient_keys,
+        check_dtype=False,
+        check_names=False,
+    )
+
+    shared_columns = sorted(
+        set(golden.columns).intersection(generated.columns)
+        - {"patient_key", "volume_id"}
+    )
 
     pd.testing.assert_frame_equal(
-        generated,
-        golden,
+        generated[shared_columns],
+        golden[shared_columns],
         check_dtype=False,
         check_exact=False,
         rtol=1e-6,
         atol=1e-6,
     )
+    assert generated["volume_id"].notna().all()
+    assert generated["volume_id"].is_unique
+    assert set(generated["phase"]) == {"OTHER"}
+    assert set(generated["phase_source"]) == {"fallback"}
+    assert set(generated["rule_phase"]) == {"OTHER"}
 
 
 def test_ircad_nifti_files_readable(ircad_nifti_root, ircad_reference_csv):

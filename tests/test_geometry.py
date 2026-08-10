@@ -66,12 +66,8 @@ def test_standardize_iop_success_and_rounding():
 def test_standardize_iop_handles_invalid_inputs():
     assert geometry.standardize_iop(None) is None
     assert geometry.standardize_iop("bad") is None
-
-    with pytest.raises(ValueError):
-        geometry.standardize_iop([1, 2, 3])
-
-    with pytest.raises(ValueError):
-        geometry.standardize_iop([0, 0, 0, 1, 0, 0])
+    assert geometry.standardize_iop([1, 2, 3]) is None
+    assert geometry.standardize_iop([0, 0, 0, 1, 0, 0]) is None
 
 
 def test_as_float_array():

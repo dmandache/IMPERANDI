@@ -29,29 +29,33 @@ def parse_iop(iop):
 def standardize_iop(iop, decimals=3, zero_tol=1e-6):
     try:
         iop = parse_iop(iop)
-    except (ValueError, TypeError):
+
+        if iop.shape != (6,):
+            return None
+
+        if not np.all(np.isfinite(iop)):
+            return None
+
+        row = iop[:3]
+        col = iop[3:]
+
+        row_norm = np.linalg.norm(row)
+        col_norm = np.linalg.norm(col)
+
+        if row_norm < zero_tol or col_norm < zero_tol:
+            return None
+
+        row = row / row_norm
+        col = col / col_norm
+
+        iop_std = np.concatenate([row, col])
+        iop_std[np.abs(iop_std) < zero_tol] = 0.0
+        iop_std = np.round(iop_std, decimals=decimals)
+
+        return tuple(iop_std)
+
+    except (ValueError, TypeError, FloatingPointError):
         return None
-
-    if iop.shape != (6,):
-        raise ValueError(f"IOP must have length 6, got shape {iop.shape}")
-
-    row = iop[:3]
-    col = iop[3:]
-
-    row_norm = np.linalg.norm(row)
-    col_norm = np.linalg.norm(col)
-
-    if row_norm == 0 or col_norm == 0:
-        raise ValueError(f"Invalid IOP (zero norm): {iop}")
-
-    row = row / row_norm
-    col = col / col_norm
-
-    iop_std = np.concatenate([row, col])
-    iop_std[np.abs(iop_std) < zero_tol] = 0.0
-    iop_std = np.round(iop_std, decimals=decimals)
-
-    return tuple(iop_std)
 
 
 def as_float_array(x):

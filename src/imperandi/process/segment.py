@@ -16,8 +16,10 @@ The module supports both CLI and library usage:
 from __future__ import annotations
 
 import argparse
+from ast import literal_eval
 from collections import deque
 import copy
+from collections.abc import Mapping
 from importlib.metadata import PackageNotFoundError, version as distribution_version
 import logging
 import multiprocessing as mp
@@ -209,25 +211,185 @@ class TotalSegmentatorBackend:
 def _default_segmentation_config() -> Dict[str, Any]:
     return {
         "backend": "totalsegmentator",
-        "tasks": [
-            {
-                "task": "total",
-                "extra": {"roi_subset_robust": ["liver"], "fastest": True},
+        "modalities": {
+            "CT": {
+                "tasks": [
+                    {
+                        "task": "total",
+                        "extra": {
+                            "roi_subset_robust": ["liver"],
+                            "fastest": True,
+                        },
+                    },
+                    {
+                        "task": "liver_lesions",
+                        "output": "liver_tumor",
+                        "fetch_output": "liver_lesions",
+                        "extra": {},
+                    },
+                ],
+                "postprocess": {
+                    "merge_keys": ["liver", "liver_tumor"],
+                    "output": "liver_all",
+                    "radius_mm": 5.0,
+                    "largest_cc": True,
+                    "fill_holes": True,
+                    "close": True,
+                },
             },
-            {
-                "task": "liver_vessels",
-                "output": "liver_tumor",
-                "extra": {},
+            "MR": {
+                "tasks": [
+                    {
+                        "task": "total_mr",
+                        "extra": {
+                            "roi_subset_robust": ["liver"],
+                            "fastest": True,
+                        },
+                    },
+                    {
+                        "task": "liver_lesions_mr",
+                        "output": "liver_tumor",
+                        "fetch_output": "liver_lesions",
+                        "extra": {},
+                    },
+                ],
+                "postprocess": {
+                    "merge_keys": ["liver", "liver_tumor"],
+                    "output": "liver_all",
+                    "radius_mm": 5.0,
+                    "largest_cc": True,
+                    "fill_holes": True,
+                    "close": True,
+                },
             },
-        ],
-        "postprocess": {
-            "merge_keys": ["liver", "liver_tumor"],
-            "output": "liver_all",
-            "radius_mm": 5.0,
-            "largest_cc": True,
-            "fill_holes": True,
-            "close": True,
         },
+    }
+
+
+def normalize_segmentation_modality(value: Any) -> str | None:
+    """Normalize one row modality to the manifest's ``CT``/``MR`` keys."""
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith(("[", "(", "{")):
+            try:
+                return normalize_segmentation_modality(literal_eval(text))
+            except (ValueError, SyntaxError):
+                pass
+        label = text.upper()
+        if label == "CT":
+            return "CT"
+        if label in {"MR", "MRI"}:
+            return "MR"
+        return None
+
+    if isinstance(value, (list, tuple, set)):
+        normalized = {
+            modality
+            for item in value
+            if (modality := normalize_segmentation_modality(item)) is not None
+        }
+        return next(iter(normalized)) if len(normalized) == 1 else None
+
+    try:
+        if value is None or pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        return None
+    return normalize_segmentation_modality(str(value))
+
+
+def _validate_resolved_segmentation_config(
+    config: Mapping[str, Any], *, field: str
+) -> Dict[str, Any]:
+    tasks = config.get("tasks")
+    if not isinstance(tasks, list) or not tasks:
+        raise ValueError(f"{field}.tasks must be a non-empty list.")
+
+    normalized_tasks: List[Dict[str, Any]] = []
+    for index, raw_task in enumerate(tasks):
+        task_field = f"{field}.tasks[{index}]"
+        if not isinstance(raw_task, Mapping):
+            raise ValueError(f"{task_field} must be a mapping.")
+        task = copy.deepcopy(dict(raw_task))
+        task_name = task.get("task")
+        if not isinstance(task_name, str) or not task_name.strip():
+            raise ValueError(f"{task_field}.task must be a non-empty string.")
+        task["task"] = task_name.strip()
+        extra = task.get("extra", {})
+        if not isinstance(extra, Mapping):
+            raise ValueError(f"{task_field}.extra must be a mapping.")
+        task["extra"] = copy.deepcopy(dict(extra))
+        infer_task_fetch_outputs(task)
+        normalized_tasks.append(task)
+
+    normalized: Dict[str, Any] = {"tasks": normalized_tasks}
+    postprocess = config.get("postprocess")
+    if postprocess is not None:
+        if not isinstance(postprocess, Mapping):
+            raise ValueError(f"{field}.postprocess must be a mapping.")
+        normalized["postprocess"] = copy.deepcopy(dict(postprocess))
+        resolve_merge_outputs(normalized["postprocess"], normalized_tasks)
+    return normalized
+
+
+def validate_segmentation_config(config: Mapping[str, Any]) -> Dict[str, Any]:
+    """Validate the modality-keyed segmentation manifest contract."""
+    if not isinstance(config, Mapping):
+        raise ValueError("segmentation must be a mapping.")
+    backend = str(config.get("backend", "totalsegmentator")).strip().lower()
+    if backend != "totalsegmentator":
+        raise ValueError(f"Unsupported backend: {backend}")
+
+    raw_modalities = config.get("modalities")
+    if not isinstance(raw_modalities, Mapping) or not raw_modalities:
+        raise ValueError("segmentation.modalities must be a non-empty mapping.")
+
+    modalities: Dict[str, Dict[str, Any]] = {}
+    for raw_modality, raw_config in raw_modalities.items():
+        modality = normalize_segmentation_modality(raw_modality)
+        if modality is None:
+            raise ValueError(
+                "segmentation.modalities keys must be CT, MR, or MRI; "
+                f"got {raw_modality!r}."
+            )
+        if modality in modalities:
+            raise ValueError(
+                f"segmentation modality {modality!r} is configured more than once."
+            )
+        if not isinstance(raw_config, Mapping):
+            raise ValueError(
+                f"segmentation.modalities.{raw_modality} must be a mapping."
+            )
+        modalities[modality] = _validate_resolved_segmentation_config(
+            raw_config,
+            field=f"segmentation.modalities.{raw_modality}",
+        )
+        for task in modalities[modality]["tasks"]:
+            runtime_task, _ = _resolve_runtime_task(task["task"], {})
+            task_modality = "MR" if runtime_task.endswith("_mr") else "CT"
+            if task_modality != modality:
+                raise ValueError(
+                    f"TotalSegmentator task {task['task']!r} is a "
+                    f"{task_modality} model and cannot be configured under "
+                    f"segmentation.modalities.{raw_modality}."
+                )
+
+    return {"backend": backend, "modalities": modalities}
+
+
+def resolve_segmentation_config_for_modality(
+    config: Mapping[str, Any], modality: Any
+) -> Dict[str, Any] | None:
+    """Return the worker configuration for a row's normalized modality."""
+    normalized_modality = normalize_segmentation_modality(modality)
+    if normalized_modality is None:
+        return None
+    modality_config = config.get("modalities", {}).get(normalized_modality)
+    if modality_config is None:
+        return None
+    return {
+        "backend": config.get("backend", "totalsegmentator"),
+        **copy.deepcopy(dict(modality_config)),
     }
 
 
@@ -241,16 +403,13 @@ def load_segmentation_config(
     )
 
     if not manifest_arg:
-        return copy.deepcopy(generic_segmentation)
+        return validate_segmentation_config(generic_segmentation)
 
     manifest = load_manifest(manifest_arg, base_path=base_path)
     manifest_segmentation = manifest.get("segmentation")
     if manifest_segmentation:
-        return copy.deepcopy(manifest_segmentation)
-    if "tasks" in manifest and "backend" in manifest:
-        # Backward compatibility for legacy files that were pure task configs.
-        return copy.deepcopy(manifest)
-    return copy.deepcopy(generic_segmentation)
+        return validate_segmentation_config(manifest_segmentation)
+    return validate_segmentation_config(generic_segmentation)
 
 
 def _resolve_prefetch_task_name(task: Dict[str, Any]) -> str | None:
@@ -508,12 +667,68 @@ def resolve_merge_outputs(
     return [column_to_output[column] for column in normalized_columns]
 
 
-def prefetch_totalsegmentator_models(tasks_config: Dict[str, Any]) -> None:
+def iter_modality_segmentation_configs(
+    config: Mapping[str, Any], modalities: set[str] | None = None
+):
+    """Yield normalized modality and worker config pairs."""
+    for modality, modality_config in config.get("modalities", {}).items():
+        if modalities is not None and modality not in modalities:
+            continue
+        yield modality, {
+            "backend": config.get("backend", "totalsegmentator"),
+            **copy.deepcopy(dict(modality_config)),
+        }
+
+
+def build_segmentation_output_maps(
+    config: Mapping[str, Any],
+) -> Tuple[Dict[str, str], Dict[str, str], set[str]]:
+    """Build union output maps across every configured modality."""
+    output_to_column: Dict[str, str] = {}
+    output_to_fetch: Dict[str, str] = {}
+    postprocess_outputs: set[str] = set()
+    for _, resolved in iter_modality_segmentation_configs(config):
+        for output_name, column_name in build_output_column_map(
+            resolved["tasks"]
+        ).items():
+            output_to_column.setdefault(output_name, column_name)
+        for output_name, fetch_name in build_output_fetch_map(
+            resolved["tasks"]
+        ).items():
+            existing = output_to_fetch.setdefault(output_name, fetch_name)
+            if existing != fetch_name:
+                raise ValueError(
+                    "Logical segmentation output maps to different backend files "
+                    f"across modalities: {output_name!r} -> "
+                    f"{existing!r}/{fetch_name!r}."
+                )
+        if resolved.get("postprocess"):
+            output_name = (
+                str(resolved["postprocess"].get("output", "merged")).strip() or "merged"
+            )
+            output_to_column.setdefault(output_name, _output_to_column(output_name))
+            output_to_fetch.setdefault(output_name, output_name)
+            postprocess_outputs.add(output_name)
+    return output_to_column, output_to_fetch, postprocess_outputs
+
+
+def prefetch_totalsegmentator_models(
+    tasks_config: Dict[str, Any], *, modalities: set[str] | None = None
+) -> None:
     """Download required TotalSegmentator weights before multiprocessing."""
     if tasks_config.get("backend", "totalsegmentator") != "totalsegmentator":
         return
 
-    tasks = tasks_config.get("tasks", [])
+    if "modalities" in tasks_config:
+        tasks = [
+            task
+            for _, resolved in iter_modality_segmentation_configs(
+                tasks_config, modalities
+            )
+            for task in resolved.get("tasks", [])
+        ]
+    else:
+        tasks = tasks_config.get("tasks", [])
     if not tasks:
         return
 
@@ -631,8 +846,15 @@ def segment_volume(
     def _store_resolved_outputs() -> None:
         if resolved_output_to_fetch is None:
             return
+        resolved = dict(output_to_fetch)
+        postprocess_config = tasks_config.get("postprocess")
+        if postprocess_config:
+            merged_output = (
+                str(postprocess_config.get("output", "merged")).strip() or "merged"
+            )
+            resolved[merged_output] = merged_output
         resolved_output_to_fetch.clear()
-        resolved_output_to_fetch.update(output_to_fetch)
+        resolved_output_to_fetch.update(resolved)
 
     for task in tasks:
         task_name = task["task"]
@@ -784,6 +1006,14 @@ def process_single_volume(
 
     setup_logging(verbose=verbose)
 
+    resolved_tasks_config = tasks_config
+    if "modalities" in tasks_config:
+        resolved_tasks_config = resolve_segmentation_config_for_modality(
+            tasks_config, row.get("Modality")
+        )
+        if resolved_tasks_config is None:
+            return idx, None, None, None, {}
+
     try:
         nifti_path = Path(row["nifti_path"])
     except KeyError:
@@ -797,7 +1027,7 @@ def process_single_volume(
         warnings = segment_volume(
             nifti_path,
             nifti_path.parent,
-            tasks_config,
+            resolved_tasks_config,
             verbose=verbose,
             force=force,
             backend=backend,
@@ -809,7 +1039,7 @@ def process_single_volume(
             str(nifti_path.parent),
             None,
             warning_msg,
-            (resolved_output_to_fetch or None),
+            resolved_output_to_fetch,
         )
     except Exception as exc:
         # Capture full traceback for later debugging
@@ -953,7 +1183,7 @@ def add_segment_arguments(
             "--manifest",
             type=str,
             default=None,
-            help="Dataset manifest name or path to manifest JSON.",
+            help="Dataset manifest name or path to manifest YAML.",
         )
     if include_dry_run:
         parser.add_argument(
@@ -1056,8 +1286,6 @@ def main(args: argparse.Namespace) -> None:
         )
         return
 
-    prefetch_totalsegmentator_models(tasks_config)
-
     from imperandi.utils.multiprocessing import (
         apply_strategy_env,
         strategy_to_log_dict,
@@ -1105,19 +1333,27 @@ def main(args: argparse.Namespace) -> None:
             df = df.drop(columns=unnamed)
     if "nifti_path" not in df.columns:
         raise KeyError("column 'nifti_path' missing")
+    if "Modality" not in df.columns:
+        raise KeyError(
+            "column 'Modality' missing; modality-keyed segmentation requires it"
+        )
     df = df.drop_duplicates("nifti_path").copy()
-    output_to_column = build_output_column_map(tasks_config.get("tasks", []))
-    output_to_fetch = build_output_fetch_map(tasks_config.get("tasks", []))
+    row_modalities = df["Modality"].map(normalize_segmentation_modality)
+    configured_modalities = set(tasks_config["modalities"])
+    eligible_by_modality = row_modalities.isin(configured_modalities)
+    active_modalities = set(row_modalities[eligible_by_modality].dropna())
+    prefetch_totalsegmentator_models(
+        tasks_config,
+        modalities=active_modalities,
+    )
+    (
+        output_to_column,
+        output_to_fetch,
+        postprocess_outputs,
+    ) = build_segmentation_output_maps(tasks_config)
     for column_name in list(dict.fromkeys(output_to_column.values())):
         if column_name not in df.columns:
             df[column_name] = None
-    if tasks_config.get("postprocess"):
-        merged_output = (
-            str(tasks_config["postprocess"].get("output", "merged")).strip() or "merged"
-        )
-        merged_col = _output_to_column(merged_output)
-        if merged_col not in df.columns:
-            df[merged_col] = None
     if "warning_message" not in df.columns:
         df["warning_message"] = None
     logged_warning_keys: set[str] = set()
@@ -1146,6 +1382,19 @@ def main(args: argparse.Namespace) -> None:
                         errors_by_idx[source_idx] = str(row["error_message"])
                 except Exception:
                     continue
+
+    modality_skipped_count = 0
+    for idx in df.index[~eligible_by_modality]:
+        source_idx = normalize_source_id(df.at[idx, "_source_idx"])
+        if source_idx not in completed_indices:
+            modality_skipped_count += 1
+            completed_indices.add(source_idx)
+        errors_by_idx.pop(source_idx, None)
+    if modality_skipped_count:
+        logger.info(
+            "Skipped %d row(s) without a configured segmentation modality",
+            modality_skipped_count,
+        )
 
     def _checkpoint_write(*, force: bool = False) -> None:
         err_ckpt_df = (
@@ -1187,23 +1436,24 @@ def main(args: argparse.Namespace) -> None:
                     output_to_fetch.setdefault(output_name, fetch_name)
                     if column_name not in df.columns:
                         df[column_name] = None
-            for output_name, column_name in output_to_column.items():
-                fetch_name = output_to_fetch.get(output_name, output_name)
+            outputs_to_check = (
+                result_output_to_fetch
+                if result_output_to_fetch is not None
+                else output_to_fetch
+            )
+            for output_name, fetch_name in outputs_to_check.items():
+                column_name = output_to_column.setdefault(
+                    output_name, _output_to_column(output_name)
+                )
+                if column_name not in df.columns:
+                    df[column_name] = None
                 mask_path = base / _output_to_filename(fetch_name)
                 if mask_path.exists():
                     df.at[idx, column_name] = str(mask_path)
+                elif output_name in postprocess_outputs:
+                    row_warnings.append(f"missing merged mask: {mask_path}")
                 else:
                     row_warnings.append(f"missing mask: {mask_path}")
-            if tasks_config.get("postprocess"):
-                merged_output = (
-                    str(tasks_config["postprocess"].get("output", "merged")).strip()
-                    or "merged"
-                )
-                merged_path = base / _output_to_filename(merged_output)
-                if merged_path.exists():
-                    df.at[idx, _output_to_column(merged_output)] = str(merged_path)
-                else:
-                    row_warnings.append(f"missing merged mask: {merged_path}")
             if warning_msg:
                 warning_messages = [
                     message.strip()
@@ -1226,8 +1476,10 @@ def main(args: argparse.Namespace) -> None:
                 df.at[idx, "warning_message"] = " | ".join(row_warnings)
             if source_idx in errors_by_idx:
                 del errors_by_idx[source_idx]
-        else:
+        elif err_msg:
             errors_by_idx[source_idx] = err_msg or "unknown"
+        elif source_idx in errors_by_idx:
+            del errors_by_idx[source_idx]
 
         _checkpoint_write(force=False)
 
@@ -1376,11 +1628,19 @@ def main(args: argparse.Namespace) -> None:
             def _submit_until_limit() -> None:
                 while row_queue and len(futures) < max_in_flight:
                     idx = row_queue.popleft()
+                    row = df.loc[idx].to_dict()
+                    resolved_config = resolve_segmentation_config_for_modality(
+                        tasks_config, row.get("Modality")
+                    )
+                    if resolved_config is None:
+                        raise RuntimeError(
+                            f"No segmentation model configured for row {idx}."
+                        )
                     fut = pool.submit(
                         process_single_volume,
                         idx,
-                        df.loc[idx].to_dict(),
-                        tasks_config,
+                        row,
+                        resolved_config,
                         verbose=args.verbose,
                         force=args.force,
                     )
@@ -1509,7 +1769,8 @@ def main(args: argparse.Namespace) -> None:
     row_indices = [
         i
         for i in list(df.index)
-        if normalize_source_id(df.at[i, "_source_idx"]) not in completed_indices
+        if bool(eligible_by_modality.at[i])
+        and normalize_source_id(df.at[i, "_source_idx"]) not in completed_indices
     ]
     processed_source_ids = {
         normalize_source_id(df.at[i, "_source_idx"]) for i in row_indices
@@ -1528,11 +1789,17 @@ def main(args: argparse.Namespace) -> None:
         )
         results_by_idx = {}
         for idx in tqdm(row_indices, total=len(row_indices), desc="Segment"):
+            row = df.loc[idx].to_dict()
+            resolved_config = resolve_segmentation_config_for_modality(
+                tasks_config, row.get("Modality")
+            )
+            if resolved_config is None:
+                raise RuntimeError(f"No segmentation model configured for row {idx}.")
             result = _normalize_process_result(
                 process_single_volume(
                     idx,
-                    df.loc[idx].to_dict(),
-                    tasks_config,
+                    row,
+                    resolved_config,
                     verbose=args.verbose,
                     force=args.force,
                 )
@@ -1605,10 +1872,13 @@ def main(args: argparse.Namespace) -> None:
         total_rows=len(df),
         processed_rows=len(row_indices),
         succeeded_rows=max(0, len(row_indices) - run_failed_count),
-        skipped_rows=resume_skipped_count,
+        skipped_rows=resume_skipped_count + modality_skipped_count,
         failed_rows=run_failed_count,
         success_label="segmented",
-        extra_counts={"skipped by resume": resume_skipped_count},
+        extra_counts={
+            "skipped by resume": resume_skipped_count,
+            "skipped by modality": modality_skipped_count,
+        },
     )
     logger.info("Segmentation done ✔")
 

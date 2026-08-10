@@ -1,329 +1,271 @@
 # Configuration
 
-IMPERANDI configuration is done through manifests and hooks.
+IMPERANDI configuration is defined in YAML manifests. JSON manifests are not
+accepted. A manifest can reference Python hooks when declarative configuration
+is insufficient for institution-specific identifiers or derived metadata.
 
-- A manifest is a JSON document that declares dataset-specific settings such as
-  identifier extraction, segmentation tasks, post-processing, and radiomics
-  options.
-- A hook is a Python callable referenced by the manifest when declarative JSON
-  is not enough, for example to normalize patient identifiers or derive cohort
-  columns from existing values.
-
-Pass a built-in manifest name (`generic` or `operandi`) or a path to a JSON
-file:
+Pass a built-in name (`generic` or `operandi`) or a YAML path:
 
 ```bash
 imperandi ingest --root_path ./dicom --manifest generic
-imperandi segment ./nifti_index.csv --manifest ./site-a.json
+imperandi phase ./nifti_index.csv --manifest ./site-a.yaml
 ```
 
-Built-ins live under `src/imperandi/datasets_config/manifests/`. Treat them as
-examples; keep institution-specific configuration in a reviewed, versioned
-file rather than editing package defaults in place. This Markdown page is the
-reference for how configuration is expressed through manifest JSON plus hook
-functions.
+Built-ins live under `src/imperandi/datasets_config/manifests/`. Keep
+institution-specific manifests in a reviewed, versioned project file.
 
-## How configuration works
+## Main library stages
 
-In practice, configuration usually follows this flow:
+One manifest configures the main data path:
 
-1. start from a built-in manifest or a project-owned copy;
-2. edit manifest keys for parsing, segmentation, and radiomics behavior;
-3. point manifest hook entries at Python functions when you need custom logic;
-4. run IMPERANDI with `--manifest your_config.json`.
+1. `id_extraction` controls DICOM identifier extraction during `parse`.
+2. `id_standardization` and `derived_columns` define parse-time hooks.
+3. `cleaning.steps` defines the ordered metadata-cleaning pipeline.
+4. `phase_curation` defines canonical phase resolution during `clean` and
+   after optional TotalSegmentator prediction during `phase`.
+5. `segmentation` defines TotalSegmentator mask tasks and post-processing.
+6. `radiomics` defines PyRadiomics settings and cohort filters.
 
-Use manifests for declarative settings that can live safely in versioned JSON.
-Use hooks for executable logic such as parsing institution-specific identifiers,
-mapping cohort metadata, or other transformations that need Python code.
+The `cleaning.steps` order is executable configuration. In particular,
+`modality_curation` should run after volume grouping and acquisition ordering,
+and `finalize` should remain last.
 
-## Manifest structure
+## YAML manifest skeleton
 
-```json
-{
-  "dataset_name": "site-a",
-  "id_extraction": {
-    "source": "auto",
-    "force_dicom_read": false,
-    "patient_key": {"from_tag": "PatientID", "fallback": "path"},
-    "study_id": {"from_tag": "StudyInstanceUID", "fallback": "path"},
-    "series_id": {"from_tag": "SeriesInstanceUID", "fallback": "path"}
-  },
-  "id_standardization": {
-    "hook_module": "datasets_config.hooks.generic",
-    "function": "standardize_patient_key"
-  },
-  "derived_columns": [
-    {
-      "hook_module": "datasets_config.hooks.operandi",
-      "function": "extract_from_patient_key",
-      "from_column": "patient_key",
-      "join_mode": "missing_only"
-    }
-  ],
-  "segmentation": {
-    "backend": "totalsegmentator",
-    "tasks": [
-      {"task": "total", "extra": {"roi_subset": ["liver"]}},
-      {
-        "task": "liver_lesions",
-        "output": "liver_tumor",
-        "fetch_output": "liver_lesions"
-      }
-    ],
-    "postprocess": {
-      "merge_keys": ["liver", "liver_tumor"],
-      "output": "liver",
-      "radius_mm": 5.0,
-      "largest_cc": true,
-      "fill_holes": true,
-      "close": true
-    }
-  },
-  "radiomics": {
-    "pyradiomics": {
-      "setting": {"binWidth": 25},
-      "imageType": {"Original": {}}
-    },
-    "filters": {"totalseg_phase": ["portal_venous", "arterial_late"]}
-  }
-}
+```yaml
+dataset_name: site-a
+
+id_extraction:
+  source: auto
+  force_dicom_read: false
+  patient_key: {from_tag: PatientID, fallback: path}
+  study_id: {from_tag: StudyInstanceUID, fallback: path}
+  series_id: {from_tag: SeriesInstanceUID, fallback: path}
+
+id_standardization:
+  hook_module: datasets_config.hooks.generic
+  function: standardize_patient_key
+
+phase_curation:
+  strategies:
+    - type: ontology
+      name: site_ontology
+      columns: [site_phase]
+      mapping:
+        pre: NATIVE
+        art: ARTERIAL
+        pv: PORTAL_VENOUS
+    - type: rules
+      name: metadata_rules
+    - type: totalsegmentator
+      name: totalsegmentator_prediction
+      column: totalseg_phase
+      modalities: [CT]
+      confidence_columns: [totalseg_probability, totalseg_confidence]
+      mapping:
+        native: NATIVE
+        arterial_early: ARTERIAL
+        arterial_late: ARTERIAL
+        portal_venous: PORTAL_VENOUS
+        delayed: DELAYED
+  unresolved_labels: ["", OTHER, UNKNOWN, UNCLASSIFIED, NONE]
+  fallback: OTHER
+
+cleaning:
+  version: 1
+  steps:
+    - type: hook
+      function: "datasets_config.hooks.generic:standardize_patient_key"
+      source_columns: [patient_key]
+    - type: coalesce_date
+    - type: coalesce_time
+    - type: build_volume_id
+    - type: group_volumes
+    - type: compute_volume_length
+    - type: compute_visit_order
+    - type: compute_acquisition_order
+    - type: modality_curation
+    - type: finalize
+
+segmentation:
+  backend: totalsegmentator
+  modalities:
+    CT:
+      tasks:
+        - task: total
+          extra:
+            roi_subset: [liver]
+        - task: liver_lesions
+          output: liver_tumor
+          fetch_output: liver_lesions
+      postprocess:
+        merge_keys: [liver, liver_tumor]
+        output: liver
+    MR:
+      tasks:
+        - task: total_mr
+          extra:
+            roi_subset: [liver]
+        - task: liver_lesions_mr
+          output: liver_tumor
+          fetch_output: liver_lesions
+      postprocess:
+        merge_keys: [liver, liver_tumor]
+        output: liver
+
+radiomics:
+  pyradiomics:
+    setting:
+      binWidth: 25
+    imageType:
+      Original: {}
+  filters:
+    phase: [ARTERIAL, PORTAL_VENOUS]
 ```
 
-## Customize a manifest file
+Copy a built-in YAML manifest as the starting point because the full built-in
+cleaning pipeline contains the geometry, modality, volume, and quality-control
+steps omitted from this abbreviated skeleton.
 
-The usual workflow is:
+## Phase curation and fallback
 
-1. copy `src/imperandi/datasets_config/manifests/generic.json` or
-   `src/imperandi/datasets_config/manifests/operandi.json`;
-2. save it as a project-owned file such as `site-a.json`;
-3. edit the JSON keys that match your dataset;
-4. pass the file path with `--manifest ./site-a.json`.
+`phase_curation.strategies` is an ordered fallback chain. Each strategy is
+optional, but the list must contain at least one strategy. The first strategy
+that produces a value not listed in `unresolved_labels` wins.
 
-The easiest way to read the manifest is by configuration area:
+The resolver writes:
 
-### Identity and cohort metadata
+- `phase`: canonical uppercase phase, such as `ARTERIAL` or `PORTAL_VENOUS`;
+- `phase_source`: configured strategy name or `fallback`;
+- `phase_confidence`: rule, ontology, or predictor confidence when available;
+- `phase_reason`: concise provenance for the decision.
 
-`dataset_name`
-Use this as a short, stable label for the configuration. It is mainly for
-readability and review, so names such as `site-a`, `operandi_v2`, or
-`external_validation` are usually better than vague labels.
+The metadata engines also retain their unmodified result in `rule_phase`,
+`rule_phase_confidence`, and `rule_phase_reason`. This lets the post-conversion
+`phase` command apply the same manifest without losing clean-time evidence.
 
-`id_extraction`
-This controls how raw patient, study, and series identifiers are obtained.
-The usual fields are `source` (`auto`, `tags`, or `path`),
-`force_dicom_read`, and the per-ID blocks `patient_key`, `study_id`, and
-`series_id` with `from_tag` and `fallback`.
-Typical `from_tag` values are DICOM keywords such as `PatientID`,
-`PatientName`, `StudyInstanceUID`, and `SeriesInstanceUID`.
-Typical `fallback` usage is `"path"` when a tag is missing or unreliable.
-Keep this section aligned with the parse or ingest CLI options you actually run:
-`--id_source`, `--force_dicom_read`, `--patient_key_from`,
-`--study_id_from`, and `--series_id_from`.
+### Explicit ontology
 
-`id_standardization`
-Use this when raw identifiers need cleanup after extraction.
-It points to a hook that rewrites `patient_key` into your canonical cohort ID,
-for example by removing prefixes, normalizing zero-padding, or extracting the
-parts of the string that matter for downstream grouping.
+Use `type: ontology` when the input already carries a controlled site label.
+`columns` is checked in order. `mapping` performs exact, case-insensitive value
+mapping; it does not run regexes or substring matching.
 
-`derived_columns`
-Use this when you want to compute extra cohort columns from an existing value.
-Each entry can define `hook_module`, `function`, `from_column`, and
-`join_mode` (`missing_only` or `overwrite`).
-This is a good place to derive fields such as `center`, `source`,
-`tumor_type`, or other site-specific metadata from a patient key or similar
-identifier.
-
-### Segmentation
-
-`segmentation.backend`
-This selects the segmentation engine. In the current implementation, the
-supported value is `totalsegmentator`.
-
-`segmentation.tasks`
-This section defines which TotalSegmentator runs happen and how IMPERANDI names
-their outputs.
-Each task entry needs at least `task`.
-Common optional keys are `extra` for backend kwargs,
-`output` or `outputs` for the logical mask names you want in IMPERANDI, and
-`fetch_output` or `fetch_outputs` when the backend-produced filenames differ
-from your preferred output names.
-Inside `extra`, common runtime options are `roi_subset`, `roi_subset_robust`,
-`fast`, and `fastest`, but other supported TotalSegmentator kwargs can also be
-passed through.
-If you use `roi_subset` or `roi_subset_robust`, IMPERANDI can infer mask names
-from those class names, but explicit `output` names are usually clearer and
-more stable for downstream CSV columns.
-Official references:
-[TotalSegmentator subtasks guide](https://github.com/wasserth/TotalSegmentator#subtasks)
-and [class details](https://github.com/wasserth/TotalSegmentator/blob/master/resources/class_details.md).
-To inspect the exact capabilities of your installed version, run
-`totalseg_info --list-tasks` and `totalseg_info --classes -ta total`.
-
-### Segmentation Mask Postprocessing
-
-`segmentation.postprocess`
-Use this section when several masks should be merged or cleaned after
-segmentation.
-`merge_keys` is required when post-processing is enabled and should name the
-logical outputs to combine, such as `liver` and `liver_tumor`
-or their `mask_*` column equivalents.
-Common options are `output` for the merged mask name, `radius_mm` for
-morphological closing, `close`, `fill_holes`, and `largest_cc` for cleanup, and
-`on_failure` with `warn_only` or `fail`.
-
-### Radiomics
-
-`radiomics.pyradiomics`
-Use this when you want the manifest itself to carry your feature extraction
-settings instead of referencing a separate YAML file.
-Common top-level sections are `setting`, `imageType`, and `featureClass`,
-plus filter-specific keys such as LoG `sigma`.
-This is the manifest equivalent of a PyRadiomics parameter file and is useful
-when you want one versioned configuration file to describe both cohort logic
-and radiomics behavior.
-Official guide:
-[PyRadiomics customization and parameter file docs](https://pyradiomics.readthedocs.io/en/latest/customization.html).
-
-`radiomics.filters`
-Use this when radiomics should run only on a subset of rows.
-The format is `column_name -> [allowed_value, ...]`.
-Typical columns include `totalseg_phase`, `phase`, `center`, `source`, or any
-other cohort column already present in the CSV.
-This is the manifest equivalent of repeated CLI filters such as
-`--filter totalseg_phase=portal_venous,arterial_late`.
-
-Example:
-
-```json
-{
-  "dataset_name": "site-a",
-  "id_extraction": {
-    "source": "auto",
-    "patient_key": {"from_tag": "PatientID", "fallback": "path"},
-    "study_id": {"from_tag": "StudyInstanceUID", "fallback": "path"},
-    "series_id": {"from_tag": "SeriesInstanceUID", "fallback": "path"}
-  },
-  "id_standardization": {
-    "hook_module": "datasets_config.hooks.site_a",
-    "function": "standardize_patient_key"
-  },
-  "radiomics": {
-    "filters": {"totalseg_phase": ["portal_venous"]}
-  }
-}
+```yaml
+phase_curation:
+  strategies:
+    - type: ontology
+      columns: [site_phase, reviewed_phase]
+      confidence: high
+      mapping:
+        sans injection: NATIVE
+        arteriel: ARTERIAL
+        portal: PORTAL_VENOUS
+  fallback: OTHER
 ```
 
-Keep custom manifests outside package defaults so they can be reviewed,
-versioned, and reused across runs.
+### Metadata rules
 
-## Hooks
+Use `type: rules` to consume IMPERANDI's CT and MRI metadata rule engines.
+These rules use sequence descriptions, timing, acquisition order, and other
+DICOM-derived features. An optional `mapping` can rename their canonical
+outputs, although the built-in labels normally need no mapping.
 
-`id_standardization` resolves a callable below the `imperandi` package and
-applies it to the raw patient key. A `derived_columns` list can similarly call
-functions that return mappings of extra fields. Each derived entry names a
-`from_column` and may set `join_mode` to `missing_only` (default) or
-`overwrite`.
-
-At runtime, IMPERANDI imports hooks as:
-
-```text
-imperandi.<hook_module>.<function>
+```yaml
+phase_curation:
+  strategies:
+    - type: rules
+  fallback: OTHER
 ```
 
-That means this manifest block:
+### TotalSegmentator prediction
 
-```json
-{
-  "hook_module": "datasets_config.hooks.generic",
-  "function": "standardize_patient_key"
-}
+Use `type: totalsegmentator` to consume or generate a prediction. The `phase`
+command invokes TotalSegmentator only for rows that reach this strategy. If it
+appears after ontology and rules, rows already resolved by either earlier
+strategy skip model inference.
+
+```yaml
+phase_curation:
+  strategies:
+    - type: rules
+    - type: totalsegmentator
+      column: totalseg_phase
+      modalities: [CT]
+      confidence_columns: [totalseg_probability, totalseg_confidence]
+      mapping:
+        native: NATIVE
+        arterial_early: ARTERIAL
+        arterial_late: ARTERIAL
+        portal_venous: PORTAL_VENOUS
+  fallback: OTHER
 ```
 
-loads `imperandi.datasets_config.hooks.generic.standardize_patient_key`.
+Put TotalSegmentator first when its prediction should override metadata rules.
+Set `fallback: null` to leave unresolved rows empty instead of assigning a
+sentinel phase. The bundled predictor is CT-specific, so the strategy defaults
+to `modalities: [CT]`; MRI rows continue to later strategies without invoking
+the model.
 
-### `id_standardization` hooks
+## Identity and hooks
 
-An `id_standardization` hook receives one raw `patient_key` value and should
-return the normalized value to write back into `patient_key`.
+`id_extraction` controls raw patient, study, and series identifiers. Typical
+`from_tag` values are `PatientID`, `PatientName`, `StudyInstanceUID`, and
+`SeriesInstanceUID`; `fallback: path` uses the source path when a tag is absent.
 
-- IMPERANDI preserves the original value in `_patient_key_raw`.
-- If a non-empty raw key becomes empty or `null`, the row is flagged with
-  `patient_key_std_failed`.
-- The built-in `generic` hook extracts numeric groups and joins them with `-`.
-- The built-in `operandi` hook applies project-specific parsing rules for that
-  dataset.
-
-### `derived_columns` hooks
-
-A `derived_columns` hook receives the value from `from_column` for each row and
-returns a mapping or `pandas.Series` of new fields to join back into the table.
-
-- `join_mode: "missing_only"` adds only columns that do not already exist.
-- `join_mode: "overwrite"` replaces existing columns with the derived values.
-- The built-in `operandi` hook `extract_from_patient_key` derives
-  `center`, `source`, and `tumor_type` from the standardized patient key.
-
-Example:
-
-```json
-{
-  "derived_columns": [
-    {
-      "hook_module": "datasets_config.hooks.operandi",
-      "function": "extract_from_patient_key",
-      "from_column": "patient_key",
-      "join_mode": "missing_only"
-    }
-  ]
-}
-```
-
-### Writing a custom hook
-
-Create an importable module under `src/imperandi/`, for example
-`src/imperandi/datasets_config/hooks/site_a.py`:
+`id_standardization` references a hook that rewrites `patient_key`.
+`derived_columns` can derive fields such as `center`, `source`, or `tumor_type`.
+Clean-time hook steps use `module:function` paths and the callable must declare
+its outputs with `@clean_hook`:
 
 ```python
-def standardize_patient_key(value):
-    if value is None:
-        return None
-    return str(value).strip().upper()
+from imperandi.ingest.hooks import clean_hook
+
+
+@clean_hook(outputs=["center", "source"])
+def extract_site_fields(patient_key):
+    return {"center": "SITE_A", "source": "clinical"}
 ```
 
-Then reference it from your manifest:
-
-```json
-{
-  "id_standardization": {
-    "hook_module": "datasets_config.hooks.site_a",
-    "function": "standardize_patient_key"
-  }
-}
+```yaml
+cleaning:
+  version: 1
+  steps:
+    - type: hook
+      function: "datasets_config.hooks.site_a:extract_site_fields"
+      source_columns: [patient_key]
 ```
 
-Custom hooks are executable Python, not passive configuration. Review them as
-code, test them against malformed and missing identifiers, and never load an
-untrusted manifest that points to untrusted modules.
+Only use manifests and hook modules from trusted sources; hook references load
+and execute Python code.
 
-## Precedence
+## Segmentation and radiomics
 
-For radiomics, manifest `radiomics.filters` are merged with CLI `--filter`
-values; when both specify the same column, the manifest values win.
-`--skip_filter` disables both CLI and manifest filters. Manifest
-`radiomics.pyradiomics` settings take precedence when both a manifest settings
-object and `--pyradiomics_settings` are supplied.
+`segmentation.modalities` is required and maps `CT` and/or `MR` to independent
+TotalSegmentator task lists. `MRI` is accepted as an alias for `MR` in input
+tables and manifest keys. CT task names must not end in `_mr`; MR task names
+must resolve to an `_mr` task. Rows without a configured modality are retained
+but skipped, and only models needed by modalities present in the cohort are
+prefetched.
 
-For parse and ingest identity controls, the runtime CLI flags remain the
-authoritative switches to review: `--id_source`, `--force_dicom_read`,
-`--patient_key_from`, `--study_id_from`, and `--series_id_from`.
+Optional task keys include `extra`, `output`, `outputs`, `fetch_output`, and
+`fetch_outputs`. Each modality may define its own `postprocess` block to merge
+logical masks and apply closing, hole filling, and largest-component cleanup.
+The same logical outputs may be used across modalities, for example mapping
+both `liver_lesions` and `liver_lesions_mr` to `mask_liver_tumor`.
 
-## Validation advice
+`radiomics.pyradiomics` follows the normal PyRadiomics parameter structure.
+`radiomics.filters` maps an existing cohort column to its accepted values. Use
+the canonical `phase` output for phase-based filtering.
 
-Before a full run:
+## Validation checklist
 
-1. run each command with `--dry-run`;
-2. parse a small representative sample;
-3. compare raw and standardized identifiers;
-4. verify expected mask column names;
-5. confirm radiomics filters retain the intended phases.
+Before a full cohort run:
+
+1. load the YAML manifest by path and by built-in name where applicable;
+2. run `ingest --dry-run` and `phase --dry-run`;
+3. process a small cohort through parse, clean, convert, segment, and phase;
+4. inspect `phase`, `phase_source`, and `phase_reason` distributions;
+5. confirm ontology values are exact and TotalSegmentator runs only on expected
+   fallback rows;
+6. confirm CT and MR rows select their respective TotalSegmentator models;
+7. verify radiomics filters use canonical phase values.

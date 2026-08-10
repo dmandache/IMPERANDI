@@ -10,7 +10,7 @@ columns and adds or normalizes the fields needed downstream.
 | `ingest` | `dicom_index_clean.csv` | parse artifacts | parsed and curated volume rows |
 | `convert` | `nifti_index.csv` | `conv_errors.csv` | `nifti_path` |
 | `segment` | input CSV in place, or `--csv_path_out` | `seg_errors.csv` and warning report when applicable | `mask_<output>` paths |
-| `phase` | input CSV in place, or `--csv_path_out` | `phase_errors.csv` | `totalseg_*`, including `totalseg_phase` |
+| `phase` | input CSV in place, or `--csv_path_out` | `phase_errors.csv` | canonical `phase`, provenance columns, and `totalseg_*` predictions when used |
 | `radiomics` | `<input>_radiomics.csv` | `radiomics_errors.csv` | ROI-prefixed PyRadiomics features |
 
 Defaults are relative to the input CSV or selected output directory. Explicit
@@ -28,11 +28,13 @@ behavior. It is removed from finalized user-facing tables.
 
 ## Image and mask paths
 
-`nifti_path` identifies the converted CT image. Segmentation outputs are stored
-in columns beginning with `mask_`; their exact set follows the manifest tasks.
-Paths may be absolute depending on the supplied output directory, so moving a
-dataset can invalidate a table. If portability matters, move artifacts and
-rewrite paths as one controlled operation.
+`nifti_path` identifies the converted image. Segmentation outputs are stored in
+columns beginning with `mask_`; their exact set is the union of the configured
+CT and MR task outputs. A row only populates outputs from its matching
+`segmentation.modalities` block, and rows whose modality is not configured keep
+those columns empty. Paths may be absolute depending on the supplied output
+directory, so moving a dataset can invalidate a table. If portability matters,
+move artifacts and rewrite paths as one controlled operation.
 
 ## Error tables
 

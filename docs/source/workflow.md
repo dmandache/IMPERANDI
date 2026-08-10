@@ -6,23 +6,24 @@ derived artifacts.
 
 ```text
 DICOM roots / archives
-        │
-        ▼
- parse ─────► dicom_index.csv
-        │
-        ▼
- clean ─────► dicom_index_clean.csv
-        │
-        ▼
- convert ───► nifti_index.csv + NIfTI images
-        │
-        ├────────► phase ─────► totalseg_* metadata
-        │
-        ▼
- segment ───► mask_* paths
-        │
-        ▼
- radiomics ─► feature columns
+        |
+        v
+ parse ------> dicom_index.csv
+        |
+        v
+ clean ------> dicom_index_clean.csv
+        |
+        v
+ convert ----> nifti_index.csv + NIfTI images
+        |
+        v
+ segment ----> mask_* paths
+        |
+        v
+ phase ------> canonical phase + provenance
+        |
+        v
+ radiomics --> feature columns
 ```
 
 ## Parse
@@ -50,9 +51,9 @@ region patterns, implausible volume length, pixel spacing, and slice thickness.
 Missing geometry is generally retained for later review rather than silently
 treated as a failure.
 
-The default accepted reconstructed length is 30–1700 mm. Override it with
-`--volume-length-min-mm` and `--volume-length-max-mm` when a protocol calls for
-different bounds.
+The built-in accepted reconstructed length is 30–1700 mm. Change the
+volume-scope filter in `cleaning.steps` when a protocol calls for different
+bounds.
 
 ## Convert
 
@@ -63,13 +64,17 @@ ingest; output rows receive `nifti_path`.
 
 ## Segment, phase, and radiomics
 
-`segment` runs manifest-defined TotalSegmentator tasks and optional mask
-post-processing. `phase` runs TotalSegmentator's CT contrast-phase extractor.
+`segment` dispatches each row to manifest-defined CT or MR TotalSegmentator
+tasks using `Modality`, followed by modality-specific mask post-processing.
+`phase` resolves the manifest's ordered ontology, metadata-rule, and
+TotalSegmentator strategies, invoking prediction only where earlier strategies
+did not resolve a phase.
 `radiomics` computes PyRadiomics features for every `mask_*` column, including
 an organ-minus-tumor strategy when paired organ and tumor masks are present.
 
-Phase can run immediately after conversion. Segmentation must precede
-radiomics because radiomics requires one or more mask columns.
+Phase can run immediately after conversion or after segmentation. Segmentation
+must precede radiomics, and a phase-filtered radiomics manifest must receive a
+table containing both `mask_*` columns and the canonical `phase` column.
 
 ## Checkpoints and resume
 
@@ -109,7 +114,7 @@ PROJECT_ROOT=/path/to/project
 DICOM_ROOT=/path/to/dicom
 TABLE_DIR="$PROJECT_ROOT/tables"
 NIFTI_DIR="$PROJECT_ROOT/nifti"
-MANIFEST="$PROJECT_ROOT/site-a.json"
+MANIFEST="$PROJECT_ROOT/site-a.yaml"
 WORKERS="${SLURM_CPUS_PER_TASK:-4}"
 
 mkdir -p "$TABLE_DIR" "$NIFTI_DIR"
@@ -133,7 +138,8 @@ imperandi segment \
 
 imperandi phase \
   --csv_path "$TABLE_DIR/nifti_index_segmented.csv" \
-  --csv_path_out "$TABLE_DIR/nifti_index_phased.csv"
+  --csv_path_out "$TABLE_DIR/nifti_index_phased.csv" \
+  --manifest "$MANIFEST"
 
 imperandi radiomics \
   --csv_path "$TABLE_DIR/nifti_index_phased.csv" \

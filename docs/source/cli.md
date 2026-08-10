@@ -22,7 +22,7 @@ Reads selected DICOM headers and writes `dicom_index.csv`. Important options:
 
 - `--root_path`, `--output_dir`: named alternatives to positional paths; named
   values win when both forms are supplied.
-- `--manifest NAME_OR_JSON`: dataset configuration.
+- `--manifest NAME_OR_YAML`: dataset configuration.
 - `--id_source {auto,tags,path}` and `--patient_key_from`, `--study_id_from`,
   `--series_id_from`: ID derivation.
 - `--tags A,B,C`: additional DICOM keywords.
@@ -40,8 +40,8 @@ imperandi clean [CSV_PATH] [CSV_PATH_OUT] [OPTIONS]
 ```
 
 Curates parsed instance metadata into a volume-level table. `--csv_path`
-accepts one or more CSVs. Use `--volume-length-min-mm` and
-`--volume-length-max-mm` to change reconstructed-length bounds.
+accepts one or more CSVs. Cleaning filters and phase-curation precedence come
+from the YAML manifest.
 
 ## `ingest`
 
@@ -49,9 +49,8 @@ accepts one or more CSVs. Use `--volume-length-min-mm` and
 imperandi ingest [ROOT_PATH] [OUTPUT_DIR] [OPTIONS]
 ```
 
-Combines `parse` and `clean`. It accepts parse/archive options plus clean's
-length bounds and `--csv_dict_path`. `--csv_path_out` selects the final cleaned
-table; it defaults to `<output_dir>/dicom_index_clean.csv`.
+Combines `parse` and `clean`. `--csv_path_out` selects the final cleaned table;
+it defaults to `<output_dir>/dicom_index_clean.csv`.
 
 ## `convert`
 
@@ -69,10 +68,12 @@ to the input CSV. Use `--num_workers` to control conversion parallelism.
 imperandi segment [CSV_PATH] [CSV_PATH_OUT] [OPTIONS]
 ```
 
-Requires `imperandi[segment]`. It reads `nifti_path` and runs the selected
-manifest's `segmentation` configuration.
+Requires `imperandi[segment]`. It reads `nifti_path` and `Modality`, then runs
+the selected manifest's matching `segmentation.modalities` configuration. CT
+and MR/MRI rows are dispatched to separate model/task lists; unconfigured
+modalities are retained without segmentation.
 
-- `--manifest NAME_OR_JSON`: task and post-processing configuration.
+- `--manifest NAME_OR_YAML`: task and post-processing configuration.
 - `--num_workers`: process count.
 - `--start_method {spawn,fork,forkserver}`: multiprocessing strategy; `spawn`
   is the robust default.
@@ -88,9 +89,12 @@ The output table overwrites the input unless `--csv_path_out` is supplied.
 imperandi phase [CSV_PATH] [CSV_PATH_OUT] [OPTIONS]
 ```
 
-Requires `imperandi[segment]` and an input `nifti_path` column. It updates the
-input table by default. Existing populated `totalseg_phase` values are skipped;
-`--force` recomputes them. Failures default to `phase_errors.csv`.
+Uses `--manifest NAME_OR_YAML` to resolve the ordered `phase_curation`
+strategies. Rows matched by ontology or metadata rules do not invoke
+TotalSegmentator when prediction is a later fallback. Prediction requires
+`imperandi[segment]` and `nifti_path`; it defaults to CT rows only, and
+`--force` recomputes existing predictions. The command writes canonical
+`phase` and provenance columns. Failures default to `phase_errors.csv`.
 
 ## `radiomics`
 
@@ -100,7 +104,7 @@ imperandi radiomics [CSV_PATH] [CSV_PATH_OUT] [OPTIONS]
 
 Requires `imperandi[radiomics]`, `nifti_path`, and `mask_*` columns.
 
-- `--manifest NAME_OR_JSON`: load settings and filters from `radiomics`.
+- `--manifest NAME_OR_YAML`: load settings and filters from `radiomics`.
 - `--pyradiomics_settings PARAMS.yaml`: use explicit PyRadiomics settings.
 - `--filter column=value1,value2`: filter rows; repeat for more columns.
 - `--skip_filter`: ignore both CLI and manifest filters.

@@ -81,6 +81,7 @@ class CTScanViewer:
     The viewer navigates cohort rows, patients, exams, phases, and anatomical
     planes while applying configurable HU windows and isotropic resampling.
     """
+
     def __init__(
         self,
         df,

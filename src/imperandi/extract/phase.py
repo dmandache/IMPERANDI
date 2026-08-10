@@ -10,6 +10,12 @@ import nibabel as nib
 import pandas as pd
 from tqdm import tqdm
 
+from imperandi.curation.phase import (
+    apply_phase_curation,
+    phase_needs_strategy,
+    validate_phase_curation,
+)
+from imperandi.utils.manifest import load_manifest
 from imperandi.utils.logging import log_task_summary, setup_logging
 from imperandi.utils.misc import print_args
 from imperandi.utils.checkpoint_cli import add_checkpoint_arguments
@@ -83,6 +89,12 @@ def add_phase_arguments(
         default=False,
         help="Recompute phase even when `totalseg_phase` is already populated.",
     )
+    parser.add_argument(
+        "--manifest",
+        type=str,
+        default="generic",
+        help="YAML manifest defining phase-curation strategy precedence.",
+    )
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose logging")
     add_checkpoint_arguments(
         parser,
@@ -100,9 +112,9 @@ def add_phase_arguments(
 
 
 def build_parser(add_help: bool = True) -> argparse.ArgumentParser:
-    """Build the standalone CT contrast-phase extraction parser."""
+    """Build the standalone manifest-driven phase-curation parser."""
     parser = argparse.ArgumentParser(
-        description="Extract CT contrast phase metadata from NIfTI volumes.",
+        description="Curate contrast phase with manifest-defined fallbacks.",
         add_help=add_help,
     )
     add_phase_arguments(parser)
@@ -200,7 +212,17 @@ def process_single_volume(
 
 
 def main(args: argparse.Namespace) -> None:
-    """Extract phase metadata for a cohort with checkpoint-aware resuming."""
+    """Curate phase metadata for a cohort with checkpoint-aware resuming."""
+    manifest_arg = getattr(args, "manifest", "generic")
+    manifest = load_manifest(
+        manifest_arg,
+        base_path=Path(__file__).resolve().parents[1],
+    )
+    if "phase_curation" not in manifest:
+        raise ValueError("Manifest must define a phase_curation section.")
+    phase_curation = manifest["phase_curation"]
+    validate_phase_curation(phase_curation)
+
     output_path = Path(args.csv_path_out)
     error_path = Path(args.error_csv_path)
     exclude_hash_args = {
@@ -213,14 +235,13 @@ def main(args: argparse.Namespace) -> None:
         "strict_resume",
     }
     source_id_signature = source_id_resume_signature(args.csv_path)
-    resume_args = (
-        argparse.Namespace(
-            **vars(args),
-            checkpoint_source_id=source_id_signature,
-        )
-        if source_id_signature
-        else args
-    )
+    resume_values = {
+        **vars(args),
+        "checkpoint_phase_curation": phase_curation,
+    }
+    if source_id_signature:
+        resume_values["checkpoint_source_id"] = source_id_signature
+    resume_args = argparse.Namespace(**resume_values)
     resume_ctx = prepare_resume_context(
         args=resume_args,
         command="phase",
@@ -241,8 +262,6 @@ def main(args: argparse.Namespace) -> None:
         )
         return
 
-    phase_extractor = _load_phase_extractor()
-
     if can_resume and paths.main_checkpoint_path.exists():
         logger.info("Resuming phase from checkpoint: %s", paths.main_checkpoint_path)
         df = pd.read_csv(paths.main_checkpoint_path).copy()
@@ -255,6 +274,7 @@ def main(args: argparse.Namespace) -> None:
     force = bool(getattr(args, "force", False))
     resume_skipped_count = 0
     prefilled_skipped_count = 0
+    prediction_skipped_count = 0
     if can_resume:
         completed_indices = normalize_source_ids(
             (state or {}).get("completed_indices", [])
@@ -271,11 +291,29 @@ def main(args: argparse.Namespace) -> None:
                     except Exception:
                         pass
 
+    needs_prediction = phase_needs_strategy(
+        df,
+        phase_curation,
+        "totalsegmentator",
+    )
+    prediction_skipped_indices = {
+        normalize_source_id(df.at[idx, "_source_idx"])
+        for idx in df.index
+        if not bool(needs_prediction.at[idx])
+    }
+    newly_skipped = prediction_skipped_indices - completed_indices
+    if newly_skipped:
+        prediction_skipped_count = len(newly_skipped)
+        completed_indices.update(newly_skipped)
+        for source_idx in newly_skipped:
+            errors_by_idx.pop(source_idx, None)
+
     if not force and "totalseg_phase" in df.columns:
         prefilled_indices = {
             normalize_source_id(df.at[idx, "_source_idx"])
             for idx in df.index
-            if _has_populated_value(df.at[idx, "totalseg_phase"])
+            if bool(needs_prediction.at[idx])
+            and _has_populated_value(df.at[idx, "totalseg_phase"])
         }
         newly_completed = prefilled_indices - completed_indices
         if newly_completed:
@@ -304,8 +342,10 @@ def main(args: argparse.Namespace) -> None:
     row_indices = [
         idx
         for idx in df.index.tolist()
-        if normalize_source_id(df.at[idx, "_source_idx"]) not in completed_indices
+        if bool(needs_prediction.at[idx])
+        and normalize_source_id(df.at[idx, "_source_idx"]) not in completed_indices
     ]
+    phase_extractor = _load_phase_extractor() if row_indices else None
     processed_source_ids = {
         normalize_source_id(df.at[idx, "_source_idx"]) for idx in row_indices
     }
@@ -332,6 +372,7 @@ def main(args: argparse.Namespace) -> None:
         ckpt.mark_processed()
         _checkpoint_write(force=False)
 
+    df = apply_phase_curation(df, phase_curation)
     _checkpoint_write(force=True)
     df_out = df.drop(columns=["_source_idx"], errors="ignore")
     df_out = merge_with_existing_output(
@@ -358,12 +399,15 @@ def main(args: argparse.Namespace) -> None:
         total_rows=len(df),
         processed_rows=len(row_indices),
         succeeded_rows=max(0, len(row_indices) - run_failed_count),
-        skipped_rows=resume_skipped_count + prefilled_skipped_count,
+        skipped_rows=(
+            resume_skipped_count + prefilled_skipped_count + prediction_skipped_count
+        ),
         failed_rows=run_failed_count,
         success_label="phase extracted",
         extra_counts={
             "skipped by resume": resume_skipped_count,
             "skipped with existing phase": prefilled_skipped_count,
+            "not sent to TotalSegmentator": prediction_skipped_count,
         },
     )
     logger.info("Phase extraction done ✔")

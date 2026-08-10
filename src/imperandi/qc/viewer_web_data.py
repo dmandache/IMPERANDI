@@ -6,7 +6,6 @@ from typing import Iterable
 
 import pandas as pd
 
-
 FILTER_ALL_COLUMNS = "__all_columns__"
 SUPPORTED_IMAGE_PATH_SUFFIXES = (
     ".nii",
@@ -146,7 +145,9 @@ def validate_image_path_column(
     )
 
 
-def guess_ct_scan_col(columns: Iterable[str], preferred: str | None = None) -> str | None:
+def guess_ct_scan_col(
+    columns: Iterable[str], preferred: str | None = None
+) -> str | None:
     """Choose the most likely CT image path column from column names."""
     columns = list(columns)
     if preferred in columns:
@@ -206,7 +207,8 @@ def guess_segmentation_cols(
     return [
         column
         for column in columns
-        if column in df.columns and df[column].apply(lambda value: not is_empty_value(value)).any()
+        if column in df.columns
+        and df[column].apply(lambda value: not is_empty_value(value)).any()
     ]
 
 

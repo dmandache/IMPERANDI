@@ -260,7 +260,7 @@ def test_normalize_radiomics_args_rejects_invalid_filters(
 def test_resolve_radiomics_filters_prefers_manifest_for_same_column(
     tmp_path, monkeypatch
 ):
-    manifest_path = tmp_path / "manifest.json"
+    manifest_path = tmp_path / "manifest.yaml"
     manifest_path.write_text(
         '{"radiomics": {"filters": {"phase": ["portal"], "site": ["A"]}}}'
     )
@@ -280,7 +280,7 @@ def test_resolve_radiomics_filters_prefers_manifest_for_same_column(
 
 
 def test_resolve_radiomics_filters_skip_filter_bypasses_manifest_and_cli(tmp_path):
-    manifest_path = tmp_path / "manifest.json"
+    manifest_path = tmp_path / "manifest.yaml"
     manifest_path.write_text('{"radiomics": {"filters": {"phase": ["portal"]}}}')
     args = argparse.Namespace(
         skip_filter=True,
@@ -601,7 +601,7 @@ def test_main_resume_reprocesses_when_manifest_filters_change(tmp_path, monkeypa
             },
         ]
     ).to_csv(csv_path, index=False)
-    manifest_path = tmp_path / "manifest.json"
+    manifest_path = tmp_path / "manifest.yaml"
     manifest_path.write_text('{"radiomics": {"filters": {"phase": ["portal"]}}}')
 
     monkeypatch.setattr(
@@ -796,7 +796,7 @@ def test_main_applies_explicit_filters_from_manifest_and_cli(tmp_path, monkeypat
             },
         ]
     ).to_csv(csv_path, index=False)
-    manifest_path = tmp_path / "manifest.json"
+    manifest_path = tmp_path / "manifest.yaml"
     manifest_path.write_text('{"radiomics": {"filters": {"phase": ["portal"]}}}')
 
     monkeypatch.setattr(
