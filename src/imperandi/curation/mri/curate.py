@@ -1459,6 +1459,22 @@ def _detect_dixon_component_from_text(text: str) -> tuple[str, str, str] | None:
 
 def detect_dixon_component(row: pd.Series) -> tuple[str, str, str]:
     """Return normalized Dixon component, reason, and evidence source."""
+    quantitative_text_match = _first_text_column_value(
+        row,
+        lambda text: (
+            ("FAT_FRACTION", "matched explicit fat-fraction/PDFF text", "explicit_text")
+            if re.search(rules.RX_DIXON_FAT_FRACTION, text)
+            else (
+                ("R2STAR", "matched explicit R2*/T2* map text", "explicit_text")
+                if re.search(rules.RX_DIXON_R2STAR, text)
+                else None
+            )
+        ),
+        cols=get_dixon_text_cols(),
+    )
+    if quantitative_text_match is not None:
+        return quantitative_text_match
+
     image_component, image_tokens = _image_type_dixon_details(row.get("ImageType"))
     if image_component is not None:
         matched_tokens = [
@@ -1479,21 +1495,13 @@ def detect_dixon_component(row: pd.Series) -> tuple[str, str, str]:
     text_match = _first_text_column_value(
         row,
         lambda text: (
-            ("FAT_FRACTION", "matched explicit fat-fraction/PDFF text", "explicit_text")
-            if re.search(rules.RX_DIXON_FAT_FRACTION, text)
-            else (
-                ("R2STAR", "matched explicit R2*/T2* map text", "explicit_text")
-                if re.search(rules.RX_DIXON_R2STAR, text)
-                else (
-                    (
-                        "DIXON_ALL",
-                        "matched explicit all-reconstructions text",
-                        "explicit_text",
-                    )
-                    if re.search(rules.RX_DIXON_ALL, text)
-                    else _detect_dixon_component_from_text(text)
-                )
+            (
+                "DIXON_ALL",
+                "matched explicit all-reconstructions text",
+                "explicit_text",
             )
+            if re.search(rules.RX_DIXON_ALL, text)
+            else _detect_dixon_component_from_text(text)
         ),
         cols=get_dixon_text_cols(),
     )

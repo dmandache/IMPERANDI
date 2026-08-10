@@ -99,7 +99,7 @@ RX_PHASE_PORTAL = token(
     # 60-90 seconds.
     r"|(?<!\d)(?:6\d|7\d|8\d|90)[\s_.+\-]*(?:s|sec(?:ond)?s?)(?!\d)"
     # Exactly 1 minute
-    r"|(?<!\d)1[\s_.+\-]*(?:mn|min(?:ute)?s?)(?!\d)"
+    r"|(?<!\d)1[\s_.+\-]*(?:mn|min(?:ute)?s?)(?![\s_.+\-]*\d)"
     # 1:00-1:30 min / 1 min 0-30 s
     r"|(?<!\d)1(?:"
     r"[.:,](?:0?\d|[12]\d|30)[\s_.+\-]*(?:mn|min(?:ute)?s?)"
