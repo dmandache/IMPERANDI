@@ -38,9 +38,8 @@ standardizes patient keys, compare `patient_key` with `_patient_key_raw`.
 
 Inspect `Modality`, `ImageType`, `SeriesDescription`, orientation, spacing, and
 computed volume length in the parsed CSV. For legitimately short or long
-protocols, adjust the `--volume-length-min-mm` or
-`--volume-length-max-mm` bounds. Avoid broad threshold changes until you know
-which filter caused the loss.
+protocols, adjust the volume-length filter in manifest `cleaning.steps`. Avoid
+broad threshold changes until you know which filter caused the loss.
 
 ## Conversion fails for archive-backed series
 

@@ -6,6 +6,7 @@ import pandas as pd
 
 from imperandi.curation.ct import curate_ct
 from imperandi.curation.mri import curate_mri
+from imperandi.curation.phase import apply_phase_curation, validate_phase_curation
 
 
 def _modality_label(value) -> str:
@@ -36,16 +37,29 @@ def curate_by_modality(
     patient_col: str = "patient_key",
     study_col: str | None = "study_id",
     date_col: str = "date",
+    phase_curation: dict | None = None,
 ) -> dict[str, object]:
     ct_df, mri_df, other_df = split_by_modality(df)
 
     ct_results = (
-        curate_ct(ct_df, patient_col=patient_col, study_col=study_col, date_col=date_col)
+        curate_ct(
+            ct_df,
+            patient_col=patient_col,
+            study_col=study_col,
+            date_col=date_col,
+            phase_curation=phase_curation,
+        )
         if not ct_df.empty
         else None
     )
     mri_results = (
-        curate_mri(mri_df, patient_col=patient_col, study_col=study_col, date_col=date_col)
+        curate_mri(
+            mri_df,
+            patient_col=patient_col,
+            study_col=study_col,
+            date_col=date_col,
+            phase_curation=phase_curation,
+        )
         if not mri_df.empty
         else None
     )
@@ -73,4 +87,11 @@ def curate_by_modality(
     }
 
 
-__all__ = ["curate_by_modality", "split_by_modality", "curate_ct", "curate_mri"]
+__all__ = [
+    "apply_phase_curation",
+    "curate_by_modality",
+    "curate_ct",
+    "curate_mri",
+    "split_by_modality",
+    "validate_phase_curation",
+]

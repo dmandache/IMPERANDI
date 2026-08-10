@@ -22,6 +22,10 @@ from imperandi.ingest.hooks import (
     get_clean_hook_outputs,
 )
 from imperandi.curation import curate_by_modality
+from imperandi.curation.phase import (
+    phase_curation_input_columns,
+    validate_phase_curation,
+)
 from imperandi.utils.logging import log_task_summary, setup_logging
 from imperandi.utils.misc import print_args, report_volumes, report_change
 from imperandi.utils.datetime import to_dates, to_times
@@ -125,7 +129,7 @@ def add_clean_arguments(
             "--manifest",
             type=str,
             default=None,
-            help="Dataset manifest name or path to manifest JSON.",
+            help="Dataset manifest name or path to manifest YAML.",
         )
     if include_dry_run:
         parser.add_argument(
@@ -1759,6 +1763,8 @@ def _get_step_inputs(step: dict) -> set[str]:
             "time",
             "SeriesNumber",
             "AcquisitionNumber",
+            "TemporalPositionIdentifier",
+            "InstanceNumber",
         }
     if step_type == "modality_curation":
         return {
@@ -1843,6 +1849,13 @@ def _get_step_outputs(step: dict) -> set[str]:
             "ct_phase",
             "mri_sequence",
             "mri_perfusion_label",
+            "rule_phase",
+            "rule_phase_reason",
+            "rule_phase_confidence",
+            "phase",
+            "phase_source",
+            "phase_reason",
+            "phase_confidence",
         }
     return set()
 
@@ -2026,11 +2039,20 @@ def validate_cleaning_manifest(manifest: dict) -> list[dict]:
 
         validated_steps.append(step)
 
+    if any(step["type"] == "modality_curation" for step in validated_steps):
+        if "phase_curation" not in manifest:
+            raise ValueError(
+                "Manifest must define phase_curation when cleaning uses "
+                "modality_curation."
+            )
+        validate_phase_curation(manifest["phase_curation"])
+
     return validated_steps
 
 
 def _collect_required_input_columns(
     steps: list[dict],
+    phase_curation: dict | None = None,
 ) -> list[str]:
     """Infer which source columns must be loaded from the parsed CSV."""
     required = set(BASE_INPUT_COLUMNS)
@@ -2040,6 +2062,8 @@ def _collect_required_input_columns(
             if col not in produced:
                 required.add(col)
         produced.update(_get_step_outputs(step))
+    if any(step["type"] == "modality_curation" for step in steps):
+        required.update(phase_curation_input_columns(phase_curation))
     return sorted(required)
 
 
@@ -2349,12 +2373,17 @@ def _run_compute_acquisition_order_step(df: pd.DataFrame, step: dict) -> pd.Data
     return compute_acquisition_order(df)
 
 
-def _run_modality_curation_step(df: pd.DataFrame, step: dict) -> pd.DataFrame:
+def _run_modality_curation_step(
+    df: pd.DataFrame,
+    step: dict,
+    *,
+    phase_curation: dict | None = None,
+) -> pd.DataFrame:
     """Annotate volume-level rows with CT/MR-specific curation labels and scores."""
     if "Modality" not in df.columns:
         return df
 
-    results = curate_by_modality(df)
+    results = curate_by_modality(df, phase_curation=phase_curation)
     curated = results["curated_all"]
     if curated.empty:
         return df.iloc[0:0].copy()
@@ -2393,13 +2422,25 @@ STEP_REGISTRY: dict[str, Callable[[pd.DataFrame, dict], pd.DataFrame]] = {
 }
 
 
-def run_clean_pipeline(df: pd.DataFrame, steps: list[dict]) -> pd.DataFrame:
+def run_clean_pipeline(
+    df: pd.DataFrame,
+    steps: list[dict],
+    *,
+    phase_curation: dict | None = None,
+) -> pd.DataFrame:
     """Run validated cleaning steps sequentially with per-step reporting."""
     report_volumes(df, "initial load")
 
     for step in steps:
         df_prev = df.copy()
-        df = STEP_REGISTRY[step["type"]](df, step)
+        if step["type"] == "modality_curation":
+            df = _run_modality_curation_step(
+                df,
+                step,
+                phase_curation=phase_curation,
+            )
+        else:
+            df = STEP_REGISTRY[step["type"]](df, step)
         label = _step_label(step)
         report_volumes(df, label)
         try:
@@ -2417,10 +2458,11 @@ def clean_and_save_data(
 ):
     """Run the manifest-defined metadata-curation pipeline and write its CSV output."""
     steps = validate_cleaning_manifest(manifest)
-    required_columns = _collect_required_input_columns(steps)
+    phase_curation = manifest.get("phase_curation")
+    required_columns = _collect_required_input_columns(steps, phase_curation)
     df = load_data(csv_path, required_columns=required_columns)
     input_rows = len(df)
-    df = run_clean_pipeline(df, steps)
+    df = run_clean_pipeline(df, steps, phase_curation=phase_curation)
 
     if csv_path_out:
         df.to_csv(csv_path_out, index=False)

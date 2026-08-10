@@ -29,6 +29,8 @@ from typing import Sequence
 import numpy as np
 import pandas as pd
 
+from imperandi.curation.phase import apply_phase_curation
+
 from . import rules
 
 logger = logging.getLogger(__name__)
@@ -1475,7 +1477,7 @@ def add_basic_feature_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def score_t1(row: pd.Series) -> float:
-    phase = norm_label(row.get("mri_perfusion_label"))
+    phase = norm_label(row.get("phase", row.get("mri_perfusion_label")))
     source = safe_str(row.get("mri_perfusion_source")) or "none"
 
     score = float(rules.T1_PHASE_PRIORITY.get(phase, 0))
@@ -1533,7 +1535,8 @@ def add_scores(df: pd.DataFrame) -> pd.DataFrame:
     out.loc[out["mri_sequence"].eq("DWI"), "selection_slot"] = "DWI"
 
     is_t1 = out["mri_sequence"].eq("T1")
-    t1_phase = out["mri_perfusion_label"].map(norm_label)
+    phase_column = "phase" if "phase" in out.columns else "mri_perfusion_label"
+    t1_phase = out[phase_column].map(norm_label)
     out.loc[is_t1 & t1_phase.ne("OTHER"), "selection_slot"] = "T1_" + t1_phase
     out.loc[is_t1 & t1_phase.eq("OTHER"), "selection_slot"] = "T1_OTHER"
 
@@ -1709,6 +1712,7 @@ def annotate_mri(
     series_col: str = "series_id",
     volume_col: str = "volume_id",
     date_col: str = "date",
+    phase_curation: dict | None = None,
 ) -> pd.DataFrame:
     """Add labels, features, and scores to a volume/series-level dataframe."""
     out = df.copy()
@@ -1731,6 +1735,10 @@ def annotate_mri(
         date_col=date_col,
     )
     out = add_mri_perfusion_columns(out, exam_group_cols=exam_cols)
+    out["rule_phase"] = out["mri_perfusion_label"]
+    out["rule_phase_reason"] = out["mri_perfusion_reason"]
+    out["rule_phase_confidence"] = out["mri_perfusion_confidence"]
+    out = apply_phase_curation(out, phase_curation)
     out = add_scores(out)
     return out
 
@@ -1743,6 +1751,7 @@ def curate_mri(
     volume_col: str = "volume_id",
     date_col: str = "date",
     display_text_col_count: int | None = None,
+    phase_curation: dict | None = None,
 ) -> dict[str, pd.DataFrame]:
     """Full MRI curation pipeline.
 
@@ -1756,6 +1765,7 @@ def curate_mri(
         series_col=series_col,
         volume_col=volume_col,
         date_col=date_col,
+        phase_curation=phase_curation,
     )
     selected_long, selected_wide = select_best_candidates(
         curated,

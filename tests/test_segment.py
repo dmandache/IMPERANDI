@@ -1,14 +1,15 @@
+import argparse
+import copy
 import sys
 from pathlib import Path
 import types
 
-# Ensure src/ is on sys.path for imports
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-
-import json
-import argparse
 import pandas as pd
 import pytest
+import yaml
+
+# Ensure src/ is on sys.path for imports
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from imperandi.process import segment as segment_module
 from imperandi.utils.multiprocessing import MPStrategy
@@ -73,6 +74,18 @@ def patch_strategy(monkeypatch, **overrides):
     monkeypatch.setattr(mp_utils, "apply_strategy_env", lambda *a, **k: None)
 
 
+def write_segmentation_manifest(path, config, *, modality="CT"):
+    resolved = copy.deepcopy(config)
+    backend = resolved.pop("backend", "totalsegmentator")
+    manifest = {
+        "segmentation": {
+            "backend": backend,
+            "modalities": {modality: resolved},
+        }
+    }
+    path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+
+
 def test_normalize_segment_args_accepts_positional_csv_path_out(tmp_path):
     csv_path = tmp_path / "nifti_index.csv"
     csv_path.write_text("nifti_path\n")
@@ -116,17 +129,60 @@ def test_load_segmentation_config_default():
     cfg = segment_module.load_segmentation_config(
         None, base_path=Path(__file__).resolve().parents[1] / "src" / "imperandi"
     )
-    assert "tasks" in cfg
+    assert set(cfg["modalities"]) == {"CT", "MR"}
+    assert cfg["modalities"]["CT"]["tasks"][0]["task"] == "total"
+    assert cfg["modalities"]["MR"]["tasks"][0]["task"] == "total_mr"
     assert cfg["backend"] == "totalsegmentator"
 
 
 def test_load_segmentation_config_missing(tmp_path):
-    missing = tmp_path / "nope.json"
+    missing = tmp_path / "nope.yaml"
     with pytest.raises(FileNotFoundError):
         segment_module.load_segmentation_config(
             str(missing),
             base_path=Path(__file__).resolve().parents[1] / "src" / "imperandi",
         )
+
+
+def test_validate_segmentation_config_requires_modality_map():
+    with pytest.raises(ValueError, match="segmentation.modalities"):
+        segment_module.validate_segmentation_config(
+            {
+                "backend": "totalsegmentator",
+                "tasks": [{"task": "total"}],
+            }
+        )
+
+
+def test_validate_segmentation_config_rejects_model_modality_mismatch():
+    with pytest.raises(ValueError, match="MR model"):
+        segment_module.validate_segmentation_config(
+            {
+                "backend": "totalsegmentator",
+                "modalities": {
+                    "CT": {"tasks": [{"task": "total_mr"}]},
+                },
+            }
+        )
+
+
+def test_resolve_segmentation_config_uses_ct_and_mr_models():
+    config = segment_module.validate_segmentation_config(
+        {
+            "backend": "totalsegmentator",
+            "modalities": {
+                "CT": {"tasks": [{"task": "total"}]},
+                "MRI": {"tasks": [{"task": "total_mr"}]},
+            },
+        }
+    )
+
+    ct = segment_module.resolve_segmentation_config_for_modality(config, "CT")
+    mr = segment_module.resolve_segmentation_config_for_modality(config, "MR")
+
+    assert ct["tasks"][0]["task"] == "total"
+    assert mr["tasks"][0]["task"] == "total_mr"
+    assert segment_module.resolve_segmentation_config_for_modality(config, "US") is None
 
 
 def test_resolve_prefetch_task_name_prefers_fast_variant_from_extra():
@@ -197,6 +253,30 @@ def test_prefetch_totalsegmentator_models_downloads_liver_lesions_when_version_s
     )
 
     assert calls == [591]
+
+
+def test_prefetch_downloads_only_models_for_active_modalities(monkeypatch):
+    calls = []
+    fake_root = types.ModuleType("totalsegmentator")
+    fake_python_api = types.ModuleType("totalsegmentator.python_api")
+    fake_python_api.download_pretrained_weights = calls.append
+    fake_root.python_api = fake_python_api
+    monkeypatch.setitem(sys.modules, "totalsegmentator", fake_root)
+    monkeypatch.setitem(sys.modules, "totalsegmentator.python_api", fake_python_api)
+
+    config = segment_module.validate_segmentation_config(
+        {
+            "backend": "totalsegmentator",
+            "modalities": {
+                "CT": {"tasks": [{"task": "total"}]},
+                "MR": {"tasks": [{"task": "total_mr"}]},
+            },
+        }
+    )
+
+    segment_module.prefetch_totalsegmentator_models(config, modalities={"MR"})
+
+    assert calls == [850, 851]
 
 
 def test_resolve_merge_outputs_requires_merge_keys():
@@ -594,12 +674,108 @@ def test_process_single_volume_missing_output(tmp_path):
     assert outputs is None
 
 
+def test_process_single_volume_skips_unconfigured_modality_before_file_access():
+    config = segment_module.validate_segmentation_config(
+        {
+            "backend": "totalsegmentator",
+            "modalities": {"CT": {"tasks": [{"task": "total"}]}},
+        }
+    )
+
+    result = segment_module.process_single_volume(
+        3,
+        {"nifti_path": "missing.nii.gz", "Modality": "MR"},
+        config,
+        verbose=False,
+        force=False,
+    )
+
+    assert result == (3, None, None, None, {})
+
+
+def test_main_dispatches_totalsegmentator_models_by_modality(tmp_path, monkeypatch):
+    ct_dir = tmp_path / "ct"
+    mr_dir = tmp_path / "mr"
+    ct_dir.mkdir()
+    mr_dir.mkdir()
+    ct_nifti = ct_dir / "scan.nii.gz"
+    mr_nifti = mr_dir / "scan.nii.gz"
+    ct_nifti.write_text("nifti")
+    mr_nifti.write_text("nifti")
+
+    csv_path = tmp_path / "nifti_index.csv"
+    pd.DataFrame(
+        [
+            {"nifti_path": str(ct_nifti), "Modality": "CT"},
+            {"nifti_path": str(mr_nifti), "Modality": "MRI"},
+        ]
+    ).to_csv(csv_path, index=False)
+    manifest_path = tmp_path / "manifest.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump(
+            {
+                "segmentation": {
+                    "backend": "totalsegmentator",
+                    "modalities": {
+                        "CT": {
+                            "tasks": [{"task": "total", "output": "liver"}]
+                        },
+                        "MR": {
+                            "tasks": [{"task": "total_mr", "output": "liver"}]
+                        },
+                    },
+                }
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    def fake_process_single_volume(
+        idx, row, tasks_config, *, verbose, force, backend=None, **kwargs
+    ):
+        task_name = tasks_config["tasks"][0]["task"]
+        calls.append((row["Modality"], task_name))
+        out_dir = Path(row["nifti_path"]).parent
+        (out_dir / "liver.nii.gz").write_text("mask")
+        return idx, str(out_dir), None, None, {"liver": "liver"}
+
+    monkeypatch.setattr(
+        segment_module, "process_single_volume", fake_process_single_volume
+    )
+    monkeypatch.setattr(
+        segment_module, "prefetch_totalsegmentator_models", lambda *a, **k: None
+    )
+    monkeypatch.setattr(segment_module, "tqdm", passthrough_tqdm)
+    patch_strategy(monkeypatch, mode="serial", max_workers=1, max_in_flight=1)
+
+    args = argparse.Namespace(
+        csv_path=str(csv_path),
+        csv_path_out=str(tmp_path / "segmented.csv"),
+        error_csv_path=str(tmp_path / "errors.csv"),
+        manifest=str(manifest_path),
+        num_workers=1,
+        verbose=False,
+        force=False,
+        start_method="spawn",
+        timeout_sec=10,
+    )
+
+    segment_module.main(args)
+
+    assert calls == [("CT", "total"), ("MRI", "total_mr")]
+    out = pd.read_csv(args.csv_path_out)
+    assert out["mask_liver"].notna().all()
+
+
 def test_main_writes_mask_columns(tmp_path, monkeypatch):
     nifti = tmp_path / "vol.nii.gz"
     nifti.write_text("nifti")
 
     csv_path = tmp_path / "nifti_index.csv"
-    df = pd.DataFrame([{"nifti_path": str(nifti)}])
+    df = pd.DataFrame([{"nifti_path": str(nifti), "Modality": "CT"}])
     df.to_csv(csv_path, index=False)
 
     config = {
@@ -616,8 +792,8 @@ def test_main_writes_mask_columns(tmp_path, monkeypatch):
         "postprocess": {"merge_keys": ["liver", "vessels"], "output": "merged.nii.gz"},
     }
 
-    config_path = tmp_path / "tasks.json"
-    config_path.write_text(json.dumps({"segmentation": config}))
+    config_path = tmp_path / "manifest.yaml"
+    write_segmentation_manifest(config_path, config)
 
     class DummyFuture:
         def __init__(self, result):
@@ -687,7 +863,7 @@ def test_main_maps_fetch_output_path_into_logical_mask_column(tmp_path, monkeypa
     nifti.write_text("nifti")
 
     csv_path = tmp_path / "nifti_index.csv"
-    df = pd.DataFrame([{"nifti_path": str(nifti)}])
+    df = pd.DataFrame([{"nifti_path": str(nifti), "Modality": "CT"}])
     df.to_csv(csv_path, index=False)
 
     config = {
@@ -707,8 +883,8 @@ def test_main_maps_fetch_output_path_into_logical_mask_column(tmp_path, monkeypa
         },
     }
 
-    config_path = tmp_path / "tasks.json"
-    config_path.write_text(json.dumps({"segmentation": config}))
+    config_path = tmp_path / "manifest.yaml"
+    write_segmentation_manifest(config_path, config)
 
     class DummyFuture:
         def __init__(self, result):
@@ -775,16 +951,17 @@ def test_main_adds_mask_columns_for_runtime_inferred_outputs(tmp_path, monkeypat
     nifti = tmp_path / "vol.nii.gz"
     nifti.write_text("nifti")
     csv_path = tmp_path / "nifti_index.csv"
-    pd.DataFrame([{"nifti_path": str(nifti)}]).to_csv(csv_path, index=False)
+    pd.DataFrame([{"nifti_path": str(nifti), "Modality": "CT"}]).to_csv(
+        csv_path, index=False
+    )
 
-    config_path = tmp_path / "tasks.json"
-    config_path.write_text(
-        json.dumps(
-            {
+    config_path = tmp_path / "manifest.yaml"
+    write_segmentation_manifest(
+        config_path,
+        {
                 "backend": "totalsegmentator",
                 "tasks": [{"task": "task_a"}],
-            }
-        )
+        }
     )
 
     monkeypatch.setattr(
@@ -828,7 +1005,9 @@ def test_main_records_warning_when_merged_mask_missing(tmp_path, monkeypatch):
     nifti.write_text("nifti")
 
     csv_path = tmp_path / "nifti_index.csv"
-    pd.DataFrame([{"nifti_path": str(nifti)}]).to_csv(csv_path, index=False)
+    pd.DataFrame([{"nifti_path": str(nifti), "Modality": "CT"}]).to_csv(
+        csv_path, index=False
+    )
 
     config = {
         "backend": "totalsegmentator",
@@ -838,8 +1017,8 @@ def test_main_records_warning_when_merged_mask_missing(tmp_path, monkeypatch):
         "postprocess": {"merge_keys": ["liver"], "output": "merged.nii.gz"},
     }
 
-    config_path = tmp_path / "tasks.json"
-    config_path.write_text(json.dumps({"segmentation": config}))
+    config_path = tmp_path / "manifest.yaml"
+    write_segmentation_manifest(config_path, config)
 
     class DummyFuture:
         def __init__(self, result):
@@ -903,7 +1082,9 @@ def test_main_single_worker_avoids_process_pool(tmp_path, monkeypatch):
     nifti.write_text("nifti")
 
     csv_path = tmp_path / "nifti_index.csv"
-    pd.DataFrame([{"nifti_path": str(nifti)}]).to_csv(csv_path, index=False)
+    pd.DataFrame([{"nifti_path": str(nifti), "Modality": "CT"}]).to_csv(
+        csv_path, index=False
+    )
 
     config = {
         "backend": "totalsegmentator",
@@ -911,8 +1092,8 @@ def test_main_single_worker_avoids_process_pool(tmp_path, monkeypatch):
             {"key": "liver", "task": "total", "output": "liver.nii.gz", "extra": {}},
         ],
     }
-    config_path = tmp_path / "tasks.json"
-    config_path.write_text(json.dumps({"segmentation": config}))
+    config_path = tmp_path / "manifest.yaml"
+    write_segmentation_manifest(config_path, config)
 
     monkeypatch.setattr(
         segment_module, "prefetch_totalsegmentator_models", lambda *a, **k: None
@@ -960,15 +1141,16 @@ def test_main_uses_strategy_effective_worker_count(tmp_path, monkeypatch):
     nifti = tmp_path / "vol.nii.gz"
     nifti.write_text("nifti")
     csv_path = tmp_path / "nifti_index.csv"
-    pd.DataFrame([{"nifti_path": str(nifti)}]).to_csv(csv_path, index=False)
-    config_path = tmp_path / "tasks.json"
-    config_path.write_text(
-        json.dumps(
-            {
+    pd.DataFrame([{"nifti_path": str(nifti), "Modality": "CT"}]).to_csv(
+        csv_path, index=False
+    )
+    config_path = tmp_path / "manifest.yaml"
+    write_segmentation_manifest(
+        config_path,
+        {
                 "backend": "totalsegmentator",
                 "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
-            }
-        )
+        }
     )
 
     monkeypatch.setattr(
@@ -1016,15 +1198,16 @@ def test_main_uses_strategy_effective_start_method(tmp_path, monkeypatch):
     nifti = tmp_path / "vol.nii.gz"
     nifti.write_text("nifti")
     csv_path = tmp_path / "nifti_index.csv"
-    pd.DataFrame([{"nifti_path": str(nifti)}]).to_csv(csv_path, index=False)
-    config_path = tmp_path / "tasks.json"
-    config_path.write_text(
-        json.dumps(
-            {
+    pd.DataFrame([{"nifti_path": str(nifti), "Modality": "CT"}]).to_csv(
+        csv_path, index=False
+    )
+    config_path = tmp_path / "manifest.yaml"
+    write_segmentation_manifest(
+        config_path,
+        {
                 "backend": "totalsegmentator",
                 "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
-            }
-        )
+        }
     )
 
     monkeypatch.setattr(
@@ -1093,15 +1276,16 @@ def test_main_enables_gpu_worker_pinning_for_multi_gpu(tmp_path, monkeypatch):
     nifti = tmp_path / "vol.nii.gz"
     nifti.write_text("nifti")
     csv_path = tmp_path / "nifti_index.csv"
-    pd.DataFrame([{"nifti_path": str(nifti)}]).to_csv(csv_path, index=False)
-    config_path = tmp_path / "tasks.json"
-    config_path.write_text(
-        json.dumps(
-            {
+    pd.DataFrame([{"nifti_path": str(nifti), "Modality": "CT"}]).to_csv(
+        csv_path, index=False
+    )
+    config_path = tmp_path / "manifest.yaml"
+    write_segmentation_manifest(
+        config_path,
+        {
                 "backend": "totalsegmentator",
                 "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
-            }
-        )
+        }
     )
 
     monkeypatch.setattr(
@@ -1181,15 +1365,16 @@ def test_main_bounds_in_flight_submissions(tmp_path, monkeypatch):
         paths.append(str(nifti))
 
     csv_path = tmp_path / "nifti_index.csv"
-    pd.DataFrame([{"nifti_path": p} for p in paths]).to_csv(csv_path, index=False)
-    config_path = tmp_path / "tasks.json"
-    config_path.write_text(
-        json.dumps(
-            {
+    pd.DataFrame([{"nifti_path": p, "Modality": "CT"} for p in paths]).to_csv(
+        csv_path, index=False
+    )
+    config_path = tmp_path / "manifest.yaml"
+    write_segmentation_manifest(
+        config_path,
+        {
                 "backend": "totalsegmentator",
                 "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
-            }
-        )
+        }
     )
 
     monkeypatch.setattr(
@@ -1254,15 +1439,16 @@ def test_main_enforces_wall_timeout_per_row(tmp_path, monkeypatch):
     nifti = tmp_path / "vol.nii.gz"
     nifti.write_text("nifti")
     csv_path = tmp_path / "nifti_index.csv"
-    pd.DataFrame([{"nifti_path": str(nifti)}]).to_csv(csv_path, index=False)
-    config_path = tmp_path / "tasks.json"
-    config_path.write_text(
-        json.dumps(
-            {
+    pd.DataFrame([{"nifti_path": str(nifti), "Modality": "CT"}]).to_csv(
+        csv_path, index=False
+    )
+    config_path = tmp_path / "manifest.yaml"
+    write_segmentation_manifest(
+        config_path,
+        {
                 "backend": "totalsegmentator",
                 "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
-            }
-        )
+        }
     )
 
     monkeypatch.setattr(
@@ -1324,15 +1510,16 @@ def test_main_force_shutdown_terminates_and_joins_workers(tmp_path, monkeypatch)
     nifti = tmp_path / "vol.nii.gz"
     nifti.write_text("nifti")
     csv_path = tmp_path / "nifti_index.csv"
-    pd.DataFrame([{"nifti_path": str(nifti)}]).to_csv(csv_path, index=False)
-    config_path = tmp_path / "tasks.json"
-    config_path.write_text(
-        json.dumps(
-            {
+    pd.DataFrame([{"nifti_path": str(nifti), "Modality": "CT"}]).to_csv(
+        csv_path, index=False
+    )
+    config_path = tmp_path / "manifest.yaml"
+    write_segmentation_manifest(
+        config_path,
+        {
                 "backend": "totalsegmentator",
                 "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
-            }
-        )
+        }
     )
 
     monkeypatch.setattr(
@@ -1439,15 +1626,16 @@ def test_main_recycles_executor_by_recycle_every(tmp_path, monkeypatch):
         paths.append(str(nifti))
 
     csv_path = tmp_path / "nifti_index.csv"
-    pd.DataFrame([{"nifti_path": p} for p in paths]).to_csv(csv_path, index=False)
-    config_path = tmp_path / "tasks.json"
-    config_path.write_text(
-        json.dumps(
-            {
+    pd.DataFrame([{"nifti_path": p, "Modality": "CT"} for p in paths]).to_csv(
+        csv_path, index=False
+    )
+    config_path = tmp_path / "manifest.yaml"
+    write_segmentation_manifest(
+        config_path,
+        {
                 "backend": "totalsegmentator",
                 "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
-            }
-        )
+        }
     )
 
     monkeypatch.setattr(
@@ -1511,15 +1699,16 @@ def test_main_subprocess_mode_currently_degrades_to_serial(tmp_path, monkeypatch
     nifti = tmp_path / "vol.nii.gz"
     nifti.write_text("nifti")
     csv_path = tmp_path / "nifti_index.csv"
-    pd.DataFrame([{"nifti_path": str(nifti)}]).to_csv(csv_path, index=False)
-    config_path = tmp_path / "tasks.json"
-    config_path.write_text(
-        json.dumps(
-            {
+    pd.DataFrame([{"nifti_path": str(nifti), "Modality": "CT"}]).to_csv(
+        csv_path, index=False
+    )
+    config_path = tmp_path / "manifest.yaml"
+    write_segmentation_manifest(
+        config_path,
+        {
                 "backend": "totalsegmentator",
                 "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
-            }
-        )
+        }
     )
 
     monkeypatch.setattr(
@@ -1571,15 +1760,16 @@ def test_main_resume_skips_completed_rows(tmp_path, monkeypatch):
     nifti = tmp_path / "vol.nii.gz"
     nifti.write_text("nifti")
     csv_path = tmp_path / "nifti_index.csv"
-    pd.DataFrame([{"nifti_path": str(nifti)}]).to_csv(csv_path, index=False)
-    config_path = tmp_path / "tasks.json"
-    config_path.write_text(
-        json.dumps(
-            {
+    pd.DataFrame([{"nifti_path": str(nifti), "Modality": "CT"}]).to_csv(
+        csv_path, index=False
+    )
+    config_path = tmp_path / "manifest.yaml"
+    write_segmentation_manifest(
+        config_path,
+        {
                 "backend": "totalsegmentator",
                 "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
-            }
-        )
+        }
     )
 
     prefetch_calls = {"count": 0}
@@ -1640,19 +1830,18 @@ def test_main_resume_uses_source_idx_after_deduplicating_inputs(tmp_path, monkey
     csv_path = tmp_path / "nifti_index.csv"
     pd.DataFrame(
         [
-            {"nifti_path": str(nifti_a)},
-            {"nifti_path": str(nifti_a)},
-            {"nifti_path": str(nifti_b)},
+            {"nifti_path": str(nifti_a), "Modality": "CT"},
+            {"nifti_path": str(nifti_a), "Modality": "CT"},
+            {"nifti_path": str(nifti_b), "Modality": "CT"},
         ]
     ).to_csv(csv_path, index=False)
-    config_path = tmp_path / "tasks.json"
-    config_path.write_text(
-        json.dumps(
-            {
+    config_path = tmp_path / "manifest.yaml"
+    write_segmentation_manifest(
+        config_path,
+        {
                 "backend": "totalsegmentator",
                 "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
-            }
-        )
+        }
     )
 
     monkeypatch.setattr(
@@ -1704,15 +1893,16 @@ def test_main_resume_reprocesses_when_segmentation_config_changes(
     nifti = tmp_path / "vol.nii.gz"
     nifti.write_text("nifti")
     csv_path = tmp_path / "nifti_index.csv"
-    pd.DataFrame([{"nifti_path": str(nifti)}]).to_csv(csv_path, index=False)
-    config_path = tmp_path / "tasks.json"
-    config_path.write_text(
-        json.dumps(
-            {
+    pd.DataFrame([{"nifti_path": str(nifti), "Modality": "CT"}]).to_csv(
+        csv_path, index=False
+    )
+    config_path = tmp_path / "manifest.yaml"
+    write_segmentation_manifest(
+        config_path,
+        {
                 "backend": "totalsegmentator",
                 "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
-            }
-        )
+        }
     )
 
     monkeypatch.setattr(
@@ -1753,15 +1943,14 @@ def test_main_resume_reprocesses_when_segmentation_config_changes(
     )
     segment_module.main(args)
 
-    config_path.write_text(
-        json.dumps(
-            {
-                "backend": "totalsegmentator",
-                "tasks": [
-                    {"key": "spleen", "task": "total", "output": "spleen.nii.gz"}
-                ],
-            }
-        )
+    write_segmentation_manifest(
+        config_path,
+        {
+            "backend": "totalsegmentator",
+            "tasks": [
+                {"key": "spleen", "task": "total", "output": "spleen.nii.gz"}
+            ],
+        },
     )
     args.resume = True
     segment_module.main(args)
@@ -1779,24 +1968,27 @@ def test_main_does_not_blank_existing_mask_or_warning_columns(tmp_path, monkeypa
         [
             {
                 "nifti_path": str(nifti_a),
+                "Modality": "CT",
                 "mask_liver": "preexisting-a",
                 "warning_message": "warn-a",
             },
             {
                 "nifti_path": str(nifti_b),
+                "Modality": "CT",
                 "mask_liver": "preexisting-b",
                 "warning_message": "warn-b",
             },
         ]
     ).to_csv(csv_path, index=False)
-    config_path = tmp_path / "tasks.json"
-    config_path.write_text(
-        json.dumps(
-            {
-                "backend": "totalsegmentator",
-                "tasks": [{"key": "liver", "task": "total", "output": "liver.nii.gz"}],
-            }
-        )
+    config_path = tmp_path / "manifest.yaml"
+    write_segmentation_manifest(
+        config_path,
+        {
+            "backend": "totalsegmentator",
+            "tasks": [
+                {"key": "liver", "task": "total", "output": "liver.nii.gz"}
+            ],
+        },
     )
 
     monkeypatch.setattr(

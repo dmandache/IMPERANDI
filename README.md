@@ -45,16 +45,21 @@ Impact: creates a standardized imaging representation for model training, segmen
 ### 3) Configurable segmentation (`segment`)
 
 - Runs configurable task pipelines (default backend: TotalSegmentator).
-- Supports multi-task mask generation per volume through a JSON task config.
+- Dispatches CT and MR/MRI volumes to separate manifest-defined
+  TotalSegmentator model lists.
 - Adds optional post-processing (mask merge, closing, hole filling, largest connected component).
 - Uses multiprocessing with timeout controls and produces warning/error tracking CSVs.
 
-Impact: converts raw CT volumes into ready-to-use anatomical/tumor masks with operational safeguards for large cohort processing.
+Impact: converts CT and MR volumes into ready-to-use anatomical/tumor masks
+with operational safeguards for large cohort processing.
 
-### 4) Contrast phase extraction (`phase`)
+### 4) Contrast phase curation (`phase`)
 
-- Extracts CT contrast phase metadata from NIfTI volumes using TotalSegmentator phase utilities.
-- Appends normalized phase outputs to cohort CSVs (`totalseg_*` columns).
+- Resolves an ordered YAML-defined fallback chain across explicit ontology,
+  metadata rules, and TotalSegmentator prediction.
+- Restricts the bundled TotalSegmentator phase predictor to CT by default.
+- Appends canonical `phase` provenance and `totalseg_*` prediction fields when
+  model inference is needed.
 - Captures per-row failures into dedicated error outputs.
 
 Impact: enables phase-aware stratification and analysis without manual review of every study.
@@ -86,7 +91,8 @@ IMPERANDI ships a single CLI with these subcommands:
 - `ingest`: run `parse` then `clean`.
 - `convert`: convert indexed DICOM volumes to NIfTI.
 - `segment`: run configurable segmentation on NIfTI volumes (requires _TotalSegmentator_, install with `.[segment]`).
-- `phase`: extract contrast phase metadata from NIfTI volumes (requires _TotalSegmentator_, install with `.[segment]`).
+- `phase`: resolve canonical contrast phase; a TotalSegmentator fallback requires
+  `.[segment]`.
 - `radiomics`: extract radiomics features from NIfTI volumes and masks (requires _pyRadiomics_, install with `.[radiomics]`).
 
 Get help:
@@ -176,19 +182,20 @@ imperandi segment \
   --csv_path_out /path/to/output/nifti_index_segmented.csv
 ```
 
-Extract contrast phase:
+Curate contrast phase:
 
 ```bash
 imperandi phase \
   --csv_path /path/to/output/nifti_index_segmented.csv \
-  --csv_path_out /path/to/output/nifti_index_phased.csv
+  --csv_path_out /path/to/output/nifti_index_phased.csv \
+  --manifest generic
 ```
 
 Extract radiomics:
 
 ```bash
 imperandi radiomics \
-  --csv_path /path/to/output/nifti_index_segmented.csv \
+  --csv_path /path/to/output/nifti_index_phased.csv \
   --csv_path_out /path/to/output/nifti_index_radiomics.csv
 ```
 
@@ -196,7 +203,7 @@ Extract radiomics with explicit PyRadiomics YAML settings:
 
 ```bash
 imperandi radiomics \
-  --csv_path /path/to/output/nifti_index_segmented.csv \
+  --csv_path /path/to/output/nifti_index_phased.csv \
   --pyradiomics_settings /path/to/Params.yaml \
   --csv_path_out /path/to/output/nifti_index_radiomics.csv
 ```
@@ -205,7 +212,7 @@ Use manifest-defined radiomics settings:
 
 ```bash
 imperandi radiomics \
-  --csv_path /path/to/output/nifti_index_segmented.csv \
+  --csv_path /path/to/output/nifti_index_phased.csv \
   --manifest generic \
   --csv_path_out /path/to/output/nifti_index_radiomics.csv
 ```
@@ -228,22 +235,28 @@ prefers manifest `radiomics` settings when that section exists.
 
 ## Configuration
 
-IMPERANDI configuration is done through dataset manifests and optional hooks.
-Manifests hold the declarative JSON settings, while hooks provide Python-based
+IMPERANDI configuration is done through YAML dataset manifests and optional hooks.
+Manifests hold the declarative settings, while hooks provide Python-based
 customization when a static file is not enough.
 
 Manifests define dataset-specific behavior and live in:
 
-- `src/imperandi/datasets_config/manifests/*.json`
+- `src/imperandi/datasets_config/manifests/*.yaml`
 
 Hook implementations live in:
 
 - `src/imperandi/datasets_config/hooks/`
 
 You can pass either a manifest name (`generic`, `operandi`) or a custom
-manifest path. The usual customization flow is to copy a built-in JSON,
+manifest path. The usual customization flow is to copy a built-in YAML file,
 edit `id_extraction`, `id_standardization`, `derived_columns`,
-`segmentation`, and `radiomics`, then run with `--manifest ./site-a.json`.
+`phase_curation`, `segmentation`, and `radiomics`, then run with
+`--manifest ./site-a.yaml`. JSON manifests are not accepted.
+
+`phase_curation.strategies` is an ordered fallback chain. It can contain an
+explicit site ontology, IMPERANDI's metadata rules, TotalSegmentator phase
+prediction, or any combination. The canonical result is written to `phase`,
+with its provenance in `phase_source`, `phase_confidence`, and `phase_reason`.
 
 Hooks are normal Python callables referenced by manifest keys
 `hook_module` and `function`: `id_standardization` hook rewrites
@@ -254,7 +267,10 @@ settings object (same structure as `Params.yaml` content).
 Official PyRadiomics parameter guide:
 [PyRadiomics customization docs](https://pyradiomics.readthedocs.io/en/latest/customization.html).
 
-For configuring segmentation, define `segmentation.tasks` in the manifest and map each run to the output mask names you want in the cohort CSV.
+For configuring segmentation, define CT and/or MR task lists under
+`segmentation.modalities`. CT uses TotalSegmentator tasks such as `total`, while
+MR uses the corresponding `_mr` models such as `total_mr`. Logical output names
+can stay consistent across modalities in the cohort CSV.
 Official TotalSegmentator task guide:
 [TotalSegmentator subtasks guide](https://github.com/wasserth/TotalSegmentator#subtasks).
 

@@ -316,3 +316,76 @@ def test_main_preserves_foreign_columns_from_existing_output(tmp_path, monkeypat
     out_df = pd.read_csv(out_path)
     assert "foreign_col" in out_df.columns
     assert out_df.loc[0, "foreign_col"] == "keep-me"
+
+
+def test_main_skips_totalsegmentator_when_rules_resolve_phase(tmp_path, monkeypatch):
+    csv_path = tmp_path / "nifti_index.csv"
+    pd.DataFrame(
+        [
+            {
+                "nifti_path": str(tmp_path / "not-needed.nii.gz"),
+                "rule_phase": "ARTERIAL",
+                "rule_phase_confidence": "high",
+            }
+        ]
+    ).to_csv(csv_path, index=False)
+
+    def fail_if_loaded():
+        raise AssertionError("TotalSegmentator should not load after a rule match")
+
+    monkeypatch.setattr(phase_module, "_load_phase_extractor", fail_if_loaded)
+    args = argparse.Namespace(
+        csv_path=str(csv_path),
+        csv_path_out=str(tmp_path / "out.csv"),
+        error_csv_path=str(tmp_path / "errors.csv"),
+        manifest="generic",
+        verbose=False,
+        force=False,
+        checkpoint_every_rows=1,
+        checkpoint_every_sec=3600,
+        resume=False,
+        strict_resume=False,
+    )
+
+    phase_module.main(args)
+
+    out_df = pd.read_csv(args.csv_path_out)
+    assert out_df.loc[0, "phase"] == "ARTERIAL"
+    assert out_df.loc[0, "phase_source"] == "metadata_rules"
+    assert "totalseg_phase" not in out_df.columns
+
+
+def test_main_does_not_run_ct_predictor_for_mri(tmp_path, monkeypatch):
+    csv_path = tmp_path / "nifti_index.csv"
+    pd.DataFrame(
+        [
+            {
+                "nifti_path": str(tmp_path / "not-needed.nii.gz"),
+                "Modality": "MR",
+                "rule_phase": "OTHER",
+            }
+        ]
+    ).to_csv(csv_path, index=False)
+
+    def fail_if_loaded():
+        raise AssertionError("The CT phase predictor must not load for MRI")
+
+    monkeypatch.setattr(phase_module, "_load_phase_extractor", fail_if_loaded)
+    args = argparse.Namespace(
+        csv_path=str(csv_path),
+        csv_path_out=str(tmp_path / "out.csv"),
+        error_csv_path=str(tmp_path / "errors.csv"),
+        manifest="generic",
+        verbose=False,
+        force=False,
+        checkpoint_every_rows=1,
+        checkpoint_every_sec=3600,
+        resume=False,
+        strict_resume=False,
+    )
+
+    phase_module.main(args)
+
+    out_df = pd.read_csv(args.csv_path_out)
+    assert out_df.loc[0, "phase"] == "OTHER"
+    assert out_df.loc[0, "phase_source"] == "fallback"

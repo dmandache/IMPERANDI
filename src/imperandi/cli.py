@@ -102,7 +102,7 @@ def _add_convert_subcommand(subparsers: argparse._SubParsersAction) -> None:
 def _add_phase_subcommand(subparsers: argparse._SubParsersAction) -> None:
     parser = subparsers.add_parser(
         "phase",
-        help="Extract contrast phase metadata from NIfTI volumes.",
+        help="Resolve canonical contrast phase with manifest fallbacks.",
     )
     phase_module = _load_phase_module()
     phase_module.add_phase_arguments(parser)

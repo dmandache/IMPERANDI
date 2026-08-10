@@ -143,7 +143,7 @@ def add_convert_arguments(
             "--manifest",
             type=str,
             default=None,
-            help="Dataset manifest name or path to manifest JSON.",
+            help="Dataset manifest name or path to manifest YAML.",
         )
     if include_dry_run:
         parser.add_argument(

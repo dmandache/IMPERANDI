@@ -19,6 +19,7 @@ from imperandi.curation.common import (
     safe_str,
     stable_text,
 )
+from imperandi.curation.phase import apply_phase_curation
 from . import rules
 
 
@@ -61,7 +62,7 @@ def detect_ct_features(row: pd.Series) -> dict:
 
 
 def score_ct(row: pd.Series) -> float:
-    phase = norm_label(row.get("ct_phase"))
+    phase = norm_label(row.get("phase", row.get("ct_phase")))
     f = detect_ct_features(row)
 
     score = float(rules.CT_PHASE_PRIORITY.get(phase, 0))
@@ -97,6 +98,9 @@ def annotate_ct(df: pd.DataFrame, date_col: str = "date") -> pd.DataFrame:
     out[["ct_phase", "ct_phase_reason", "ct_phase_confidence"]] = pd.DataFrame(
         result.tolist(), index=out.index
     )
+    out["rule_phase"] = out["ct_phase"]
+    out["rule_phase_reason"] = out["ct_phase_reason"]
+    out["rule_phase_confidence"] = out["ct_phase_confidence"]
     out["ct_selection_score"] = out.apply(score_ct, axis=1)
     out["selection_slot"] = out["ct_phase"].map(
         lambda x: f"CT_{norm_label(x)}" if norm_label(x) != "OTHER" else "CT_OTHER"
@@ -163,8 +167,15 @@ def curate_ct(
     patient_col: str = "patient_key",
     study_col: str | None = "study_id",
     date_col: str = "date",
+    phase_curation: dict | None = None,
 ) -> dict[str, pd.DataFrame]:
     curated = annotate_ct(df, date_col=date_col)
+    curated = apply_phase_curation(curated, phase_curation)
+    curated["ct_selection_score"] = curated.apply(score_ct, axis=1)
+    curated["selection_slot"] = curated["phase"].map(
+        lambda x: f"CT_{norm_label(x)}" if norm_label(x) != "OTHER" else "CT_OTHER"
+    )
+    curated["selection_score"] = curated["ct_selection_score"]
     selected_long, selected_wide = select_ct_per_exam(
         curated,
         patient_col=patient_col,

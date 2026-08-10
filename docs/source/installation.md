@@ -24,7 +24,7 @@ The base installation supports DICOM ingest and NIfTI conversion. Install only
 the heavier feature sets needed by your workflow:
 
 ```bash
-# TotalSegmentator-based segmentation and phase extraction
+# TotalSegmentator-based segmentation and phase-prediction fallback
 python -m pip install -e ".[segment]"
 
 # PyRadiomics extraction

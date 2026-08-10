@@ -270,7 +270,7 @@ def test_cli_radiomics_accepts_pyradiomics_settings_yaml(tmp_path):
 def test_cli_radiomics_accepts_manifest_with_pyradiomics_block(tmp_path):
     csv_in = tmp_path / "nifti_index.csv"
     csv_in.write_text("patient_key,phase,nifti_path\n")
-    manifest_path = tmp_path / "manifest.json"
+    manifest_path = tmp_path / "manifest.yaml"
     manifest_path.write_text(
         json.dumps(
             {

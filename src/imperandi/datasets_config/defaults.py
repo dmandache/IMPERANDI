@@ -42,6 +42,7 @@ DEFAULT_DICOM_TAGS = [
     # Instance-level metadata retained for acquisition ordering and timestamps.
     "InstanceNumber",
     "AcquisitionNumber",
+    "TemporalPositionIdentifier",
     "InstanceCreationDate",
     "InstanceCreationTime",
     "ContentDate",

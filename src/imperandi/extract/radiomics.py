@@ -417,7 +417,7 @@ def add_radiomics_arguments(
         "--manifest",
         type=str,
         default=None,
-        help="Dataset manifest name or path to manifest JSON.",
+        help="Dataset manifest name or path to manifest YAML.",
     )
     parser.add_argument(
         "--pyradiomics_settings",

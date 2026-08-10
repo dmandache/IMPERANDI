@@ -103,7 +103,7 @@ def add_parse_arguments(
             "--manifest",
             type=str,
             default=None,
-            help="Dataset manifest name or path to manifest JSON.",
+            help="Dataset manifest name or path to manifest YAML.",
         )
 
     # Tag reading

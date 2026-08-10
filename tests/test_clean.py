@@ -724,6 +724,48 @@ def test_validate_cleaning_manifest_uses_hook_output_metadata():
     assert "center" not in required
 
 
+def test_validate_cleaning_manifest_requires_phase_curation_for_modality_step():
+    manifest = {
+        "cleaning": {
+            "version": 1,
+            "steps": [{"type": "modality_curation"}],
+        }
+    }
+
+    with pytest.raises(ValueError, match="must define phase_curation"):
+        clean.validate_cleaning_manifest(manifest)
+
+
+def test_phase_curation_sources_are_loaded_for_modality_curation():
+    manifest = {
+        "phase_curation": {
+            "strategies": [
+                {
+                    "type": "ontology",
+                    "columns": ["reviewed_phase"],
+                    "mapping": {"portal": "PORTAL_VENOUS"},
+                },
+                {"type": "totalsegmentator", "column": "predicted_phase"},
+            ]
+        },
+        "cleaning": {
+            "version": 1,
+            "steps": [
+                {"type": "compute_acquisition_order"},
+                {"type": "modality_curation"},
+            ],
+        },
+    }
+
+    steps = clean.validate_cleaning_manifest(manifest)
+    required = clean._collect_required_input_columns(
+        steps, manifest["phase_curation"]
+    )
+
+    assert {"reviewed_phase", "predicted_phase"}.issubset(required)
+    assert {"TemporalPositionIdentifier", "InstanceNumber"}.issubset(required)
+
+
 @pytest.mark.parametrize(
     ("step", "message"),
     [
@@ -932,6 +974,10 @@ def test_run_clean_pipeline_executes_all_supported_step_types(monkeypatch):
         }
     )
     manifest = {
+        "phase_curation": {
+            "strategies": [{"type": "rules"}],
+            "fallback": "OTHER",
+        },
         "cleaning": {
             "version": 1,
             "steps": [
@@ -990,7 +1036,9 @@ def test_run_clean_pipeline_executes_all_supported_step_types(monkeypatch):
     }
 
     steps = clean.validate_cleaning_manifest(manifest)
-    out = clean.run_clean_pipeline(df.copy(), steps)
+    out = clean.run_clean_pipeline(
+        df.copy(), steps, phase_curation=manifest["phase_curation"]
+    )
 
     assert out.shape[0] == 2
     assert out["patient_key"].tolist() == ["12-30", "12-30"]
