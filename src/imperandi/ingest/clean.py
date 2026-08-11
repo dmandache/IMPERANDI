@@ -2081,13 +2081,24 @@ def _collect_required_input_columns(
 
 def _step_label(step: dict) -> str:
     """Build a human-readable label for logging and validation errors."""
+    step_type = step["type"]
+    if step_type == "filter":
+        columns = list(
+            dict.fromkeys(
+                rule["column"]
+                for rule in step.get("rules", [])
+                if isinstance(rule, dict) and rule.get("column")
+            )
+        )
+        label = f"{step['kind']} {step['scope']} filter"
+        if columns:
+            label += f" on column(s) {', '.join(columns)}"
+        return label
     if step.get("name"):
         return str(step["name"])
-    if step["type"] == "hook":
+    if step_type == "hook":
         return f"hook {step['function']}"
-    if step["type"] == "filter":
-        return f"{step['kind']} {step['scope']} filter"
-    return step["type"].replace("_", " ")
+    return step_type.replace("_", " ")
 
 
 def _ensure_columns_present(df: pd.DataFrame, columns: set[str], step: dict) -> None:

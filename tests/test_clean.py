@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import sys
 from pathlib import Path
 from datetime import time as dt_time
@@ -951,6 +952,43 @@ def test_run_clean_pipeline_filter_logic_and_or():
     out = clean.run_clean_pipeline(df.copy(), steps)
 
     assert out["patient_key"].tolist() == ["p1"]
+
+
+def test_filter_step_log_lists_each_column_once(caplog):
+    caplog.set_level(logging.INFO, logger="imperandi.utils.misc")
+    df = pd.DataFrame(
+        {
+            "patient_key": ["p1", "p2"],
+            "study_id": ["s", "s"],
+            "series_id": ["sr1", "sr2"],
+            "Modality": ["CT", "PT"],
+            "SeriesDescription": ["abdomen", "scout"],
+        }
+    )
+    steps = [
+        {
+            "type": "filter",
+            "kind": "discard",
+            "scope": "row",
+            "logic": "or",
+            "rules": [
+                {"column": "Modality", "op": "eq", "value": "PT"},
+                {"column": "Modality", "op": "eq", "value": "NM"},
+                {
+                    "column": "SeriesDescription",
+                    "op": "icontains",
+                    "value": "scout",
+                },
+            ],
+        }
+    ]
+
+    clean.run_clean_pipeline(df, steps)
+
+    assert (
+        "After discard row filter on column(s) Modality, SeriesDescription:"
+        in caplog.text
+    )
 
 
 def test_run_clean_pipeline_executes_all_supported_step_types(monkeypatch):
