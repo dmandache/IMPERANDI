@@ -82,7 +82,11 @@ def add_convert_arguments(
         nargs="?",
         type=str,
         default=None,
-        help="Root directory for NIFTI data.",
+        help=(
+            "Root directory for NIFTI data. "
+            "Defaults to <project_root>/NIFTI, where project_root is the "
+            "input CSV directory."
+        ),
     )
     parser.add_argument(
         "--output_dir",
@@ -105,7 +109,7 @@ def add_convert_arguments(
         type=str,
         default=None,
         help=(
-            "Path to save the error CSV file. " "Defaults to <csv_dir>/conv_errors.csv."
+            "Path to save the error CSV file. Defaults to <csv_dir>/conv_errors.csv."
         ),
     )
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose mode")
@@ -179,7 +183,7 @@ def normalize_convert_args(args: argparse.Namespace) -> argparse.Namespace:
 
     Raises:
         FileNotFoundError: If an input CSV does not exist.
-        ValueError: If an input is not CSV or no output directory is supplied.
+        ValueError: If an input is not CSV.
     """
     # pick optionals over positionals
     csv_in = args.csv_path_opt if args.csv_path_opt is not None else args.csv_path_pos
@@ -204,18 +208,18 @@ def normalize_convert_args(args: argparse.Namespace) -> argparse.Namespace:
     args.csv_path = [str(p.resolve()) for p in csv_paths]
 
     # output_dir -> directory
+    first_csv = Path(args.csv_path[0])
+    csv_dir = first_csv.parent
     if out_in is None:
-        raise ValueError("output_dir is required (positional or --output_dir).")
+        out_in = csv_dir / "NIFTI"
+        logger.warning("No output_dir supplied; defaulting NIfTI output to %s.", out_in)
 
-    args.output_dir = out_in
+    args.output_dir = str(out_in)
 
     del args.csv_path_pos
     del args.csv_path_opt
     del args.output_dir_pos
     del args.output_dir_opt
-
-    first_csv = Path(args.csv_path[0])
-    csv_dir = first_csv.parent
 
     if not args.csv_path_out:
         args.csv_path_out = str(csv_dir / "nifti_index.csv")

@@ -60,7 +60,9 @@ imperandi convert [CSV_PATH] [OUTPUT_DIR] [OPTIONS]
 
 Converts series listed in one or more CSV files. The default final table is
 `nifti_index.csv` and the default failure table is `conv_errors.csv`, both next
-to the input CSV. Use `--num_workers` to control conversion parallelism.
+to the input CSV. If `OUTPUT_DIR`/`--output_dir` is omitted, converted files are
+written to `<project_root>/NIFTI` (the input CSV's directory) and a warning is
+logged. Use `--num_workers` to control conversion parallelism.
 
 ## `segment`
 
@@ -118,4 +120,3 @@ explicit YAML path and a warning is emitted.
 `parse`, `convert`, `segment`, `phase`, and `radiomics` accept checkpoint and
 resume options described in [Workflow](workflow.md). All commands support
 `--dry-run`.
-

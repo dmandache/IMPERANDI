@@ -31,6 +31,34 @@ def test_convert_list_str_to_list_invalid():
     assert out == s
 
 
+def test_normalize_convert_args_defaults_output_dir_to_project_nifti(tmp_path, caplog):
+    csv_path = tmp_path / "dicom_index_clean.csv"
+    csv_path.write_text("patient_key\n")
+    args = convert_module.build_parser().parse_args([str(csv_path)])
+
+    with caplog.at_level(logging.WARNING, logger=convert_module.__name__):
+        normalized = convert_module.normalize_convert_args(args)
+
+    assert normalized.output_dir == str(tmp_path / "NIFTI")
+    assert "No output_dir supplied" in caplog.text
+    assert str(tmp_path / "NIFTI") in caplog.text
+
+
+def test_normalize_convert_args_keeps_explicit_output_dir_without_warning(
+    tmp_path, caplog
+):
+    csv_path = tmp_path / "dicom_index_clean.csv"
+    csv_path.write_text("patient_key\n")
+    output_dir = tmp_path / "custom_nifti"
+    args = convert_module.build_parser().parse_args([str(csv_path), str(output_dir)])
+
+    with caplog.at_level(logging.WARNING, logger=convert_module.__name__):
+        normalized = convert_module.normalize_convert_args(args)
+
+    assert normalized.output_dir == str(output_dir)
+    assert "No output_dir supplied" not in caplog.text
+
+
 @pytest.mark.parametrize(
     ("base_level", "expected_level"),
     [
