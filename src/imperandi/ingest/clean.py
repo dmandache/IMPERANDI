@@ -31,7 +31,6 @@ from imperandi.utils.misc import print_args, report_volumes, report_change
 from imperandi.utils.datetime import to_dates, to_times
 from imperandi.datasets_config.defaults import (
     DEFAULT_DICOM_TAGS,
-    DEFAULT_MAX_PIXEL_SPACING_MM,
     DATE_CANDIDATES,
     TIME_CANDIDATES,
 )
@@ -412,20 +411,6 @@ def remove_other_organs_description(df):
         )
     ]
 
-    return df
-
-
-def clean_pixel_spacing(df):
-    if "PixelSpacing" not in df.columns:
-        return df
-    df["PixelSpacingXY"] = df["PixelSpacing"].apply(
-        lambda x: literal_eval(x)[0] if isinstance(x, str) else None
-    )
-    df["PixelSpacingXY"] = pd.to_numeric(df["PixelSpacingXY"], errors="coerce")
-    df = df[
-        (df["PixelSpacingXY"].isna())
-        | (df["PixelSpacingXY"] <= DEFAULT_MAX_PIXEL_SPACING_MM)
-    ]
     return df
 
 
@@ -1190,18 +1175,6 @@ def calculate_volume_length(df):
         lambda x: len(x) if isinstance(x, list) else 1
     )
     df["volume_length"] = df.apply(calculate_total_volume_length, axis=1)
-    return df
-
-
-def filter_volumes_by_size(df, min_length_mm, max_length_mm):
-    """Keep volumes within inclusive length bounds, retaining missing lengths."""
-    df = df[
-        (df["volume_length"].isna())
-        | (
-            (df["volume_length"] >= min_length_mm)
-            & (df["volume_length"] <= max_length_mm)
-        )
-    ]
     return df
 
 

@@ -277,22 +277,31 @@ def test_add_time_selects_best_time_candidate():
     assert out.loc[2, "time"] == dt_time(12, 2, 0)
 
 
-def test_clean_pixel_spacing():
+def test_generic_manifest_filters_pixel_spacing_declaratively():
+    base_path = Path(__file__).resolve().parents[1] / "src" / "imperandi"
+    manifest = clean.load_manifest("generic", base_path=base_path)
+    pixel_spacing_filter = next(
+        step
+        for step in manifest["cleaning"]["steps"]
+        if step.get("name") == "pixel_spacing_quality"
+    )
     df = pd.DataFrame(
         {
-            "Rows": [512, None],
-            "Columns": [512, 512],
-            "SliceThickness": [
-                "2",
-                "5",
-            ],  # second should be filtered out (thickness > 3)
-            "PixelSpacing": ["[0.7, 0.7]", None],
+            "patient_key": ["valid", "boundary", "coarse", "unknown"],
+            "study_id": ["s"] * 4,
+            "series_id": ["sr"] * 4,
+            "PixelSpacing": ["[0.7, 0.7]", "[1.25, 1.25]", "[1.5, 1.5]", None],
         }
     )
-    ps = clean.clean_pixel_spacing(df.copy())
-    assert "PixelSpacingXY" in ps.columns
-    assert ps.loc[0, "PixelSpacingXY"] == 0.7
-    assert pd.isna(ps.loc[1, "PixelSpacingXY"])
+
+    out = clean.run_clean_pipeline(
+        df,
+        [{"type": "pixel_spacing_xy"}, pixel_spacing_filter],
+    )
+
+    assert out["patient_key"].tolist() == ["valid", "boundary", "unknown"]
+    assert out.iloc[0]["PixelSpacingXY"] == 0.7
+    assert pd.isna(out.iloc[2]["PixelSpacingXY"])
 
 
 def test_generic_manifest_filters_scan_size_declaratively():
@@ -405,7 +414,7 @@ def test_parse_ipp_accepts_dicom_backslash_string():
     assert clean._parse_ipp(r"1.5\-2.0\3.25") == (1.5, -2.0, 3.25)
 
 
-def test_group_volumes_and_calculate_length_and_filter_by_size():
+def test_group_volumes_and_calculate_length():
     df = pd.DataFrame(
         {
             "volume_id": ["v1", "v1", "v2"],
@@ -419,11 +428,29 @@ def test_group_volumes_and_calculate_length_and_filter_by_size():
     calc = clean.calculate_volume_length(grouped.copy())
     # v1 has n_files >1 -> volume_length computed
     assert "volume_length" in calc.columns
-    filtered = clean.filter_volumes_by_size(
-        calc.copy(), min_length_mm=0.0, max_length_mm=5.0
+    assert set(calc["volume_id"]) == set(grouped["volume_id"])
+
+
+def test_generic_manifest_filters_volume_length_declaratively():
+    base_path = Path(__file__).resolve().parents[1] / "src" / "imperandi"
+    manifest = clean.load_manifest("generic", base_path=base_path)
+    volume_length_filter = next(
+        step
+        for step in manifest["cleaning"]["steps"]
+        if step.get("name") == "volume_length_quality"
     )
-    # both volumes should be kept (v2 has NaN volume_length => kept)
-    assert set(filtered["volume_id"]) == set(grouped["volume_id"])
+    df = pd.DataFrame(
+        {
+            "patient_key": ["short", "minimum", "maximum", "long", "unknown"],
+            "study_id": ["s"] * 5,
+            "series_id": ["sr"] * 5,
+            "volume_length": [29.9, 30.0, 1700.0, 1700.1, None],
+        }
+    )
+
+    out = clean.run_clean_pipeline(df, [volume_length_filter])
+
+    assert out["patient_key"].tolist() == ["minimum", "maximum", "unknown"]
 
 
 def test_group_volumes_deterministic_ordering():

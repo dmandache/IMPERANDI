@@ -163,6 +163,15 @@ cleaning:
         # - {column: SeriesDescription, op: not_null}
 
     - type: pixel_spacing_xy
+    # Dataset-owned in-plane resolution policy; null spacing is retained.
+    - type: filter
+      name: pixel_spacing_quality
+      kind: keep
+      scope: row
+      logic: and
+      keep_null: true
+      rules:
+        - {column: PixelSpacingXY, op: lte, value: 1.25}
     - type: standardize_iop
     - type: classify_acquisition_plane
       # Maximum obliquity angle used for axis classification; default 10.0.
@@ -215,6 +224,7 @@ cleaning:
 
     # Volume filters use the same kind/logic/operator contract as row filters.
     - type: filter
+      name: volume_length_quality
       kind: keep
       scope: volume
       logic: and

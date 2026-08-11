@@ -128,6 +128,7 @@ cleaning:
         - {column: SeriesDescription, op: contains, value: orl}
     - type: pixel_spacing_xy
     - type: filter
+      name: pixel_spacing_quality
       kind: keep
       scope: row
       logic: and
@@ -172,6 +173,7 @@ cleaning:
     - type: group_volumes
     - type: compute_volume_length
     - type: filter
+      name: volume_length_quality
       kind: keep
       scope: volume
       logic: and
