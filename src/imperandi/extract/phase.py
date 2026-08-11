@@ -220,8 +220,14 @@ def main(args: argparse.Namespace) -> None:
     )
     if "phase_curation" not in manifest:
         raise ValueError("Manifest must define a phase_curation section.")
-    phase_curation = manifest["phase_curation"]
-    validate_phase_curation(phase_curation)
+    phase_curation = validate_phase_curation(manifest["phase_curation"])
+    logger.info(
+        "Phase strategy order: %s",
+        " -> ".join(
+            f"{strategy['name']} ({strategy['type']})"
+            for strategy in phase_curation["strategies"]
+        ),
+    )
 
     output_path = Path(args.csv_path_out)
     error_path = Path(args.error_csv_path)
@@ -296,6 +302,21 @@ def main(args: argparse.Namespace) -> None:
         phase_curation,
         "totalsegmentator",
     )
+    prediction_strategy = next(
+        (
+            strategy
+            for strategy in phase_curation["strategies"]
+            if strategy["type"] == "totalsegmentator"
+        ),
+        None,
+    )
+    if prediction_strategy is not None:
+        logger.info(
+            "Phase extraction step: %s (totalsegmentator) selected %d/%d volume(s)",
+            prediction_strategy["name"],
+            int(needs_prediction.sum()),
+            len(df),
+        )
     prediction_skipped_indices = {
         normalize_source_id(df.at[idx, "_source_idx"])
         for idx in df.index
@@ -372,7 +393,11 @@ def main(args: argparse.Namespace) -> None:
         ckpt.mark_processed()
         _checkpoint_write(force=False)
 
-    df = apply_phase_curation(df, phase_curation)
+    df = apply_phase_curation(
+        df,
+        phase_curation,
+        progress_logger=logger,
+    )
     _checkpoint_write(force=True)
     df_out = df.drop(columns=["_source_idx"], errors="ignore")
     df_out = merge_with_existing_output(

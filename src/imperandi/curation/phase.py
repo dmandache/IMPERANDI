@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import logging
 import re
 from collections.abc import Mapping
 from typing import Any
@@ -288,8 +289,13 @@ def apply_phase_curation(
     *,
     stop_before: str | None = None,
     apply_fallback: bool = True,
+    progress_logger: logging.Logger | None = None,
 ) -> pd.DataFrame:
-    """Resolve a canonical phase using configured strategy precedence."""
+    """Resolve a canonical phase using configured strategy precedence.
+
+    When ``progress_logger`` is provided, emit one compact summary per applied
+    strategy with the number of newly resolved and still-unresolved volumes.
+    """
     normalized = validate_phase_curation(config)
     source = df.copy()
     out = df.copy()
@@ -309,9 +315,11 @@ def apply_phase_curation(
         )
     }
     stop_type = stop_before.strip().lower() if stop_before else None
-    for strategy in normalized["strategies"]:
+    strategy_count = len(normalized["strategies"])
+    for strategy_index, strategy in enumerate(normalized["strategies"], start=1):
         if strategy["type"] == stop_type:
             break
+        resolved_count = 0
         for row_position, is_unresolved in enumerate(unresolved):
             if not is_unresolved:
                 continue
@@ -325,8 +333,21 @@ def apply_phase_curation(
             out.iat[row_position, output_positions["phase_confidence"]] = confidence
             out.iat[row_position, output_positions["phase_reason"]] = reason
             unresolved[row_position] = False
+            resolved_count += 1
+
+        if progress_logger is not None:
+            progress_logger.info(
+                "Phase strategy %d/%d: %s (%s) resolved %d volume(s); %d unresolved",
+                strategy_index,
+                strategy_count,
+                strategy["name"],
+                strategy["type"],
+                resolved_count,
+                sum(unresolved),
+            )
 
     if apply_fallback and normalized["fallback"] is not None:
+        fallback_count = sum(unresolved)
         for row_position, is_unresolved in enumerate(unresolved):
             if not is_unresolved:
                 continue
@@ -334,6 +355,15 @@ def apply_phase_curation(
             out.iat[row_position, output_positions["phase_source"]] = "fallback"
             out.iat[row_position, output_positions["phase_reason"]] = (
                 "no phase strategy resolved"
+            )
+            unresolved[row_position] = False
+
+        if progress_logger is not None:
+            progress_logger.info(
+                "Phase fallback (%s) resolved %d volume(s); %d unresolved",
+                normalized["fallback"],
+                fallback_count,
+                sum(unresolved),
             )
 
     return out

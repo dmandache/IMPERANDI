@@ -5,6 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import argparse
+import logging
 
 import pandas as pd
 
@@ -130,7 +131,7 @@ def test_main_writes_phase_columns_and_error_csv(tmp_path, monkeypatch):
     monkeypatch.setattr(
         phase_module,
         "_load_phase_extractor",
-        lambda: (lambda _, quiet=True: {"phase": "arterial", "confidence": 0.8}),
+        lambda: lambda _, quiet=True: {"phase": "arterial", "confidence": 0.8},
     )
 
     args = argparse.Namespace(
@@ -213,7 +214,7 @@ def test_main_skips_rows_with_existing_totalseg_phase_when_not_forced(
     monkeypatch.setattr(
         phase_module,
         "_load_phase_extractor",
-        lambda: (lambda _, quiet=True: {"phase": "arterial"}),
+        lambda: lambda _, quiet=True: {"phase": "arterial"},
     )
 
     def fake_process_single_volume(idx, row, *, phase_extractor, verbose=False):
@@ -255,7 +256,7 @@ def test_main_force_recomputes_existing_totalseg_phase(tmp_path, monkeypatch):
     monkeypatch.setattr(
         phase_module,
         "_load_phase_extractor",
-        lambda: (lambda _, quiet=True: {"phase": "arterial"}),
+        lambda: lambda _, quiet=True: {"phase": "arterial"},
     )
 
     def fake_process_single_volume(idx, row, *, phase_extractor, verbose=False):
@@ -298,7 +299,7 @@ def test_main_preserves_foreign_columns_from_existing_output(tmp_path, monkeypat
     monkeypatch.setattr(
         phase_module,
         "_load_phase_extractor",
-        lambda: (lambda _, quiet=True: {"phase": "portal"}),
+        lambda: lambda _, quiet=True: {"phase": "portal"},
     )
 
     args = argparse.Namespace(
@@ -318,7 +319,10 @@ def test_main_preserves_foreign_columns_from_existing_output(tmp_path, monkeypat
     assert out_df.loc[0, "foreign_col"] == "keep-me"
 
 
-def test_main_skips_totalsegmentator_when_rules_resolve_phase(tmp_path, monkeypatch):
+def test_main_skips_totalsegmentator_when_rules_resolve_phase(
+    tmp_path, monkeypatch, caplog
+):
+    caplog.set_level(logging.INFO, logger=phase_module.__name__)
     csv_path = tmp_path / "nifti_index.csv"
     pd.DataFrame(
         [
@@ -353,6 +357,9 @@ def test_main_skips_totalsegmentator_when_rules_resolve_phase(tmp_path, monkeypa
     assert out_df.loc[0, "phase"] == "ARTERIAL"
     assert out_df.loc[0, "phase_source"] == "metadata_rules"
     assert "totalseg_phase" not in out_df.columns
+    assert "Phase strategy order:" in caplog.text
+    assert "selected 0/1 volume(s)" in caplog.text
+    assert "metadata_rules (rules) resolved 1 volume(s); 0 unresolved" in caplog.text
 
 
 def test_main_does_not_run_ct_predictor_for_mri(tmp_path, monkeypatch):

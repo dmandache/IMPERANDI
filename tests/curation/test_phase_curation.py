@@ -1,3 +1,5 @@
+from unittest.mock import MagicMock
+
 import pandas as pd
 import pytest
 
@@ -56,6 +58,27 @@ def test_phase_curation_uses_ordered_fallbacks_and_provenance():
         "totalseg_prediction",
         "fallback",
     ]
+
+
+def test_phase_curation_logs_resolution_counts_for_each_strategy_and_fallback():
+    df = pd.DataFrame(
+        [
+            {"site_phase": "portal-site", "rule_phase": "ARTERIAL"},
+            {"site_phase": "unmapped", "rule_phase": "ARTERIAL"},
+            {"rule_phase": "OTHER", "totalseg_phase": "portal"},
+            {"rule_phase": "UNKNOWN"},
+        ]
+    )
+    progress_logger = MagicMock()
+
+    apply_phase_curation(df, PHASE_CONFIG, progress_logger=progress_logger)
+
+    assert [call.args[5:] for call in progress_logger.info.call_args_list[:3]] == [
+        (1, 3),
+        (1, 2),
+        (1, 1),
+    ]
+    assert progress_logger.info.call_args_list[3].args[1:] == ("OTHER", 1, 0)
 
 
 def test_phase_curation_order_can_prefer_totalsegmentator():
