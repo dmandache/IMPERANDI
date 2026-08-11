@@ -277,7 +277,7 @@ def test_add_time_selects_best_time_candidate():
     assert out.loc[2, "time"] == dt_time(12, 2, 0)
 
 
-def test_clean_scan_size_and_pixel_spacing():
+def test_clean_pixel_spacing():
     df = pd.DataFrame(
         {
             "Rows": [512, None],
@@ -289,13 +289,34 @@ def test_clean_scan_size_and_pixel_spacing():
             "PixelSpacing": ["[0.7, 0.7]", None],
         }
     )
-    cleaned = clean.clean_scan_size(df.copy())
-    assert (cleaned["SliceThickness"].astype(float) <= 3).all()
-
     ps = clean.clean_pixel_spacing(df.copy())
     assert "PixelSpacingXY" in ps.columns
     assert ps.loc[0, "PixelSpacingXY"] == 0.7
     assert pd.isna(ps.loc[1, "PixelSpacingXY"])
+
+
+def test_generic_manifest_filters_scan_size_declaratively():
+    base_path = Path(__file__).resolve().parents[1] / "src" / "imperandi"
+    manifest = clean.load_manifest("generic", base_path=base_path)
+    scan_size_filter = next(
+        step
+        for step in manifest["cleaning"]["steps"]
+        if step.get("name") == "scan_size_quality"
+    )
+    df = pd.DataFrame(
+        {
+            "patient_key": ["valid", "no_rows", "no_columns", "thick", "unknown"],
+            "study_id": ["s"] * 5,
+            "series_id": ["sr"] * 5,
+            "Rows": [512, None, 512, 512, 512],
+            "Columns": [512, 512, None, 512, 512],
+            "SliceThickness": [2.0, 2.0, 2.0, 5.0, None],
+        }
+    )
+
+    out = clean.run_clean_pipeline(df, [scan_size_filter])
+
+    assert out["patient_key"].tolist() == ["valid", "unknown"]
 
 
 def test_build_volume_id_naive_and_filter_by_acquisition_plane():
@@ -771,6 +792,10 @@ def test_phase_curation_sources_are_loaded_for_modality_curation():
     ("step", "message"),
     [
         (
+            {"type": "clean_scan_size"},
+            "Unknown cleaning step type",
+        ),
+        (
             {
                 "type": "filter",
                 "kind": "keep",
@@ -1063,7 +1088,6 @@ def test_run_clean_pipeline_executes_all_supported_step_types(monkeypatch):
                 {"type": "coalesce_time", "candidates": ["AltTime", "AcquisitionTime"]},
                 {"type": "sop_class"},
                 {"type": "parse_image_type"},
-                {"type": "clean_scan_size"},
                 {"type": "normalize_string", "column": "SeriesDescription"},
                 {"type": "pixel_spacing_xy"},
                 {"type": "standardize_iop"},

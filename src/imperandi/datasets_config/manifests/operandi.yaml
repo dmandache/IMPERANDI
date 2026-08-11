@@ -92,7 +92,15 @@ cleaning:
     - type: coalesce_time
     - type: sop_class
     - type: parse_image_type
-    - type: clean_scan_size
+    - type: filter
+      name: scan_size_quality
+      kind: discard
+      scope: row
+      logic: or
+      rules:
+        - {column: Rows, op: is_null}
+        - {column: Columns, op: is_null}
+        - {column: SliceThickness, op: gt, value: 3.0}
     - type: filter
       # kind: keep|discard; scope: row|volume; logic: and|or.
       # Operators: eq, ne, in, not_in, contains, icontains, regex, lt, lte,

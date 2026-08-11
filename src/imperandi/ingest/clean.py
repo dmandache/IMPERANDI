@@ -32,7 +32,6 @@ from imperandi.utils.datetime import to_dates, to_times
 from imperandi.datasets_config.defaults import (
     DEFAULT_DICOM_TAGS,
     DEFAULT_MAX_PIXEL_SPACING_MM,
-    DEFAULT_MAX_SLICE_THICKNESS_MM,
     DATE_CANDIDATES,
     TIME_CANDIDATES,
 )
@@ -413,17 +412,6 @@ def remove_other_organs_description(df):
         )
     ]
 
-    return df
-
-
-def clean_scan_size(df):
-    if "Rows" in df.columns and "Columns" in df.columns:
-        df = df.dropna(subset=["Rows", "Columns"])
-    if "SliceThickness" in df.columns:
-        df = df[
-            (df["SliceThickness"].astype(float) <= DEFAULT_MAX_SLICE_THICKNESS_MM)
-            | (df["SliceThickness"].isna())
-        ]
     return df
 
 
@@ -1719,8 +1707,6 @@ def _get_step_inputs(step: dict) -> set[str]:
         return {"SOPClassUID"}
     if step_type == "parse_image_type":
         return {"ImageType"}
-    if step_type == "clean_scan_size":
-        return {"Rows", "Columns", "SliceThickness"}
     if step_type == "normalize_string":
         return {step["column"]}
     if step_type == "pixel_spacing_xy":
@@ -2257,11 +2243,6 @@ def _run_parse_image_type_step(df: pd.DataFrame, step: dict) -> pd.DataFrame:
     return filter_image_type(df)
 
 
-def _run_clean_scan_size_step(df: pd.DataFrame, step: dict) -> pd.DataFrame:
-    """Normalize scan-size fields used by later geometry filters."""
-    return clean_scan_size(df)
-
-
 def _run_normalize_string_step(df: pd.DataFrame, step: dict) -> pd.DataFrame:
     """Lowercase and normalize a configured string column in-place."""
     column = step["column"]
@@ -2422,7 +2403,6 @@ STEP_REGISTRY: dict[str, Callable[[pd.DataFrame, dict], pd.DataFrame]] = {
     "coalesce_time": _run_coalesce_time_step,
     "sop_class": _run_sop_class_step,
     "parse_image_type": _run_parse_image_type_step,
-    "clean_scan_size": _run_clean_scan_size_step,
     "normalize_string": _run_normalize_string_step,
     "pixel_spacing_xy": _run_pixel_spacing_xy_step,
     "standardize_iop": _run_standardize_iop_step,

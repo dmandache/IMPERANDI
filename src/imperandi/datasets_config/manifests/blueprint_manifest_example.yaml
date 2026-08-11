@@ -121,7 +121,19 @@ cleaning:
     # Parameterless normalization/derivation steps.
     - type: sop_class
     - type: parse_image_type
-    - type: clean_scan_size
+
+    # Scan-size quality policy belongs in the manifest so each dataset can tune
+    # or remove it. This preserves rows with missing SliceThickness, while
+    # discarding missing matrix dimensions or thickness above 3 mm.
+    - type: filter
+      name: scan_size_quality
+      kind: discard
+      scope: row
+      logic: or
+      rules:
+        - {column: Rows, op: is_null}
+        - {column: Columns, op: is_null}
+        - {column: SliceThickness, op: gt, value: 3.0}
 
     - type: normalize_string
       column: SeriesDescription
