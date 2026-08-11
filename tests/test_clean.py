@@ -283,14 +283,14 @@ def test_generic_manifest_filters_pixel_spacing_declaratively():
     pixel_spacing_filter = next(
         step
         for step in manifest["cleaning"]["steps"]
-        if step.get("name") == "pixel_spacing_quality"
+        if step.get("name") == "discard_large_pixel_spacing"
     )
     df = pd.DataFrame(
         {
             "patient_key": ["valid", "boundary", "coarse", "unknown"],
             "study_id": ["s"] * 4,
             "series_id": ["sr"] * 4,
-            "PixelSpacing": ["[0.7, 0.7]", "[1.25, 1.25]", "[1.5, 1.5]", None],
+            "PixelSpacing": ["[0.7, 0.7]", "[1.5, 1.5]", "[1.51, 1.51]", None],
         }
     )
 
@@ -304,28 +304,39 @@ def test_generic_manifest_filters_pixel_spacing_declaratively():
     assert pd.isna(out.iloc[2]["PixelSpacingXY"])
 
 
-def test_generic_manifest_filters_scan_size_declaratively():
+def test_generic_manifest_filters_slice_spacing_declaratively():
     base_path = Path(__file__).resolve().parents[1] / "src" / "imperandi"
     manifest = clean.load_manifest("generic", base_path=base_path)
-    scan_size_filter = next(
+    slice_spacing_filter = next(
         step
         for step in manifest["cleaning"]["steps"]
-        if step.get("name") == "scan_size_quality"
+        if step.get("name") == "discard_large_slice_spacing"
     )
     df = pd.DataFrame(
         {
-            "patient_key": ["valid", "no_rows", "no_columns", "thick", "unknown"],
-            "study_id": ["s"] * 5,
-            "series_id": ["sr"] * 5,
-            "Rows": [512, None, 512, 512, 512],
-            "Columns": [512, 512, None, 512, 512],
-            "SliceThickness": [2.0, 2.0, 2.0, 5.0, None],
+            "patient_key": [
+                "valid",
+                "thickness_boundary",
+                "spacing_boundary",
+                "thick",
+                "wide",
+                "unknown",
+            ],
+            "study_id": ["s"] * 6,
+            "series_id": ["sr"] * 6,
+            "SliceThickness": [2.0, 6.0, 2.0, 6.1, 2.0, None],
+            "SpacingBetweenSlices": [2.0, 2.0, 5.0, 2.0, 5.1, None],
         }
     )
 
-    out = clean.run_clean_pipeline(df, [scan_size_filter])
+    out = clean.run_clean_pipeline(df, [slice_spacing_filter])
 
-    assert out["patient_key"].tolist() == ["valid", "unknown"]
+    assert out["patient_key"].tolist() == [
+        "valid",
+        "thickness_boundary",
+        "spacing_boundary",
+        "unknown",
+    ]
 
 
 def test_build_volume_id_naive_and_filter_by_acquisition_plane():
@@ -437,7 +448,9 @@ def test_generic_manifest_filters_volume_length_declaratively():
     volume_length_filter = next(
         step
         for step in manifest["cleaning"]["steps"]
-        if step.get("name") == "volume_length_quality"
+        if step["type"] == "filter"
+        and step["scope"] == "volume"
+        and {rule["column"] for rule in step["rules"]} == {"volume_length"}
     )
     df = pd.DataFrame(
         {
@@ -815,6 +828,48 @@ def test_phase_curation_sources_are_loaded_for_modality_curation():
     assert {"TemporalPositionIdentifier", "InstanceNumber"}.issubset(required)
 
 
+def test_single_rule_filter_defaults_missing_logic_to_and():
+    manifest = {
+        "cleaning": {
+            "version": 1,
+            "steps": [
+                {
+                    "type": "filter",
+                    "kind": "keep",
+                    "scope": "row",
+                    "rules": [{"column": "Modality", "op": "eq", "value": "CT"}],
+                }
+            ],
+        }
+    }
+
+    steps = clean.validate_cleaning_manifest(manifest)
+
+    assert steps[0]["logic"] == "and"
+
+
+def test_multiple_rule_filter_requires_logic():
+    manifest = {
+        "cleaning": {
+            "version": 1,
+            "steps": [
+                {
+                    "type": "filter",
+                    "kind": "keep",
+                    "scope": "row",
+                    "rules": [
+                        {"column": "Modality", "op": "eq", "value": "CT"},
+                        {"column": "Rows", "op": "gte", "value": 256},
+                    ],
+                }
+            ],
+        }
+    }
+
+    with pytest.raises(ValueError, match="multiple rules"):
+        clean.validate_cleaning_manifest(manifest)
+
+
 @pytest.mark.parametrize(
     ("step", "message"),
     [
@@ -1006,7 +1061,57 @@ def test_run_clean_pipeline_filter_logic_and_or():
     assert out["patient_key"].tolist() == ["p1"]
 
 
-def test_filter_step_log_lists_each_column_once(caplog):
+@pytest.mark.parametrize("op", ["eq", "ne", "in", "not_in"])
+@pytest.mark.parametrize(
+    "values",
+    [
+        pd.Series(["CT", None], dtype="object"),
+        pd.Series(["CT", pd.NA], dtype="string"),
+        pd.Series([1.0, float("nan")], dtype="float64"),
+    ],
+)
+def test_non_null_filter_operators_never_match_missing_values(op, values):
+    comparison = ["CT"] if op in {"in", "not_in"} else "CT"
+    if values.dtype == "float64":
+        comparison = [1.0] if op in {"in", "not_in"} else 1.0
+    df = pd.DataFrame({"value": values})
+
+    mask = clean._rule_mask(
+        df,
+        {"column": "value", "op": op, "value": comparison},
+    )
+
+    assert not bool(mask.iloc[1])
+
+
+@pytest.mark.parametrize("kind", ["keep", "discard"])
+def test_keep_null_preserves_incomplete_rows_for_both_filter_kinds(kind):
+    df = pd.DataFrame(
+        {
+            "patient_key": ["missing", "match", "other"],
+            "study_id": ["s"] * 3,
+            "series_id": ["sr"] * 3,
+            "value": [None, 5.0, 1.0],
+        }
+    )
+    step = {
+        "type": "filter",
+        "kind": kind,
+        "scope": "row",
+        "keep_null": True,
+        "rules": [{"column": "value", "op": "gte", "value": 5.0}],
+    }
+    validated_step = clean.validate_cleaning_manifest(
+        {"cleaning": {"version": 1, "steps": [step]}}
+    )[0]
+
+    out = clean.run_clean_pipeline(df, [validated_step])
+
+    expected = ["missing", "match"] if kind == "keep" else ["missing", "other"]
+    assert out["patient_key"].tolist() == expected
+
+
+def test_filter_step_log_includes_name_and_lists_each_column_once(caplog):
     caplog.set_level(logging.INFO, logger="imperandi.utils.misc")
     df = pd.DataFrame(
         {
@@ -1020,6 +1125,7 @@ def test_filter_step_log_lists_each_column_once(caplog):
     steps = [
         {
             "type": "filter",
+            "name": "exclude_non_diagnostic",
             "kind": "discard",
             "scope": "row",
             "logic": "or",
@@ -1038,7 +1144,8 @@ def test_filter_step_log_lists_each_column_once(caplog):
     clean.run_clean_pipeline(df, steps)
 
     assert (
-        "After discard row filter on column(s) Modality, SeriesDescription:"
+        "After discard row filter 'exclude_non_diagnostic' on column(s) "
+        "Modality, SeriesDescription:"
         in caplog.text
     )
 

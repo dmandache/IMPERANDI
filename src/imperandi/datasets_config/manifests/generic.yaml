@@ -20,9 +20,9 @@ id_extraction:
 
 # Optional trusted Python hook used to normalize patient_key during parsing.
 # hook_module is relative to the imperandi package.
-id_standardization:
-  hook_module: datasets_config.hooks.generic
-  function: standardize_patient_key
+# id_standardization:
+#   hook_module: datasets_config.hooks.generic
+#   function: standardize_patient_key
 
 # Ordered phase fallback chain: the first resolved label wins. Supported
 # strategy types are ontology, rules, and totalsegmentator (at most one each).
@@ -63,29 +63,30 @@ phase_curation:
 cleaning:
   version: 1
   steps:
-    - type: hook
-      function: "datasets_config.hooks.generic:standardize_patient_key"
-      source_columns: [patient_key]
+    # - type: hook
+    #   function: "datasets_config.hooks.generic:standardize_patient_key"
+    #   source_columns: [patient_key]
     - type: coalesce_date
     - type: coalesce_time
     - type: sop_class
     - type: parse_image_type
     - type: filter
-      name: scan_size_quality
+      name: discard_large_slice_spacing
       kind: discard
       scope: row
       logic: or
       rules:
-        - {column: Rows, op: is_null}
-        - {column: Columns, op: is_null}
-        - {column: SliceThickness, op: gt, value: 3.0}
+        #- {column: Rows, op: is_null}
+        #- {column: Columns, op: is_null}
+        - {column: SliceThickness, op: gt, value: 6.0}
+        - {column: SpacingBetweenSlices, op: gt, value: 5.0}
     - type: filter
       # kind: keep|discard; scope: row|volume; logic: and|or.
       # Operators: eq, ne, in, not_in, contains, icontains, regex, lt, lte,
       # gt, gte, is_null, not_null. `in`/`not_in` require a list value.
       kind: keep
       scope: row
-      logic: and
+      logic: or
       rules:
         - column: Modality
           op: in
@@ -98,6 +99,7 @@ cleaning:
             - MRImageStorage
             - EnhancedMRImageStorage
     - type: filter
+      name: discard_pet_and_nuclear
       kind: discard
       scope: row
       logic: or
@@ -105,42 +107,43 @@ cleaning:
         - {column: ModalitiesInStudy, op: contains, value: PT}
         - {column: ModalitiesInStudy, op: contains, value: NM}
     - type: filter
+      name: discard_localizer_and_scout
       kind: discard
       scope: row
       logic: or
       rules:
         - {column: ImageType, op: contains, value: LOCALIZER}
+        - {column: SeriesDescription, op: icontains, value: localizer}
         - {column: SeriesDescription, op: icontains, value: scout}
     - type: normalize_string
       column: SeriesDescription
     - type: filter
+      name: discard_non_liver
       kind: discard
       scope: row
       logic: or
       rules:
-        - {column: SeriesDescription, op: contains, value: pelvis}
         - {column: SeriesDescription, op: contains, value: crane}
         - {column: SeriesDescription, op: contains, value: rachis}
         - {column: SeriesDescription, op: contains, value: prostate}
         - {column: SeriesDescription, op: contains, value: phlebo}
-        - {column: SeriesDescription, op: contains, value: meckel}
         - {column: SeriesDescription, op: contains, value: femur}
         - {column: SeriesDescription, op: contains, value: orl}
     - type: pixel_spacing_xy
     - type: filter
-      name: pixel_spacing_quality
+      name: discard_large_pixel_spacing
+      kind: discard
+      scope: row
+      rules:
+        - {column: PixelSpacingXY, op: gt, value: 1.5}
+    - type: standardize_iop
+    - type: classify_acquisition_plane
+    - type: filter
+      name: keep_axial_acquisitions
       kind: keep
       scope: row
       logic: and
       keep_null: true
-      rules:
-        - {column: PixelSpacingXY, op: lte, value: 1.25}
-    - type: standardize_iop
-    - type: classify_acquisition_plane
-    - type: filter
-      kind: keep
-      scope: row
-      logic: and
       rules:
         - {column: acquisition_axis, op: eq, value: Z}
     - type: build_volume_id
@@ -173,7 +176,6 @@ cleaning:
     - type: group_volumes
     - type: compute_volume_length
     - type: filter
-      name: volume_length_quality
       kind: keep
       scope: volume
       logic: and

@@ -33,9 +33,14 @@ def test_load_generic_manifest_and_hook_resolution():
     manifest = load_manifest("generic", base_path=base_path)
 
     assert manifest["dataset_name"] == "generic"
-    assert "id_standardization" in manifest
+    assert "id_standardization" not in manifest
 
-    hook = resolve_hook(manifest["id_standardization"])
+    hook = resolve_hook(
+        {
+            "hook_module": "datasets_config.hooks.generic",
+            "function": "standardize_patient_key",
+        }
+    )
     assert hook is not None
     assert hook("patient_0012_030") == "12-30"
 

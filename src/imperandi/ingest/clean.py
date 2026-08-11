@@ -1975,11 +1975,20 @@ def validate_cleaning_manifest(manifest: dict) -> list[dict]:
                 raise ValueError("Filter steps must define kind='keep' or 'discard'.")
             if step.get("scope") not in {"row", "volume"}:
                 raise ValueError("Filter steps must define scope='row' or 'volume'.")
-            if step.get("logic") not in {"and", "or"}:
-                raise ValueError("Filter steps must define logic='and' or 'or'.")
             rules = step.get("rules")
             if not isinstance(rules, list) or not rules:
                 raise ValueError("Filter steps must define a non-empty 'rules' list.")
+            logic = step.get("logic")
+            if logic is None:
+                if len(rules) == 1:
+                    step["logic"] = "and"
+                else:
+                    raise ValueError(
+                        "Filter steps must define logic='and' or 'or' when they "
+                        "contain multiple rules."
+                    )
+            elif logic not in {"and", "or"}:
+                raise ValueError("Filter step logic must be 'and' or 'or'.")
             if "keep_null" in step and not isinstance(step["keep_null"], bool):
                 raise ValueError("Filter steps must define keep_null as a boolean.")
             for rule in rules:
@@ -2050,6 +2059,8 @@ def _step_label(step: dict) -> str:
             )
         )
         label = f"{step['kind']} {step['scope']} filter"
+        if step.get("name"):
+            label += f" {str(step['name'])!r}"
         if columns:
             label += f" on column(s) {', '.join(columns)}"
         return label
@@ -2128,15 +2139,16 @@ def _rule_mask(df: pd.DataFrame, rule: dict) -> pd.Series:
     op = rule["op"]
     value = rule.get("value")
     series = df[col]
+    non_null = series.notna()
 
     if op == "eq":
-        return series == value
+        return non_null & (series == value).fillna(False)
     if op == "ne":
-        return series != value
+        return non_null & (series != value).fillna(False)
     if op == "in":
-        return series.isin(value)
+        return non_null & series.isin(value)
     if op == "not_in":
-        return ~series.isin(value)
+        return non_null & ~series.isin(value)
     if op == "contains":
         return series.astype("string").str.contains(str(value), regex=False, na=False)
     if op == "icontains":
@@ -2173,12 +2185,15 @@ def _run_filter_step(df: pd.DataFrame, step: dict) -> pd.DataFrame:
         else:
             mask = mask | current
 
+    if step["kind"] == "keep":
+        if step.get("keep_null"):
+            null_mask = df[list(required_columns)].isna().any(axis=1)
+            mask = mask | null_mask
+        return df[mask].copy()
+
     if step.get("keep_null"):
         null_mask = df[list(required_columns)].isna().any(axis=1)
-        mask = mask | null_mask
-
-    if step["kind"] == "keep":
-        return df[mask].copy()
+        mask = mask & ~null_mask
     return df[~mask].copy()
 
 
