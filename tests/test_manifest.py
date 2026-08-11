@@ -9,6 +9,25 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from imperandi.utils.manifest import load_manifest, resolve_hook
 
 
+@pytest.mark.parametrize(
+    ("manifest_name", "dataset_name"),
+    [
+        ("generic", "generic"),
+        ("operandi", "operandi"),
+        ("blueprint_manifest_example", "blueprint_example"),
+    ],
+)
+def test_bundled_manifests_are_loadable(manifest_name, dataset_name):
+    base_path = Path(__file__).resolve().parents[1] / "src" / "imperandi"
+
+    manifest = load_manifest(manifest_name, base_path=base_path)
+
+    assert manifest["dataset_name"] == dataset_name
+    assert manifest["cleaning"]["version"] == 1
+    assert manifest["phase_curation"]["strategies"]
+    assert manifest["segmentation"]["backend"] == "totalsegmentator"
+
+
 def test_load_generic_manifest_and_hook_resolution():
     base_path = Path(__file__).resolve().parents[1] / "src" / "imperandi"
     manifest = load_manifest("generic", base_path=base_path)

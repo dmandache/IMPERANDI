@@ -1,0 +1,320 @@
+# IMPERANDI manifest blueprint
+#
+# Copy this file and replace the example names, hooks, columns, mappings, and
+# task choices. It is valid YAML and demonstrates every IMPERANDI-owned
+# manifest field. Commented alternatives are mutually exclusive choices or
+# advanced steps that should not normally run together.
+
+# Free-form dataset label used to identify this configuration.
+dataset_name: blueprint_example
+
+# ---------------------------------------------------------------------------
+# Parse-time identifier extraction
+# ---------------------------------------------------------------------------
+id_extraction:
+  # Allowed: auto (tag, then path), tags (tag only), path (directory layout).
+  source: auto
+  # Passed to pydicom for non-conformant files.
+  force_dicom_read: false
+  patient_key:
+    # Any valid DICOM keyword, commonly PatientID or PatientName.
+    from_tag: PatientID
+    fallback: path
+  study_id:
+    # Common alternatives: StudyInstanceUID or StudyID.
+    from_tag: StudyInstanceUID
+    fallback: path
+  series_id:
+    # Common alternatives: SeriesInstanceUID or SeriesNumber.
+    from_tag: SeriesInstanceUID
+    fallback: path
+
+# Optional parse-time patient-key normalization hook. Modules are relative to
+# `imperandi`; only use trusted code because hooks are imported and executed.
+id_standardization:
+  hook_module: datasets_config.hooks.generic
+  function: standardize_patient_key
+
+# Optional parse-time enrichments. A hook returns a mapping/Series of columns.
+derived_columns:
+  - hook_module: datasets_config.hooks.operandi
+    function: extract_from_patient_key
+    from_column: patient_key
+    # Allowed: missing_only (default) or overwrite.
+    join_mode: missing_only
+  # - hook_module: datasets_config.hooks.site
+  #   function: derive_site_fields
+  #   from_column: patient_key
+  #   join_mode: overwrite
+
+# ---------------------------------------------------------------------------
+# Phase curation
+# ---------------------------------------------------------------------------
+# Strategies run in list order and each type may occur at most once. Canonical
+# labels are normalized uppercase strings; typical values are NATIVE, ARTERIAL,
+# PORTAL_VENOUS, DELAYED, and OTHER, but custom non-empty labels are accepted.
+phase_curation:
+  strategies:
+    # Exact, case-insensitive site-ontology mapping. columns are tried in order.
+    - type: ontology
+      name: reviewed_site_ontology
+      columns: [reviewed_phase, site_phase]
+      # Any scalar string/number is accepted as confidence.
+      confidence: high
+      mapping:
+        pre: NATIVE
+        non contrast: NATIVE
+        art: ARTERIAL
+        pv: PORTAL_VENOUS
+        late: DELAYED
+
+    # Consumes IMPERANDI metadata-rule outputs. mapping is optional; omit it to
+    # preserve the rule engine's normalized labels.
+    - type: rules
+      name: metadata_rules
+      mapping:
+        native: NATIVE
+        arterial: ARTERIAL
+        portal_venous: PORTAL_VENOUS
+        delayed: DELAYED
+
+    # Consumes columns produced by `imperandi phase`. Defaults when omitted:
+    # column=totalseg_phase, modalities=[CT], and the confidence columns below.
+    - type: totalsegmentator
+      name: totalsegmentator_prediction
+      column: totalseg_phase
+      modalities: [CT]
+      confidence_columns: [totalseg_probability, totalseg_confidence]
+      # Optional. Without mapping, normalized predictor labels pass through.
+      mapping:
+        native: NATIVE
+        non_contrast: NATIVE
+        arterial_early: ARTERIAL
+        arterial_late: ARTERIAL
+        portal_venous: PORTAL_VENOUS
+        delayed: DELAYED
+
+  # These values do not stop the fallback chain. Empty is always unresolved.
+  unresolved_labels: ["", OTHER, UNKNOWN, UNCLASSIFIED, NONE]
+  # Any non-empty phase label, or null to leave unresolved rows empty.
+  fallback: OTHER
+
+# ---------------------------------------------------------------------------
+# Ordered cleaning pipeline
+# ---------------------------------------------------------------------------
+cleaning:
+  # Only version 1 is currently supported.
+  version: 1
+  steps:
+    # Optional `name` may be added to any step to improve log labels.
+    - type: hook
+      name: normalize_patient_key
+      function: "datasets_config.hooks.generic:standardize_patient_key"
+      source_columns: [patient_key]
+
+    # Candidate lists are optional; first populated candidate wins.
+    - type: coalesce_date
+      candidates: [AcquisitionDate, SeriesDate, StudyDate, ContentDate]
+    - type: coalesce_time
+      candidates: [AcquisitionTime, SeriesTime, StudyTime, ContentTime]
+
+    # Parameterless normalization/derivation steps.
+    - type: sop_class
+    - type: parse_image_type
+    - type: clean_scan_size
+
+    - type: normalize_string
+      column: SeriesDescription
+
+    # Filter values can be strings, numbers, booleans, or lists as appropriate.
+    # kind: keep|discard; scope: row|volume; logic: and|or; keep_null: bool.
+    # All operators are shown below. `value` is omitted only for null checks.
+    - type: filter
+      name: filter_operator_examples
+      kind: keep
+      scope: row
+      logic: and
+      keep_null: true
+      rules:
+        - {column: Modality, op: eq, value: CT}
+        # - {column: Modality, op: ne, value: PT}
+        # - {column: Modality, op: in, value: [CT, MR, MRI]}
+        # - {column: Modality, op: not_in, value: [PT, NM]}
+        # - {column: ImageType, op: contains, value: ORIGINAL}
+        # - {column: SeriesDescription, op: icontains, value: liver}
+        # - {column: SeriesDescription, op: regex, value: "(?i)abdomen|liver"}
+        # - {column: SliceThickness, op: lt, value: 5.0}
+        # - {column: SliceThickness, op: lte, value: 5.0}
+        # - {column: Rows, op: gt, value: 255}
+        # - {column: Rows, op: gte, value: 256}
+        # - {column: ContrastBolusAgent, op: is_null}
+        # - {column: SeriesDescription, op: not_null}
+
+    - type: pixel_spacing_xy
+    - type: standardize_iop
+    - type: classify_acquisition_plane
+      # Maximum obliquity angle used for axis classification; default 10.0.
+      angle_thresh_deg: 10.0
+
+    # Composite recommended volume-ID step: hashes preferred/fallback metadata,
+    # splits repeated stacks, and merges near-duplicate IDs.
+    - type: build_volume_id
+      preferred_columns:
+        - patient_key
+        - study_id
+        - series_id
+        - ImageType
+        - AcquisitionNumber
+        - ImageOrientationPatient
+        - SliceThickness
+        - PixelSpacingXY
+      fallback_columns: [patient_key, study_id, series_id]
+      series_group_columns: [patient_key, study_id, series_id]
+      split_z_tolerance: 0.01
+      min_slices: 8
+      min_repeated_slice_fraction: 0.7
+      merge_group_columns:
+        - patient_key
+        - study_id
+        - series_id
+        - ImageType
+        - ImageOrientationPatient
+        - SliceThickness
+        - PixelSpacingXY
+      merge_z_sources: [ImagePositionPatient, SliceLocation]
+      merge_z_tolerance: 0.001
+      volume_column: volume_id
+
+    # Advanced alternatives to the composite build_volume_id step. Uncomment
+    # only when constructing a custom pipeline; both expose volume_column.
+    # - type: split_multivolume_series
+    #   series_group_columns: [patient_key, study_id, series_id]
+    #   z_tolerance: 0.01
+    #   min_slices: 8
+    #   min_repeated_slice_fraction: 0.7
+    #   volume_column: volume_id
+    # - type: merge_volume_ids
+    #   group_columns: [patient_key, study_id, series_id]
+    #   z_sources: [ImagePositionPatient, SliceLocation]
+    #   z_tolerance: 0.001
+
+    - type: group_volumes
+    - type: compute_volume_length
+
+    # Volume filters use the same kind/logic/operator contract as row filters.
+    - type: filter
+      kind: keep
+      scope: volume
+      logic: and
+      keep_null: true
+      rules:
+        - {column: volume_length, op: gte, value: 30.0}
+        - {column: volume_length, op: lte, value: 1700.0}
+
+    - type: compute_visit_order
+    - type: compute_acquisition_order
+    # Requires the top-level phase_curation block.
+    - type: modality_curation
+    # Keep finalize last to drop empty helpers and restore canonical ordering.
+    - type: finalize
+
+# ---------------------------------------------------------------------------
+# Segmentation
+# ---------------------------------------------------------------------------
+segmentation:
+  # Currently the only accepted value.
+  backend: totalsegmentator
+  # Keys may be CT and/or MR; MRI is accepted as an alias for MR. A modality
+  # omitted here is retained in the table but skipped by segmentation.
+  modalities:
+    CT:
+      tasks:
+        # `extra` accepts TotalSegmentator keyword arguments. roi_subset and
+        # roi_subset_robust also declare logical outputs for the result table.
+        - task: total
+          extra:
+            roi_subset: [liver]
+            # Alternative selector: roi_subset_robust: [liver]
+            fastest: true
+            # `fast: true` is also supported. Backend kwargs are version-specific.
+        # Singular logical/backend output alias.
+        - task: liver_lesions
+          output: liver_tumor
+          fetch_output: liver_lesions
+          extra: {}
+        # Plural aliases must map one-to-one. This commented example documents
+        # outputs/fetch_outputs without requiring a particular backend task.
+        # - task: custom_multimask_task
+        #   outputs: [logical_a, logical_b]
+        #   fetch_outputs: [backend_a, backend_b]
+        #   extra: {}
+      postprocess:
+        # Bare logical names, mask_* column names, and *.nii.gz names are accepted.
+        merge_keys: [liver, liver_tumor]
+        output: liver
+        radius_mm: 5.0
+        close: true
+        fill_holes: true
+        largest_cc: true
+        # Allowed: warn_only (default) or fail.
+        on_failure: warn_only
+
+    MR:
+      # MR task names resolve to TotalSegmentator's *_mr models.
+      tasks:
+        - task: total_mr
+          extra:
+            roi_subset_robust: [liver]
+            fastest: true
+        - task: liver_lesions_mr
+          output: liver_tumor
+          fetch_output: liver_lesions
+          extra: {}
+      postprocess:
+        merge_keys: [liver, liver_tumor]
+        output: liver
+        radius_mm: 5.0
+        close: true
+        fill_holes: true
+        largest_cc: true
+        on_failure: fail
+
+# ---------------------------------------------------------------------------
+# Radiomics
+# ---------------------------------------------------------------------------
+radiomics:
+  # Passed to PyRadiomics as its native parameter mapping. These representative
+  # sections cover settings, voxel settings, image types, and feature classes;
+  # exact keys/values depend on the installed PyRadiomics version.
+  pyradiomics:
+    setting:
+      binWidth: 25
+      resampledPixelSpacing: [1, 1, 1]
+      interpolator: sitkBSpline
+      normalize: false
+      removeOutliers: null
+      resegmentRange: [-150, 250]
+      correctMask: true
+    voxelSetting:
+      kernelRadius: 1
+      maskedKernel: true
+      initValue: .nan
+    imageType:
+      Original: {}
+      LoG:
+        sigma: [1.0, 2.0, 3.0]
+      Wavelet: {}
+    featureClass:
+      firstorder: []
+      shape: []
+      glcm: []
+      glrlm: []
+      glszm: []
+      gldm: []
+      ngtdm: []
+
+  # Map any existing cohort column to a non-empty accepted-value list. Multiple
+  # columns are ANDed; values retain their YAML scalar types.
+  filters:
+    phase: [ARTERIAL, PORTAL_VENOUS]
+    Modality: [CT, MR, MRI]

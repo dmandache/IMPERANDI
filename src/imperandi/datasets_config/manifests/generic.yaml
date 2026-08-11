@@ -1,5 +1,10 @@
+# Built-in baseline manifest. Comments document the supported manifest contract;
+# changing the values changes the corresponding pipeline stage.
 dataset_name: generic
 
+# Parse-time identifier policy. source accepts: auto, tags, or path. The three
+# from_tag values are DICOM keywords; fallback: path uses directory components
+# when the selected tag is unavailable.
 id_extraction:
   source: auto
   force_dicom_read: false
@@ -13,14 +18,20 @@ id_extraction:
     from_tag: SeriesInstanceUID
     fallback: path
 
+# Optional trusted Python hook used to normalize patient_key during parsing.
+# hook_module is relative to the imperandi package.
 id_standardization:
   hook_module: datasets_config.hooks.generic
   function: standardize_patient_key
 
+# Ordered phase fallback chain: the first resolved label wins. Supported
+# strategy types are ontology, rules, and totalsegmentator (at most one each).
 phase_curation:
   strategies:
     - type: rules
       name: metadata_rules
+    # Consumes predictions written by `imperandi phase`; mapping keys are
+    # case-insensitive raw labels and values are canonical output labels.
     - type: totalsegmentator
       name: totalsegmentator_prediction
       column: totalseg_phase
@@ -47,6 +58,8 @@ phase_curation:
     - NONE
   fallback: OTHER
 
+# Executable, ordered cleaning pipeline. version currently must be 1. Step
+# order matters: row cleanup precedes volume grouping, then volume curation.
 cleaning:
   version: 1
   steps:
@@ -59,6 +72,9 @@ cleaning:
     - type: parse_image_type
     - type: clean_scan_size
     - type: filter
+      # kind: keep|discard; scope: row|volume; logic: and|or.
+      # Operators: eq, ne, in, not_in, contains, icontains, regex, lt, lte,
+      # gt, gte, is_null, not_null. `in`/`not_in` require a list value.
       kind: keep
       scope: row
       logic: and
@@ -119,6 +135,8 @@ cleaning:
       rules:
         - {column: acquisition_axis, op: eq, value: Z}
     - type: build_volume_id
+      # Detect repeated stacks, assign volume IDs, then merge near-duplicates.
+      # Tolerances are in the units of their source DICOM geometry fields.
       preferred_columns:
         - patient_key
         - study_id
@@ -158,6 +176,9 @@ cleaning:
     - type: modality_curation
     - type: finalize
 
+# TotalSegmentator is currently the only backend. CT and MR have independent
+# task lists (MRI is accepted as an MR alias). `extra` is passed through to the
+# backend; output/fetch_output rename a produced mask in the cohort table.
 segmentation:
   backend: totalsegmentator
   modalities:
@@ -172,6 +193,7 @@ segmentation:
           fetch_output: liver_lesions
         - task: liver_segments
       postprocess:
+        # Merge logical task outputs, then optionally clean the merged mask.
         merge_keys: [liver, liver_tumor]
         output: liver
         radius_mm: 5.0
@@ -197,6 +219,7 @@ segmentation:
         close: true
 
 radiomics:
+  # `pyradiomics` follows the native PyRadiomics parameter-file structure.
   pyradiomics:
     setting:
       binWidth: 25
@@ -206,4 +229,6 @@ radiomics:
     imageType:
       Original: {}
   filters:
+    # Each key is a cohort-table column; a row is retained when its value is in
+    # the configured list. Multiple filter keys are combined with AND.
     phase: [PORTAL_VENOUS, ARTERIAL]
