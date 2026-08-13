@@ -15,6 +15,7 @@ from imperandi.qc.viewer_resample import (
     load_nifti_isotropic,
     validate_isotropic_resolution,
 )
+from imperandi.qc.viewer_windowing import normalize_modality, percentile_window
 
 warnings.filterwarnings("ignore")  # Ignore warnings
 
@@ -22,6 +23,7 @@ warnings.filterwarnings("ignore")  # Ignore warnings
 DICOM_TAGS_TO_DISPLAY = [
     "patient_key",
     "date",
+    "Modality",
     "visit_order",
     "phase",
     "SeriesDescription",
@@ -71,15 +73,15 @@ def load_nifti(
 
 
 def clip_hu_values(ct_scan, min_hu, max_hu):
-    """Clip the Hounsfield Unit (HU) values of the CT scan."""
+    """Clip CT values to the selected Hounsfield Unit (HU) window."""
     return np.clip(ct_scan, min_hu, max_hu)
 
 
-class CTScanViewer:
-    """Interactive Jupyter viewer for CT volumes and segmentation overlays.
+class ScanViewer:
+    """Interactive Jupyter viewer for CT/MRI volumes and segmentation overlays.
 
     The viewer navigates cohort rows, patients, exams, phases, and anatomical
-    planes while applying configurable HU windows and isotropic resampling.
+    planes with modality-aware intensity windowing and isotropic resampling.
     """
 
     def __init__(
@@ -97,6 +99,10 @@ class CTScanViewer:
         self.ct_scan_col = ct_scan_col
         self.patient_col = "patient_key" if "patient_key" in df.columns else None
         self.date_col = "date" if "date" in df.columns else None
+        self.modality_col = next(
+            (column for column in ("Modality", "modality") if column in df.columns),
+            None,
+        )
         if phase_col is not None and phase_col in df.columns:
             self.phase_col = phase_col
         elif "phase" in df.columns:
@@ -138,6 +144,8 @@ class CTScanViewer:
 
         self.HU_min = HU_min
         self.HU_max = HU_max
+        self.percentile_min = 1.0
+        self.percentile_max = 99.0
         self.current_index = 0
         self.view_plane = "axial"
         self.slice_idx = 0
@@ -149,6 +157,7 @@ class CTScanViewer:
         self.display_widget = None
         self._uses_output_fallback = False
         self._suspend_jump = False
+        self._suspend_window = False
         self.exploration_mode = exploration_mode
         self.canvas_size_px = DISPLAY_CANVAS_PX
         self.figure_dpi = FIGURE_DPI
@@ -178,6 +187,7 @@ class CTScanViewer:
         nav_button_layout = widgets.Layout(
             width="auto", min_width=JUMP_NAV_BUTTON_WIDTH
         )
+        scan_button_layout = widgets.Layout(width="50%", min_width="180px")
         self.prev_slice_button = widgets.Button(
             description="< Prev Slice", layout=nav_button_layout
         )
@@ -212,6 +222,47 @@ class CTScanViewer:
         )
         self.window_preset.observe(self.on_window_preset_change, names="value")
 
+        self.hu_min_input = widgets.BoundedFloatText(
+            value=self.HU_min,
+            min=-10000,
+            max=10000,
+            step=10,
+            description="HU min",
+            layout=widgets.Layout(width="50%", min_width="0px"),
+            style={"description_width": "105px"},
+        )
+        self.hu_max_input = widgets.BoundedFloatText(
+            value=self.HU_max,
+            min=-10000,
+            max=10000,
+            step=10,
+            description="HU max",
+            layout=widgets.Layout(width="50%", min_width="0px"),
+            style={"description_width": "105px"},
+        )
+        self.percentile_min_input = widgets.BoundedFloatText(
+            value=self.percentile_min,
+            min=0,
+            max=100,
+            step=0.5,
+            description="Percentile min",
+            layout=widgets.Layout(width="50%", min_width="0px"),
+            style={"description_width": "105px"},
+        )
+        self.percentile_max_input = widgets.BoundedFloatText(
+            value=self.percentile_max,
+            min=0,
+            max=100,
+            step=0.5,
+            description="Percentile max",
+            layout=widgets.Layout(width="50%", min_width="0px"),
+            style={"description_width": "105px"},
+        )
+        self.hu_min_input.observe(self.on_hu_change, names="value")
+        self.hu_max_input.observe(self.on_hu_change, names="value")
+        self.percentile_min_input.observe(self.on_percentile_change, names="value")
+        self.percentile_max_input.observe(self.on_percentile_change, names="value")
+
         self.resolution_input = widgets.BoundedFloatText(
             value=self.isotropic_resolution_mm,
             min=0.01,
@@ -229,8 +280,12 @@ class CTScanViewer:
         self.date_dropdown = widgets.Dropdown(
             description="Date", layout=widgets.Layout(width="100%", min_width="0px")
         )
+        self.modality_dropdown = widgets.Dropdown(
+            description="Modality",
+            layout=widgets.Layout(width="50%", min_width="0px"),
+        )
         self.phase_dropdown = widgets.Dropdown(
-            description=phase_desc, layout=widgets.Layout(width="100%", min_width="0px")
+            description=phase_desc, layout=widgets.Layout(width="50%", min_width="0px")
         )
         self.prev_patient_button = widgets.Button(
             description="< Prev Patient",
@@ -251,6 +306,7 @@ class CTScanViewer:
         self._refresh_jump_dropdowns()
         self.patient_dropdown.observe(self.on_patient_change, names="value")
         self.date_dropdown.observe(self.on_date_change, names="value")
+        self.modality_dropdown.observe(self.on_modality_change, names="value")
         self.phase_dropdown.observe(self.on_phase_change, names="value")
         self.prev_patient_button.on_click(self.on_prev_patient)
         self.next_patient_button.on_click(self.on_next_patient)
@@ -258,11 +314,11 @@ class CTScanViewer:
         self.next_date_button.on_click(self.on_next_date)
 
         self.next_button = widgets.Button(
-            description="Next Scan >", layout=nav_button_layout
+            description="Next Scan >", layout=scan_button_layout
         )
         self.next_button.on_click(self.on_next)
         self.prev_button = widgets.Button(
-            description="< Prev Scan", layout=nav_button_layout
+            description="< Prev Scan", layout=scan_button_layout
         )
         self.prev_button.on_click(self.on_prev)
 
@@ -419,9 +475,13 @@ class CTScanViewer:
                     [self.prev_date_button, self.date_dropdown, self.next_date_button],
                     layout=grid_three,
                 ),
-                widgets.GridBox(
-                    [self.prev_button, self.phase_dropdown, self.next_button],
-                    layout=grid_three,
+                widgets.HBox(
+                    [self.modality_dropdown, self.phase_dropdown],
+                    layout=widgets.Layout(width="100%"),
+                ),
+                widgets.HBox(
+                    [self.prev_button, self.next_button],
+                    layout=widgets.Layout(width="100%"),
                 ),
             ],
             layout=widgets.Layout(
@@ -434,14 +494,19 @@ class CTScanViewer:
                 height="100%",
             ),
         )
-        ui_top = widgets.GridBox(
-            [top_left_controls, top_right_jump],
-            layout=widgets.Layout(
-                grid_template_columns="1fr 1fr",
-                width="100%",
-                align_items="stretch",
-                grid_gap="6px",
-            ),
+        ui_top = widgets.VBox(
+            [
+                widgets.HTML("<h3 style='margin:0 0 8px 0'>3D Scan Viewer</h3>"),
+                widgets.GridBox(
+                    [top_left_controls, top_right_jump],
+                    layout=widgets.Layout(
+                        grid_template_columns="1fr 1fr",
+                        width="100%",
+                        align_items="stretch",
+                        grid_gap="6px",
+                    ),
+                ),
+            ]
         )
         overlay_group = widgets.VBox(
             [
@@ -455,6 +520,14 @@ class CTScanViewer:
             [
                 widgets.HTML("<b>Rendering</b>"),
                 self.window_preset,
+                widgets.HBox(
+                    [self.hu_min_input, self.hu_max_input],
+                    layout=widgets.Layout(width="100%"),
+                ),
+                widgets.HBox(
+                    [self.percentile_min_input, self.percentile_max_input],
+                    layout=widgets.Layout(width="100%"),
+                ),
                 self.resolution_input,
             ],
             layout=group_layout,
@@ -581,7 +654,9 @@ class CTScanViewer:
             return [("N/A", None)]
         return options
 
-    def _filter_frame_for_jump(self, patient_value=None, date_value=None):
+    def _filter_frame_for_jump(
+        self, patient_value=None, date_value=None, modality_value=None
+    ):
         frame = self.df
         if self.patient_col and patient_value is not None:
             frame = frame[
@@ -592,6 +667,10 @@ class CTScanViewer:
         if self.date_col and date_value is not None:
             frame = frame[
                 frame[self.date_col].apply(lambda v: self._format_date(v) == date_value)
+            ]
+        if self.modality_col and modality_value is not None:
+            frame = frame[
+                frame[self.modality_col].apply(normalize_modality) == modality_value
             ]
         return frame
 
@@ -612,6 +691,7 @@ class CTScanViewer:
         frame = self._filter_frame_for_jump(
             patient_value=patient_value,
             date_value=date_value,
+            modality_value=getattr(self.modality_dropdown, "value", None),
         )
         return self._build_options_for_column(
             self.phase_col, self._format_value, frame=frame
@@ -648,6 +728,11 @@ class CTScanViewer:
             if use_current_row and self.phase_col is not None
             else getattr(self.phase_dropdown, "value", None)
         )
+        modality_pref = (
+            normalize_modality(row.get(self.modality_col))
+            if use_current_row and self.modality_col is not None
+            else getattr(self.modality_dropdown, "value", None)
+        )
 
         self._suspend_jump = True
         try:
@@ -665,6 +750,22 @@ class CTScanViewer:
                 date_options,
                 preferred=date_pref,
                 disabled=self.date_col is None,
+            )
+
+            modality_frame = self._filter_frame_for_jump(
+                patient_value=self.patient_dropdown.value,
+                date_value=self.date_dropdown.value,
+            )
+            modality_options = self._build_options_for_column(
+                self.modality_col,
+                normalize_modality,
+                frame=modality_frame,
+            )
+            self._set_dropdown_options(
+                self.modality_dropdown,
+                modality_options,
+                preferred=modality_pref,
+                disabled=self.modality_col is None or len(modality_options) <= 1,
             )
 
             phase_options = self._build_phase_options(
@@ -687,6 +788,9 @@ class CTScanViewer:
         patient_value = self.patient_dropdown.value if self.patient_col else None
         date_value = self.date_dropdown.value if self.date_col else None
         phase_value = self.phase_dropdown.value if self.phase_col else None
+        modality_value = (
+            self.modality_dropdown.value if self.modality_col else None
+        )
 
         for pos in range(len(self.df)):
             row = self.df.iloc[pos]
@@ -695,6 +799,9 @@ class CTScanViewer:
                     continue
             if self.date_col and date_value is not None:
                 if self._format_date(row.get(self.date_col)) != date_value:
+                    continue
+            if self.modality_col and modality_value is not None:
+                if normalize_modality(row.get(self.modality_col)) != modality_value:
                     continue
             if self.phase_col and phase_value is not None:
                 if self._format_value(row.get(self.phase_col)) != phase_value:
@@ -806,13 +913,82 @@ class CTScanViewer:
         self.ax.margins(0)
 
     def on_window_preset_change(self, change):
+        if self._current_modality() != "CT":
+            return
         preset = change["new"]
         if preset == "Custom":
             return
         wl, ww = WINDOW_PRESETS[preset]
-        self.HU_min = wl - ww / 2.0
-        self.HU_max = wl + ww / 2.0
+        window_min = wl - ww / 2.0
+        window_max = wl + ww / 2.0
+        self._suspend_window = True
+        try:
+            self.hu_max_input.value = window_max
+            self.hu_min_input.value = window_min
+        finally:
+            self._suspend_window = False
+        self.HU_min = window_min
+        self.HU_max = window_max
         self.update_display()
+
+    def _current_modality(self):
+        if self.modality_col is None or self.df.empty:
+            return "CT"
+        return normalize_modality(
+            self.df.iloc[self.current_index].get(self.modality_col)
+        )
+
+    def _update_window_controls(self):
+        is_ct = self._current_modality() == "CT"
+        self.window_preset.disabled = not is_ct
+        self.hu_min_input.disabled = not is_ct
+        self.hu_max_input.disabled = not is_ct
+        self.percentile_min_input.disabled = is_ct
+        self.percentile_max_input.disabled = is_ct
+
+    def _display_window(self):
+        if self._current_modality() == "MR":
+            return percentile_window(
+                self.ct_scan_raw,
+                self.percentile_min,
+                self.percentile_max,
+            )
+        return float(self.HU_min), float(self.HU_max)
+
+    def on_hu_change(self, change):
+        if self._suspend_window or self._current_modality() != "CT":
+            return
+        lower = float(self.hu_min_input.value)
+        upper = float(self.hu_max_input.value)
+        if lower >= upper:
+            self._restore_window_inputs()
+            return
+        self.HU_min = lower
+        self.HU_max = upper
+        self.update_display()
+
+    def on_percentile_change(self, change):
+        if self._suspend_window or self._current_modality() != "MR":
+            return
+        lower = float(self.percentile_min_input.value)
+        upper = float(self.percentile_max_input.value)
+        if lower >= upper:
+            self._restore_window_inputs()
+            return
+        self.percentile_min = lower
+        self.percentile_max = upper
+        self.update_display()
+
+    def _restore_window_inputs(self):
+        """Keep controls synchronized with the last valid rendered window."""
+        self._suspend_window = True
+        try:
+            self.hu_min_input.value = self.HU_min
+            self.hu_max_input.value = self.HU_max
+            self.percentile_min_input.value = self.percentile_min
+            self.percentile_max_input.value = self.percentile_max
+        finally:
+            self._suspend_window = False
 
     def on_resolution_change(self, change):
         self.isotropic_resolution_mm = validate_isotropic_resolution(change["new"])
@@ -825,6 +1001,12 @@ class CTScanViewer:
         self._jump_to_selected_filters()
 
     def on_date_change(self, change):
+        if self._suspend_jump:
+            return
+        self._refresh_jump_dropdowns(use_current_row=False)
+        self._jump_to_selected_filters()
+
+    def on_modality_change(self, change):
         if self._suspend_jump:
             return
         self._refresh_jump_dropdowns(use_current_row=False)
@@ -885,6 +1067,7 @@ class CTScanViewer:
             isotropic_resolution_mm=self.isotropic_resolution_mm,
             order=1,
         )
+        self._update_window_controls()
 
         self.segmentations = {}
         if self.segmentation_cols:
@@ -964,7 +1147,8 @@ class CTScanViewer:
                 name: seg[:, slice_idx, :] for name, seg in self.segmentations.items()
             }
 
-        ct_slice = clip_hu_values(ct_slice, self.HU_min, self.HU_max)
+        window_min, window_max = self._display_window()
+        ct_slice = np.clip(ct_slice, window_min, window_max)
 
         self.ax.clear()
         self._pin_axes_to_canvas()
@@ -974,6 +1158,8 @@ class CTScanViewer:
             origin="lower",
             aspect=self.image_aspect,
             interpolation="nearest",
+            vmin=window_min,
+            vmax=window_max,
         )
 
         visible_names = []
@@ -1096,3 +1282,7 @@ class CTScanViewer:
                 self.load_data()
             else:
                 print("Already at the first explored scan.")
+
+
+# Backwards-compatible import for notebooks using the former CT-specific name.
+CTScanViewer = ScanViewer

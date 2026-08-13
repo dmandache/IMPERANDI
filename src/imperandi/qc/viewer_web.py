@@ -29,6 +29,7 @@ try:
         validate_image_path_column,
         load_dataframe,
     )
+    from imperandi.qc.viewer_windowing import normalize_modality, percentile_window
 except ModuleNotFoundError:
     from viewer_resample import (
         DEFAULT_ISOTROPIC_RESOLUTION_MM,
@@ -45,6 +46,7 @@ except ModuleNotFoundError:
         validate_image_path_column,
         load_dataframe,
     )
+    from viewer_windowing import normalize_modality, percentile_window
 
 warnings.filterwarnings("ignore")
 
@@ -54,6 +56,7 @@ pn.extension(sizing_mode="stretch_width")
 DICOM_TAGS_TO_DISPLAY = [
     "patient_key",
     "date",
+    "Modality",
     "visit_order",
     "phase",
     "totalseg_phase",
@@ -128,7 +131,7 @@ def format_date(value):
     return dt.strftime("%Y-%m-%d")
 
 
-class CTScanPanelViewer(param.Parameterized):
+class ScanPanelViewer(param.Parameterized):
     """
     Minimal Panel version of the current ipywidgets viewer.
 
@@ -140,6 +143,7 @@ class CTScanPanelViewer(param.Parameterized):
 
     patient = param.Selector(default=None, objects=[])
     date = param.Selector(default=None, objects=[])
+    modality = param.Selector(default=None, objects=[])
     phase = param.Selector(default=None, objects=[])
 
     view_plane = param.Selector(
@@ -152,6 +156,8 @@ class CTScanPanelViewer(param.Parameterized):
     )
     HU_min = param.Integer(default=-100, step=10, bounds=(-1000, 1000))
     HU_max = param.Integer(default=400, step=10, bounds=(-1000, 1000))
+    percentile_min = param.Number(default=1.0, bounds=(0, 100))
+    percentile_max = param.Number(default=99.0, bounds=(0, 100))
 
     alpha = param.Number(default=0.10, bounds=(0, 1))
     isotropic_resolution_mm = param.Number(
@@ -183,6 +189,10 @@ class CTScanPanelViewer(param.Parameterized):
 
         self.patient_col = "patient_key" if "patient_key" in self.df.columns else None
         self.date_col = "date" if "date" in self.df.columns else None
+        self.modality_col = next(
+            (column for column in ("Modality", "modality") if column in self.df.columns),
+            None,
+        )
 
         if phase_col is not None and phase_col in self.df.columns:
             self.phase_col = phase_col
@@ -217,6 +227,7 @@ class CTScanPanelViewer(param.Parameterized):
         self.seg_visible = {c: True for c in self.segmentation_cols}
         self.segmentations = {}
         self.ct_scan_raw = np.zeros((2, 2, 2))
+        self._suspend_window = False
 
         self.figure_pane = pn.pane.Matplotlib(height=700, sizing_mode="stretch_both")
         self.info_pane = pn.pane.HTML(height=320, sizing_mode="stretch_width")
@@ -248,6 +259,11 @@ class CTScanPanelViewer(param.Parameterized):
             name="Date",
             sizing_mode="stretch_width",
         )
+        self.modality_widget = pn.widgets.Select.from_param(
+            self.param.modality,
+            name="Modality",
+            sizing_mode="stretch_width",
+        )
         self.phase_widget = pn.widgets.Select.from_param(
             self.param.phase,
             name=self.phase_col or "Phase",
@@ -275,10 +291,24 @@ class CTScanPanelViewer(param.Parameterized):
         self.hu_min_widget = pn.widgets.IntInput.from_param(
             self.param.HU_min,
             name="HU min",
+            sizing_mode="stretch_width",
         )
         self.hu_max_widget = pn.widgets.IntInput.from_param(
             self.param.HU_max,
             name="HU max",
+            sizing_mode="stretch_width",
+        )
+        self.percentile_min_widget = pn.widgets.FloatInput.from_param(
+            self.param.percentile_min,
+            name="Percentile min",
+            step=0.5,
+            sizing_mode="stretch_width",
+        )
+        self.percentile_max_widget = pn.widgets.FloatInput.from_param(
+            self.param.percentile_max,
+            name="Percentile max",
+            step=0.5,
+            sizing_mode="stretch_width",
         )
 
         self.alpha_widget = pn.widgets.FloatSlider.from_param(
@@ -303,10 +333,14 @@ class CTScanPanelViewer(param.Parameterized):
         )
 
         self.prev_scan_button = pn.widgets.Button(
-            name="< Prev Scan", button_type="default"
+            name="< Prev Scan",
+            button_type="default",
+            sizing_mode="stretch_width",
         )
         self.next_scan_button = pn.widgets.Button(
-            name="Next Scan >", button_type="default"
+            name="Next Scan >",
+            button_type="default",
+            sizing_mode="stretch_width",
         )
         self.prev_patient_button = pn.widgets.Button(name="< Prev Patient")
         self.next_patient_button = pn.widgets.Button(name="Next Patient >")
@@ -342,11 +376,18 @@ class CTScanPanelViewer(param.Parameterized):
             cb.param.watch(self._on_seg_visibility_change, "value")
             self.seg_checkboxes[col] = cb
 
-        self.param.watch(self._on_jump_change, ["patient", "date", "phase"])
+        self.param.watch(
+            self._on_jump_change, ["patient", "date", "modality", "phase"]
+        )
         self.param.watch(self._on_plane_change, "view_plane")
         self.param.watch(self._on_window_change, "window_preset")
         self.param.watch(
-            self._update_display_event, ["slice_idx", "HU_min", "HU_max", "alpha"]
+            self._update_display_event,
+            ["slice_idx", "alpha"],
+        )
+        self.param.watch(
+            self._on_rendering_value_change,
+            ["HU_min", "HU_max", "percentile_min", "percentile_max"],
         )
         self.param.watch(self._on_resolution_change, "isotropic_resolution_mm")
 
@@ -366,7 +407,7 @@ class CTScanPanelViewer(param.Parameterized):
                 seen.add(v)
         return values
 
-    def _filtered_frame(self, patient=None, date=None):
+    def _filtered_frame(self, patient=None, date=None, modality=None):
         frame = self.df
 
         if self.patient_col and patient not in [None, "?"]:
@@ -374,6 +415,11 @@ class CTScanPanelViewer(param.Parameterized):
 
         if self.date_col and date not in [None, "?"]:
             frame = frame[frame[self.date_col].apply(format_date) == date]
+
+        if self.modality_col and modality not in [None, "?"]:
+            frame = frame[
+                frame[self.modality_col].apply(normalize_modality) == modality
+            ]
 
         return frame
 
@@ -398,6 +444,23 @@ class CTScanPanelViewer(param.Parameterized):
             self.date = self.param.date.objects[0]
 
         phase_frame = self._filtered_frame(patient=self.patient, date=self.date)
+        modality_options = self._unique_options(
+            phase_frame, self.modality_col, normalize_modality
+        )
+        self.param.modality.objects = modality_options or [None]
+        if use_current_row and self.modality_col:
+            self.modality = normalize_modality(row[self.modality_col])
+        elif self.modality not in self.param.modality.objects:
+            self.modality = self.param.modality.objects[0]
+        self.modality_widget.disabled = (
+            self.modality_col is None or len(modality_options) <= 1
+        )
+
+        phase_frame = self._filtered_frame(
+            patient=self.patient,
+            date=self.date,
+            modality=self.modality,
+        )
         phase_options = self._unique_options(phase_frame, self.phase_col, format_value)
         self.param.phase.objects = phase_options or [None]
 
@@ -423,6 +486,11 @@ class CTScanPanelViewer(param.Parameterized):
 
         if self.date_col and self.date not in [None, "?"]:
             matches = matches[matches[self.date_col].apply(format_date) == self.date]
+
+        if self.modality_col and self.modality not in [None, "?"]:
+            matches = matches[
+                matches[self.modality_col].apply(normalize_modality) == self.modality
+            ]
 
         if self.phase_col and self.phase not in [None, "?"]:
             matches = matches[matches[self.phase_col].apply(format_value) == self.phase]
@@ -496,6 +564,7 @@ class CTScanPanelViewer(param.Parameterized):
 
         if refresh_jump:
             self._refresh_jump_options(use_current_row=True)
+        self._update_window_controls()
 
         self._update_slice_bounds()
         self.slice_idx = self.param.slice_idx.bounds[1] // 2
@@ -528,6 +597,8 @@ class CTScanPanelViewer(param.Parameterized):
         self.param.slice_idx.bounds = (0, int(max_slice))
 
     def _on_window_change(self, event):
+        if self._current_modality() != "CT":
+            return
         preset = WINDOW_PRESETS.get(self.window_preset)
         if preset is not None:
             center, width = preset
@@ -535,9 +606,50 @@ class CTScanPanelViewer(param.Parameterized):
             self.HU_max = int(center + width / 2)
         self.update_display()
 
+    def _current_modality(self):
+        if self.modality_col is None or self.df.empty:
+            return "CT"
+        return normalize_modality(
+            self.df.iloc[self.current_index].get(self.modality_col)
+        )
+
+    def _update_window_controls(self):
+        is_ct = self._current_modality() == "CT"
+        self.window_widget.disabled = not is_ct
+        self.hu_min_widget.disabled = not is_ct
+        self.hu_max_widget.disabled = not is_ct
+        self.percentile_min_widget.disabled = is_ct
+        self.percentile_max_widget.disabled = is_ct
+
+    def _display_window(self):
+        if self._current_modality() == "MR":
+            try:
+                return percentile_window(
+                    self.ct_scan_raw,
+                    self.percentile_min,
+                    self.percentile_max,
+                )
+            except ValueError:
+                return percentile_window(self.ct_scan_raw)
+        return float(self.HU_min), float(self.HU_max)
+
     def _on_seg_visibility_change(self, event):
         for col, cb in self.seg_checkboxes.items():
             self.seg_visible[col] = cb.value
+        self.update_display()
+
+    def _on_rendering_value_change(self, event):
+        if self._suspend_window:
+            return
+        hu_valid = self.HU_min < self.HU_max
+        percentile_valid = self.percentile_min < self.percentile_max
+        if not hu_valid or not percentile_valid:
+            self._suspend_window = True
+            try:
+                setattr(self, event.name, event.old)
+            finally:
+                self._suspend_window = False
+            return
         self.update_display()
 
     def _update_display_event(self, event):
@@ -568,12 +680,13 @@ class CTScanPanelViewer(param.Parameterized):
             self.slice_idx = int(np.argmax(sums))
 
     def update_display(self):
-        ct = clip_hu_values(self.ct_scan_raw, self.HU_min, self.HU_max)
-        img = self.get_slice(ct)
+        window_min, window_max = self._display_window()
+        scan = np.clip(self.ct_scan_raw, window_min, window_max)
+        img = self.get_slice(scan)
 
         fig, ax = plt.subplots(figsize=(7, 7), dpi=100)
 
-        ax.imshow(np.rot90(img), cmap="gray", vmin=self.HU_min, vmax=self.HU_max)
+        ax.imshow(np.rot90(img), cmap="gray", vmin=window_min, vmax=window_max)
 
         for i, col in enumerate(self.segmentation_cols):
             if not self.seg_visible.get(col, True):
@@ -645,8 +758,16 @@ class CTScanPanelViewer(param.Parameterized):
             self.patient_widget,
             pn.Row(self.prev_date_button, self.next_date_button),
             self.date_widget,
-            pn.Row(self.prev_scan_button, self.next_scan_button),
-            self.phase_widget,
+            pn.Row(
+                self.modality_widget,
+                self.phase_widget,
+                sizing_mode="stretch_width",
+            ),
+            pn.Row(
+                self.prev_scan_button,
+                self.next_scan_button,
+                sizing_mode="stretch_width",
+            ),
             title="Explore",
             collapsed=False,
         )
@@ -660,7 +781,16 @@ class CTScanPanelViewer(param.Parameterized):
 
         rendering_controls = pn.Card(
             self.window_widget,
-            pn.Row(self.hu_min_widget, self.hu_max_widget),
+            pn.Row(
+                self.hu_min_widget,
+                self.hu_max_widget,
+                sizing_mode="stretch_width",
+            ),
+            pn.Row(
+                self.percentile_min_widget,
+                self.percentile_max_widget,
+                sizing_mode="stretch_width",
+            ),
             self.resolution_widget,
             title="Rendering",
             collapsed=False,
@@ -686,13 +816,17 @@ class CTScanPanelViewer(param.Parameterized):
         )
 
         return pn.Row(
-            self.figure_pane,
+            pn.Column(
+                pn.pane.HTML("<h2 style='margin:0'>3D Scan Viewer</h2>"),
+                self.figure_pane,
+                sizing_mode="stretch_both",
+            ),
             sidebar,
             sizing_mode="stretch_both",
         )
 
 
-class CTScanPanelApp:
+class ScanPanelApp:
     def __init__(
         self,
         initial_csv=None,
@@ -764,7 +898,7 @@ class CTScanPanelApp:
         self.load_upload_button.on_click(self._load_uploaded_dataframe)
 
         self.ct_col_widget = pn.widgets.Select(
-            name="CT column",
+            name="Scan column",
             options=[],
             sizing_mode="stretch_width",
         )
@@ -894,7 +1028,7 @@ class CTScanPanelApp:
 
         if not path_columns:
             self._set_status(
-                "No image path columns were detected. CT and segmentation selections require file path columns.",
+                "No image path columns were detected. Scan and segmentation selections require file path columns.",
                 kind="error",
             )
 
@@ -992,11 +1126,11 @@ class CTScanPanelApp:
         ct_scan_col = self.ct_col_widget.value
         if ct_scan_col is None:
             self._set_viewer_message(
-                "Select the CT scan path column to open the viewer."
+                "Select the scan path column to open the viewer."
             )
             if update_status:
                 self._set_status(
-                    "Choose the CT scan column before opening the viewer.", kind="error"
+                    "Choose the scan column before opening the viewer.", kind="error"
                 )
             return
 
@@ -1005,7 +1139,7 @@ class CTScanPanelApp:
                 self.filtered_df,
                 ct_scan_col,
                 allow_empty=False,
-                label=f"CT column '{ct_scan_col}'",
+                label=f"Scan column '{ct_scan_col}'",
             )
         except Exception as exc:
             self._set_viewer_message(str(exc))
@@ -1033,7 +1167,7 @@ class CTScanPanelApp:
             return
 
         try:
-            self.viewer = CTScanPanelViewer(
+            self.viewer = ScanPanelViewer(
                 df=self.filtered_df,
                 ct_scan_col=ct_scan_col,
                 segmentation_cols=segmentation_cols or None,
@@ -1117,7 +1251,7 @@ class CTScanPanelApp:
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--csv", default=None)
-parser.add_argument("--ct-col", default="nifti_path")
+parser.add_argument("--scan-col", "--ct-col", dest="scan_col", default="nifti_path")
 parser.add_argument("--phase-col", default=None)
 parser.add_argument("--seg-cols", nargs="*", default=None)
 parser.add_argument(
@@ -1125,12 +1259,17 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
-app = CTScanPanelApp(
+# Backwards-compatible imports for callers using the former CT-specific names.
+CTScanPanelViewer = ScanPanelViewer
+CTScanPanelApp = ScanPanelApp
+
+
+app = ScanPanelApp(
     initial_csv=args.csv,
-    ct_scan_col=args.ct_col,
+    ct_scan_col=args.scan_col,
     segmentation_cols=args.seg_cols,
     phase_col=args.phase_col,
     isotropic_resolution_mm=args.isotropic_resolution_mm,
 )
 
-app.panel().servable(title="IMPERANDI QC Viewer")
+app.panel().servable(title="3D Scan Viewer")

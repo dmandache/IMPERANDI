@@ -12,7 +12,8 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from imperandi.qc import viewer as viewer_module
-from imperandi.qc.viewer import CTScanViewer, clip_hu_values, load_nifti
+from imperandi.qc.viewer import CTScanViewer, ScanViewer, clip_hu_values, load_nifti
+from imperandi.qc.viewer_windowing import normalize_modality, percentile_window
 
 
 def _build_viewer(patient_values, date_values, patient_value, date_value):
@@ -127,6 +128,7 @@ def viewer(monkeypatch):
                 "patient_key": "P1",
                 "date": "2024-01-01",
                 "phase": "portal",
+                "Modality": "CT",
                 "scan": "scan-1",
                 "mask_liver": "mask-1",
                 "SeriesDescription": "Baseline",
@@ -135,6 +137,7 @@ def viewer(monkeypatch):
                 "patient_key": "P2",
                 "date": "2024-02-02",
                 "phase": "arterial",
+                "Modality": "MR",
                 "scan": "scan-2",
                 "mask_liver": "mask-2",
             },
@@ -147,6 +150,7 @@ def viewer(monkeypatch):
 
 
 def test_viewer_initialization_loads_data_and_builds_jump_controls(viewer):
+    assert isinstance(viewer, ScanViewer)
     assert viewer.segmentation_cols == ["mask_liver"]
     assert viewer.seg_colormaps == {"mask_liver": "jet"}
     assert viewer.ct_scan_raw.shape == (2, 3, 4)
@@ -154,6 +158,22 @@ def test_viewer_initialization_loads_data_and_builds_jump_controls(viewer):
     assert viewer.patient_dropdown.options == (("P1", "P1"), ("P2", "P2"))
     assert viewer.date_dropdown.options == (("2024-01-01", "2024-01-01"),)
     assert viewer.phase_dropdown.options == (("portal", "portal"),)
+    assert viewer.modality_dropdown.options == (("CT", "CT"),)
+    assert viewer.modality_dropdown.disabled is True
+    assert viewer.window_preset.disabled is False
+    assert viewer.percentile_min_input.disabled is True
+    assert viewer.prev_button.layout.width == "50%"
+    assert viewer.next_button.layout.width == "50%"
+    rendering_inputs = [
+        viewer.hu_min_input,
+        viewer.hu_max_input,
+        viewer.percentile_min_input,
+        viewer.percentile_max_input,
+    ]
+    assert {widget.layout.width for widget in rendering_inputs} == {"50%"}
+    assert {widget.style.description_width for widget in rendering_inputs} == {
+        "105px"
+    }
     assert "Baseline" in viewer.info_display.value
     assert viewer.progress_bar.layout.visibility == "hidden"
 
@@ -361,6 +381,73 @@ def test_window_resolution_and_keyboard_handlers(viewer, monkeypatch):
         viewer.on_key_press(SimpleNamespace(key=key))
 
     assert actions == ["prev", "next", "prev-slice", "next-slice"]
+
+
+def test_mri_uses_default_percentile_window_and_disables_hu_controls(viewer):
+    viewer.current_index = 1
+    viewer.ct_scan_raw = np.arange(100, dtype=float).reshape(2, 5, 10)
+    viewer._update_window_controls()
+
+    assert viewer._current_modality() == "MR"
+    assert viewer._display_window() == pytest.approx((0.99, 98.01))
+    assert viewer.window_preset.disabled is True
+    assert viewer.hu_min_input.disabled is True
+    assert viewer.hu_max_input.disabled is True
+    assert viewer.percentile_min_input.disabled is False
+    assert viewer.percentile_max_input.disabled is False
+
+
+def test_mri_slices_share_volume_wide_rendering_bounds(viewer):
+    viewer.current_index = 1
+    viewer.ct_scan_raw = np.arange(100, dtype=float).reshape(2, 5, 10)
+    viewer.plane_selector.value = "axial"
+    expected_window = percentile_window(viewer.ct_scan_raw, 1, 99)
+
+    observed_windows = []
+    for slice_index in (0, 9):
+        viewer.slice_slider.value = slice_index
+        viewer.update_display()
+        observed_windows.append(viewer.ax.images[0].get_clim())
+
+    assert observed_windows == [expected_window, expected_window]
+
+
+def test_invalid_percentile_edit_reverts_to_rendered_values(viewer):
+    viewer.current_index = 1
+    viewer._update_window_controls()
+
+    viewer.percentile_min_input.value = 100
+
+    assert viewer.percentile_min_input.value == 1.0
+    assert viewer.percentile_max_input.value == 99.0
+    assert (viewer.percentile_min, viewer.percentile_max) == (1.0, 99.0)
+
+
+def test_modality_dropdown_is_enabled_for_mixed_modality_exam(viewer):
+    mixed_row = viewer.df.iloc[0].copy()
+    mixed_row["Modality"] = "MRI"
+    mixed_row["phase"] = "delayed"
+    viewer.df = pd.concat([viewer.df, mixed_row.to_frame().T], ignore_index=True)
+    viewer.current_index = 0
+
+    viewer._refresh_jump_dropdowns(use_current_row=True)
+
+    assert viewer.modality_dropdown.options == (("CT", "CT"), ("MR", "MR"))
+    assert viewer.modality_dropdown.disabled is False
+    viewer.modality_dropdown.value = "MR"
+    assert viewer._build_phase_options("P1", "2024-01-01") == [
+        ("delayed", "delayed")
+    ]
+
+
+def test_modality_and_percentile_helpers_handle_mri_and_nonfinite_voxels():
+    assert normalize_modality("mri") == "MR"
+    assert normalize_modality(" ct ") == "CT"
+    assert normalize_modality(["MRI"]) == "MR"
+    values = np.array([0.0, 10.0, np.nan, np.inf])
+    assert percentile_window(values, 0, 100) == (0.0, 10.0)
+    with pytest.raises(ValueError, match="lower < upper"):
+        percentile_window(values, 99, 1)
 
 
 def test_scan_navigation_uses_ordered_and_random_history(monkeypatch):

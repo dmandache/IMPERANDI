@@ -75,8 +75,9 @@ Impact: accelerates feature exctraction for prognostic and response modeling pip
 
 ### 6) Interactive quality control viewer (Jupyter)
 
-- Provides an interactive CT + mask viewer for cohort navigation and quick visual QA.
-- Supports patient/date/phase exploration, mask overlays, window presets, and keyboard navigation.
+- Provides a 3D CT/MRI + mask viewer for cohort navigation and quick visual QA.
+- Uses HU windows for CT and percentile windows (1st–99th by default) for MRI.
+- Supports patient/date/modality/phase exploration, mask overlays, window presets, and keyboard navigation.
 
 Impact: shortens the feedback loop between pipeline outputs and clinical/imaging validation.
 
