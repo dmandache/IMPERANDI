@@ -209,15 +209,15 @@ segmentation:
         - task: liver_lesions
           output: liver_tumor
           fetch_output: liver_lesions
-        - task: liver_segments
-      postprocess:
-        # Merge logical task outputs, then optionally clean the merged mask.
-        merge_keys: [liver, liver_tumor]
-        output: liver
-        radius_mm: 5.0
-        largest_cc: true
-        fill_holes: true
-        close: true
+        #- task: liver_segments
+      # postprocess:
+      #   # Merge logical task outputs, then optionally clean the merged mask.
+      #   merge_keys: [liver, liver_tumor]
+      #   output: liver
+      #   radius_mm: 5.0
+      #   largest_cc: true
+      #   fill_holes: true
+      #   close: true
     MR:
       tasks:
         - task: total_mr
@@ -227,14 +227,14 @@ segmentation:
         - task: liver_lesions_mr
           output: liver_tumor
           fetch_output: liver_lesions
-        - task: liver_segments_mr
-      postprocess:
-        merge_keys: [liver, liver_tumor]
-        output: liver
-        radius_mm: 5.0
-        largest_cc: true
-        fill_holes: true
-        close: true
+        #- task: liver_segments_mr
+      # postprocess:
+      #   merge_keys: [liver, liver_tumor]
+      #   output: liver
+      #   radius_mm: 5.0
+      #   largest_cc: true
+      #   fill_holes: true
+      #   close: true
 
 radiomics:
   # `pyradiomics` follows the native PyRadiomics parameter-file structure.

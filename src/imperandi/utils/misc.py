@@ -93,7 +93,7 @@ def report_change(df, previous_df, columns=None, max_rows=10, *, col=None):
         column
         for column in columns
         if column in previous_df.columns
-        and column not in {"patient_key", "study_id", "date"}
+        and column not in {"patient_key", "date"}
     ]
     max_rows = max(0, int(max_rows))
 
