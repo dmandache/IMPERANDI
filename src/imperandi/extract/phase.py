@@ -243,6 +243,7 @@ def main(args: argparse.Namespace) -> None:
     source_id_signature = source_id_resume_signature(args.csv_path)
     resume_values = {
         **vars(args),
+        "checkpoint_manifest_config": manifest,
         "checkpoint_phase_curation": phase_curation,
     }
     if source_id_signature:

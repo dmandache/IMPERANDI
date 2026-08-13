@@ -556,6 +556,12 @@ def main(args):
     """
     output_path = Path(args.csv_path_out)
     error_path = Path(args.error_csv_path)
+    manifest_config = None
+    if hasattr(args, "manifest") and args.manifest:
+        manifest_config = load_manifest(
+            args.manifest,
+            base_path=Path(__file__).resolve().parents[1],
+        )
 
     exclude_hash_args = {
         "csv_path_out",
@@ -567,14 +573,13 @@ def main(args):
         "strict_resume",
     }
     source_id_signature = source_id_resume_signature(args.csv_path)
-    resume_args = (
-        argparse.Namespace(
-            **vars(args),
-            checkpoint_source_id=source_id_signature,
-        )
-        if source_id_signature
-        else args
-    )
+    resume_values = {
+        **vars(args),
+        "checkpoint_manifest_config": manifest_config,
+    }
+    if source_id_signature:
+        resume_values["checkpoint_source_id"] = source_id_signature
+    resume_args = argparse.Namespace(**resume_values)
     resume_ctx = prepare_resume_context(
         args=resume_args,
         command="convert",
@@ -598,9 +603,6 @@ def main(args):
     if args.verbose:
         for p in args.csv_path:
             check_file(p)
-
-    if hasattr(args, "manifest") and args.manifest:
-        load_manifest(args.manifest, base_path=Path(__file__).resolve().parents[1])
 
     if can_resume and paths.main_checkpoint_path.exists():
         logger.info("Resuming convert from checkpoint: %s", paths.main_checkpoint_path)

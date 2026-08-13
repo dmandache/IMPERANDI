@@ -805,12 +805,22 @@ def main(args: argparse.Namespace) -> None:
         args
     )
     effective_filters = _resolve_radiomics_filters(args)
+    manifest_arg = getattr(args, "manifest", None)
+    manifest_config = (
+        load_manifest(
+            manifest_arg,
+            base_path=Path(__file__).resolve().parents[1],
+        )
+        if manifest_arg
+        else None
+    )
     settings_fingerprint = (
         fingerprint_inputs(settings_path, strict=True) if settings_path else []
     )
     source_id_signature = source_id_resume_signature(args.csv_path)
     checkpoint_signature = {
         "effective_filters": effective_filters,
+        "manifest_config": manifest_config,
         "pyradiomics_settings_fingerprint": settings_fingerprint,
         "pyradiomics_settings_source": source_kind,
         "pyradiomics_settings": settings_dict,

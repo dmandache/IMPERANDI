@@ -578,7 +578,7 @@ def test_main_resume_skips_completed_rows(tmp_path, monkeypatch):
     assert dep_calls["count"] == 1
 
 
-def test_main_resume_reprocesses_when_manifest_filters_change(tmp_path, monkeypatch):
+def test_main_resume_reprocesses_when_manifest_content_changes(tmp_path, monkeypatch):
     portal_nifti = tmp_path / "portal.nii.gz"
     arterial_nifti = tmp_path / "arterial.nii.gz"
     portal_mask = tmp_path / "portal_mask.nii.gz"
@@ -602,7 +602,9 @@ def test_main_resume_reprocesses_when_manifest_filters_change(tmp_path, monkeypa
         ]
     ).to_csv(csv_path, index=False)
     manifest_path = tmp_path / "manifest.yaml"
-    manifest_path.write_text('{"radiomics": {"filters": {"phase": ["portal"]}}}')
+    manifest_path.write_text(
+        '{"dataset_name": "v1", "radiomics": {"filters": {"phase": ["portal"]}}}'
+    )
 
     monkeypatch.setattr(
         radiomics_module,
@@ -652,11 +654,20 @@ def test_main_resume_reprocesses_when_manifest_filters_change(tmp_path, monkeypa
     )
     radiomics_module.main(args)
 
-    manifest_path.write_text('{"radiomics": {"filters": {"phase": ["arterial"]}}}')
+    manifest_path.write_text(
+        '{"dataset_name": "v1", "radiomics": {"filters": {"phase": ["arterial"]}}}'
+    )
     args.resume = True
     radiomics_module.main(args)
 
-    assert processed == ["portal.nii.gz", "arterial.nii.gz"]
+    # Even a change outside the command-specific radiomics section invalidates
+    # the checkpoint because resume tracks the complete loaded manifest.
+    manifest_path.write_text(
+        '{"dataset_name": "v2", "radiomics": {"filters": {"phase": ["arterial"]}}}'
+    )
+    radiomics_module.main(args)
+
+    assert processed == ["portal.nii.gz", "arterial.nii.gz", "arterial.nii.gz"]
 
 
 def test_main_preserves_foreign_columns_from_existing_output(tmp_path, monkeypatch):

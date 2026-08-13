@@ -1244,12 +1244,20 @@ def main(args: argparse.Namespace) -> None:
     setup_logging(verbose=getattr(args, "verbose", False))
     output_path = Path(args.csv_path_out)
     error_path = Path(args.error_csv_path)
+    manifest_arg = getattr(args, "manifest", None)
+    manifest_config = load_manifest(
+        manifest_arg or "generic",
+        base_path=Path(__file__).resolve().parents[1],
+    )
     tasks_config = load_segmentation_config(
-        getattr(args, "manifest", None),
+        manifest_arg,
         base_path=Path(__file__).resolve().parents[1],
     )
     source_id_signature = source_id_resume_signature(args.csv_path)
-    checkpoint_signature = {"segmentation": tasks_config}
+    checkpoint_signature = {
+        "manifest_config": manifest_config,
+        "segmentation": tasks_config,
+    }
     if source_id_signature:
         checkpoint_signature["source_id"] = source_id_signature
     resume_args = argparse.Namespace(
