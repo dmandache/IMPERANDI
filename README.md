@@ -239,13 +239,16 @@ IMPERANDI configuration is done through YAML dataset manifests and optional hook
 Manifests hold the declarative settings, while hooks provide Python-based
 customization when a static file is not enough.
 
-Manifests define dataset-specific behavior and live in:
+Generic manifests shipped with the package live in:
 
-- `src/imperandi/datasets_config/manifests/*.yaml`
+- `src/imperandi/builtin_datasets_config/manifests/*.yaml`
 
-Hook implementations live in:
+Their built-in hooks live in:
 
-- `src/imperandi/datasets_config/hooks/`
+- `src/imperandi/builtin_datasets_config/hooks/`
+
+Repository-specific OPERANDI configuration lives in `dataset_configs/` and
+is intentionally not included in installed packages.
 
 You can pass either a manifest name (`generic`, `operandi`) or a custom
 manifest path. The usual customization flow is to copy a built-in YAML file,

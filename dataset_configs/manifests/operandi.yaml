@@ -1,5 +1,6 @@
 # OPERANDI cohort manifest. Comments explain each configurable stage while the
 # values below retain the cohort's current production behavior.
+# OPERANDI dataset configuration.
 dataset_name: operandi
 
 # Parse-time IDs. source accepts auto, tags, or path; auto prefers the DICOM
@@ -19,13 +20,13 @@ id_extraction:
 
 # Trusted Python hook that rewrites patient_key during parsing.
 id_standardization:
-  hook_module: datasets_config.hooks.operandi
+  hook_module: dataset_configs.hooks.operandi
   function: standardize_operandi_patient_key
 
 # Optional enrichment hooks. from_column is passed to the hook; join_mode is
 # missing_only (preserve existing columns) or overwrite (replace them).
 derived_columns:
-  - hook_module: datasets_config.hooks.operandi
+  - hook_module: dataset_configs.hooks.operandi
     function: extract_from_patient_key
     from_column: patient_key
     join_mode: missing_only
@@ -83,10 +84,10 @@ cleaning:
   version: 1
   steps:
     - type: hook
-      function: "datasets_config.hooks.operandi:standardize_operandi_patient_key"
+      function: "dataset_configs.hooks.operandi:standardize_operandi_patient_key"
       source_columns: [patient_key]
     - type: hook
-      function: "datasets_config.hooks.operandi:extract_from_patient_key"
+      function: "dataset_configs.hooks.operandi:extract_from_patient_key"
       source_columns: [patient_key]
     - type: coalesce_date
     - type: coalesce_time

@@ -1,3 +1,5 @@
+"""Framework defaults for DICOM ingestion and metadata normalization."""
+
 # Used by parse.py as the default DICOM tag read list, and by clean.py to keep
 # matching metadata columns when loading parsed CSV files.
 DEFAULT_DICOM_TAGS = [

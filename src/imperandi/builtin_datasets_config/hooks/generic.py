@@ -1,4 +1,6 @@
-﻿import re
+﻿"""Generic dataset hook implementations."""
+
+import re
 from typing import Optional
 
 from imperandi.ingest.hooks import clean_hook

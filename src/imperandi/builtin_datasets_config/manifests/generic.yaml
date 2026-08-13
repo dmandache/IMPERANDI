@@ -21,7 +21,7 @@ id_extraction:
 # Optional trusted Python hook used to normalize patient_key during parsing.
 # hook_module is relative to the imperandi package.
 # id_standardization:
-#   hook_module: datasets_config.hooks.generic
+#   hook_module: imperandi.builtin_datasets_config.hooks.generic
 #   function: standardize_patient_key
 
 # Ordered phase fallback chain: the first resolved label wins. Supported
@@ -64,7 +64,7 @@ cleaning:
   version: 1
   steps:
     # - type: hook
-    #   function: "datasets_config.hooks.generic:standardize_patient_key"
+    #   function: "imperandi.builtin_datasets_config.hooks.generic:standardize_patient_key"
     #   source_columns: [patient_key]
     - type: coalesce_date
     - type: coalesce_time

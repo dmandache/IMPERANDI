@@ -64,7 +64,7 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-imperandi = ["datasets_config/manifests/*.yaml"]
+imperandi = ["builtin_datasets_config/manifests/*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/unit", "tests/slow"]

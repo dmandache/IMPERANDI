@@ -767,7 +767,7 @@ def test_validate_cleaning_manifest_uses_hook_output_metadata():
             "steps": [
                 {
                     "type": "hook",
-                    "function": "datasets_config.hooks.operandi:extract_from_patient_key",
+                    "function": "dataset_configs.hooks.operandi:extract_from_patient_key",
                     "source_columns": ["patient_key"],
                 },
                 {
@@ -1209,7 +1209,7 @@ def test_run_clean_pipeline_executes_all_supported_step_types(monkeypatch):
             "steps": [
                 {
                     "type": "hook",
-                    "function": "datasets_config.hooks.generic:standardize_patient_key",
+                    "function": "imperandi.builtin_datasets_config.hooks.generic:standardize_patient_key",
                     "source_columns": ["patient_key"],
                 },
                 {
@@ -1300,7 +1300,7 @@ def test_clean_and_save_data_runs_manifest_pipeline(tmp_path):
             "steps": [
                 {
                     "type": "hook",
-                    "function": "datasets_config.hooks.generic:standardize_patient_key",
+                    "function": "imperandi.builtin_datasets_config.hooks.generic:standardize_patient_key",
                     "source_columns": ["patient_key"],
                 },
                 {"type": "coalesce_date"},

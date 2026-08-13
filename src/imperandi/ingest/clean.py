@@ -29,7 +29,7 @@ from imperandi.curation.phase import (
 from imperandi.utils.logging import log_task_summary, setup_logging
 from imperandi.utils.misc import print_args, report_volumes, report_change
 from imperandi.utils.datetime import to_dates, to_times
-from imperandi.datasets_config.defaults import (
+from imperandi.ingest.defaults import (
     DEFAULT_DICOM_TAGS,
     DATE_CANDIDATES,
     TIME_CANDIDATES,

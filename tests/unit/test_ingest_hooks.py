@@ -8,7 +8,7 @@ import pytest
 # Ensure src/ is on sys.path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
-from imperandi.datasets_config.hooks import operandi
+from dataset_configs.hooks import operandi
 from imperandi.ingest.hooks import (
     apply_derived_columns,
     apply_id_standardization,

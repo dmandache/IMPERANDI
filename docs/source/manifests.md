@@ -11,8 +11,10 @@ imperandi ingest --root_path ./dicom --manifest generic
 imperandi phase ./nifti_index.csv --manifest ./site-a.yaml
 ```
 
-Built-ins live under `src/imperandi/datasets_config/manifests/`. Keep
-institution-specific manifests in a reviewed, versioned project file.
+Built-ins live under `src/imperandi/builtin_datasets_config/manifests/`.
+Project-local OPERANDI configuration lives under `dataset_configs/` and is not
+installed with the package. Keep other institution-specific manifests in a
+reviewed, versioned project directory.
 
 ## Main library stages
 
@@ -43,7 +45,7 @@ id_extraction:
   series_id: {from_tag: SeriesInstanceUID, fallback: path}
 
 id_standardization:
-  hook_module: datasets_config.hooks.generic
+  hook_module: imperandi.builtin_datasets_config.hooks.generic
   function: standardize_patient_key
 
 phase_curation:
@@ -75,7 +77,7 @@ cleaning:
   version: 1
   steps:
     - type: hook
-      function: "datasets_config.hooks.generic:standardize_patient_key"
+      function: "imperandi.builtin_datasets_config.hooks.generic:standardize_patient_key"
       source_columns: [patient_key]
     - type: coalesce_date
     - type: coalesce_time
@@ -231,7 +233,7 @@ cleaning:
   version: 1
   steps:
     - type: hook
-      function: "datasets_config.hooks.site_a:extract_site_fields"
+      function: "dataset_configs.hooks.site_a:extract_site_fields"
       source_columns: [patient_key]
 ```
 

@@ -6,6 +6,7 @@
 # advanced steps that should not normally run together.
 
 # Free-form dataset label used to identify this configuration.
+# Copy this blueprint when creating a dataset configuration.
 dataset_name: blueprint_example
 
 # ---------------------------------------------------------------------------
@@ -32,17 +33,17 @@ id_extraction:
 # Optional parse-time patient-key normalization hook. Modules are relative to
 # `imperandi`; only use trusted code because hooks are imported and executed.
 id_standardization:
-  hook_module: datasets_config.hooks.generic
+  hook_module: imperandi.builtin_datasets_config.hooks.generic
   function: standardize_patient_key
 
 # Optional parse-time enrichments. A hook returns a mapping/Series of columns.
 derived_columns:
-  - hook_module: datasets_config.hooks.operandi
+  - hook_module: dataset_configs.hooks.operandi
     function: extract_from_patient_key
     from_column: patient_key
     # Allowed: missing_only (default) or overwrite.
     join_mode: missing_only
-  # - hook_module: datasets_config.hooks.site
+  # - hook_module: dataset_configs.hooks.site
   #   function: derive_site_fields
   #   from_column: patient_key
   #   join_mode: overwrite
@@ -109,7 +110,7 @@ cleaning:
     # Optional `name` may be added to any step to improve log labels.
     - type: hook
       name: normalize_patient_key
-      function: "datasets_config.hooks.generic:standardize_patient_key"
+      function: "imperandi.builtin_datasets_config.hooks.generic:standardize_patient_key"
       source_columns: [patient_key]
 
     # Candidate lists are optional; first populated candidate wins.

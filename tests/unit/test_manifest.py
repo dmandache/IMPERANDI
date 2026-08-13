@@ -37,7 +37,7 @@ def test_load_generic_manifest_and_hook_resolution():
 
     hook = resolve_hook(
         {
-            "hook_module": "datasets_config.hooks.generic",
+            "hook_module": "imperandi.builtin_datasets_config.hooks.generic",
             "function": "standardize_patient_key",
         }
     )

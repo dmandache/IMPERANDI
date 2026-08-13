@@ -1,3 +1,5 @@
+"""OPERANDI-specific dataset hook implementations."""
+
 import re
 import pandas as pd
 

@@ -37,7 +37,7 @@ from imperandi.utils.run_state import (
     load_state,
     now_epoch,
 )
-from imperandi.datasets_config.defaults import DEFAULT_DICOM_TAGS
+from imperandi.ingest.defaults import DEFAULT_DICOM_TAGS
 from imperandi.ingest.apply_hook_manifests import apply_id_standardization
 
 warnings.filterwarnings("ignore")
