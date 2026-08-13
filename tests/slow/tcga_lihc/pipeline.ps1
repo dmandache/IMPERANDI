@@ -2,11 +2,20 @@ param(
     [string]$InputDir = (Join-Path $PSScriptRoot "data\input"),
     [string]$WorkDir = (Join-Path $PSScriptRoot "data\work"),
     [string]$Manifest = "generic",
+    [int]$NumWorkers = 1,
     [string]$Python = "python"
 )
 
 $ErrorActionPreference = "Stop"
 New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
+
+Write-Host "Running TCGA-LIHC pipeline"
+Write-Host "SCRIPT_DIR=$PSScriptRoot"
+Write-Host "INPUT_DIR=$InputDir"
+Write-Host "WORK_DIR=$WorkDir"
+Write-Host "MANIFEST=$Manifest"
+Write-Host "NUM_WORKERS=$NumWorkers"
+Write-Host "PYTHON=$Python"
 
 # 1. Discover DICOM files, extract metadata, and curate the cohort table.
 & $Python -m imperandi ingest `
@@ -14,7 +23,7 @@ New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
     $WorkDir `
     --manifest $Manifest `
     --snapshot_tags `
-    --num_workers 1
+    --num_workers $NumWorkers
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 # 2. Convert each retained DICOM volume to NIfTI.
@@ -23,14 +32,14 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     (Join-Path $WorkDir "NIFTI") `
     --csv_path_out (Join-Path $WorkDir "nifti_index.csv") `
     --manifest $Manifest `
-    --num_workers 1
+    --num_workers $NumWorkers
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 # 3. Create manifest-configured organ and lesion segmentations.
 & $Python -m imperandi segment `
     (Join-Path $WorkDir "nifti_index.csv") `
     --manifest $Manifest `
-    --num_workers 1
+    --num_workers $NumWorkers
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 # 4. Resolve contrast phases using metadata and model fallbacks.

@@ -10,17 +10,18 @@ bash tests/slow/tcga_lihc/pipeline.sh
 python -m pytest tests/slow/tcga_lihc -m slow
 ```
 
-The Bash script accepts optional `input directory`, `work directory`, and
-`manifest` positional arguments:
+The Bash script accepts optional `input directory`, `work directory`,
+`manifest`, and `number of workers` positional arguments. Worker count
+defaults to `1`:
 
 ```bash
-bash tests/slow/tcga_lihc/pipeline.sh /data/tcga-lihc ./tcga-results generic
+bash tests/slow/tcga_lihc/pipeline.sh /data/tcga-lihc ./tcga-results generic 4
 ```
 
 PowerShell exposes the equivalent named parameters:
 
 ```powershell
-.\tests\slow\tcga_lihc\pipeline.ps1 -InputDir C:\data\tcga-lihc -WorkDir .\tcga-results -Manifest generic
+.\tests\slow\tcga_lihc\pipeline.ps1 -InputDir C:\data\tcga-lihc -WorkDir .\tcga-results -Manifest generic -NumWorkers 4
 ```
 
 Choose a different subset by repeating `--patient`.

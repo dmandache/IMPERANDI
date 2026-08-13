@@ -5,9 +5,18 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 INPUT_DIR="${1:-${SCRIPT_DIR}/data/input}"
 WORK_DIR="${2:-${SCRIPT_DIR}/data/work}"
 MANIFEST="${3:-generic}"
+NUM_WORKERS="${4:-1}"
 PYTHON_BIN="${PYTHON:-python3}"
 
 mkdir -p "${WORK_DIR}"
+
+echo "Running TCGA-LIHC pipeline"
+echo "SCRIPT_DIR=${SCRIPT_DIR}"
+echo "INPUT_DIR=${INPUT_DIR}"
+echo "WORK_DIR=${WORK_DIR}"
+echo "MANIFEST=${MANIFEST}"
+echo "NUM_WORKERS=${NUM_WORKERS}"
+echo "PYTHON_BIN=${PYTHON_BIN}"
 
 # 1. Discover DICOM files, extract metadata, and curate the cohort table.
 "${PYTHON_BIN}" -m imperandi ingest \
@@ -15,7 +24,7 @@ mkdir -p "${WORK_DIR}"
   "${WORK_DIR}" \
   --manifest "${MANIFEST}" \
   --snapshot_tags \
-  --num_workers 1
+  --num_workers "${NUM_WORKERS}"
 
 # 2. Convert each retained DICOM volume to NIfTI.
 "${PYTHON_BIN}" -m imperandi convert \
@@ -23,13 +32,13 @@ mkdir -p "${WORK_DIR}"
   "${WORK_DIR}/NIFTI" \
   --csv_path_out "${WORK_DIR}/nifti_index.csv" \
   --manifest "${MANIFEST}" \
-  --num_workers 1
+  --num_workers "${NUM_WORKERS}"
 
 # 3. Create manifest-configured organ and lesion segmentations.
 "${PYTHON_BIN}" -m imperandi segment \
   "${WORK_DIR}/nifti_index.csv" \
   --manifest "${MANIFEST}" \
-  --num_workers 1
+  --num_workers "${NUM_WORKERS}"
 
 # 4. Resolve contrast phases using metadata and model fallbacks.
 "${PYTHON_BIN}" -m imperandi phase \

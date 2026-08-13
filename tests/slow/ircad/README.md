@@ -10,17 +10,18 @@ bash tests/slow/ircad/pipeline.sh
 python -m pytest tests/slow/ircad -m slow
 ```
 
-The Bash script accepts optional `input directory`, `work directory`, and
-`manifest` positional arguments:
+The Bash script accepts optional `input directory`, `work directory`,
+`manifest`, and `number of workers` positional arguments. Worker count
+defaults to `1`:
 
 ```bash
-bash tests/slow/ircad/pipeline.sh /data/ircad ./ircad-results generic
+bash tests/slow/ircad/pipeline.sh /data/ircad ./ircad-results generic 4
 ```
 
 PowerShell exposes the equivalent named parameters:
 
 ```powershell
-.\tests\slow\ircad\pipeline.ps1 -InputDir C:\data\ircad -WorkDir .\ircad-results -Manifest generic
+.\tests\slow\ircad\pipeline.ps1 -InputDir C:\data\ircad -WorkDir .\ircad-results -Manifest generic -NumWorkers 4
 ```
 
 Choose a different subset by repeating `--patient`, for example:

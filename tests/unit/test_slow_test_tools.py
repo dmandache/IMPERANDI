@@ -44,3 +44,6 @@ def test_user_facing_pipeline_scripts_show_every_stage_without_runner():
             assert "run_pipeline.py" not in script
             for stage in pipeline_module.STAGES:
                 assert f"imperandi {stage}" in script
+            assert "NumWorkers = 1" in script or 'NUM_WORKERS="${4:-1}"' in script
+            for setting in ("SCRIPT_DIR", "INPUT_DIR", "WORK_DIR", "MANIFEST"):
+                assert setting in script
