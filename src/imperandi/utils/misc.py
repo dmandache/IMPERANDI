@@ -137,7 +137,6 @@ def report_change(df, previous_df, columns=None, max_rows=10, *, col=None):
             ]
             row = {
                 "patient_key": _display_value(patient_key),
-                "study_id": _display_value(study_id),
             }
             if "date" in affected.columns:
                 dates = pd.to_datetime(affected["date"], errors="coerce").dt.strftime(

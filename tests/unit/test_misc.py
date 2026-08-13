@@ -29,8 +29,9 @@ def test_report_change_logs_compact_tables_with_affected_values(caplog):
     assert "patient_key  studies Modality SliceThickness" in caplog.text
     assert "p1        1   CT, MR       6.0, 7.0" in caplog.text
     assert "1 studies removed in this step (showing 1)" in caplog.text
-    assert "patient_key study_id       date Modality SliceThickness" in caplog.text
-    assert "p1       s1 2024-01-02   CT, MR       6.0, 7.0" in caplog.text
+    assert "patient_key       date Modality SliceThickness" in caplog.text
+    assert "p1 2024-01-02   CT, MR       6.0, 7.0" in caplog.text
+    assert "study_id" not in caplog.text
 
 
 def test_report_change_caps_tables_and_reports_omitted_entities(caplog):
@@ -65,7 +66,9 @@ def test_report_change_reports_studies_without_a_date_column(caplog):
         report_change(current_df, previous_df, col="reason")
 
     assert "1 studies removed in this step (showing 1)" in caplog.text
-    assert "p1       s1  scout" in caplog.text
+    assert "patient_key reason" in caplog.text
+    assert "p1  scout" in caplog.text
+    assert "study_id" not in caplog.text
 
 
 def test_clean_pipeline_passes_filter_columns_to_change_report(monkeypatch):
