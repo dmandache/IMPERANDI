@@ -304,37 +304,43 @@ def test_generic_manifest_filters_pixel_spacing_declaratively():
     assert pd.isna(out.iloc[2]["PixelSpacingXY"])
 
 
-def test_generic_manifest_filters_slice_spacing_declaratively():
+def test_generic_manifest_filters_slice_thickness_by_modality_declaratively():
     base_path = Path(__file__).resolve().parents[2] / "src" / "imperandi"
     manifest = clean.load_manifest("generic", base_path=base_path)
-    slice_spacing_filter = next(
-        step
-        for step in manifest["cleaning"]["steps"]
-        if step.get("name") == "discard_large_slice_spacing"
-    )
+    filters_by_name = {
+        step.get("name"): step for step in manifest["cleaning"]["steps"]
+    }
+    slice_thickness_filters = [
+        filters_by_name["discard_large_slice_thickness_CT"],
+        filters_by_name["discard_large_slice_thickness_MR"],
+    ]
     df = pd.DataFrame(
         {
             "patient_key": [
-                "valid",
-                "thickness_boundary",
-                "spacing_boundary",
-                "thick",
-                "wide",
+                "ct_valid",
+                "ct_boundary",
+                "ct_thick",
+                "mr_valid",
+                "mr_boundary",
+                "mr_thick",
+                "other_modality",
                 "unknown",
             ],
-            "study_id": ["s"] * 6,
-            "series_id": ["sr"] * 6,
-            "SliceThickness": [2.0, 6.0, 2.0, 6.1, 2.0, None],
-            "SpacingBetweenSlices": [2.0, 2.0, 5.0, 2.0, 5.1, None],
+            "study_id": ["s"] * 8,
+            "series_id": ["sr"] * 8,
+            "Modality": ["CT", "CT", "CT", "MR", "MR", "MR", "PT", "CT"],
+            "SliceThickness": [2.0, 5.0, 5.1, 6.0, 7.0, 7.1, 8.0, None],
         }
     )
 
-    out = clean.run_clean_pipeline(df, [slice_spacing_filter])
+    out = clean.run_clean_pipeline(df, slice_thickness_filters)
 
     assert out["patient_key"].tolist() == [
-        "valid",
-        "thickness_boundary",
-        "spacing_boundary",
+        "ct_valid",
+        "ct_boundary",
+        "mr_valid",
+        "mr_boundary",
+        "other_modality",
         "unknown",
     ]
 

@@ -2429,7 +2429,12 @@ def run_clean_pipeline(
         label = _step_label(step)
         report_volumes(df, label)
         try:
-            report_change(df, df_prev)
+            report_columns = None
+            if step["type"] == "filter":
+                report_columns = list(
+                    dict.fromkeys(rule["column"] for rule in step["rules"])
+                )
+            report_change(df, df_prev, columns=report_columns)
         except Exception:
             logger.debug("Could not compute detailed change report for step %s", label)
 

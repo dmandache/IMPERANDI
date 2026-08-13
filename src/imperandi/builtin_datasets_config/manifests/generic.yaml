@@ -71,15 +71,21 @@ cleaning:
     - type: sop_class
     - type: parse_image_type
     - type: filter
-      name: discard_large_slice_spacing
+      name: discard_large_slice_thickness_CT
       kind: discard
       scope: row
-      logic: or
+      logic: and
       rules:
-        #- {column: Rows, op: is_null}
-        #- {column: Columns, op: is_null}
-        - {column: SliceThickness, op: gt, value: 6.0}
-        - {column: SpacingBetweenSlices, op: gt, value: 5.0}
+        - {column: SliceThickness, op: gt, value: 5.0}
+        - {column: Modality, op: eq, value: CT}
+    - type: filter
+      name: discard_large_slice_thickness_MR
+      kind: discard
+      scope: row
+      logic: and
+      rules:
+        - {column: SliceThickness, op: gt, value: 7.0}
+        - {column: Modality, op: eq, value: MR}
     - type: filter
       # kind: keep|discard; scope: row|volume; logic: and|or.
       # Operators: eq, ne, in, not_in, contains, icontains, regex, lt, lte,
