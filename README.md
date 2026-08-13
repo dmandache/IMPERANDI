@@ -287,24 +287,34 @@ Full IMPERANDI configuration guide: [Documentation](https://imperandi.readthedoc
 - Archive workflows are bounded by depth and include path-safety protections.
 - Most commands support `--dry-run` for pipeline planning and CI smoke checks.
 
-<!-- ## Testing (slow datasets)
+## Testing
 
-Slow integration tests for the [IRCAD dataset](https://www.ircad.fr/research/data-sets/liver-segmentation-3d-ircadb-01/) are available and skipped unless data is present.
-
-- Place DICOM data at `tests/data/IRCAD_DICOM` (gitignored) or set `IRCAD_ROOT`.
-- Optional: place NIfTI outputs at `tests/data/IRCAD_nifti` or set `IRCAD_NIFTI_ROOT`.
-- Run slow tests:
+Fast tests are organized under `tests/unit` and run in normal CI:
 
 ```bash
-python -m pytest -m slow
+python -m pytest -m "not slow"
 ```
 
-- Regenerate reference CSVs:
+Dataset-backed tests run the complete ingest, convert, segment, phase, and
+radiomics workflow on small IRCAD and TCGA-LIHC cohorts. Downloaded inputs and
+generated outputs stay outside version control:
 
 ```bash
-python -m imperandi parse --root_path tests/data/IRCAD_DICOM --output_dir tests/data
-python -m imperandi clean --csv_path tests/data/dicom_index.csv --csv_path_out tests/data/dicom_index_clean.csv
-``` -->
+python -m pip install -e '.[all]'
+python tests/slow/ircad/download.py
+python tests/slow/tcga_lihc/download.py
+python -m pytest tests/slow -m slow
+```
+
+Each dataset can also run independently:
+
+```bash
+bash tests/slow/ircad/pipeline.sh
+bash tests/slow/tcga_lihc/pipeline.sh
+```
+
+See [`tests/slow/README.md`](tests/slow/README.md) for layout, environment
+overrides, and dataset-specific instructions.
 
 ## Use Case on [IRCAD Dataset](https://www.ircad.fr/research/data-sets/liver-segmentation-3d-ircadb-01/)
 
@@ -351,4 +361,3 @@ Inspect results with dashboards:
 - explore images & segmentations with the interactive viewer
 - inspect DICOM tags
 - basic radiomics statistics
-

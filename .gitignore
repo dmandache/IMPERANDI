@@ -17,6 +17,8 @@ temp/
 
 # Big test data
 tests/data/
+tests/slow/*/data/input/
+tests/slow/*/data/work/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

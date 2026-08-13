@@ -48,7 +48,11 @@ dev = [
   "ipywidgets"
 ]
 
-all = ["imperandi[dev,segment,radiomics]"]
+slow = [
+  "idc-index",
+]
+
+all = ["imperandi[dev,segment,radiomics,slow]"]
 
 [project.scripts]
 imperandi = "imperandi.cli:main"
@@ -63,8 +67,9 @@ where = ["src"]
 imperandi = ["datasets_config/manifests/*.yaml"]
 
 [tool.pytest.ini_options]
+testpaths = ["tests/unit", "tests/slow"]
 markers = [
-  "slow: IRCAD dataset integration tests",
+  "slow: dataset-backed full pipeline tests",
 ]
 
 [tool.ruff]
