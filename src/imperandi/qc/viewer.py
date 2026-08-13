@@ -741,7 +741,7 @@ class ScanViewer:
                 self.patient_dropdown,
                 patient_options,
                 preferred=patient_pref,
-                disabled=self.patient_col is None,
+                disabled=self.patient_col is None or len(patient_options) <= 1,
             )
 
             date_options = self._build_date_options(self.patient_dropdown.value)
@@ -749,7 +749,7 @@ class ScanViewer:
                 self.date_dropdown,
                 date_options,
                 preferred=date_pref,
-                disabled=self.date_col is None,
+                disabled=self.date_col is None or len(date_options) <= 1,
             )
 
             modality_frame = self._filter_frame_for_jump(
@@ -776,7 +776,7 @@ class ScanViewer:
                 self.phase_dropdown,
                 phase_options,
                 preferred=phase_pref,
-                disabled=self.phase_col is None,
+                disabled=self.phase_col is None or len(phase_options) <= 1,
             )
         finally:
             self._suspend_jump = False

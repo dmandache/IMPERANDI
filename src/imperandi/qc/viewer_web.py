@@ -433,6 +433,9 @@ class ScanPanelViewer(param.Parameterized):
             self.patient = format_value(row[self.patient_col])
         elif self.patient not in self.param.patient.objects:
             self.patient = self.param.patient.objects[0]
+        self.patient_widget.disabled = (
+            self.patient_col is None or len(patient_options) <= 1
+        )
 
         date_frame = self._filtered_frame(patient=self.patient)
         date_options = self._unique_options(date_frame, self.date_col, format_date)
@@ -442,6 +445,7 @@ class ScanPanelViewer(param.Parameterized):
             self.date = format_date(row[self.date_col])
         elif self.date not in self.param.date.objects:
             self.date = self.param.date.objects[0]
+        self.date_widget.disabled = self.date_col is None or len(date_options) <= 1
 
         phase_frame = self._filtered_frame(patient=self.patient, date=self.date)
         modality_options = self._unique_options(
@@ -468,6 +472,7 @@ class ScanPanelViewer(param.Parameterized):
             self.phase = format_value(row[self.phase_col])
         elif self.phase not in self.param.phase.objects:
             self.phase = self.param.phase.objects[0]
+        self.phase_widget.disabled = self.phase_col is None or len(phase_options) <= 1
 
         self.param.center_segmentation.objects = self.segmentation_cols or [None]
         if (

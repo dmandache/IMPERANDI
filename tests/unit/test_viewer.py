@@ -156,8 +156,11 @@ def test_viewer_initialization_loads_data_and_builds_jump_controls(viewer):
     assert viewer.ct_scan_raw.shape == (2, 3, 4)
     assert viewer.segmentations["mask_liver"].shape == (2, 3, 4)
     assert viewer.patient_dropdown.options == (("P1", "P1"), ("P2", "P2"))
+    assert viewer.patient_dropdown.disabled is False
     assert viewer.date_dropdown.options == (("2024-01-01", "2024-01-01"),)
+    assert viewer.date_dropdown.disabled is True
     assert viewer.phase_dropdown.options == (("portal", "portal"),)
+    assert viewer.phase_dropdown.disabled is True
     assert viewer.modality_dropdown.options == (("CT", "CT"),)
     assert viewer.modality_dropdown.disabled is True
     assert viewer.window_preset.disabled is False
@@ -438,6 +441,24 @@ def test_modality_dropdown_is_enabled_for_mixed_modality_exam(viewer):
     assert viewer._build_phase_options("P1", "2024-01-01") == [
         ("delayed", "delayed")
     ]
+
+
+def test_single_option_dropdowns_enable_when_alternatives_become_available(viewer):
+    second_phase = viewer.df.iloc[0].copy()
+    second_phase["phase"] = "delayed"
+    second_date = viewer.df.iloc[0].copy()
+    second_date["date"] = "2024-01-02"
+    viewer.df = pd.concat(
+        [viewer.df, second_phase.to_frame().T, second_date.to_frame().T],
+        ignore_index=True,
+    )
+    viewer.current_index = 0
+
+    viewer._refresh_jump_dropdowns(use_current_row=True)
+
+    assert viewer.patient_dropdown.disabled is False
+    assert viewer.date_dropdown.disabled is False
+    assert viewer.phase_dropdown.disabled is False
 
 
 def test_modality_and_percentile_helpers_handle_mri_and_nonfinite_voxels():
