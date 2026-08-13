@@ -1,7 +1,9 @@
 # %matplotlib widget
 
+import sys
 import time
 import warnings
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -10,12 +12,27 @@ import matplotlib.patches as mpatches
 import ipywidgets as widgets
 from IPython.display import clear_output, display
 
-from imperandi.qc.viewer_resample import (
-    DEFAULT_ISOTROPIC_RESOLUTION_MM,
-    load_nifti_isotropic,
-    validate_isotropic_resolution,
-)
-from imperandi.qc.viewer_windowing import normalize_modality, percentile_window
+try:
+    from imperandi.qc.viewer_resample import (
+        DEFAULT_ISOTROPIC_RESOLUTION_MM,
+        load_nifti_isotropic,
+        validate_isotropic_resolution,
+    )
+    from imperandi.qc.viewer_windowing import normalize_modality, percentile_window
+except ModuleNotFoundError as exc:
+    # Allow this file to be loaded directly (for example with
+    # importlib.util.spec_from_file_location) without installing IMPERANDI.
+    if exc.name != "imperandi":
+        raise
+    viewer_dir = str(Path(__file__).resolve().parent)
+    if viewer_dir not in sys.path:
+        sys.path.insert(0, viewer_dir)
+    from viewer_resample import (  # noqa: E402
+        DEFAULT_ISOTROPIC_RESOLUTION_MM,
+        load_nifti_isotropic,
+        validate_isotropic_resolution,
+    )
+    from viewer_windowing import normalize_modality, percentile_window  # noqa: E402
 
 warnings.filterwarnings("ignore")  # Ignore warnings
 

@@ -1,3 +1,5 @@
+import builtins
+import importlib.util
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,6 +16,24 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 from imperandi.qc import viewer as viewer_module
 from imperandi.qc.viewer import CTScanViewer, ScanViewer, clip_hu_values, load_nifti
 from imperandi.qc.viewer_windowing import normalize_modality, percentile_window
+
+
+def test_viewer_can_be_loaded_directly_without_imperandi_import(monkeypatch):
+    """The notebook viewer can be copied and loaded outside the package."""
+    real_import = builtins.__import__
+
+    def import_without_imperandi(name, *args, **kwargs):
+        if name == "imperandi" or name.startswith("imperandi."):
+            raise ModuleNotFoundError("No module named 'imperandi'", name="imperandi")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", import_without_imperandi)
+    viewer_path = Path(viewer_module.__file__).resolve()
+    spec = importlib.util.spec_from_file_location("standalone_viewer", viewer_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert module.CTScanViewer is module.ScanViewer
 
 
 def _build_viewer(patient_values, date_values, patient_value, date_value):
