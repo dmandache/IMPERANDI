@@ -205,12 +205,12 @@ class ScanViewer:
         self.load_data()
 
     def _sort_dataframe_for_navigation(self, df):
-        """Group rows and apply clinical phase order with stable ties."""
+        """Group rows by patient and date, with clinical phase order and stable ties."""
         sort_columns = [
             column
             for column in (
                 self.patient_col,
-                self.study_col,
+                self.date_col,
                 self.modality_col,
                 self.phase_col,
             )

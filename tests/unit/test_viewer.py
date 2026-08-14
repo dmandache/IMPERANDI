@@ -228,6 +228,7 @@ def test_viewer_stably_sorts_rows_for_navigation(monkeypatch):
             {
                 "patient_key": "P2",
                 "study_id": "S1",
+                "date": "2024-01-01",
                 "Modality": "CT",
                 "phase": "arterial",
                 "scan": "p2",
@@ -235,6 +236,7 @@ def test_viewer_stably_sorts_rows_for_navigation(monkeypatch):
             {
                 "patient_key": "P1",
                 "study_id": "S2",
+                "date": "2024-01-01",
                 "Modality": "CT",
                 "phase": "portal",
                 "scan": "study-2",
@@ -242,6 +244,7 @@ def test_viewer_stably_sorts_rows_for_navigation(monkeypatch):
             {
                 "patient_key": "P1",
                 "study_id": "S1",
+                "date": "2024-02-01",
                 "Modality": "MR",
                 "phase": "arterial",
                 "scan": "mr",
@@ -249,6 +252,7 @@ def test_viewer_stably_sorts_rows_for_navigation(monkeypatch):
             {
                 "patient_key": "P1",
                 "study_id": "S1",
+                "date": "2024-02-01",
                 "Modality": "CT",
                 "phase": "portal",
                 "scan": "portal-first",
@@ -256,6 +260,7 @@ def test_viewer_stably_sorts_rows_for_navigation(monkeypatch):
             {
                 "patient_key": "P1",
                 "study_id": "S1",
+                "date": "2024-02-01",
                 "Modality": "CT",
                 "phase": "arterial",
                 "scan": "arterial",
@@ -263,6 +268,7 @@ def test_viewer_stably_sorts_rows_for_navigation(monkeypatch):
             {
                 "patient_key": "P1",
                 "study_id": "S1",
+                "date": "2024-02-01",
                 "Modality": "CT",
                 "phase": "portal",
                 "scan": "portal-second",
@@ -274,11 +280,11 @@ def test_viewer_stably_sorts_rows_for_navigation(monkeypatch):
     instance = CTScanViewer(frame, "scan")
 
     assert instance.df["scan"].tolist() == [
+        "study-2",
         "arterial",
         "portal-first",
         "portal-second",
         "mr",
-        "study-2",
         "p2",
     ]
     assert instance.df.index.tolist() == list(range(len(frame)))
