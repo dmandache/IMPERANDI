@@ -184,6 +184,8 @@ def test_viewer_initialization_loads_data_and_builds_jump_controls(viewer):
     assert viewer.modality_dropdown.disabled is True
     assert viewer.window_preset.disabled is False
     assert viewer.percentile_min_input.disabled is True
+    assert viewer.scale_bar_cm == 5.0
+    assert viewer.scale_bar_color == "yellow"
     assert viewer.prev_button.layout.width == "50%"
     assert viewer.next_button.layout.width == "50%"
     rendering_inputs = [
@@ -448,6 +450,16 @@ def test_update_display_handles_all_planes_visibility_and_output_fallback(
     monkeypatch.setattr(viewer, "_render_output_figure", lambda: calls.append(True))
     viewer.update_display()
     assert calls == [True]
+
+
+def test_scale_bar_uses_isotropic_voxel_size(viewer):
+    viewer.update_display()
+
+    scale_line = viewer.ax.lines[-1]
+    x_values = scale_line.get_xdata()
+    assert x_values[1] - x_values[0] == pytest.approx(25.0)
+    assert scale_line.get_color() == "yellow"
+    assert any(text.get_text() == "5 cm" for text in viewer.ax.texts)
 
 
 def test_load_data_skips_missing_masks_and_reports_failed_mask_load(

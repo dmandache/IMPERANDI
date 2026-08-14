@@ -70,6 +70,8 @@ COLORMAPS = ["jet", "autumn", "summer", "winter", "viridis"]
 CONTOUR_COLORS = ["blue", "red", "green", "cyan", "magenta"]
 DISPLAY_CANVAS_PX = 700
 FIGURE_DPI = 100
+DEFAULT_SCALE_BAR_CM = 5.0
+DEFAULT_SCALE_BAR_COLOR = "yellow"
 JUMP_DROPDOWN_WIDTH = "250px"
 JUMP_NAV_BUTTON_WIDTH = "120px"
 
@@ -120,6 +122,8 @@ class ScanViewer:
         HU_max=400,
         exploration_mode="ordered",
         isotropic_resolution_mm=DEFAULT_ISOTROPIC_RESOLUTION_MM,
+        scale_bar_cm=DEFAULT_SCALE_BAR_CM,
+        scale_bar_color=DEFAULT_SCALE_BAR_COLOR,
     ):
         self.ct_scan_col = ct_scan_col
         self.patient_col = "patient_key" if "patient_key" in df.columns else None
@@ -191,10 +195,14 @@ class ScanViewer:
         self.exploration_mode = exploration_mode
         self.canvas_size_px = DISPLAY_CANVAS_PX
         self.figure_dpi = FIGURE_DPI
-        self.image_aspect = "auto"
+        self.image_aspect = "equal"
         self.isotropic_resolution_mm = validate_isotropic_resolution(
             isotropic_resolution_mm
         )
+        self.scale_bar_cm = float(scale_bar_cm)
+        if not np.isfinite(self.scale_bar_cm) or self.scale_bar_cm <= 0:
+            raise ValueError("scale_bar_cm must be a positive finite number")
+        self.scale_bar_color = scale_bar_color
 
         if self.exploration_mode == "random":
             self.explored_history = [self.current_index]
@@ -650,17 +658,34 @@ class ScanViewer:
         ]
         right_panel = widgets.VBox(
             right_items,
-            layout=widgets.Layout(width="500px"),
+            layout=widgets.Layout(width="500px", margin="0 0 0 8px"),
         )
 
         self.display_widget.layout = widgets.Layout(
-            width="100%",
-            flex="1 1 auto",
-            min_width="500px",
+            width=f"{self.canvas_size_px}px",
+            height=f"{self.canvas_size_px}px",
+            flex="0 0 auto",
+        )
+        self.canvas_container = widgets.Box(
+            [self.display_widget],
+            layout=widgets.Layout(
+                width=f"{self.canvas_size_px}px",
+                height=f"{self.canvas_size_px}px",
+                min_width="0px",
+                flex="0 0 auto",
+                display="flex",
+                align_items="center",
+                justify_content="center",
+                overflow="hidden",
+            ),
         )
         ui_bot = widgets.HBox(
-            [self.display_widget, right_panel],
-            layout=widgets.Layout(width="100%", align_items="flex-start"),
+            [self.canvas_container, right_panel],
+            layout=widgets.Layout(
+                width="100%",
+                align_items="flex-start",
+                justify_content="center",
+            ),
         )
         display(ui_top, ui_bot)
 
@@ -995,7 +1020,56 @@ class ScanViewer:
         self.fig.subplots_adjust(left=0.0, right=1.0, bottom=0.0, top=1.0)
         self.ax.set_position([0.0, 0.0, 1.0, 1.0])
         self.ax.set_aspect(self.image_aspect, adjustable="box")
+        self.ax.set_anchor("C")
         self.ax.margins(0)
+
+    def _fit_canvas_to_image(self, image):
+        """Fit the real canvas inside its square slot without stretching it."""
+        height, width = image.shape[:2]
+        if height <= 0 or width <= 0:
+            return
+        scale = self.canvas_size_px / max(width, height)
+        width_px = max(1, round(width * scale))
+        height_px = max(1, round(height * scale))
+        self.fig.set_size_inches(
+            width_px / self.figure_dpi,
+            height_px / self.figure_dpi,
+            forward=True,
+        )
+        self.display_widget.layout.width = f"{width_px}px"
+        self.display_widget.layout.height = f"{height_px}px"
+        self.canvas_container.layout.width = f"{width_px}px"
+
+    def _draw_scale_bar(self, image):
+        """Draw the configured physical scale using the resampled voxel size."""
+        height, width = image.shape[:2]
+        length_px = self.scale_bar_cm * 10.0 / self.isotropic_resolution_mm
+        x_end = width - 0.05 * width
+        x_start = x_end - length_px
+        y = 0.06 * height
+        x_limits = self.ax.get_xlim()
+        y_limits = self.ax.get_ylim()
+        self.ax.plot(
+            [x_start, x_end],
+            [y, y],
+            color=self.scale_bar_color,
+            linewidth=4,
+            solid_capstyle="butt",
+            zorder=20,
+        )
+        self.ax.text(
+            (x_start + x_end) / 2.0,
+            y + 0.025 * height,
+            f"{self.scale_bar_cm:g} cm",
+            color=self.scale_bar_color,
+            fontsize=11,
+            fontweight="bold",
+            ha="center",
+            va="bottom",
+            zorder=20,
+        )
+        self.ax.set_xlim(x_limits)
+        self.ax.set_ylim(y_limits)
 
     def on_window_preset_change(self, change):
         if self._current_modality() != "CT":
@@ -1307,11 +1381,13 @@ class ScanViewer:
 
         window_min, window_max = self._display_window()
         ct_slice = np.clip(ct_slice, window_min, window_max)
+        display_slice = ct_slice.T
 
+        self._fit_canvas_to_image(display_slice)
         self.ax.clear()
         self._pin_axes_to_canvas()
         self.ax.imshow(
-            ct_slice.T,
+            display_slice,
             cmap="gray",
             origin="lower",
             aspect=self.image_aspect,
@@ -1361,6 +1437,7 @@ class ScanViewer:
                 framealpha=0.6,
             )
 
+        self._draw_scale_bar(display_slice)
         self.ax.axis("off")
         if self._uses_output_fallback:
             self._render_output_figure()
