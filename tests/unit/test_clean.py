@@ -448,6 +448,33 @@ def test_group_volumes_and_calculate_length():
     assert set(calc["volume_id"]) == set(grouped["volume_id"])
 
 
+def test_group_volumes_resolves_time_lists_to_earliest_scalar():
+    df = pd.DataFrame(
+        {
+            "volume_id": ["v1", "v1", "v1", "v2"],
+            "time": [
+                dt_time(14, 39, 23),
+                [dt_time(14, 39, 21), dt_time(14, 39, 22)],
+                "datetime.time(14, 39, 24)",
+                None,
+            ],
+            "AcquisitionTime": ["143923", "143921", "143924", None],
+        }
+    )
+
+    grouped = clean.group_volumes(df)
+    by_volume = grouped.set_index("volume_id")
+
+    assert by_volume.loc["v1", "time"] == dt_time(14, 39, 21)
+    assert not isinstance(by_volume.loc["v1", "time"], list)
+    assert by_volume.loc["v1", "AcquisitionTime"] == [
+        "143921",
+        "143923",
+        "143924",
+    ]
+    assert pd.isna(by_volume.loc["v2", "time"])
+
+
 def test_generic_manifest_filters_volume_length_declaratively():
     base_path = Path(__file__).resolve().parents[2] / "src" / "imperandi"
     manifest = clean.load_manifest("generic", base_path=base_path)

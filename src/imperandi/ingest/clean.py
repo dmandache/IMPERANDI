@@ -1140,12 +1140,20 @@ def _sorted_unique(values, col_name):
 
 
 def group_volumes(df):
-    """Aggregate instance-level metadata into one row per volume identifier."""
+    """Aggregate instance metadata into one row per volume.
+
+    The canonical ``time`` column represents the volume acquisition start, so
+    resolve varying per-instance times to the earliest valid clock time instead
+    of carrying a list into downstream volume-level processing.
+    """
 
     def agg_fun(col):
         vals = list(col.dropna())
         if len(vals) == 0:
             return float("NaN")
+        if col.name == "time":
+            earliest = _normalize_instance_creation_time(vals)
+            return earliest if earliest is not None else float("NaN")
         unique_vals = _sorted_unique(vals, col.name)
         if len(unique_vals) == 1:
             return unique_vals[0]
