@@ -137,7 +137,6 @@ def viewer(monkeypatch):
         return scans[path]
 
     monkeypatch.setattr(viewer_module, "load_nifti", fake_load)
-    monkeypatch.setattr(viewer_module.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(viewer_module, "clear_output", lambda **_kwargs: None)
     monkeypatch.setattr(viewer_module, "display", lambda *_widgets: None)
     monkeypatch.setattr(CTScanViewer, "_try_enable_widget_backend", lambda _self: None)
@@ -219,6 +218,71 @@ def test_viewer_auto_detects_legacy_segmentations_and_ignores_empty_values(monke
     assert instance.segmentation_cols == ["liver_path"]
     assert instance.explored_history == [0]
     assert instance.history_index == 0
+
+
+def test_viewer_stably_sorts_rows_for_navigation(monkeypatch):
+    monkeypatch.setattr(CTScanViewer, "init_widgets", lambda _self: None)
+    monkeypatch.setattr(CTScanViewer, "load_data", lambda _self: None)
+    frame = pd.DataFrame(
+        [
+            {
+                "patient_key": "P2",
+                "study_id": "S1",
+                "Modality": "CT",
+                "phase": "arterial",
+                "scan": "p2",
+            },
+            {
+                "patient_key": "P1",
+                "study_id": "S2",
+                "Modality": "CT",
+                "phase": "portal",
+                "scan": "study-2",
+            },
+            {
+                "patient_key": "P1",
+                "study_id": "S1",
+                "Modality": "MR",
+                "phase": "arterial",
+                "scan": "mr",
+            },
+            {
+                "patient_key": "P1",
+                "study_id": "S1",
+                "Modality": "CT",
+                "phase": "portal",
+                "scan": "portal-first",
+            },
+            {
+                "patient_key": "P1",
+                "study_id": "S1",
+                "Modality": "CT",
+                "phase": "arterial",
+                "scan": "arterial",
+            },
+            {
+                "patient_key": "P1",
+                "study_id": "S1",
+                "Modality": "CT",
+                "phase": "portal",
+                "scan": "portal-second",
+            },
+        ],
+        index=[9, 8, 7, 6, 5, 4],
+    )
+
+    instance = CTScanViewer(frame, "scan")
+
+    assert instance.df["scan"].tolist() == [
+        "arterial",
+        "portal-first",
+        "portal-second",
+        "mr",
+        "study-2",
+        "p2",
+    ]
+    assert instance.df.index.tolist() == list(range(len(frame)))
+    assert frame.index.tolist() == [9, 8, 7, 6, 5, 4]
 
 
 def test_viewer_helpers_format_filter_and_select_values(viewer):
@@ -376,6 +440,71 @@ def test_load_data_skips_missing_masks_and_reports_failed_mask_load(
     assert "failed to load segmentation mask_bad" in capsys.readouterr().out
 
 
+def test_load_data_disables_navigation_while_scan_is_loading(viewer, monkeypatch):
+    observed_states = []
+    viewer.segmentation_cols = []
+
+    def fake_load(_path, **_kwargs):
+        observed_states.append(
+            (
+                viewer._is_loading,
+                viewer.prev_button.disabled,
+                viewer.next_button.disabled,
+                viewer.patient_dropdown.disabled,
+                viewer.phase_dropdown.disabled,
+            )
+        )
+        return np.zeros((2, 3, 4))
+
+    monkeypatch.setattr(viewer_module, "load_nifti", fake_load)
+
+    assert viewer.load_data() is True
+
+    assert observed_states == [(True, True, True, True, True)]
+    assert viewer._is_loading is False
+    assert viewer.prev_button.disabled is False
+    assert viewer.next_button.disabled is False
+
+
+def test_scan_load_failure_clears_previous_image_and_reports_row(viewer, monkeypatch):
+    viewer.df = pd.DataFrame(
+        [
+            {
+                "patient_key": "P3",
+                "study_id": "S3",
+                "date": "2024-03-03",
+                "Modality": "CT",
+                "phase": "portal",
+                "volume_id": "volume-bad",
+                "scan": "missing-scan.nii.gz",
+            }
+        ]
+    )
+    viewer.current_index = 0
+    viewer.segmentation_cols = []
+
+    def fail_load(_path, **_kwargs):
+        raise OSError("not readable")
+
+    monkeypatch.setattr(viewer_module, "load_nifti", fail_load)
+
+    assert viewer.load_data() is False
+
+    assert viewer.current_index == 0
+    assert viewer.ct_scan_raw is None
+    assert viewer.segmentations == {}
+    assert len(viewer.ax.images) == 0
+    assert "Failed to load scan" in viewer.info_display.value
+    assert "volume-bad" in viewer.info_display.value
+    assert "missing-scan.nii.gz" in viewer.info_display.value
+    assert "OSError: not readable" in viewer.info_display.value
+    assert "Failed to load scan" in viewer.ax.texts[0].get_text()
+    assert viewer.progress_bar.bar_style == "danger"
+    assert viewer.progress_bar.description == "Load failed"
+    assert viewer.prev_button.disabled is False
+    assert viewer.next_button.disabled is False
+
+
 def test_window_resolution_and_keyboard_handlers(viewer, monkeypatch):
     displayed = []
     loaded = []
@@ -522,6 +651,74 @@ def test_scan_navigation_uses_ordered_and_random_history(monkeypatch):
     assert instance.current_index == 0
     instance.on_next(None)
     assert instance.current_index == 1
+
+
+def test_duplicate_phase_scan_navigation_visits_every_row_forward_and_backward(
+    viewer, monkeypatch
+):
+    loaded = []
+    viewer.segmentation_cols = []
+    frame = pd.DataFrame(
+        [
+            {
+                "patient_key": "P1",
+                "date": "2024-01-01",
+                "Modality": "CT",
+                "phase": "portal",
+                "scan": "portal-first",
+            },
+            {
+                "patient_key": "P1",
+                "date": "2024-01-01",
+                "Modality": "CT",
+                "phase": "arterial",
+                "scan": "arterial",
+            },
+            {
+                "patient_key": "P1",
+                "date": "2024-01-01",
+                "Modality": "CT",
+                "phase": "portal",
+                "scan": "portal-second",
+            },
+            {
+                "patient_key": "P1",
+                "date": "2024-01-01",
+                "Modality": "CT",
+                "phase": "delayed",
+                "scan": "delayed",
+            },
+        ]
+    )
+    viewer.df = viewer._sort_dataframe_for_navigation(frame)
+
+    def fake_load(path, **_kwargs):
+        loaded.append(path)
+        return np.zeros((2, 3, 4))
+
+    monkeypatch.setattr(viewer_module, "load_nifti", fake_load)
+    assert viewer.df["scan"].tolist() == [
+        "arterial",
+        "delayed",
+        "portal-first",
+        "portal-second",
+    ]
+
+    viewer.current_index = 1
+    viewer.load_data()
+    loaded.clear()
+    viewer.on_next(None)
+    assert (viewer.current_index, loaded[-1]) == (2, "portal-first")
+    viewer.on_next(None)
+    assert (viewer.current_index, loaded[-1]) == (3, "portal-second")
+
+    viewer.current_index = 0
+    viewer.load_data()
+    loaded.clear()
+    viewer.on_prev(None)
+    assert (viewer.current_index, loaded[-1]) == (3, "portal-second")
+    viewer.on_prev(None)
+    assert (viewer.current_index, loaded[-1]) == (2, "portal-first")
 
 
 def test_random_previous_at_history_start_prints_message(capsys):

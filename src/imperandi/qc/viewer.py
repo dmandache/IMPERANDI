@@ -1,8 +1,8 @@
 # %matplotlib widget
 
 import sys
-import time
 import warnings
+from html import escape
 from pathlib import Path
 
 import numpy as np
@@ -112,9 +112,9 @@ class ScanViewer:
         exploration_mode="ordered",
         isotropic_resolution_mm=DEFAULT_ISOTROPIC_RESOLUTION_MM,
     ):
-        self.df = df
         self.ct_scan_col = ct_scan_col
         self.patient_col = "patient_key" if "patient_key" in df.columns else None
+        self.study_col = "study_id" if "study_id" in df.columns else None
         self.date_col = "date" if "date" in df.columns else None
         self.modality_col = next(
             (column for column in ("Modality", "modality") if column in df.columns),
@@ -128,6 +128,9 @@ class ScanViewer:
             self.phase_col = "totalseg_phase"
         else:
             self.phase_col = None
+
+        self.df = self._sort_dataframe_for_navigation(df)
+        df = self.df
 
         # Handle segmentation_cols gracefully
         if segmentation_cols is None:
@@ -175,6 +178,8 @@ class ScanViewer:
         self._uses_output_fallback = False
         self._suspend_jump = False
         self._suspend_window = False
+        self._is_loading = False
+        self._last_load_error = None
         self.exploration_mode = exploration_mode
         self.canvas_size_px = DISPLAY_CANVAS_PX
         self.figure_dpi = FIGURE_DPI
@@ -189,6 +194,43 @@ class ScanViewer:
 
         self.init_widgets()
         self.load_data()
+
+    def _sort_dataframe_for_navigation(self, df):
+        """Group viewer rows predictably while preserving equal-key input order."""
+        sort_columns = [
+            column
+            for column in (
+                self.patient_col,
+                self.study_col,
+                self.modality_col,
+                self.phase_col,
+            )
+            if column is not None
+        ]
+        ordered = df.copy().reset_index(drop=True)
+        if len(ordered) <= 1 or not sort_columns:
+            return ordered
+
+        sort_keys = pd.DataFrame(index=ordered.index)
+        key_columns = []
+        for position, column in enumerate(sort_columns):
+            if column == self.modality_col:
+                values = ordered[column].apply(normalize_modality)
+            else:
+                values = ordered[column].apply(self._format_value)
+            values = values.fillna("").astype(str).str.casefold()
+            missing_column = f"missing_{position}"
+            value_column = f"value_{position}"
+            sort_keys[missing_column] = values.eq("")
+            sort_keys[value_column] = values
+            key_columns.extend([missing_column, value_column])
+
+        sort_keys["input_position"] = np.arange(len(ordered))
+        sorted_positions = sort_keys.sort_values(
+            key_columns + ["input_position"],
+            kind="mergesort",
+        ).index
+        return ordered.iloc[sorted_positions].reset_index(drop=True)
 
     def init_widgets(self):
         self.slice_slider = widgets.IntSlider(
@@ -1058,6 +1100,8 @@ class ScanViewer:
             self.slice_slider.value = int(center_idx)
 
     def on_key_press(self, event):
+        if getattr(self, "_is_loading", False):
+            return
         key = (event.key or "").lower()
         if "shift+" in key:
             if "left" in key or "up" in key:
@@ -1071,52 +1115,123 @@ class ScanViewer:
         elif key in {"right", "down"}:
             self.on_next_slice_manual(None)
 
+    def _set_navigation_loading(self, loading):
+        if not loading:
+            for name in ("prev_button", "next_button"):
+                control = getattr(self, name, None)
+                if control is not None:
+                    control.disabled = False
+            return
+
+        control_names = (
+            "patient_dropdown",
+            "date_dropdown",
+            "modality_dropdown",
+            "phase_dropdown",
+            "prev_patient_button",
+            "next_patient_button",
+            "prev_date_button",
+            "next_date_button",
+            "prev_button",
+            "next_button",
+        )
+        for name in control_names:
+            control = getattr(self, name, None)
+            if control is not None:
+                control.disabled = True
+
+    def _show_scan_load_error(self, exc):
+        self.ct_scan_raw = None
+        self.segmentations = {}
+        self._last_load_error = exc
+        self.update_info_display(load_error=exc)
+
+        if self.ax is None:
+            return
+        self.ax.clear()
+        self.ax.text(
+            0.5,
+            0.5,
+            "Failed to load scan\n" f"{type(exc).__name__}: {exc}",
+            ha="center",
+            va="center",
+            wrap=True,
+            transform=self.ax.transAxes,
+        )
+        self.ax.axis("off")
+        if self._uses_output_fallback:
+            self._render_output_figure()
+        else:
+            self.fig.canvas.draw_idle()
+
     def load_data(self):
+        if self._is_loading:
+            return False
+
+        self._is_loading = True
+        self._set_navigation_loading(True)
         self.progress_bar.layout.visibility = "visible"
         self.progress_bar.value = 0
         self.progress_bar.bar_style = "info"
         self.progress_bar.description = "Loading..."
 
-        row = self.df.iloc[self.current_index]
-        self.progress_bar.value = 0.1
-        self.ct_scan_raw = load_nifti(
-            row[self.ct_scan_col],
-            isotropic_resolution_mm=self.isotropic_resolution_mm,
-            order=1,
-        )
-        self._update_window_controls()
+        try:
+            row = self.df.iloc[self.current_index]
+            self.progress_bar.value = 0.1
+            try:
+                scan = load_nifti(
+                    row[self.ct_scan_col],
+                    isotropic_resolution_mm=self.isotropic_resolution_mm,
+                    order=1,
+                )
+            except Exception as exc:
+                self.progress_bar.bar_style = "danger"
+                self.progress_bar.description = "Load failed"
+                self._show_scan_load_error(exc)
+                return False
 
-        self.segmentations = {}
-        if self.segmentation_cols:
-            for seg_col in self.segmentation_cols:
-                seg_path = row.get(seg_col, None)
-                if seg_path is None:
-                    continue
-                if isinstance(seg_path, float) and np.isnan(seg_path):
-                    continue
-                try:
-                    self.segmentations[seg_col] = load_nifti(
-                        seg_path,
-                        isotropic_resolution_mm=self.isotropic_resolution_mm,
-                        order=0,
-                    )
-                except Exception as exc:
-                    print(
-                        f"Warning: failed to load segmentation {seg_col} "
-                        f"for index {self.current_index}: {exc}"
-                    )
+            self.ct_scan_raw = scan
+            self._last_load_error = None
+            self._update_window_controls()
 
-        self.progress_bar.value = 0.6
-        self.update_info_display()
-        self.update_slice_slider()
-        self._set_jump_value()
-        self.progress_bar.value = 1
-        self.progress_bar.bar_style = "success"
-        self.progress_bar.description = "Loaded"
-        time.sleep(0.5)
-        self.progress_bar.layout.visibility = "hidden"
+            self.segmentations = {}
+            if self.segmentation_cols:
+                for seg_col in self.segmentation_cols:
+                    seg_path = row.get(seg_col, None)
+                    if seg_path is None:
+                        continue
+                    if isinstance(seg_path, float) and np.isnan(seg_path):
+                        continue
+                    try:
+                        self.segmentations[seg_col] = load_nifti(
+                            seg_path,
+                            isotropic_resolution_mm=self.isotropic_resolution_mm,
+                            order=0,
+                        )
+                    except Exception as exc:
+                        print(
+                            f"Warning: failed to load segmentation {seg_col} "
+                            f"for index {self.current_index}: {exc}"
+                        )
+
+            self.progress_bar.value = 0.6
+            self.update_info_display()
+            self.update_slice_slider()
+            self.progress_bar.value = 1
+            self.progress_bar.bar_style = "success"
+            self.progress_bar.description = "Loaded"
+            self.progress_bar.layout.visibility = "hidden"
+            return True
+        finally:
+            self._is_loading = False
+            try:
+                self._set_jump_value()
+            finally:
+                self._set_navigation_loading(False)
 
     def update_slice_slider(self):
+        if self.ct_scan_raw is None:
+            return
         self.view_plane = self.plane_selector.value
         if self.view_plane == "axial":
             self.num_slices = self.ct_scan_raw.shape[2]
@@ -1226,7 +1341,7 @@ class ScanViewer:
         else:
             self.fig.canvas.draw_idle()
 
-    def update_info_display(self):
+    def update_info_display(self, load_error=None):
         row = self.df.iloc[self.current_index]
         rows = []
         for column in DICOM_TAGS_TO_DISPLAY:
@@ -1245,13 +1360,29 @@ class ScanViewer:
                 "</tr>"
             )
         if rows:
-            html = (
+            metadata_html = (
                 "<table style='width: 100%; table-layout: fixed; border-collapse: collapse;'>"
                 + "".join(rows)
                 + "</table>"
             )
         else:
-            html = "<i>No metadata</i>"
+            metadata_html = "<i>No metadata</i>"
+
+        error_html = ""
+        if load_error is not None:
+            identity = [f"Scan {self.current_index + 1}/{len(self.df)}"]
+            for column in ("volume_id", "study_id", self.ct_scan_col):
+                if column in row.index and not self._is_empty_value(row[column]):
+                    identity.append(f"{column}={self._format_value(row[column])}")
+            error_text = f"{type(load_error).__name__}: {load_error}"
+            error_html = (
+                "<div style='color: #b00020; margin-bottom: 8px;'>"
+                "<b>Failed to load scan</b><br>"
+                f"{escape(' | '.join(identity))}<br>"
+                f"<code>{escape(error_text)}</code>"
+                "</div>"
+            )
+        html = error_html + metadata_html
         self.info_display.value = html
 
     def on_slice_change(self, change):
@@ -1271,6 +1402,8 @@ class ScanViewer:
         self.slice_slider.value = new_val
 
     def on_next(self, button):
+        if getattr(self, "_is_loading", False):
+            return
         if self.exploration_mode == "ordered":
             self.current_index = (self.current_index + 1) % len(self.df)
         else:
@@ -1289,6 +1422,8 @@ class ScanViewer:
         self.load_data()
 
     def on_prev(self, button):
+        if getattr(self, "_is_loading", False):
+            return
         if self.exploration_mode == "ordered":
             self.current_index = (self.current_index - 1) % len(self.df)
             self.load_data()
