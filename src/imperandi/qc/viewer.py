@@ -123,7 +123,6 @@ class ScanViewer:
     ):
         self.ct_scan_col = ct_scan_col
         self.patient_col = "patient_key" if "patient_key" in df.columns else None
-        self.study_col = "study_id" if "study_id" in df.columns else None
         self.date_col = "date" if "date" in df.columns else None
         self.modality_col = next(
             (column for column in ("Modality", "modality") if column in df.columns),
@@ -240,6 +239,9 @@ class ScanViewer:
                 continue
             if column == self.modality_col:
                 values = ordered[column].apply(normalize_modality)
+            elif column == self.date_col:
+                values = ordered[column].apply(self._format_date)
+                values = values.where(values.str.fullmatch(r"\d{4}-\d{2}-\d{2}"), "")
             else:
                 values = ordered[column].apply(self._format_value)
             values = values.fillna("").astype(str).str.casefold()
