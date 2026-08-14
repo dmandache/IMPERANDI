@@ -73,6 +73,15 @@ FIGURE_DPI = 100
 JUMP_DROPDOWN_WIDTH = "250px"
 JUMP_NAV_BUTTON_WIDTH = "120px"
 
+PHASE_SORT_RANK = {
+    "NATIVE": 0,
+    "ARTERIAL": 1,
+    "PORTAL": 2,
+    "PORTAL_VENOUS": 2,
+    "DELAYED": 3,
+    "HEPATOBILIARY": 4,
+}
+
 
 def load_nifti(
     file_path,
@@ -196,7 +205,7 @@ class ScanViewer:
         self.load_data()
 
     def _sort_dataframe_for_navigation(self, df):
-        """Group viewer rows predictably while preserving equal-key input order."""
+        """Group rows and apply clinical phase order with stable ties."""
         sort_columns = [
             column
             for column in (
@@ -214,6 +223,21 @@ class ScanViewer:
         sort_keys = pd.DataFrame(index=ordered.index)
         key_columns = []
         for position, column in enumerate(sort_columns):
+            if column == self.phase_col:
+                normalized_phase = (
+                    ordered[column]
+                    .apply(self._format_value)
+                    .str.strip()
+                    .str.upper()
+                    .str.replace(r"[^A-Z0-9]+", "_", regex=True)
+                    .str.strip("_")
+                )
+                rank_column = f"phase_rank_{position}"
+                sort_keys[rank_column] = normalized_phase.map(PHASE_SORT_RANK).fillna(
+                    5
+                )
+                key_columns.append(rank_column)
+                continue
             if column == self.modality_col:
                 values = ordered[column].apply(normalize_modality)
             else:

@@ -285,6 +285,41 @@ def test_viewer_stably_sorts_rows_for_navigation(monkeypatch):
     assert frame.index.tolist() == [9, 8, 7, 6, 5, 4]
 
 
+def test_viewer_sorts_phases_in_clinical_order_then_preserves_rest(monkeypatch):
+    monkeypatch.setattr(CTScanViewer, "init_widgets", lambda _self: None)
+    monkeypatch.setattr(CTScanViewer, "load_data", lambda _self: None)
+    phases = [
+        "OTHER",
+        "HEPATOBILIARY",
+        "PORTAL_VENOUS",
+        "NATIVE",
+        "UNKNOWN",
+        "DELAYED",
+        "ARTERIAL",
+    ]
+    frame = pd.DataFrame(
+        {
+            "patient_key": ["P1"] * len(phases),
+            "study_id": ["S1"] * len(phases),
+            "Modality": ["MR"] * len(phases),
+            "phase": phases,
+            "scan": phases,
+        }
+    )
+
+    instance = CTScanViewer(frame, "scan")
+
+    assert instance.df["phase"].tolist() == [
+        "NATIVE",
+        "ARTERIAL",
+        "PORTAL_VENOUS",
+        "DELAYED",
+        "HEPATOBILIARY",
+        "OTHER",
+        "UNKNOWN",
+    ]
+
+
 def test_viewer_helpers_format_filter_and_select_values(viewer):
     assert clip_hu_values(np.array([-200, 0, 500]), -100, 400).tolist() == [
         -100,
@@ -699,26 +734,26 @@ def test_duplicate_phase_scan_navigation_visits_every_row_forward_and_backward(
     monkeypatch.setattr(viewer_module, "load_nifti", fake_load)
     assert viewer.df["scan"].tolist() == [
         "arterial",
-        "delayed",
         "portal-first",
         "portal-second",
+        "delayed",
     ]
-
-    viewer.current_index = 1
-    viewer.load_data()
-    loaded.clear()
-    viewer.on_next(None)
-    assert (viewer.current_index, loaded[-1]) == (2, "portal-first")
-    viewer.on_next(None)
-    assert (viewer.current_index, loaded[-1]) == (3, "portal-second")
 
     viewer.current_index = 0
     viewer.load_data()
     loaded.clear()
+    viewer.on_next(None)
+    assert (viewer.current_index, loaded[-1]) == (1, "portal-first")
+    viewer.on_next(None)
+    assert (viewer.current_index, loaded[-1]) == (2, "portal-second")
+
+    viewer.current_index = 3
+    viewer.load_data()
+    loaded.clear()
     viewer.on_prev(None)
-    assert (viewer.current_index, loaded[-1]) == (3, "portal-second")
+    assert (viewer.current_index, loaded[-1]) == (2, "portal-second")
     viewer.on_prev(None)
-    assert (viewer.current_index, loaded[-1]) == (2, "portal-first")
+    assert (viewer.current_index, loaded[-1]) == (1, "portal-first")
 
 
 def test_random_previous_at_history_start_prints_message(capsys):
