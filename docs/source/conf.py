@@ -50,7 +50,6 @@ autodoc_mock_imports = [
     "radiomics",
     "skimage",
     "torch",
-    "torchio",
     "xgboost",
 ]
 

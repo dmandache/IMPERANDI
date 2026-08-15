@@ -45,7 +45,6 @@ Issues = "https://github.com/dmandache/IMPERANDI/issues"
 segment = [
   "matplotlib",
   "TotalSegmentator",
-  "torchio",
   "scipy",
   "scikit-image",
   "xgboost",
