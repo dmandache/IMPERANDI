@@ -30,20 +30,21 @@ id_extraction:
     from_tag: SeriesInstanceUID
     fallback: path
 
-# Optional parse-time patient-key normalization hook. Modules are relative to
-# `imperandi`; only use trusted code because hooks are imported and executed.
+# Optional parse-time patient-key normalization hook. Modules can be absolute
+# imports or relative to `imperandi`; only use trusted code because hooks are
+# imported and executed.
 id_standardization:
   hook_module: imperandi.builtin_datasets_config.hooks.generic
   function: standardize_patient_key
 
 # Optional parse-time enrichments. A hook returns a mapping/Series of columns.
 derived_columns:
-  - hook_module: dataset_configs.hooks.operandi
+  - hook_module: site_config.hooks.site_a
     function: extract_from_patient_key
     from_column: patient_key
     # Allowed: missing_only (default) or overwrite.
     join_mode: missing_only
-  # - hook_module: dataset_configs.hooks.site
+  # - hook_module: site_config.hooks.site_b
   #   function: derive_site_fields
   #   from_column: patient_key
   #   join_mode: overwrite

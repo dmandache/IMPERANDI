@@ -4,7 +4,7 @@ IMPERANDI configuration is defined in YAML manifests. JSON manifests are not
 accepted. A manifest can reference Python hooks when declarative configuration
 is insufficient for institution-specific identifiers or derived metadata.
 
-Pass a built-in name (`generic` or `operandi`) or a YAML path:
+Pass a built-in name (`generic`) or a YAML path:
 
 ```bash
 imperandi ingest --root_path ./dicom --manifest generic
@@ -13,8 +13,9 @@ imperandi phase ./nifti_index.csv --manifest ./site-a.yaml
 
 Built-ins live under `src/imperandi/builtin_datasets_config/manifests/`.
 Project-local OPERANDI configuration lives under `dataset_configs/` and is not
-installed with the package. Keep other institution-specific manifests in a
-reviewed, versioned project directory.
+installed with the package. Load it only by its explicit path, for example
+`--manifest ./dataset_configs/manifests/operandi.yaml`. Keep other
+institution-specific manifests in a reviewed, versioned project directory.
 
 ## Main library stages
 
@@ -233,7 +234,7 @@ cleaning:
   version: 1
   steps:
     - type: hook
-      function: "dataset_configs.hooks.site_a:extract_site_fields"
+      function: "site_config.hooks.site_a:extract_site_fields"
       source_columns: [patient_key]
 ```
 

@@ -261,11 +261,13 @@ Their built-in hooks live in:
 - `src/imperandi/builtin_datasets_config/hooks/`
 
 Repository-specific OPERANDI configuration lives in `dataset_configs/` and
-is intentionally not included in installed packages.
+is intentionally not included in installed packages. Load it only by its
+explicit YAML path, for example
+`--manifest ./dataset_configs/manifests/operandi.yaml`.
 
-You can pass either a manifest name (`generic`, `operandi`) or a custom
-manifest path. The usual customization flow is to copy a built-in YAML file,
-edit `id_extraction`, `id_standardization`, `derived_columns`,
+You can pass a built-in manifest name (such as `generic`) or a custom manifest
+path. The usual customization flow is to copy a built-in YAML file, edit
+`id_extraction`, `id_standardization`, `derived_columns`,
 `phase_curation`, `segmentation`, and `radiomics`, then run with
 `--manifest ./site-a.yaml`. JSON manifests are not accepted.
 

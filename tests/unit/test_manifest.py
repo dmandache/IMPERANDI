@@ -13,7 +13,6 @@ from imperandi.utils.manifest import load_manifest, resolve_hook
     ("manifest_name", "dataset_name"),
     [
         ("generic", "generic"),
-        ("operandi", "operandi"),
         ("blueprint_manifest_example", "blueprint_example"),
     ],
 )
@@ -62,3 +61,18 @@ def test_load_manifest_accepts_only_yaml(tmp_path):
     json_path.write_text('{"dataset_name": "site"}', encoding="utf-8")
     with pytest.raises(ValueError, match="must use YAML"):
         load_manifest(str(json_path), base_path=base_path)
+
+
+def test_external_manifest_requires_an_explicit_path(tmp_path, monkeypatch):
+    base_path = Path(__file__).resolve().parents[2] / "src" / "imperandi"
+    external_manifest = tmp_path / "dataset_configs" / "manifests" / "operandi.yaml"
+    external_manifest.parent.mkdir(parents=True)
+    external_manifest.write_text("dataset_name: external_operandi\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(FileNotFoundError, match=r"Manifest \*operandi\* not found"):
+        load_manifest("operandi", base_path=base_path)
+
+    assert load_manifest(str(external_manifest), base_path=base_path) == {
+        "dataset_name": "external_operandi"
+    }

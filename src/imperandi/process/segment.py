@@ -1183,7 +1183,7 @@ def add_segment_arguments(
             "--manifest",
             type=str,
             default=None,
-            help="Dataset manifest name or path to manifest YAML.",
+            help="Built-in manifest name or path to manifest YAML.",
         )
     if include_dry_run:
         parser.add_argument(
