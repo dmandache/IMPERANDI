@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - "v[0-9]*.[0-9]*.[0-9]*"
+  release:
+    types: [published]
 
 concurrency:
   group: release-${{ github.ref }}
@@ -182,7 +184,7 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
 
   publish-github:
-    name: Create GitHub Release
+    name: Publish GitHub Release assets
     if: github.repository == 'dmandache/IMPERANDI'
     needs: [build, publish-pypi]
     runs-on: ubuntu-latest
@@ -196,12 +198,18 @@ jobs:
           name: python-package-distributions
           path: dist/
 
-      - name: Create release and attach distributions
+      - name: Create or update release assets
         env:
+          EVENT_NAME: ${{ github.event_name }}
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           PRERELEASE: ${{ needs.build.outputs.prerelease }}
         run: |
+          if [[ "${EVENT_NAME}" == "release" ]]; then
+            gh release upload "${GITHUB_REF_NAME}" dist/* --clobber
+            exit 0
+          fi
+
           release_flags=()
           if [[ "${PRERELEASE}" == "true" ]]; then
             release_flags+=(--prerelease)
