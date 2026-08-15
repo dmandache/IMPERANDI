@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=80", "setuptools-scm>=8", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "imperandi"
-version = "0.0.0"
+dynamic = ["version"]
 description = "IMaging PREprocessing And Normalization for Diagnostic Interoperability"
 license = "Apache-2.0"
 authors = [
@@ -88,6 +88,9 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 imperandi = ["builtin_datasets_config/manifests/*.yaml"]
+
+[tool.setuptools_scm]
+fallback_version = "0.0.0"
 
 [tool.pytest.ini_options]
 testpaths = ["tests/unit", "tests/slow"]
