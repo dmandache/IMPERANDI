@@ -162,31 +162,10 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  publish-pypi:
-    name: Publish to PyPI
-    if: github.repository == 'dmandache/IMPERANDI'
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: pypi
-      url: https://pypi.org/p/imperandi
-    permissions:
-      id-token: write
-
-    steps:
-      - name: Download distributions
-        uses: actions/download-artifact@v8
-        with:
-          name: python-package-distributions
-          path: dist/
-
-      - name: Publish distributions
-        uses: pypa/gh-action-pypi-publish@release/v1
-
   publish-github:
     name: Publish GitHub Release assets
     if: github.repository == 'dmandache/IMPERANDI'
-    needs: [build, publish-pypi]
+    needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -220,3 +199,24 @@ jobs:
             --generate-notes \
             --title "${GITHUB_REF_NAME}" \
             "${release_flags[@]}"
+
+  publish-pypi:
+    name: Publish to PyPI
+    if: github.repository == 'dmandache/IMPERANDI'
+    needs: [build, publish-github]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/imperandi
+    permissions:
+      id-token: write
+
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v8
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Publish distributions
+        uses: pypa/gh-action-pypi-publish@release/v1
