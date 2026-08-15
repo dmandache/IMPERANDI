@@ -7,7 +7,7 @@ name = "imperandi"
 version = "0.0.0"
 description = "IMaging PREprocessing And Normalization for Diagnostic Interoperability"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.10,<3.13"
 dependencies = [
   "numpy",
   "scipy",
@@ -38,21 +38,25 @@ radiomics = [
   "pyradiomics@git+https://github.com/radiomics/pyradiomics.git",   # because 3.1.0 sdist metadata is broken on PyPI right now
 ]
 
+viewer = [
+  "matplotlib",
+  "ipykernel",
+  "ipympl",
+  "ipywidgets"
+]
+
 dev = [
   "pytest",
   "pytest-cov",
   "black[jupyter]",
-  "ruff",
-  "ipykernel",
-  "ipympl",
-  "ipywidgets"
+  "ruff"
 ]
 
 slow = [
   "idc-index",
 ]
 
-all = ["imperandi[dev,segment,radiomics,slow]"]
+all = ["imperandi[dev,segment,radiomics,viewer,slow]"]
 
 [project.scripts]
 imperandi = "imperandi.cli:main"

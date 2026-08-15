@@ -11,7 +11,19 @@
 
 IMPERANDI is a Python framework and CLI for building analysis-ready CT imaging cohorts from heterogeneous DICOM sources. It standardizes identifiers, curates volume-level metadata, converts volumes to NIfTI, and supports downstream segmentation, perfusion phase detection, radiomics extraction, and quality control in one coherent pipeline.
 
-_This work performed under the RHU OPERANDI project was supported in part by the French National Research Agency (Agence Nationale de la Recherche, ANR) as its 3rd PIA, integrated to France 2030 plan under reference ANR-21-RHUS-0012._
+## Disclaimers
+
+### Research use only
+
+IMPERANDI is research software and is not a medical device. Outputs are not intended for clinical diagnosis or treatment decisions without independent validation.
+
+### DICOM privacy
+
+IMPERANDI should not be assumed to de-identify input DICOM data. Users are responsible for appropriate anonymization and data-governance procedures before processing or sharing data.
+
+### Funding
+
+This work performed under the RHU OPERANDI project was supported in part by the French National Research Agency (Agence Nationale de la Recherche, ANR) as its 3rd PIA, integrated to France 2030 plan under reference _ANR-21-RHUS-0012._
 
 ## Why IMPERANDI matters
 
