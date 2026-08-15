@@ -6,6 +6,19 @@ build-backend = "setuptools.build_meta"
 name = "imperandi"
 version = "0.0.0"
 description = "IMaging PREprocessing And Normalization for Diagnostic Interoperability"
+license = "Apache-2.0"
+authors = [
+  { name = "Diana Mandache" },
+]
+keywords = [
+  "medical-imaging",
+  "dicom",
+  "nifti",
+  "medical-image-processing",
+  "healthcare-ai",
+  "mri",
+  "ct",
+]
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
 dependencies = [
@@ -21,6 +34,12 @@ dependencies = [
   "nibabel",
   "pyyaml",
 ]
+
+[project.urls]
+Homepage = "https://github.com/dmandache/IMPERANDI"
+Repository = "https://github.com/dmandache/IMPERANDI"
+Documentation = "https://imperandi.readthedocs.io/"
+Issues = "https://github.com/dmandache/IMPERANDI/issues"
 
 [project.optional-dependencies]
 segment = [
