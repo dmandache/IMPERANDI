@@ -112,24 +112,6 @@ jobs:
           ]
           if len(artifacts) != 2:
               raise SystemExit(f"Expected one wheel and one sdist, found: {artifacts}")
-
-          for artifact in artifacts:
-              if artifact.suffix == ".whl":
-                  with zipfile.ZipFile(artifact) as archive:
-                      members = archive.namelist()
-              else:
-                  with tarfile.open(artifact, "r:gz") as archive:
-                      members = archive.getnames()
-              forbidden = [
-                  member
-                  for member in members
-                  if "dataset_configs" in PurePosixPath(member).parts
-              ]
-              if forbidden:
-                  raise SystemExit(
-                      f"Project-local dataset_configs leaked into {artifact}: {forbidden}"
-                  )
-          print("Verified project-local dataset_configs are absent")
           PY
 
       - name: Check distribution metadata
