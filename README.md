@@ -9,7 +9,7 @@
 ![Tests](https://github.com/dmandache/IMPERANDI/actions/workflows/tests.yml/badge.svg?branch=main)
 [![codecov](https://codecov.io/gh/dmandache/IMPERANDI/branch/main/graph/badge.svg)](https://codecov.io/gh/dmandache/IMPERANDI)
 
-IMPERANDI is a Python framework and CLI for building analysis-ready CT imaging cohorts from heterogeneous DICOM sources. It standardizes identifiers, curates volume-level metadata, converts volumes to NIfTI, and supports downstream segmentation, perfusion phase detection, radiomics extraction, and quality control in one coherent pipeline.
+IMPERANDI is a Python framework and CLI for transforming heterogeneous DICOM collections into analysis-ready CT and MR imaging cohorts. It standardizes identifiers, curates imaging series and volume-level metadata, converts selected volumes to NIfTI, and supports downstream segmentation, contrast-phase identification, radiomics extraction, and quality control within a coherent, reproducible pipeline.
 
 ## Disclaimers
 
@@ -40,7 +40,7 @@ This work performed under the RHU OPERANDI project was supported in part by the 
 - Extracts selected DICOM header tags into a raw metadata table (`dicom_index.csv`).
 - Builds stable patient/study/series identifiers from tags, folder structure, or hybrid fallback rules.
 - Applies manifest-driven hooks for patient-key standardization and derived columns.
-- Cleans and curates CT cohorts by filtering modality/noise patterns, localizers, non-target anatomy, non-axial acquisitions, and implausible scan geometry.
+- Cleans and curates cohorts by filtering modality/noise patterns, localizers, non-target anatomy, non-axial acquisitions, and implausible scan geometry.
 - Aggregates slices into robust volume-level records and computes exam/acquisition ordering.
 
 Impact: turns fragmented acquisition data into a consistent cohort backbone that downstream models and analytics can trust.
@@ -57,7 +57,7 @@ Impact: creates a standardized imaging representation for model training, segmen
 ### 3) Configurable segmentation (`segment`)
 
 - Runs configurable task pipelines (default backend: TotalSegmentator).
-- Dispatches CT and MR/MRI volumes to separate manifest-defined
+- Dispatches CT and MRI volumes to separate manifest-defined
   TotalSegmentator model lists.
 - Adds optional post-processing (mask merge, closing, hole filling, largest connected component).
 - Uses multiprocessing with timeout controls and produces warning/error tracking CSVs.
@@ -78,7 +78,7 @@ Impact: enables phase-aware stratification and analysis without manual review of
 
 ### 5) Radiomics feature extraction (`radiomics`)
 
-- Extracts PyRadiomics features for organ and tumor regions from CT + masks.
+- Extracts PyRadiomics features for organ and tumor regions from CT/MRI + masks.
 - Includes a organ-minus-tumor extraction path for cleaner parenchyma characterization.
 - Supports optional cohort filtering controls and error-aware output generation.
 - Supports PyRadiomics parameterization from either `--pyradiomics_settings /path/to/Params.yaml` or manifest `radiomics` settings.
