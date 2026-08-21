@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "imperandi"
 dynamic = ["version"]
-description = "IMaging PREprocessing And Normalization for Diagnostic Interoperability"
+description = "Build analysis-ready CT and MR cohorts from heterogeneous DICOM data"
 license = "Apache-2.0"
 authors = [
   { name = "Diana Mandache" },
