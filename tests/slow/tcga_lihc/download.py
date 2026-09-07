@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import random
 from pathlib import Path
 
 DEFAULT_PATIENTS = ("TCGA-BC-A10X", "TCGA-DD-A113")
@@ -10,11 +11,18 @@ DEFAULT_PATIENTS = ("TCGA-BC-A10X", "TCGA-DD-A113")
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
+    patients = parser.add_mutually_exclusive_group()
+    patients.add_argument(
         "--patient",
         action="append",
         dest="patients",
         help="TCGA patient ID; repeat the option for multiple patients.",
+    )
+    patients.add_argument(
+        "--n",
+        type=int,
+        default=None,
+        help="Download N random patients with CT/MR series instead of the defaults.",
     )
     parser.add_argument(
         "--output-dir",
@@ -25,7 +33,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    args = build_parser().parse_args()
+    parser = build_parser()
+    args = parser.parse_args()
+    if args.n is not None and args.n <= 0:
+        parser.error("--n must be a positive integer")
     try:
         from idc_index import IDCClient
     except ImportError as exc:
@@ -42,9 +53,17 @@ def main() -> int:
     index = client.index
     selection = index[
         index["collection_id"].astype(str).str.lower().eq("tcga_lihc")
-        & index["PatientID"].isin(patients)
         & index["Modality"].isin(["CT", "MR"])
     ]
+    if args.n is not None:
+        available = selection["PatientID"].dropna().unique().tolist()
+        if args.n > len(available):
+            parser.error(
+                f"Requested {args.n} patients, but only {len(available)} "
+                "TCGA-LIHC patients have CT/MR series"
+            )
+        patients = random.sample(available, args.n)
+    selection = selection[selection["PatientID"].isin(patients)]
     found = set(selection["PatientID"].unique())
     missing = sorted(set(patients) - found)
     if missing:
