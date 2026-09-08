@@ -1,6 +1,7 @@
 """Physical-space PCA and linear organ registration, independent of tumor masks."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import time
 from itertools import permutations, product
 import numpy as np
 
@@ -114,16 +115,50 @@ class TransformResult:
     dice_before: float
     dice_after: float
     warnings: list[str]
+    stages: dict = field(default_factory=dict)
+
+
+class RegistrationRejected(ValueError):
+    """A rejected pair retains stage diagnostics for QC."""
+
+    def __init__(self, message, result):
+        super().__init__(message)
+        self.result = result
 
 
 def register_pair(fixed_organ, moving_organ, config):
     sitk = backend()
-    initial = initialize_pca(fixed_organ, moving_organ)
     before = dice(fixed_organ, moving_organ, sitk.Transform(3, sitk.sitkIdentity))
+    started_pca = time.perf_counter()
+    try:
+        initial = initialize_pca(fixed_organ, moving_organ)
+    except (RuntimeError, ValueError) as exc:
+        stages = {
+            name: {"dice": None, "status": "not_run"}
+            for name in ("baseline", "pca", "rigid", "affine")
+        }
+        stages["baseline"] = {"dice": before, "status": "evaluated"}
+        stages["pca"] = {"dice": None, "status": "failed", "error": str(exc)}
+        raise RegistrationRejected(
+            str(exc),
+            TransformResult(
+                sitk.Euler3DTransform(), "identity", before, before, [str(exc)], stages
+            ),
+        ) from exc
     best = initial
     score = dice(fixed_organ, moving_organ, best)
     stage = "pca"
     warnings = []
+    stages = {
+        "baseline": {"dice": before, "status": "evaluated"},
+        "pca": {
+            "dice": score,
+            "status": "evaluated",
+            "elapsed_seconds": time.perf_counter() - started_pca,
+        },
+        "rigid": {"dice": None, "status": "not_run"},
+        "affine": {"dice": None, "status": "not_run"},
+    }
     fixed_dm = sitk.SignedMaurerDistanceMap(
         fixed_organ, insideIsPositive=False, squaredDistance=False, useImageSpacing=True
     )
@@ -150,8 +185,13 @@ def register_pair(fixed_organ, moving_organ, config):
         reg.SetSmoothingSigmasPerLevel([1, 0])
         reg.SmoothingSigmasAreSpecifiedInPhysicalUnitsOn()
         reg.SetInitialTransform(tx, inPlace=True)
+        started = time.perf_counter()
         try:
             reg.Execute(fixed_dm, moving_dm)
+            stages[name].update(
+                optimizer_stop=reg.GetOptimizerStopConditionDescription(),
+                optimizer_iteration=int(reg.GetOptimizerIteration()),
+            )
             matrix = np.array(tx.GetMatrix()).reshape(3, 3)
             scales = np.linalg.svd(matrix, compute_uv=False)
             if (
@@ -163,12 +203,17 @@ def register_pair(fixed_organ, moving_organ, config):
                 raise ValueError("Implausible or nonfinite transform")
             tx.GetInverse()
             candidate = dice(fixed_organ, moving_organ, tx)
+            stages[name].update(dice=candidate, status="evaluated")
             if candidate > score + 1e-6:
                 best, score, stage = tx, candidate, name
         except (RuntimeError, ValueError) as exc:
             warnings.append(f"{name}: {exc}")
+            stages[name].update(status="failed", error=str(exc))
+        finally:
+            stages[name]["elapsed_seconds"] = time.perf_counter() - started
     if before >= score - 1e-6:
         best, score, stage = sitk.Euler3DTransform(), before, "identity"
+    result = TransformResult(best, stage, before, score, warnings, stages)
     if score < config.min_dice:
-        raise ValueError(f"Organ overlap rejected: Dice={score:.4f}")
-    return TransformResult(best, stage, before, score, warnings)
+        raise RegistrationRejected(f"Organ overlap rejected: Dice={score:.4f}", result)
+    return result
