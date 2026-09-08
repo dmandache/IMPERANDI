@@ -76,9 +76,81 @@ Phase can run immediately after conversion or after segmentation. Segmentation
 must precede radiomics, and a phase-filtered radiomics manifest must receive a
 table containing both `mask_*` columns and the canonical `phase` column.
 
+## Registration
+
+Install `imperandi[registration]` to enable `imperandi register`. Run it on a
+segmented cohort with curated `phase` and, for MR, `mri_sequence` columns:
+
+```bash
+imperandi register --csv_path nifti_index_phased.csv \
+  --csv_path_out nifti_index_registered.csv --output_dir registration \
+  --manifest generic --method anchor --num_workers 4
+```
+
+The stage groups by `patient_key`, `study_id`, and normalized `Modality`
+(CT or MR/MRI). Use `--visit_column visit_id` when your dataset supplies a
+different visit identifier. It applies physical-space PCA initialization,
+rigid organ alignment, and optional `--affine` refinement. Default masks are
+`mask_liver` and `mask_liver_tumor`; masks must match their native image geometry.
+
+Consensus methods are `anchor`, `majority`, `intersection`, `union`, and `staple`.
+CT references prefer portal venous, arterial, delayed, then native phases;
+MR prefers T1, T2, then DWI. Unlisted scans rank last; ties use stable scan IDs.
+Anchor uses the reference tumor mask when available, otherwise the next valid
+mask in priority order. Missing masks are omitted; readable empty masks vote
+negative. Every available accepted scan contributes to non-anchor fusion, so
+select independent sequences/phases upstream to avoid duplicate reconstruction
+votes. Whole-volume annotations are assumed. Fusion is limited to common
+observed coverage, which is saved separately; outside-coverage zeros are unknown.
+Majority saves vote fractions and uses `> 0.5` (ties negative); STAPLE saves
+estimated probabilities and uses `>= 0.5`.
+
+The stage loads `generic` by default. Use `--manifest generic` for a built-in
+manifest or `--manifest dataset_configs/manifests/operandi.yaml` for a file.
+CLI `--method`, `--affine`/`--no_affine`, and `--visit_column` override manifest
+values. An optional manifest `registration` mapping accepts `visit_column`,
+`organ_column`, `tumor_column`, `method`, `affine`, `iterations`, `min_dice`,
+`threshold`, and `reference_priority`. The latter maps CT/MR to ordered lists
+of column/value selectors, such as `CT: [{phase: PORTAL_VENOUS}]` or
+`MR: [{mri_sequence: T1}]`. Defaults are 100 iterations, minimum organ Dice 0.1,
+and threshold 0.5. These initial QC settings require dataset validation.
+
+Native `nifti_path` and `mask_*` columns remain unchanged. Derived `reg_*` paths
+point to registered images/organs, common and native-space tumor masks,
+coverage, probabilities where applicable, and both transform directions.
+`reg_reference_to_scan_path` maps reference points to native scan points for
+resampling onto the reference grid; its inverse transfers reference masks back.
+Group JSON reports retain configuration, contributors, and stage diagnostics;
+`<output_stem>_errors.csv` records failures. Check `registration_status` and
+`consensus_status` before using artifacts. Existing radiomics continues to use
+native masks until you explicitly select the derived masks in an analysis CSV.
+
+The command checkpoints complete visit/modality groups and resumes by default.
+It fingerprints the input CSV, referenced images/masks, resolved manifest, and
+algorithm settings. Each reused group must also have unchanged output artifacts.
+Deleting or modifying a group's outputs reruns that group; changed input data or
+settings invalidate the run. `--strict_resume` hashes file contents, including
+referenced images, masks, and outputs. Failed groups remain recorded on resume;
+use `--retry_failed` to retry them, or `--force`/`--no_resume` to recompute all groups.
+Fresh work gets separate artifact directories; native inputs remain unchanged.
+
+`--num_workers` bounds concurrent groups (default 1), `--threads_per_worker`
+sets SimpleITK threads (default 1), and `--timeout_sec` imposes a hard per-group
+limit (default 900 seconds including process startup). A timed-out group is
+recorded as failed. `--start_method` defaults to `spawn`; workers exit after
+each group. One worker with timeout 0 runs in-process. `--dry-run` validates
+configuration and cohort identities without loading images or writing files.
+Checkpoint row/time thresholds are checked between completed groups and while
+waiting for subprocesses; an interrupted group is recomputed on restart.
+
+The library API `register_cohort` remains a fresh-work image-processing interface
+with replaceable registration and fusion callables. The command's runner wraps
+it with scheduling and checkpoints. Registration does not perform deformable,
+cross-modality, or cross-visit alignment.
+
 ## Checkpoints and resume
 
-`parse`, `convert`, `segment`, `phase`, and `radiomics` checkpoint long runs.
+`parse`, `convert`, `segment`, `phase`, `register`, and `radiomics` checkpoint long runs.
 Resume is enabled by default when the saved command state and input fingerprint
 match. Common controls are:
 
@@ -158,4 +230,3 @@ starting from scratch unless you pass `--no_resume`.
 - Start with a small cohort and `--num_workers 1` when validating a manifest.
 - Preserve error CSVs and logs with the corresponding output table.
 - Use explicit output paths in automation instead of relying on defaults.
-

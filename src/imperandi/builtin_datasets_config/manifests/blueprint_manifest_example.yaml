@@ -328,6 +328,28 @@ segmentation:
 # ---------------------------------------------------------------------------
 # Radiomics
 # ---------------------------------------------------------------------------
+# Intra-visit, intra-modal organ registration and shared tumor segmentation.
+# CLI --method, --affine/--no_affine, and --visit_column override these settings.
+registration:
+  visit_column: study_id
+  organ_column: mask_liver
+  tumor_column: mask_liver_tumor
+  method: anchor
+  affine: false
+  iterations: 100
+  min_dice: 0.1
+  threshold: 0.5
+  reference_priority:
+    CT:
+      - {phase: PORTAL_VENOUS}
+      - {phase: ARTERIAL}
+      - {phase: DELAYED}
+      - {phase: NATIVE}
+    MR:
+      - {mri_sequence: T1}
+      - {mri_sequence: T2}
+      - {mri_sequence: DWI}
+
 radiomics:
   # Select a complete PyRadiomics parameter mapping using the row's Modality.
   # MRI is an alias for MR. Every retained modality must be configured.

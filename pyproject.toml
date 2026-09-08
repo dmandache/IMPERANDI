@@ -40,6 +40,8 @@ Documentation = "https://imperandi.readthedocs.io/"
 Issues = "https://github.com/dmandache/IMPERANDI/issues"
 
 [project.optional-dependencies]
+registration = ["SimpleITK"]
+
 segment = [
   "TotalSegmentator",
   "scikit-image",

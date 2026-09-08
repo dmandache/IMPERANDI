@@ -15,3 +15,12 @@ Segmentation
    :members:
    :undoc-members:
 
+
+Registration
+------------
+
+.. automodule:: imperandi.process.registration
+   :members:
+
+.. automodule:: imperandi.process.registration.cli
+   :members:
