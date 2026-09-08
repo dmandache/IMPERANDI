@@ -1,7 +1,6 @@
 """Command-line entry point for the ``imperandi register`` stage."""
 
 import argparse
-from dataclasses import asdict
 import logging
 import multiprocessing as mp
 from pathlib import Path
@@ -11,7 +10,7 @@ import pandas as pd
 from imperandi.utils.checkpoint_cli import add_checkpoint_arguments
 from imperandi.utils.manifest import load_manifest
 from imperandi.utils.run_state import build_checkpoint_paths
-from .config import RegistrationConfig
+from .config import CONSENSUS_METHODS, RegistrationConfig
 from .grouping import prepare_cohort
 from .labels import group_label
 
@@ -36,9 +35,7 @@ def add_registration_arguments(parser):
     parser.add_argument(
         "--manifest", help="Built-in manifest name or YAML path (default: generic)."
     )
-    parser.add_argument(
-        "--method", choices=["anchor", "majority", "intersection", "union", "staple"]
-    )
+    parser.add_argument("--method", choices=CONSENSUS_METHODS)
     affine = parser.add_mutually_exclusive_group()
     affine.add_argument("--affine", action="store_true", default=None)
     affine.add_argument("--no_affine", action="store_false", dest="affine")
@@ -215,14 +212,15 @@ def main(args):
     if args.dry_run:
         planned = prepare_cohort(table, config)
         logger.info(
-            "Registration dry run: scans=%d, visit/modality_groups=%d, settings=%s",
+            "Registration dry run: series=%d, groups=%d, method=%s, affine=%s",
             len(planned),
             planned.registration_group_id.nunique(),
-            asdict(config),
+            config.method,
+            config.affine,
         )
         for _, group in planned.groupby("registration_group_id", sort=True):
             logger.info(
-                "Planned registration: %s, scans=%d",
+                "Registration group planned: %s, series=%d",
                 group_label(group.iloc[0], config.visit_column),
                 len(group),
             )

@@ -12,7 +12,7 @@ import pandas as pd
 
 from imperandi.utils.run_state import atomic_write_json
 from .artifacts import write_artifact
-from .config import RegistrationConfig
+from .config import REGISTRATION_STAGES, RegistrationConfig
 from .consensus import fuse_tumors
 from .grouping import (
     normalize_modalities,
@@ -22,7 +22,7 @@ from .grouping import (
 )
 from .labels import group_context, group_label
 from .organ import backend, read_image, read_mask, register_pair, resample
-from .qc import STAGES, publish_group_qc, record_stages
+from .qc import ERROR_COLUMNS, build_error_record, publish_group_qc, record_stages
 
 logger = logging.getLogger(__name__)
 
@@ -51,24 +51,14 @@ def register_cohort(
     errors = []
 
     def error(index, stage, exc):
-        context = group_context(df.loc[index], config.visit_column)
         logger.error(
-            "Registration failed: scan={%s}, stage=%s, error_type=%s; "
+            "Registration series failed: %s, stage=%s, error_type=%s; "
             "see the error table for details",
             df.at[index, "registration_scan_label"],
             stage,
             type(exc).__name__,
         )
-        errors.append(
-            {
-                **context,
-                "registration_group_label": df.at[index, "registration_group_label"],
-                "registration_scan_label": df.at[index, "registration_scan_label"],
-                "registration_scan_id": ids[index],
-                "stage": stage,
-                "error": str(exc),
-            }
-        )
+        errors.append(build_error_record(df.loc[index], config, stage=stage, error=exc))
 
     groups = df.groupby(
         [df.patient_key, df[config.visit_column], modalities], sort=True
@@ -76,7 +66,7 @@ def register_cohort(
     for group_key, group in groups:
         group_id = stable_id(tuple(str(value) for value in group_key))
         label = group_label(group.iloc[0], config.visit_column)
-        logger.info("Starting registration group: %s, series=%d", label, len(group))
+        logger.info("Registration group started: %s, series=%d", label, len(group))
         directory = root / group_id
         group_started = time.perf_counter()
         df.loc[group.index, "registration_started_at"] = datetime.now(
@@ -99,7 +89,7 @@ def register_cohort(
                 df.at[i, "registration_status"] = "failed"
                 error(i, "input", exc)
         if not loaded:
-            logger.warning("No valid registration reference")
+            logger.warning("Registration reference unavailable: no valid organ masks")
             df.loc[group.index, "consensus_status"] = "no_reference"
             df.loc[group.index, "registration_elapsed_seconds"] = (
                 time.perf_counter() - group_started
@@ -113,7 +103,7 @@ def register_cohort(
             ref, "registration_scan_label"
         ]
         logger.info(
-            "Selected registration reference: %s",
+            "Registration reference selected: %s",
             df.at[ref, "registration_scan_label"],
         )
         transforms = {}
@@ -121,7 +111,7 @@ def register_cohort(
         for i, (image, organ) in loaded.items():
             started = time.perf_counter()
             logger.info(
-                "Starting organ alignment: %s",
+                "Registration organ alignment started: %s",
                 df.at[i, "registration_scan_label"],
             )
             try:
@@ -139,7 +129,7 @@ def register_cohort(
                                     "evaluated" if stage == "baseline" else "not_run"
                                 ),
                             }
-                            for stage in STAGES
+                            for stage in REGISTRATION_STAGES
                         },
                     }
                 else:
@@ -234,7 +224,7 @@ def register_cohort(
                 df.at[i, "registration_scan_label"] for i in contributors
             ]
             logger.info(
-                "Starting tumor consensus: method=%s, contributors=%d [%s]",
+                "Registration tumor consensus started: method=%s, contributors=%d [%s]",
                 config.method,
                 len(contributors),
                 " | ".join(contributor_labels),
@@ -303,7 +293,9 @@ def register_cohort(
                 df.loc[group.index, "consensus_status"] = "failed"
                 error(ref, "consensus", exc)
         else:
-            logger.warning("Tumor consensus skipped: no tumor masks are available")
+            logger.warning(
+                "Registration tumor consensus skipped: no tumor masks are available"
+            )
         report_path = directory / "group.json"
         atomic_write_json(
             report_path,
@@ -326,23 +318,19 @@ def register_cohort(
         )
         df.loc[group.index, "registration_report_path"] = str(report_path.resolve())
         publish_group_qc(df, group.index, errors, config, directory)
+        registration_counts = (
+            df.loc[group.index, "registration_status"].value_counts().to_dict()
+        )
+        consensus_counts = (
+            df.loc[group.index, "consensus_status"].value_counts().to_dict()
+        )
         logger.info(
-            "Finished registration group: registration_status=%s, consensus_status=%s",
-            df.loc[group.index, "registration_status"].tolist(),
-            df.loc[group.index, "consensus_status"].tolist(),
+            "Registration group completed: registration_status_counts=%s, "
+            "consensus_status_counts=%s",
+            registration_counts,
+            consensus_counts,
         )
     return df, pd.DataFrame(
         errors,
-        columns=[
-            "patient_id",
-            "date",
-            "visit_order",
-            "visit",
-            "modality",
-            "registration_group_label",
-            "registration_scan_label",
-            "registration_scan_id",
-            "stage",
-            "error",
-        ],
+        columns=ERROR_COLUMNS,
     )

@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass
 import numpy as np
+
+from .config import CONSENSUS_METHODS
 from .organ import backend
 
 
@@ -19,7 +21,7 @@ def fuse_tumors(masks, coverages, *, method, threshold=0.5):
     coverage is excluded from every estimator, and returned separately.
     """
     sitk = backend()
-    if method not in {"anchor", "majority", "intersection", "union", "staple"}:
+    if method not in CONSENSUS_METHODS:
         raise ValueError(f"Unknown consensus method: {method}")
     if not masks or len(masks) != len(coverages):
         raise ValueError("Consensus requires masks and matching coverage")

@@ -5,14 +5,13 @@ import multiprocessing as mp
 from multiprocessing.connection import wait
 import time
 
+from imperandi.utils.logging import setup_logging
 from .organ import backend
 from .pipeline import register_cohort
 
 
 def _process_group(connection, table, output_dir, config, threads, log_level):
-    logging.basicConfig(
-        level=log_level, format="%(asctime)s %(levelname)s %(name)s %(message)s"
-    )
+    setup_logging(level=log_level)
     try:
         backend().ProcessObject.SetGlobalDefaultNumberOfThreads(threads)
         connection.send((register_cohort(table, output_dir, config), None))
