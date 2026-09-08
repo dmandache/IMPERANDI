@@ -236,6 +236,30 @@ segmentation:
       #   fill_holes: true
       #   close: true
 
+# Intra-visit, intra-modal organ registration and shared tumor segmentation.
+# CLI --method, --affine/--no_affine, and --visit_column override these settings.
+registration:
+  visit_column: study_id
+  organ_column: mask_liver
+  tumor_column: mask_liver_tumor
+  method: anchor
+  affine: false
+  iterations: 100
+  min_dice: 0.1
+  threshold: 0.5
+  reference_priority:
+    CT:
+      - {phase: PORTAL_VENOUS}
+      - {phase: DELAYED}
+      - {phase: ARTERIAL}
+      - {phase: NATIVE}
+      - {phase: UNKNOWN}
+    MR:
+      - {mri_sequence: T1, phase: PORTAL_VENOUS}
+      - {mri_sequence: T1}
+      - {mri_sequence: T2}
+      - {mri_sequence: DWI}
+
 radiomics:
   # `pyradiomics` follows the native PyRadiomics parameter-file structure.
   pyradiomics:

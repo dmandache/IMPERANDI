@@ -178,8 +178,30 @@ def build_parser() -> argparse.ArgumentParser:
     _add_phase_subcommand(subparsers)
     _add_radiomics_subcommand(subparsers)
     _add_segment_subcommand(subparsers)
+    from imperandi.process.registration.cli import add_registration_arguments
+
+    registration_parser = subparsers.add_parser(
+        "register", help="Register organs and build intra-visit tumor consensus."
+    )
+    add_registration_arguments(registration_parser)
+    registration_parser.set_defaults(_handler=_handle_register)
 
     return parser
+
+
+def _handle_register(args: argparse.Namespace) -> int:
+    from imperandi.process.registration import cli as registration_module
+
+    args = registration_module.normalize_registration_args(args)
+    _log_script_namespace(registration_module.__file__, args)
+    try:
+        registration_module.main(args)
+    except RuntimeError as exc:
+        if "requires optional dependencies" in str(exc):
+            logger.error("%s", exc)
+            return 2
+        raise
+    return 0
 
 
 def _handle_parse(args: argparse.Namespace) -> int:

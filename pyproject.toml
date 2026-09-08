@@ -40,6 +40,8 @@ Documentation = "https://imperandi.readthedocs.io/"
 Issues = "https://github.com/dmandache/IMPERANDI/issues"
 
 [project.optional-dependencies]
+registration = ["SimpleITK"]
+
 segment = [
   "TotalSegmentator",
   "scipy",
@@ -71,7 +73,7 @@ slow = [
   "idc-index",
 ]
 
-all = ["imperandi[dev,segment,radiomics,viewer,slow]"]
+all = ["imperandi[dev,segment,registration,radiomics,viewer,slow]"]
 
 [project.scripts]
 imperandi = "imperandi.cli:main"

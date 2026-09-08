@@ -85,6 +85,32 @@ modalities are retained without segmentation.
 
 The output table overwrites the input unless `--csv_path_out` is supplied.
 
+## `register`
+
+```bash
+imperandi register [CSV_PATH] [CSV_PATH_OUT] [OPTIONS]
+```
+
+Requires `imperandi[registration]`. Aligns organs within each visit/modality and
+creates shared tumor masks with anchor, majority, intersection, union, or STAPLE.
+
+- `--csv_path` and `--csv_path_out` provide named alternatives to positional paths.
+  Defaults: `./nifti_index.csv` and `<input_stem>_registered.csv`.
+- `--output_dir` defaults to `registration` beside the input CSV.
+- `--error_csv_path` defaults to `<output_stem>_errors.csv`.
+- `--manifest` accepts a built-in name or YAML file; default is `generic`.
+- `--method`, `--affine`/`--no_affine`, and `--visit_column` override manifest settings.
+- `--num_workers`, `--threads_per_worker`, `--start_method`, and `--timeout_sec`
+  control group execution. Timeout defaults to 900 seconds; 0 disables it.
+- Common checkpoint controls apply. `--force` starts fresh; `--retry_failed`
+  retries groups with recorded errors while retaining valid completed groups.
+- `--dry-run` validates the group plan without creating artifacts; `--verbose`
+  enables verbose logging.
+
+Input, output, error, and checkpoint paths must be distinct. Resume checks both
+referenced input files and derived artifacts. See [Registration workflow](workflow.md#registration)
+for grouping, coverage, status, and checkpoint semantics.
+
 ## `phase`
 
 ```bash
@@ -117,6 +143,6 @@ explicit YAML path and a warning is emitted.
 
 ## Shared long-running options
 
-`parse`, `convert`, `segment`, `phase`, and `radiomics` accept checkpoint and
+`parse`, `convert`, `segment`, `phase`, `register`, and `radiomics` accept checkpoint and
 resume options described in [Workflow](workflow.md). All commands support
 `--dry-run`.
