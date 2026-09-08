@@ -26,6 +26,7 @@ QC_FIELDS = [
     "registration_selected_stage",
     "registration_dice_selected",
     *[f"registration_dice_{stage}" for stage in REGISTRATION_STAGES],
+    *[f"registration_tumor_dice_{stage}" for stage in REGISTRATION_STAGES],
     "registration_stage_details",
     "registration_warnings",
     "registration_started_at",
@@ -137,6 +138,10 @@ def build_qc(table, errors, config):
             **{
                 f"registration_dice_{stage}": f"dice_{stage}"
                 for stage in (*REGISTRATION_STAGES, "selected")
+            },
+            **{
+                f"registration_tumor_dice_{stage}": f"tumor_dice_{stage}"
+                for stage in REGISTRATION_STAGES
             },
             "registration_selected_stage": "selected_stage",
         }

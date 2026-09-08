@@ -247,6 +247,9 @@ registration:
   affine_min_dice: 0.9
   iterations: 100
   min_dice: 0.1
+  crop_padding_mm: 25.0
+  distance_band_mm: 15.0
+  constrain_tumor_to_organ: true
   threshold: 0.5
   reference_priority:
     CT:

@@ -18,10 +18,19 @@ from .grouping import (
     reference_rank,
 )
 from .labels import group_label
-from .organ import backend, read_image, read_mask, register_pair, resample
+from .organ import backend, dice, read_image, read_mask, register_pair, resample
 from .qc import ERROR_COLUMNS, build_error_record, publish_group_log, record_stages
 
 logger = logging.getLogger(__name__)
+
+
+def _registration_report(result):
+    """Return serializable stage diagnostics from a registration result."""
+    return {
+        key: value
+        for key, value in vars(result).items()
+        if key not in {"reference_to_scan", "stage_transforms"}
+    }
 
 
 def register_cohort(
@@ -104,7 +113,7 @@ def register_cohort(
             "Registration reference selected: %s",
             df.at[ref, "registration_scan_label"],
         )
-        transforms = {}
+        transforms, pair_results, native_organs = {}, {}, {}
         for i, (image, organ) in loaded.items():
             started = time.perf_counter()
             logger.info(
@@ -132,28 +141,24 @@ def register_cohort(
                 else:
                     result = pair_registration(reference_organ, organ, config)
                     tx = result.reference_to_scan
-                    report = {
-                        k: v
-                        for k, v in vars(result).items()
-                        if k != "reference_to_scan"
-                    }
+                    pair_results[i] = result
+                    report = _registration_report(result)
                 record_stages(df, i, report)
                 inverse = tx.GetInverse()
                 pair_dir = directory / ids[i]
+                native_organ = resample(reference_organ, image, inverse)
                 df.at[i, "reg_organ_native_path"] = write_artifact(
-                    resample(reference_organ, image, inverse),
+                    native_organ,
                     pair_dir / "organ_native.nii.gz",
                 )
                 df.at[i, config.organ_column] = df.at[i, "reg_organ_native_path"]
                 transforms[i] = tx
+                native_organs[i] = native_organ
                 df.at[i, "registration_status"] = "reference" if i == ref else "ok"
             except (RuntimeError, ValueError) as exc:
                 if hasattr(exc, "result"):
-                    report = {
-                        k: v
-                        for k, v in vars(exc.result).items()
-                        if k != "reference_to_scan"
-                    }
+                    pair_results[i] = exc.result
+                    report = _registration_report(exc.result)
                     record_stages(df, i, report)
                 df.at[i, "registration_status"] = "failed"
                 error(i, "organ", exc)
@@ -166,8 +171,9 @@ def register_cohort(
             )
             publish_group_log(df, group.index, errors, config, directory)
             continue
-        masks, coverages, contributors, native_masks = [], [], [], {}
-        # Reference first, then availability in configured priority order.
+        tumors = {}
+        # Read all available inputs so tumor Dice can be reported independently
+        # from the selected consensus policy.
         for i in [ref] + [i for i in order if i != ref]:
             if i not in transforms:
                 continue
@@ -175,17 +181,42 @@ def register_cohort(
             if pd.isna(path) or not str(path).strip():
                 continue
             try:
-                tumor = read_mask(path, loaded[i][0])
-                coverage = sitk.Image(tumor.GetSize(), sitk.sitkUInt8) + 1
-                coverage.CopyInformation(tumor)
-                masks.append(resample(tumor, reference, transforms[i]))
-                coverages.append(resample(coverage, reference, transforms[i]))
-                contributors.append(i)
-                native_masks[i] = tumor
-                if config.method == "anchor":
-                    break
+                tumors[i] = read_mask(path, loaded[i][0])
             except (RuntimeError, ValueError) as exc:
                 error(i, "tumor_input", exc)
+
+        # Tumor overlap is diagnostic only and never affects transform selection.
+        if ref in tumors:
+            df.at[ref, "registration_tumor_dice_baseline"] = 1.0
+            for i, tumor in tumors.items():
+                if i == ref:
+                    continue
+                for stage, tx in getattr(
+                    pair_results.get(i), "stage_transforms", {}
+                ).items():
+                    try:
+                        df.at[i, f"registration_tumor_dice_{stage}"] = dice(
+                            tumors[ref], tumor, tx
+                        )
+                    except (RuntimeError, ValueError) as exc:
+                        logger.warning(
+                            "Registration tumor QC unavailable: %s, stage=%s, "
+                            "error_type=%s",
+                            df.at[i, "registration_scan_label"],
+                            stage,
+                            type(exc).__name__,
+                        )
+
+        contributors = list(tumors)
+        if config.method == "anchor":
+            contributors = contributors[:1]
+        masks, coverages = [], []
+        for i in contributors:
+            tumor = tumors[i]
+            coverage = sitk.Image(tumor.GetSize(), sitk.sitkUInt8) + 1
+            coverage.CopyInformation(tumor)
+            masks.append(resample(tumor, reference, transforms[i]))
+            coverages.append(resample(coverage, reference, transforms[i]))
         df.loc[group.index, "consensus_status"] = "registration_failed"
         df.loc[list(transforms), "consensus_status"] = "no_tumor_input"
         if masks:
@@ -212,12 +243,14 @@ def register_cohort(
                             composed.AddTransform(transforms[contributors[0]])
                             composed.AddTransform(inverse)
                             native = resample(
-                                native_masks[contributors[0]], image, composed
+                                tumors[contributors[0]], image, composed
                             )
                         else:
                             native = resample(fused.mask, image, inverse)
                         native_coverage = resample(fused.coverage, image, inverse)
                         native = sitk.And(native, native_coverage)
+                        if config.constrain_tumor_to_organ:
+                            native = sitk.And(native, native_organs[i])
                         df.at[i, "reg_tumor_native_path"] = write_artifact(
                             native, pair_dir / "tumor_native.nii.gz"
                         )
