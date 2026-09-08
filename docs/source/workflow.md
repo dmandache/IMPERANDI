@@ -115,15 +115,38 @@ of column/value selectors, such as `CT: [{phase: PORTAL_VENOUS}]` or
 `MR: [{mri_sequence: T1}]`. Defaults are 100 iterations, minimum organ Dice 0.1,
 and threshold 0.5. These initial QC settings require dataset validation.
 
-Native `nifti_path` and `mask_*` columns remain unchanged. Derived `reg_*` paths
-point to registered images/organs, common and native-space tumor masks,
-coverage, probabilities where applicable, and both transform directions.
+`nifti_path` always points to the original scan. Registration writes new NIfTI
+files and never modifies the original masks. In the output CSV, successful
+organ registrations replace `mask_liver` with the reference organ mask transferred
+to that scan's native grid (`reg_organ_native_path`). Successful consensus replaces
+`mask_liver_tumor` with the common tumor mask on the same native grid
+(`reg_tumor_native_path`). Original paths are preserved as `source_mask_liver`
+and `source_mask_liver_tumor` (in general, `source_<configured_mask_column>`).
+A rerun uses these source columns as its input masks; it never feeds previous
+consensus back into fusion. Failed stages retain their original canonical paths,
+so inspect `registration_status` and `consensus_status` before downstream analysis.
+Existing radiomics now consumes the native-space registered masks automatically.
+
+Derived `reg_*` columns also retain reference-space images/organs, common tumor
+masks, coverage, probabilities, and both transform directions.
 `reg_reference_to_scan_path` maps reference points to native scan points for
 resampling onto the reference grid; its inverse transfers reference masks back.
-Group JSON reports retain configuration, contributors, and stage diagnostics;
-`<output_stem>_errors.csv` records failures. Check `registration_status` and
-`consensus_status` before using artifacts. Existing radiomics continues to use
-native masks until you explicitly select the derived masks in an analysis CSV.
+
+`<output_stem>_qc.csv` contains one row per scan, including failures, with organ
+`dice_baseline`, `dice_pca`, `dice_rigid`, `dice_affine`, and `dice_selected`.
+Candidate scores are retained even when a simpler stage wins; unexecuted or
+failed optimizations have blank Dice and explicit stage status. Reference scans
+have baseline/selected Dice 1 and optimization stages marked `not_run`.
+The table links patient/visit/scan/reference IDs, source and output mask paths,
+transforms, selected stage, optimizer diagnostics, warnings, timing, and errors.
+Use `--qc_csv_path` to choose its location. QC is refreshed at checkpoint
+boundaries and reconstructed on resume if the final table is missing.
+
+Each group also has `qc.csv`, `group.json`, and a structured `registration.jsonl`
+log, linked by `registration_qc_path`, `registration_report_path`, and
+`registration_log_path`. Logs identify scans, references, stage scores/statuses,
+and output paths. Global errors remain in `<output_stem>_errors.csv`; timeouts
+and other worker failures also appear in the global QC table.
 
 The command checkpoints complete visit/modality groups and resumes by default.
 It fingerprints the input CSV, referenced images/masks, resolved manifest, and

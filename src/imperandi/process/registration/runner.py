@@ -19,6 +19,7 @@ from imperandi.utils.run_state import (
 from .execution import iter_group_results
 from .organ import backend
 from .pipeline import prepare_cohort
+from .qc import build_qc
 
 logger = logging.getLogger(__name__)
 ERROR_COLUMNS = ["registration_scan_id", "stage", "error"]
@@ -28,7 +29,8 @@ def _artifact_paths(rows):
     columns = [
         c
         for c in rows
-        if c == "registration_report_path"
+        if c
+        in {"registration_report_path", "registration_qc_path", "registration_log_path"}
         or (c.startswith("reg_") and c.endswith("_path"))
     ]
     return sorted(
@@ -52,7 +54,7 @@ def run_registration(args, table, config, manifest):
     signature = argparse.Namespace(
         settings=asdict(config),
         manifest_config=manifest,
-        registration_schema=1,
+        registration_schema=2,
         backend_version=sitk.Version_VersionString(),
         output_dir=args.output_dir,
         threads_per_worker=args.threads_per_worker,
@@ -63,9 +65,13 @@ def run_registration(args, table, config, manifest):
         checkpoint_every_sec=args.checkpoint_every_sec,
     )
     inputs = {args.csv_path}
-    for col in ["nifti_path", config.organ_column, config.tumor_column]:
-        if col in table:
-            inputs.update(str(p) for p in table[col].dropna() if str(p).strip())
+    for col in [
+        "nifti_path",
+        f"source_{config.organ_column}",
+        f"source_{config.tumor_column}",
+    ]:
+        if col in df:
+            inputs.update(str(p) for p in df[col].dropna() if str(p).strip())
     context = prepare_resume_context(
         args=signature,
         command="register",
@@ -82,7 +88,7 @@ def run_registration(args, table, config, manifest):
         for c in df
         if c.startswith("reg_")
         or c.startswith("registration_")
-        or c == "consensus_status"
+        or c in {"consensus_status", config.organ_column, config.tumor_column}
     ]
     if context["can_resume"]:
         saved = _read_checkpoint(context["paths"].main_checkpoint_path)
@@ -141,6 +147,13 @@ def run_registration(args, table, config, manifest):
     )
 
     def checkpoint(force=False):
+        if not manager.should_flush(force=force):
+            return
+        atomic_write_csv(
+            build_qc(df.loc[df.registration_group_id.isin(completed)], errors, config),
+            args.qc_csv_path,
+            index=False,
+        )
         manager.flush(
             main_df=df,
             error_df=errors,
@@ -149,7 +162,7 @@ def run_registration(args, table, config, manifest):
             extra_state={"artifacts": artifacts, "error_count": len(errors)},
         )
 
-    final_paths = [args.csv_path_out, args.error_csv_path]
+    final_paths = [args.csv_path_out, args.error_csv_path, args.qc_csv_path]
     if (
         not pending
         and context["already_finished"]
@@ -185,6 +198,12 @@ def run_registration(args, table, config, manifest):
             for group_id, result, worker_error in results:
                 group = groups[group_id]
                 if worker_error is not None:
+                    logger.error(
+                        "group=%s scans=%s worker_error=%s",
+                        group_id,
+                        group.registration_scan_id.tolist(),
+                        worker_error,
+                    )
                     rows = group.copy()
                     rows["registration_status"] = "failed"
                     rows["consensus_status"] = "registration_failed"
@@ -209,6 +228,14 @@ def run_registration(args, table, config, manifest):
                     errors = pd.concat(
                         [errors, group_errors[ERROR_COLUMNS]], ignore_index=True
                     )
+                logger.info(
+                    "group=%s completed scans=%s registration_status=%s consensus_status=%s errors=%d",
+                    group_id,
+                    rows.registration_scan_id.tolist(),
+                    rows.registration_status.tolist(),
+                    rows.consensus_status.tolist(),
+                    len(group_errors),
+                )
                 paths = _artifact_paths(rows)
                 if any(not Path(p).is_file() for p in paths):
                     raise RuntimeError(
