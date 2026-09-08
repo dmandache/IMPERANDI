@@ -415,7 +415,7 @@ def test_cli_cannot_overwrite_source_with_error_table(tmp_path):
     from imperandi.process.registration.register import main
 
     args = Namespace(
-        csv_path=str(tmp_path / "cohort_errors.csv"),
+        csv_path=str(tmp_path / "register_errors.csv"),
         csv_path_out=str(tmp_path / "cohort.csv"),
     )
     with pytest.raises(ValueError, match="differ"):

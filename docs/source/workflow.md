@@ -138,7 +138,7 @@ The native organ and tumor masks are the only persisted image artifacts.
 Reference-space images, transforms, coverage, and probability images remain
 in-memory intermediates.
 
-`registration_qc.csv` contains one row per scan, including failures, with organ
+`register_qc.csv` contains one row per scan, including failures, with organ
 `dice_baseline`, `dice_pca`, `dice_rigid`, `dice_affine`, and `dice_selected`.
 Candidate scores are retained even when a simpler stage wins; unexecuted or
 failed optimizations have blank Dice and explicit stage status. Reference scans
@@ -157,7 +157,7 @@ references, and stage scores/statuses. JSONL stores one context event per group
 and one result event per series, with stage results nested under that series.
 Logs omit file paths and source series
 IDs; those values remain available in the QC and error tables for audit and resume.
-Global errors remain in `registration_errors.csv`; timeouts
+Global errors remain in `register_errors.csv`; timeouts
 and other worker failures also appear in the global QC table.
 
 The command checkpoints complete visit/modality groups and resumes by default.
