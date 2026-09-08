@@ -1,6 +1,7 @@
 """Registration runtime contracts: resume, manifests, workers, and interruption."""
 
 import json
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -40,7 +41,9 @@ def cohort(tmp_path):
 
 
 def args_for(source, *flags):
-    return register.build_parser().parse_args([str(source), "--timeout_sec", "0", *flags])
+    return register.build_parser().parse_args(
+        [str(source), "--timeout_sec", "0", *flags]
+    )
 
 
 def paths_for(source):
@@ -102,6 +105,23 @@ def test_finished_run_skips_and_restores_missing_final_csv(monkeypatch, cohort):
     assert output.read_bytes() == original
     assert errors.exists() and paths.state_path.exists()
     assert json.loads(paths.state_path.read_text())["finished"]
+
+
+def test_registration_uses_shared_task_summary(caplog, cohort):
+    caplog.set_level(logging.INFO)
+    register.main(args_for(cohort))
+    assert (
+        "Registration summary: 2 total row(s), 2 processed, 2 registered, "
+        "0 reused, 0 failed, 2 groups processed"
+    ) in caplog.text
+    assert "Registration done ✔" in caplog.text
+
+    caplog.clear()
+    register.main(args_for(cohort))
+    assert (
+        "Registration summary: 2 total row(s), 0 processed, 0 registered, "
+        "2 reused, 0 failed, 2 groups reused"
+    ) in caplog.text
 
 
 def test_interruption_resumes_only_committed_group(monkeypatch, cohort):

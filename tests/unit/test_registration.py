@@ -427,14 +427,15 @@ def test_stage_qc_and_trace_logs(tmp_path, caplog):
         for line in Path(out.loc[1, "registration_log_path"]).read_text().splitlines()
     ]
     assert any(
-        event.get("stage") == "rigid"
+        event.get("event") == "scan_result"
         and event["registration_scan_label"] == moving.registration_scan_label
+        and event["stages"]["rigid"]["dice"] == pytest.approx(moving.dice_rigid)
         for event in events
     )
     assert any(
         "series=2/2" in record.message
         and "phase=ARTERIAL" in record.message
-        and "stage=rigid" in record.message
+        and "rigid=" in record.message
         for record in caplog.records
     )
 
@@ -481,12 +482,11 @@ def test_logs_identify_groups_with_human_attributes(tmp_path, caplog):
     assert group_events == [
         {
             "event": "group_context",
-            "patient_key": "001",
             "patient_id": "PATIENT-A",
             "date": "2024-05-17",
-            "visit_order": 2,
-            "study_id": "v1",
-            "Modality": "CT",
+            "visit_order": "2",
+            "visit": "v1",
+            "modality": "CT",
             "series_count": 1,
             "registration_reference_label": (
                 "series=1/1, phase=PORTAL_VENOUS, sequence=T1"
@@ -494,6 +494,7 @@ def test_logs_identify_groups_with_human_attributes(tmp_path, caplog):
             "consensus_method": "anchor",
         }
     ]
+    assert len(scan_events) == 1
     assert all("patient_id" not in event for event in scan_events)
     assert all(
         "series=1/1" in event["registration_scan_label"] for event in scan_events

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from .config import SUPPORTED_MODALITIES
 from .labels import group_label, scan_label
 from .qc import QC_FIELDS
 
@@ -71,7 +72,7 @@ def prepare_cohort(table: pd.DataFrame, config) -> pd.DataFrame:
             raise ValueError(f"Missing registration identity: {column}")
 
     modalities = normalize_modalities(df)
-    if not modalities.isin(["CT", "MR"]).all():
+    if not modalities.isin(SUPPORTED_MODALITIES).all():
         raise ValueError("Registration supports CT and MR only")
 
     identities = [
@@ -109,9 +110,7 @@ def prepare_cohort(table: pd.DataFrame, config) -> pd.DataFrame:
         for position, index in enumerate(ordered, start=1):
             df.at[index, "registration_series_number"] = position
             df.at[index, "registration_group_size"] = len(group)
-    df["registration_scan_label"] = [
-        scan_label(row, config.visit_column) for _, row in df.iterrows()
-    ]
+    df["registration_scan_label"] = [scan_label(row) for _, row in df.iterrows()]
 
     derived_columns = [
         "registration_report_path",

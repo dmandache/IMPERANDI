@@ -151,7 +151,9 @@ log, linked by `registration_qc_path`, `registration_report_path`, and
 `registration_log_path`. Console and JSONL logs record patient ID, date, visit
 order, configured visit value, and modality once per group. Later events use the
 series position and group total (for example `series=1/6`) plus phase/sequence,
-references, and stage scores/statuses. Logs omit file paths and source series
+references, and stage scores/statuses. JSONL stores one context event per group
+and one result event per series, with stage results nested under that series.
+Logs omit file paths and source series
 IDs; those values remain available in tables and reports for audit and resume.
 Global errors remain in `registration_errors.csv`; timeouts
 and other worker failures also appear in the global QC table.
