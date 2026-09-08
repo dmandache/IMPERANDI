@@ -140,6 +140,9 @@ in-memory intermediates.
 
 `register_qc.csv` contains one row per scan, including failures, with organ
 `dice_baseline`, `dice_pca`, `dice_rigid`, `dice_affine`, and `dice_selected`.
+When both the reference and moving tumor masks are available, corresponding
+`tumor_dice_*` fields provide diagnostic overlap without influencing transform
+selection.
 Candidate scores are retained even when a simpler stage wins; unexecuted or
 failed optimizations have blank Dice and explicit stage status. Reference scans
 have baseline/selected Dice 1 and optimization stages marked `not_run`.
@@ -159,6 +162,11 @@ Logs omit file paths and source series
 IDs; those values remain available in the QC and error tables for audit and resume.
 Global errors remain in `register_errors.csv`; timeouts
 and other worker failures also appear in the global QC table.
+
+Organ distance maps are cropped around their foreground with configurable
+`crop_padding_mm` and clamped to `distance_band_mm`. By default, native tumor
+consensus masks are constrained to the registered organ; manifests can disable
+this with `constrain_tumor_to_organ: false`.
 
 The command checkpoints complete visit/modality groups and resumes by default.
 It tracks changes to the input CSV, referenced images/masks, resolved manifest,
