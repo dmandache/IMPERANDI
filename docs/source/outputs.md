@@ -11,7 +11,7 @@ columns and adds or normalizes the fields needed downstream.
 | `convert` | `nifti_index.csv` | `conv_errors.csv` | `nifti_path` |
 | `segment` | input CSV in place, or `--csv_path_out` | `seg_errors.csv` and warning report when applicable | `mask_<output>` paths |
 | `phase` | input CSV in place, or `--csv_path_out` | `phase_errors.csv` | canonical `phase`, provenance columns, and `totalseg_*` predictions when used |
-| `register` | `<input>_registered.csv` | `<output_stem>_errors.csv`, `<output_stem>_qc.csv`, group JSON/logs, checkpoint/state files | Native-space canonical `mask_*` paths, original `source_mask_*` paths, `registration_*`, `consensus_status`, `reg_*` artifacts |
+| `register` | `<input>_registered.csv` | `<output_stem>_errors.csv`, `<output_stem>_qc.csv`, one JSONL log per group, checkpoint/state files | Native-space canonical `mask_*` paths, original `source_mask_*` paths, registration status/QC fields, and native organ/tumor artifact paths |
 | `radiomics` | `<input>_radiomics.csv` | `radiomics_errors.csv` | ROI-prefixed PyRadiomics features |
 
 Defaults are relative to the input CSV or selected output directory. Explicit
@@ -51,4 +51,3 @@ rather than disposable logs. Check all of the following before downstream use:
 Checkpoint files and JSON state may appear beside the configured main/error
 outputs during resumable runs. They are implementation artifacts, not cohort
 tables, and should not be passed to the next stage.
-
