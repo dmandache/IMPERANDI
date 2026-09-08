@@ -7,6 +7,8 @@ import numpy as np
 
 from .config import REGISTRATION_STAGES
 
+DICE_TOLERANCE = 1e-6
+
 
 def backend():
     try:
@@ -128,9 +130,27 @@ class RegistrationRejected(ValueError):
         self.result = result
 
 
+def _select_candidate(
+    best, score, stage, candidate, candidate_score, candidate_stage, stages
+):
+    """Accept improvement; otherwise retain the previous transform and annotate QC."""
+    detail = stages[candidate_stage]
+    detail.update(dice=candidate_score, input_dice=score, selected=False)
+    if candidate_score < score - DICE_TOLERANCE:
+        detail.update(status="rejected_worse_dice", fallback_stage=stage)
+        return best, score, stage
+    if candidate_score <= score + DICE_TOLERANCE:
+        detail.update(status="rejected_no_improvement", fallback_stage=stage)
+        return best, score, stage
+    stages[stage]["selected"] = False
+    detail.update(status="evaluated", selected=True)
+    return candidate, candidate_score, candidate_stage
+
+
 def register_pair(fixed_organ, moving_organ, config):
     sitk = backend()
-    before = dice(fixed_organ, moving_organ, sitk.Transform(3, sitk.sitkIdentity))
+    identity = sitk.Euler3DTransform()
+    before = dice(fixed_organ, moving_organ, identity)
     started_pca = time.perf_counter()
     try:
         initial = initialize_pca(fixed_organ, moving_organ)
@@ -138,28 +158,40 @@ def register_pair(fixed_organ, moving_organ, config):
         stages = {
             name: {"dice": None, "status": "not_run"} for name in REGISTRATION_STAGES
         }
-        stages["baseline"] = {"dice": before, "status": "evaluated"}
-        stages["pca"] = {"dice": None, "status": "failed", "error": str(exc)}
+        stages["baseline"] = {
+            "dice": before,
+            "status": "evaluated",
+            "selected": True,
+        }
+        stages["pca"] = {
+            "dice": None,
+            "status": "failed",
+            "selected": False,
+            "fallback_stage": "baseline",
+            "error": str(exc),
+        }
         raise RegistrationRejected(
             str(exc),
             TransformResult(
                 sitk.Euler3DTransform(), "identity", before, before, [str(exc)], stages
             ),
         ) from exc
-    best = initial
-    score = dice(fixed_organ, moving_organ, best)
-    stage = "pca"
+    pca_score = dice(fixed_organ, moving_organ, initial)
     warnings = []
     stages = {
-        "baseline": {"dice": before, "status": "evaluated"},
+        "baseline": {"dice": before, "status": "evaluated", "selected": True},
         "pca": {
-            "dice": score,
+            "dice": pca_score,
             "status": "evaluated",
+            "selected": False,
             "elapsed_seconds": time.perf_counter() - started_pca,
         },
         "rigid": {"dice": None, "status": "not_run"},
         "affine": {"dice": None, "status": "not_run"},
     }
+    best, score, stage = _select_candidate(
+        identity, before, "baseline", initial, pca_score, "pca", stages
+    )
     fixed_dm = sitk.SignedMaurerDistanceMap(
         fixed_organ, insideIsPositive=False, squaredDistance=False, useImageSpacing=True
     )
@@ -175,14 +207,16 @@ def register_pair(fixed_organ, moving_organ, config):
                 status="skipped_low_dice",
                 input_dice=score,
                 required_dice=config.affine_min_dice,
+                selected=False,
+                fallback_stage=stage,
                 reason=(
-                    f"Selected PCA/rigid Dice {score:.4f} is below the affine "
+                    f"Best pre-affine Dice {score:.4f} is below the affine "
                     f"threshold {config.affine_min_dice:.4f}"
                 ),
             )
             continue
         if name == "rigid":
-            tx = sitk.Euler3DTransform(initial)
+            tx = sitk.Euler3DTransform(best)
         else:
             tx = sitk.AffineTransform(3)
             tx.SetCenter(best.GetCenter())
@@ -215,17 +249,22 @@ def register_pair(fixed_organ, moving_organ, config):
                 raise ValueError("Implausible or nonfinite transform")
             tx.GetInverse()
             candidate = dice(fixed_organ, moving_organ, tx)
-            stages[name].update(dice=candidate, status="evaluated")
-            if candidate > score + 1e-6:
-                best, score, stage = tx, candidate, name
+            best, score, stage = _select_candidate(
+                best, score, stage, tx, candidate, name, stages
+            )
         except (RuntimeError, ValueError) as exc:
             warnings.append(f"{name}: {exc}")
-            stages[name].update(status="failed", error=str(exc))
+            stages[name].update(
+                status="failed",
+                error=str(exc),
+                input_dice=score,
+                selected=False,
+                fallback_stage=stage,
+            )
         finally:
             stages[name]["elapsed_seconds"] = time.perf_counter() - started
-    if before >= score - 1e-6:
-        best, score, stage = sitk.Euler3DTransform(), before, "identity"
-    result = TransformResult(best, stage, before, score, warnings, stages)
+    selected_stage = "identity" if stage == "baseline" else stage
+    result = TransformResult(best, selected_stage, before, score, warnings, stages)
     if score < config.min_dice:
         raise RegistrationRejected(f"Organ overlap rejected: Dice={score:.4f}", result)
     return result

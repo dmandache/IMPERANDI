@@ -12,6 +12,19 @@ from .config import SUPPORTED_MODALITIES
 from .labels import group_label, scan_label
 from .qc import QC_FIELDS
 
+OBSOLETE_ARTIFACT_COLUMNS = (
+    "registration_report_path",
+    "reg_reference_to_scan_path",
+    "reg_scan_to_reference_path",
+    "reg_tumor_common_path",
+    "reg_tumor_coverage_common_path",
+    "reg_tumor_coverage_native_path",
+    "reg_tumor_probability_common_path",
+    "reg_tumor_probability_native_path",
+    "reg_nifti_path",
+    "reg_organ_path",
+)
+
 
 def stable_id(value) -> str:
     """Return a filesystem-safe, deterministic identifier for structured values."""
@@ -46,7 +59,9 @@ def reference_rank(row, priorities) -> tuple[int, str]:
 
 def prepare_cohort(table: pd.DataFrame, config) -> pd.DataFrame:
     """Validate identities and initialize registration output columns."""
-    df = table.copy().reset_index(drop=True)
+    df = table.drop(columns=OBSOLETE_ARTIFACT_COLUMNS, errors="ignore").reset_index(
+        drop=True
+    )
 
     # Source columns remain authoritative across repeated registration runs.
     for column in (config.organ_column, config.tumor_column):
@@ -113,7 +128,6 @@ def prepare_cohort(table: pd.DataFrame, config) -> pd.DataFrame:
     df["registration_scan_label"] = [scan_label(row) for _, row in df.iterrows()]
 
     derived_columns = [
-        "registration_report_path",
         "registration_qc_path",
         "registration_log_path",
         *QC_FIELDS,
@@ -121,16 +135,7 @@ def prepare_cohort(table: pd.DataFrame, config) -> pd.DataFrame:
         "registration_reference_label",
         "registration_status",
         "consensus_status",
-        "reg_reference_to_scan_path",
-        "reg_scan_to_reference_path",
-        "reg_tumor_common_path",
         "reg_tumor_native_path",
-        "reg_tumor_coverage_common_path",
-        "reg_tumor_coverage_native_path",
-        "reg_tumor_probability_common_path",
-        "reg_tumor_probability_native_path",
-        "reg_nifti_path",
-        "reg_organ_path",
         "reg_organ_native_path",
     ]
     for column in derived_columns:

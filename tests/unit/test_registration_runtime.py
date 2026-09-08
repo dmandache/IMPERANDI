@@ -343,6 +343,7 @@ def test_qc_and_canonical_paths_survive_resume_and_qc_restoration(monkeypatch, c
     qc_path = output.with_name(output.stem + "_qc.csv")
     qc_before = pd.read_csv(qc_path)
     assert set(qc_before.registration_scan_id) == set(first.registration_scan_id)
+    assert first.registration_qc_path.eq(str(qc_path.resolve())).all()
     assert first.mask_liver.equals(first.reg_organ_native_path)
     assert first.mask_liver_tumor.equals(first.reg_tumor_native_path)
     assert first.source_mask_liver.equals(pd.read_csv(cohort).mask_liver)

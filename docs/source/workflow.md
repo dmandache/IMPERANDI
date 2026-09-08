@@ -102,9 +102,10 @@ mask in priority order. Missing masks are omitted; readable empty masks vote
 negative. Every available accepted scan contributes to non-anchor fusion, so
 select independent sequences/phases upstream to avoid duplicate reconstruction
 votes. Whole-volume annotations are assumed. Fusion is limited to common
-observed coverage, which is saved separately; outside-coverage zeros are unknown.
-Majority saves vote fractions and uses `> 0.5` (ties negative); STAPLE saves
-estimated probabilities and uses `>= 0.5`.
+observed coverage; outside-coverage zeros are unknown. Majority computes vote
+fractions and uses `> 0.5` (ties negative); STAPLE computes estimated
+probabilities and uses `>= 0.5`. Coverage and probability images remain
+in-memory intermediates.
 
 The stage loads `generic` by default. Use `--manifest generic` for a built-in
 manifest or `--manifest dataset_configs/manifests/operandi.yaml` for a file.
@@ -114,7 +115,9 @@ values. An optional manifest `registration` mapping accepts `visit_column`,
 `iterations`, `min_dice`, `threshold`, and `reference_priority`. Affine
 refinement runs only when enabled and the best PCA/rigid organ Dice is at least
 `affine_min_dice` (default 0.9). Otherwise QC records `skipped_low_dice` and
-retains the best preceding transform. `reference_priority` maps CT/MR to ordered lists
+retains the best preceding transform. Every PCA, rigid, and affine candidate is
+compared with the best preceding Dice; a worse candidate is rejected and QC
+records `rejected_worse_dice` with its fallback stage. `reference_priority` maps CT/MR to ordered lists
 of column/value selectors, such as `CT: [{phase: PORTAL_VENOUS}]` or
 `MR: [{mri_sequence: T1}]`. Defaults are 100 iterations, minimum organ Dice 0.1,
 and threshold 0.5. These initial QC settings require dataset validation.
@@ -131,10 +134,9 @@ consensus back into fusion. Failed stages retain their original canonical paths,
 so inspect `registration_status` and `consensus_status` before downstream analysis.
 Existing radiomics now consumes the native-space registered masks automatically.
 
-Derived `reg_*` columns also retain reference-space images/organs, common tumor
-masks, coverage, probabilities, and both transform directions.
-`reg_reference_to_scan_path` maps reference points to native scan points for
-resampling onto the reference grid; its inverse transfers reference masks back.
+The native organ and tumor masks are the only persisted image artifacts.
+Reference-space images, transforms, coverage, and probability images remain
+in-memory intermediates.
 
 `registration_qc.csv` contains one row per scan, including failures, with organ
 `dice_baseline`, `dice_pca`, `dice_rigid`, `dice_affine`, and `dice_selected`.
@@ -142,19 +144,19 @@ Candidate scores are retained even when a simpler stage wins; unexecuted or
 failed optimizations have blank Dice and explicit stage status. Reference scans
 have baseline/selected Dice 1 and optimization stages marked `not_run`.
 The table links patient/visit/scan/reference IDs, source and output mask paths,
-transforms, selected stage, optimizer diagnostics, warnings, timing, and errors.
+selected stage, optimizer diagnostics, warnings, timing, and errors.
 Use `--qc_csv_path` to choose its location. QC is refreshed at checkpoint
 boundaries and reconstructed on resume if the final table is missing.
 
-Each group also has `qc.csv`, `group.json`, and a structured `registration.jsonl`
-log, linked by `registration_qc_path`, `registration_report_path`, and
-`registration_log_path`. Console and JSONL logs record patient ID, date, visit
+Each group has one structured `registration.jsonl` log, linked by
+`registration_log_path`. Output rows link the single task-level QC table through
+`registration_qc_path`. Console and JSONL logs record patient ID, date, visit
 order, configured visit value, and modality once per group. Later events use the
 series position and group total (for example `series=1/6`) plus phase/sequence,
 references, and stage scores/statuses. JSONL stores one context event per group
 and one result event per series, with stage results nested under that series.
 Logs omit file paths and source series
-IDs; those values remain available in tables and reports for audit and resume.
+IDs; those values remain available in the QC and error tables for audit and resume.
 Global errors remain in `registration_errors.csv`; timeouts
 and other worker failures also appear in the global QC table.
 
