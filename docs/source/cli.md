@@ -97,8 +97,8 @@ creates shared tumor masks with anchor, majority, intersection, union, or STAPLE
 - `--csv_path` and `--csv_path_out` provide named alternatives to positional paths.
   Defaults: `./nifti_index.csv` and `<input_stem>_registered.csv`.
 - `--output_dir` defaults to `registration` beside the input CSV.
-- `--error_csv_path` defaults to `<output_stem>_errors.csv`.
-- `--qc_csv_path` defaults to `<output_stem>_qc.csv` and records stage Dice and provenance.
+- `--error_csv_path` defaults to `registration_errors.csv`.
+- `--qc_csv_path` defaults to `registration_qc.csv` and records stage Dice and provenance.
 - `--manifest` accepts a built-in name or YAML file; default is `generic`.
 - `--method`, `--affine`/`--no_affine`, and `--visit_column` override manifest settings.
 - `--num_workers`, `--threads_per_worker`, `--start_method`, and `--timeout_sec`
@@ -107,6 +107,10 @@ creates shared tumor masks with anchor, majority, intersection, union, or STAPLE
   retries groups with recorded errors while retaining valid completed groups.
 - `--dry-run` validates the group plan without creating artifacts; `--verbose`
   enables verbose logging.
+
+Progress and stage logs identify groups with patient ID, date, visit order,
+configured visit value, and modality. Scan messages add series, phase/sequence,
+and filename. Internal IDs remain in CSV and JSON artifacts for resume and audit.
 
 Input, output, error, QC, and checkpoint paths must be distinct. Resume checks both
 referenced input files and derived artifacts. See [Registration workflow](workflow.md#registration)
