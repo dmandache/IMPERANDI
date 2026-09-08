@@ -24,10 +24,10 @@ def add_registration_arguments(parser):
     parser.add_argument("csv_path_out_pos", nargs="?", help="Optional output CSV.")
     parser.add_argument("--csv_path", dest="csv_path_opt")
     parser.add_argument("--csv_path_out", help="Default: <input_stem>_registered.csv.")
-    parser.add_argument("--error_csv_path", help="Default: registration_errors.csv.")
+    parser.add_argument("--error_csv_path", help="Default: register_errors.csv.")
     parser.add_argument(
         "--qc_csv_path",
-        help="Stage Dice and provenance table (default: registration_qc.csv).",
+        help="Stage Dice and provenance table (default: register_qc.csv).",
     )
     parser.add_argument(
         "--output_dir", help="Artifact root (default: registration beside input CSV)."
@@ -111,16 +111,13 @@ def normalize_registration_args(args):
     error = (
         Path(
             getattr(args, "error_csv_path", None)
-            or output.with_name(output.stem + "_errors.csv")
+            or output.with_name("register_errors.csv")
         )
         .expanduser()
         .resolve()
     )
     qc = (
-        Path(
-            getattr(args, "qc_csv_path", None)
-            or output.with_name(output.stem + "_qc.csv")
-        )
+        Path(getattr(args, "qc_csv_path", None) or output.with_name("register_qc.csv"))
         .expanduser()
         .resolve()
     )
