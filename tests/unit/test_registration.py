@@ -427,12 +427,12 @@ def test_stage_qc_and_trace_logs(tmp_path, caplog):
         for line in Path(out.loc[1, "registration_log_path"]).read_text().splitlines()
     ]
     assert any(
-        event.get("stage") == "rigid" and event["registration_scan_id"] == moving.name
+        event.get("stage") == "rigid"
+        and event["registration_scan_label"] == moving.registration_scan_label
         for event in events
     )
     assert any(
-        "patient_id=001" in record.message
-        and "modality=CT" in record.message
+        "series=2/2" in record.message
         and "phase=ARTERIAL" in record.message
         and "stage=rigid" in record.message
         for record in caplog.records
@@ -440,6 +440,7 @@ def test_stage_qc_and_trace_logs(tmp_path, caplog):
 
 
 def test_logs_identify_groups_with_human_attributes(tmp_path, caplog):
+    import json
     import logging
 
     caplog.set_level(logging.INFO)
@@ -449,25 +450,92 @@ def test_logs_identify_groups_with_human_attributes(tmp_path, caplog):
             "patient_id": "PATIENT-A",
             "date": "2024-05-17",
             "visit_order": 2,
+            "series_id": "SERIES-SECRET",
         }
     ]
     out, errors = register_cohort(pd.DataFrame(rows), tmp_path / "out")
     assert errors.empty
     expected = (
-        "patient_id=PATIENT-A, date=2024-05-17, visit_order=2, " "visit=v1, modality=CT"
+        "patient_id=PATIENT-A, date=2024-05-17, visit_order=2, visit=v1, modality=CT"
     )
     assert out.loc[0, "registration_group_label"] == expected
     info_messages = [
         record.message for record in caplog.records if record.levelno == logging.INFO
     ]
-    assert any(expected in message for message in info_messages)
+    assert sum(expected in message for message in info_messages) == 1
     assert not any(
         out.loc[0, "registration_group_id"] in message for message in info_messages
+    )
+    assert any("series=1/1" in message for message in info_messages)
+    assert not any("SERIES-SECRET" in message for message in info_messages)
+    assert not any("image.nii.gz" in message for message in info_messages)
+    log_text = Path(out.loc[0, "registration_log_path"]).read_text()
+    events = [json.loads(line) for line in log_text.splitlines()]
+    assert "SERIES-SECRET" not in log_text
+    assert "image.nii.gz" not in log_text
+    assert all(
+        "series_id" not in event and "nifti_path" not in event for event in events
+    )
+    group_events = [event for event in events if event["event"] == "group_context"]
+    scan_events = [event for event in events if event["event"] != "group_context"]
+    assert group_events == [
+        {
+            "event": "group_context",
+            "patient_key": "001",
+            "patient_id": "PATIENT-A",
+            "date": "2024-05-17",
+            "visit_order": 2,
+            "study_id": "v1",
+            "Modality": "CT",
+            "series_count": 1,
+            "registration_reference_label": (
+                "series=1/1, phase=PORTAL_VENOUS, sequence=T1"
+            ),
+            "consensus_method": "anchor",
+        }
+    ]
+    assert all("patient_id" not in event for event in scan_events)
+    assert all(
+        "series=1/1" in event["registration_scan_label"] for event in scan_events
     )
     qc = pd.read_csv(out.loc[0, "registration_qc_path"])
     assert qc.loc[0, "patient_id"] == "PATIENT-A"
     assert qc.loc[0, "date"] == "2024-05-17"
     assert qc.loc[0, "visit_order"] == 2
+
+
+def test_scan_labels_number_series_within_each_group():
+    from imperandi.process.registration.grouping import prepare_cohort
+
+    rows = [
+        {
+            "patient_key": "001",
+            "study_id": "visit-1",
+            "Modality": "CT",
+            "phase": phase,
+            "series_id": f"PRIVATE-{index}",
+            "nifti_path": f"/private/location/scan-{index}.nii.gz",
+            "mask_liver": f"/private/location/liver-{index}.nii.gz",
+        }
+        for index, phase in enumerate(
+            ["NATIVE", "DELAYED", "OTHER", "ARTERIAL", "OTHER", "PORTAL_VENOUS"]
+        )
+    ]
+    planned = prepare_cohort(pd.DataFrame(rows), RegistrationConfig())
+    labels = planned.registration_scan_label.tolist()
+    positions = planned.registration_series_number.tolist()
+    assert positions[0:2] == [4, 3]
+    assert positions[3] == 2
+    assert positions[5] == 1
+    assert {positions[2], positions[4]} == {5, 6}
+    assert all(
+        f"series={position}/6" in labels[index]
+        for index, position in enumerate(positions)
+    )
+    assert not any(
+        "patient_id=" in label or "PRIVATE" in label or "/private/" in label
+        for label in labels
+    )
 
 
 def test_rejected_pair_keeps_qc_and_original_canonical_paths(tmp_path):

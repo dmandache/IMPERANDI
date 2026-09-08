@@ -53,6 +53,8 @@ def build_qc(table, errors, config):
                 config.tumor_column,
                 "registration_scan_id",
                 "registration_scan_label",
+                "registration_series_number",
+                "registration_group_size",
                 "registration_group_id",
                 "registration_group_label",
                 "registration_reference_id",
@@ -107,35 +109,39 @@ def publish_group_qc(df, indices, errors, config, directory):
     df.loc[indices, "registration_log_path"] = str(log_path.resolve())
     qc = build_qc(df.loc[indices], pd.DataFrame(errors), config)
     atomic_write_csv(qc, qc_path, index=False)
-    events = []
-    for row in qc.to_dict("records"):
+    rows = qc.to_dict("records")
+    first = rows[0]
+    events = [
+        {
+            "event": "group_context",
+            **{
+                key: None if pd.isna(first[key]) else first[key]
+                for key in [
+                    "patient_key",
+                    "patient_id",
+                    "date",
+                    "visit_order",
+                    config.visit_column,
+                    "Modality",
+                ]
+            },
+            "series_count": len(rows),
+            "registration_reference_label": (
+                None
+                if pd.isna(first["registration_reference_label"])
+                else first["registration_reference_label"]
+            ),
+            "consensus_method": first["consensus_method"],
+        }
+    ]
+    for row in rows:
         context = {
             key: row[key]
             for key in [
-                "patient_key",
-                "patient_id",
-                "date",
-                "visit_order",
-                config.visit_column,
-                "Modality",
-                "registration_group_id",
-                "registration_group_label",
-                "registration_scan_id",
                 "registration_scan_label",
-                "registration_reference_id",
-                "registration_reference_label",
-                "nifti_path",
-                "registration_started_at",
                 "selected_stage",
                 "dice_selected",
-                "consensus_method",
                 "registration_elapsed_seconds",
-                f"source_{config.organ_column}",
-                f"source_{config.tumor_column}",
-                "reg_reference_to_scan_path",
-                "reg_scan_to_reference_path",
-                "reg_organ_native_path",
-                "reg_tumor_native_path",
             ]
         }
         context = {
@@ -158,7 +164,7 @@ def publish_group_qc(df, indices, errors, config, directory):
                 "event": "scan_result",
                 "registration_status": row["registration_status"],
                 "consensus_status": row["consensus_status"],
-                "errors": row["errors"],
+                "has_errors": bool(row["errors"]),
             }
         )
     temporary = log_path.with_suffix(".tmp")

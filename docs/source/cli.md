@@ -108,9 +108,11 @@ creates shared tumor masks with anchor, majority, intersection, union, or STAPLE
 - `--dry-run` validates the group plan without creating artifacts; `--verbose`
   enables verbose logging.
 
-Progress and stage logs identify groups with patient ID, date, visit order,
-configured visit value, and modality. Scan messages add series, phase/sequence,
-and filename. Internal IDs remain in CSV and JSON artifacts for resume and audit.
+Progress logs identify each group once with patient ID, date, visit order,
+configured visit value, and modality. Messages within that group use only the
+series position and group total (for example `series=1/6`) plus phase or
+sequence. File paths and source series IDs remain in the CSV/QC tables and are
+omitted from logs.
 
 Input, output, error, QC, and checkpoint paths must be distinct. Resume checks both
 referenced input files and derived artifacts. See [Registration workflow](workflow.md#registration)
