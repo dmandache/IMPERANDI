@@ -22,5 +22,5 @@ Registration
 .. automodule:: imperandi.process.registration
    :members:
 
-.. automodule:: imperandi.process.registration.cli
+.. automodule:: imperandi.process.registration.register
    :members:

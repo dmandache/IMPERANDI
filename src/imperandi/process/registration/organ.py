@@ -169,6 +169,17 @@ def register_pair(fixed_organ, moving_organ, config):
         useImageSpacing=True,
     )
     for name in (["rigid", "affine"] if config.affine else ["rigid"]):
+        if name == "affine" and score < config.affine_min_dice:
+            stages[name].update(
+                status="skipped_low_dice",
+                input_dice=score,
+                required_dice=config.affine_min_dice,
+                reason=(
+                    f"Selected PCA/rigid Dice {score:.4f} is below the affine "
+                    f"threshold {config.affine_min_dice:.4f}"
+                ),
+            )
+            continue
         if name == "rigid":
             tx = sitk.Euler3DTransform(initial)
         else:

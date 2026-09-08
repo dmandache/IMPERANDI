@@ -254,6 +254,7 @@ registration:
   tumor_column: mask_liver_tumor
   method: anchor
   affine: false
+  affine_min_dice: 0.9
   iterations: 100
   min_dice: 0.1
   threshold: 0.5

@@ -178,7 +178,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_phase_subcommand(subparsers)
     _add_radiomics_subcommand(subparsers)
     _add_segment_subcommand(subparsers)
-    from imperandi.process.registration.cli import add_registration_arguments
+    from imperandi.process.registration.register import add_registration_arguments
 
     registration_parser = subparsers.add_parser(
         "register", help="Register organs and build intra-visit tumor consensus."
@@ -190,7 +190,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _handle_register(args: argparse.Namespace) -> int:
-    from imperandi.process.registration import cli as registration_module
+    from imperandi.process.registration import register as registration_module
 
     args = registration_module.normalize_registration_args(args)
     _log_script_namespace(registration_module.__file__, args)

@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 import yaml
 
-from imperandi.process.registration import cli, runner, execution
+from imperandi.process.registration import execution, register, runner
 from imperandi.process.registration.config import RegistrationConfig
 from imperandi.utils.run_state import build_checkpoint_paths
 
@@ -40,7 +40,7 @@ def cohort(tmp_path):
 
 
 def args_for(source, *flags):
-    return cli.build_parser().parse_args([str(source), "--timeout_sec", "0", *flags])
+    return register.build_parser().parse_args([str(source), "--timeout_sec", "0", *flags])
 
 
 def paths_for(source):
@@ -54,22 +54,22 @@ def test_manifest_overrides_defaults_and_cli(tmp_path, cohort):
     manifest.write_text(
         yaml.safe_dump({"registration": {"method": "majority", "affine": True}})
     )
-    args = cli.normalize_registration_args(
+    args = register.normalize_registration_args(
         args_for(cohort, "--manifest", str(manifest))
     )
-    config, _ = cli.resolve_config(args)
+    config, _ = register.resolve_config(args)
     assert config.method == "majority" and config.affine
-    override = cli.normalize_registration_args(
+    override = register.normalize_registration_args(
         args_for(
             cohort, "--manifest", str(manifest), "--method", "union", "--no_affine"
         )
     )
-    config, _ = cli.resolve_config(override)
+    config, _ = register.resolve_config(override)
     assert config.method == "union" and not config.affine
-    built_in = cli.normalize_registration_args(
+    built_in = register.normalize_registration_args(
         args_for(cohort, "--manifest", "generic")
     )
-    assert isinstance(cli.resolve_config(built_in)[0], RegistrationConfig)
+    assert isinstance(register.resolve_config(built_in)[0], RegistrationConfig)
 
 
 def test_dry_run_no_backend_or_writes(monkeypatch, cohort, tmp_path):
@@ -78,12 +78,12 @@ def test_dry_run_no_backend_or_writes(monkeypatch, cohort, tmp_path):
 
     monkeypatch.setattr(runner, "backend", unavailable)
     before = set(tmp_path.rglob("*"))
-    cli.main(args_for(cohort, "--dry-run"))
+    register.main(args_for(cohort, "--dry-run"))
     assert set(tmp_path.rglob("*")) == before
 
 
 def test_finished_run_skips_and_restores_missing_final_csv(monkeypatch, cohort):
-    cli.main(args_for(cohort))
+    register.main(args_for(cohort))
     output, errors, paths = paths_for(cohort)
     original = output.read_bytes()
     stat = output.stat().st_mtime_ns
@@ -93,12 +93,12 @@ def test_finished_run_skips_and_restores_missing_final_csv(monkeypatch, cohort):
         yield
 
     monkeypatch.setattr(runner, "iter_group_results", forbidden)
-    cli.main(args_for(cohort))
+    register.main(args_for(cohort))
     assert output.stat().st_mtime_ns == stat
     # Recover a deleted final table from checkpoints without processing images.
     output.unlink()
     monkeypatch.setattr(runner, "iter_group_results", lambda *a, **k: (x for x in ()))
-    cli.main(args_for(cohort))
+    register.main(args_for(cohort))
     assert output.read_bytes() == original
     assert errors.exists() and paths.state_path.exists()
     assert json.loads(paths.state_path.read_text())["finished"]
@@ -117,7 +117,7 @@ def test_interruption_resumes_only_committed_group(monkeypatch, cohort):
 
     monkeypatch.setattr(runner, "iter_group_results", interrupted)
     with pytest.raises(KeyboardInterrupt):
-        cli.main(args_for(cohort, "--checkpoint_every_rows", "100"))
+        register.main(args_for(cohort, "--checkpoint_every_rows", "100"))
     output, _, paths = paths_for(cohort)
     assert not output.exists()
     state = json.loads(paths.state_path.read_text())
@@ -130,7 +130,7 @@ def test_interruption_resumes_only_committed_group(monkeypatch, cohort):
         yield from actual(groups, *args, **kwargs)
 
     monkeypatch.setattr(runner, "iter_group_results", tracking)
-    cli.main(args_for(cohort))
+    register.main(args_for(cohort))
     assert len(observed) == 1
     assert observed[0] not in state["completed_indices"]
     assert len(pd.read_csv(output)) == 2
@@ -138,7 +138,7 @@ def test_interruption_resumes_only_committed_group(monkeypatch, cohort):
 
 @pytest.mark.parametrize("mutation", ["delete", "modify"])
 def test_missing_artifact_recomputes_only_affected_group(monkeypatch, cohort, mutation):
-    cli.main(args_for(cohort))
+    register.main(args_for(cohort))
     output, _, _ = paths_for(cohort)
     first = pd.read_csv(output)
     artifact = Path(first.loc[0, "reg_tumor_native_path"])
@@ -154,7 +154,7 @@ def test_missing_artifact_recomputes_only_affected_group(monkeypatch, cohort, mu
         yield from actual(groups, *args, **kwargs)
 
     monkeypatch.setattr(runner, "iter_group_results", tracking)
-    cli.main(args_for(cohort))
+    register.main(args_for(cohort))
     second = pd.read_csv(output)
     assert observed == [first.loc[0, "registration_group_id"]]
     assert (
@@ -170,7 +170,7 @@ def test_changed_inputs_and_forced_runs_recompute(
     manifest = tmp_path / "settings.yaml"
     manifest.write_text("registration:\n  method: anchor\n")
     flags = ["--manifest", str(manifest)]
-    cli.main(args_for(cohort, *flags))
+    register.main(args_for(cohort, *flags))
     if change == "mask":
         row = pd.read_csv(cohort).iloc[0]
         image = sitk.ReadImage(row.mask_liver)
@@ -188,12 +188,12 @@ def test_changed_inputs_and_forced_runs_recompute(
         yield from actual(groups, *args, **kwargs)
 
     monkeypatch.setattr(runner, "iter_group_results", tracking)
-    cli.main(args_for(cohort, *flags))
+    register.main(args_for(cohort, *flags))
     assert len(seen) == 2
 
 
 def test_strict_resume_hashes_referenced_inputs_and_artifacts(cohort):
-    cli.main(args_for(cohort, "--strict_resume"))
+    register.main(args_for(cohort, "--strict_resume"))
     _, _, paths = paths_for(cohort)
     state = json.loads(paths.state_path.read_text())
     assert len(state["input_fingerprint"]) == 3
@@ -211,20 +211,20 @@ def test_retry_failed_and_preserve_errors(monkeypatch, cohort):
             yield key, None, "deliberate worker failure"
 
     monkeypatch.setattr(runner, "iter_group_results", fail)
-    cli.main(args_for(cohort))
+    register.main(args_for(cohort))
     output, errors, _ = paths_for(cohort)
     assert len(pd.read_csv(errors)) == 2
     assert pd.read_csv(output).registration_status.eq("failed").all()
     monkeypatch.setattr(runner, "iter_group_results", real)
-    cli.main(args_for(cohort))
+    register.main(args_for(cohort))
     assert len(pd.read_csv(errors)) == 2
-    cli.main(args_for(cohort, "--retry_failed"))
+    register.main(args_for(cohort, "--retry_failed"))
     assert pd.read_csv(errors).empty
     assert pd.read_csv(output).registration_status.eq("reference").all()
 
 
 def test_real_spawn_workers(cohort):
-    cli.main(args_for(cohort, "--num_workers", "2", "--timeout_sec", "30"))
+    register.main(args_for(cohort, "--num_workers", "2", "--timeout_sec", "30"))
     output, errors, _ = paths_for(cohort)
     assert pd.read_csv(errors).empty
     assert pd.read_csv(output).registration_status.eq("reference").all()
@@ -234,7 +234,7 @@ def test_hard_timeout_is_recorded(cohort):
     # Startup itself takes longer than this; verify timed-out processes cannot
     # subsequently publish successful rows or leave active children.
     before = {p.pid for p in execution.mp.active_children()}
-    cli.main(args_for(cohort, "--timeout_sec", "0.001", "--num_workers", "2"))
+    register.main(args_for(cohort, "--timeout_sec", "0.001", "--num_workers", "2"))
     output, errors, _ = paths_for(cohort)
     assert pd.read_csv(output).registration_status.eq("failed").all()
     assert pd.read_csv(errors).error.str.contains("timeout").all()
@@ -247,7 +247,7 @@ def test_hard_timeout_is_recorded(cohort):
 )
 def test_runtime_argument_validation(cohort, flag, value):
     with pytest.raises(ValueError):
-        cli.normalize_registration_args(args_for(cohort, flag, value))
+        register.normalize_registration_args(args_for(cohort, flag, value))
 
 
 @pytest.mark.parametrize("trigger", ["rows", "time"])
@@ -280,7 +280,7 @@ def test_checkpoint_thresholds_commit_complete_groups(monkeypatch, cohort, trigg
         if trigger == "rows"
         else ["--checkpoint_every_rows", "100", "--checkpoint_every_sec", "1"]
     )
-    cli.main(args_for(cohort, *flags))
+    register.main(args_for(cohort, *flags))
     assert len(observed) == 1
     assert len(observed[0]) == 1
 
@@ -289,7 +289,7 @@ def test_invalid_manifest_dry_run_does_not_create_outputs(cohort, tmp_path):
     manifest = tmp_path / "invalid.yaml"
     manifest.write_text("registration:\n  unknown_option: true\n")
     with pytest.raises(ValueError, match="Unknown registration"):
-        cli.main(args_for(cohort, "--manifest", str(manifest), "--dry-run"))
+        register.main(args_for(cohort, "--manifest", str(manifest), "--dry-run"))
     assert not paths_for(cohort)[0].exists()
     assert not (tmp_path / "registration").exists()
 
@@ -302,7 +302,7 @@ def test_missing_error_checkpoint_reprocesses_instead_of_losing_errors(
             yield key, None, "failure"
 
     monkeypatch.setattr(runner, "iter_group_results", fail)
-    cli.main(args_for(cohort))
+    register.main(args_for(cohort))
     paths_for(cohort)[2].error_checkpoint_path.unlink()
     seen = []
 
@@ -311,13 +311,13 @@ def test_missing_error_checkpoint_reprocesses_instead_of_losing_errors(
         yield from fail(groups, *args, **kwargs)
 
     monkeypatch.setattr(runner, "iter_group_results", track)
-    cli.main(args_for(cohort))
+    register.main(args_for(cohort))
     assert len(seen) == 2
     assert len(pd.read_csv(paths_for(cohort)[1])) == 2
 
 
 def test_qc_and_canonical_paths_survive_resume_and_qc_restoration(monkeypatch, cohort):
-    cli.main(args_for(cohort))
+    register.main(args_for(cohort))
     output, _, _ = paths_for(cohort)
     first = pd.read_csv(output)
     qc_path = output.with_name(output.stem + "_qc.csv")
@@ -333,14 +333,14 @@ def test_qc_and_canonical_paths_survive_resume_and_qc_restoration(monkeypatch, c
         yield from ()
 
     monkeypatch.setattr(runner, "iter_group_results", no_work)
-    cli.main(args_for(cohort))
+    register.main(args_for(cohort))
     second = pd.read_csv(output)
     pd.testing.assert_frame_equal(second, first)
     pd.testing.assert_frame_equal(pd.read_csv(qc_path), qc_before)
 
 
 def test_worker_failures_appear_in_qc(cohort):
-    cli.main(args_for(cohort, "--timeout_sec", "0.001"))
+    register.main(args_for(cohort, "--timeout_sec", "0.001"))
     output, _, _ = paths_for(cohort)
     qc = pd.read_csv(output.with_name(output.stem + "_qc.csv"))
     assert len(qc) == 2
@@ -351,7 +351,7 @@ def test_worker_failures_appear_in_qc(cohort):
 
 def test_custom_qc_output_and_path_collision(cohort, tmp_path):
     qc = tmp_path / "quality.csv"
-    cli.main(args_for(cohort, "--qc_csv_path", str(qc)))
+    register.main(args_for(cohort, "--qc_csv_path", str(qc)))
     assert len(pd.read_csv(qc)) == 2
     with pytest.raises(ValueError, match="differ"):
-        cli.main(args_for(cohort, "--qc_csv_path", str(cohort)))
+        register.main(args_for(cohort, "--qc_csv_path", str(cohort)))

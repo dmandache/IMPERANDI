@@ -95,7 +95,8 @@ rigid organ alignment, and optional `--affine` refinement. Default masks are
 
 Consensus methods are `anchor`, `majority`, `intersection`, `union`, and `staple`.
 CT references prefer portal venous, arterial, delayed, then native phases;
-MR prefers T1, T2, then DWI. Unlisted scans rank last; ties use stable scan IDs.
+MR prefers T1, T2, then DWI. Unlisted scans rank last; ties use deterministic
+scan ordering.
 Anchor uses the reference tumor mask when available, otherwise the next valid
 mask in priority order. Missing masks are omitted; readable empty masks vote
 negative. Every available accepted scan contributes to non-anchor fusion, so
@@ -109,8 +110,11 @@ The stage loads `generic` by default. Use `--manifest generic` for a built-in
 manifest or `--manifest dataset_configs/manifests/operandi.yaml` for a file.
 CLI `--method`, `--affine`/`--no_affine`, and `--visit_column` override manifest
 values. An optional manifest `registration` mapping accepts `visit_column`,
-`organ_column`, `tumor_column`, `method`, `affine`, `iterations`, `min_dice`,
-`threshold`, and `reference_priority`. The latter maps CT/MR to ordered lists
+`organ_column`, `tumor_column`, `method`, `affine`, `affine_min_dice`,
+`iterations`, `min_dice`, `threshold`, and `reference_priority`. Affine
+refinement runs only when enabled and the best PCA/rigid organ Dice is at least
+`affine_min_dice` (default 0.9). Otherwise QC records `skipped_low_dice` and
+retains the best preceding transform. `reference_priority` maps CT/MR to ordered lists
 of column/value selectors, such as `CT: [{phase: PORTAL_VENOUS}]` or
 `MR: [{mri_sequence: T1}]`. Defaults are 100 iterations, minimum organ Dice 0.1,
 and threshold 0.5. These initial QC settings require dataset validation.
@@ -132,7 +136,7 @@ masks, coverage, probabilities, and both transform directions.
 `reg_reference_to_scan_path` maps reference points to native scan points for
 resampling onto the reference grid; its inverse transfers reference masks back.
 
-`<output_stem>_qc.csv` contains one row per scan, including failures, with organ
+`registration_qc.csv` contains one row per scan, including failures, with organ
 `dice_baseline`, `dice_pca`, `dice_rigid`, `dice_affine`, and `dice_selected`.
 Candidate scores are retained even when a simpler stage wins; unexecuted or
 failed optimizations have blank Dice and explicit stage status. Reference scans
@@ -144,16 +148,19 @@ boundaries and reconstructed on resume if the final table is missing.
 
 Each group also has `qc.csv`, `group.json`, and a structured `registration.jsonl`
 log, linked by `registration_qc_path`, `registration_report_path`, and
-`registration_log_path`. Logs identify scans, references, stage scores/statuses,
-and output paths. Global errors remain in `<output_stem>_errors.csv`; timeouts
+`registration_log_path`. Console and JSONL logs identify groups by patient ID,
+date, visit order, configured visit value, and modality. Scan events add series,
+phase/sequence, and filename, along with references, stage scores/statuses, and
+output paths. Internal IDs stay in tables and reports for audit and resume.
+Global errors remain in `registration_errors.csv`; timeouts
 and other worker failures also appear in the global QC table.
 
 The command checkpoints complete visit/modality groups and resumes by default.
-It fingerprints the input CSV, referenced images/masks, resolved manifest, and
-algorithm settings. Each reused group must also have unchanged output artifacts.
+It tracks changes to the input CSV, referenced images/masks, resolved manifest,
+and algorithm settings. Each reused group must also have unchanged output artifacts.
 Deleting or modifying a group's outputs reruns that group; changed input data or
-settings invalidate the run. `--strict_resume` hashes file contents, including
-referenced images, masks, and outputs. Failed groups remain recorded on resume;
+settings invalidate the run. `--strict_resume` verifies referenced image, mask,
+and output contents rather than relying only on file metadata. Failed groups remain recorded on resume;
 use `--retry_failed` to retry them, or `--force`/`--no_resume` to recompute all groups.
 Fresh work gets separate artifact directories; native inputs remain unchanged.
 
