@@ -88,13 +88,33 @@ def prepare_cohort(table: pd.DataFrame, config) -> pd.DataFrame:
         raise ValueError("Duplicate scan identity in registration input")
 
     df["registration_scan_id"] = scan_ids
+    df["registration_group_id"] = [
+        stable_id(
+            (str(row.patient_key), str(row[config.visit_column]), modalities[index])
+        )
+        for index, row in df.iterrows()
+    ]
+    df["registration_group_label"] = [
+        group_label(row, config.visit_column) for _, row in df.iterrows()
+    ]
+    df["registration_series_number"] = None
+    df["registration_group_size"] = None
+    for _, group in df.groupby("registration_group_id", sort=False):
+        modality = modalities.loc[group.index[0]]
+        priorities = config.reference_priority.get(modality, [])
+        ordered = sorted(
+            group.index,
+            key=lambda index: reference_rank(df.loc[index], priorities),
+        )
+        for position, index in enumerate(ordered, start=1):
+            df.at[index, "registration_series_number"] = position
+            df.at[index, "registration_group_size"] = len(group)
     df["registration_scan_label"] = [
         scan_label(row, config.visit_column) for _, row in df.iterrows()
     ]
 
     derived_columns = [
         "registration_report_path",
-        "registration_group_label",
         "registration_qc_path",
         "registration_log_path",
         *QC_FIELDS,
@@ -117,13 +137,4 @@ def prepare_cohort(table: pd.DataFrame, config) -> pd.DataFrame:
     for column in derived_columns:
         df[column] = pd.Series([None] * len(df), dtype=object)
 
-    df["registration_group_id"] = [
-        stable_id(
-            (str(row.patient_key), str(row[config.visit_column]), modalities[index])
-        )
-        for index, row in df.iterrows()
-    ]
-    df["registration_group_label"] = [
-        group_label(row, config.visit_column) for _, row in df.iterrows()
-    ]
     return df

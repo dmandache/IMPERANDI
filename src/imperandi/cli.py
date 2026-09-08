@@ -193,7 +193,6 @@ def _handle_register(args: argparse.Namespace) -> int:
     from imperandi.process.registration import register as registration_module
 
     args = registration_module.normalize_registration_args(args)
-    _log_script_namespace(registration_module.__file__, args)
     try:
         registration_module.main(args)
     except RuntimeError as exc:
