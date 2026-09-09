@@ -138,49 +138,48 @@ def initialize_pca(fixed, moving):
 
 
 def elastic_refine(fixed, moving, fixed_dm, moving_dm, initial, config):
-    """Refine a fixed-to-moving mapping with a cubic B-spline deformation.
+    """Refine a fixed-to-moving mapping with Fast Symmetric Forces Demons.
 
     SimpleITK resampling transforms map output points to input points. The
     returned composite therefore maps the reference (``fixed``) space into the
     scan (``moving``) space.
     """
     sitk = backend()
-    physical_lengths = [
-        max(1.0, (size - 1) * spacing)
-        for size, spacing in zip(fixed_dm.GetSize(), fixed_dm.GetSpacing())
-    ]
-    mesh_size = [
-        max(1, int(round(length / config.bspline_ctrl_spacing_mm)))
-        for length in physical_lengths
-    ]
-    bspline = sitk.BSplineTransformInitializer(fixed_dm, mesh_size, order=3)
-    registration = sitk.ImageRegistrationMethod()
-    registration.SetMetricAsMeanSquares()
-    registration.SetInterpolator(sitk.sitkLinear)
-    registration.SetOptimizerAsGradientDescentLineSearch(
-        learningRate=1.0,
-        numberOfIterations=config.iterations,
-        convergenceMinimumValue=1e-3,
-        convergenceWindowSize=5,
+    # Demons requires a shared grid. Prewarp by the selected linear transform
+    # and estimate a residual deformation in reference space. Outside the
+    # moving crop, use the positive distance band (background), not zero.
+    aligned_dm = sitk.Resample(
+        moving_dm,
+        fixed_dm,
+        initial,
+        sitk.sitkLinear,
+        float(config.distance_band_mm),
+        sitk.sitkFloat32,
     )
-    registration.SetOptimizerScalesFromPhysicalShift()
-    registration.SetShrinkFactorsPerLevel([2, 1])
-    registration.SetSmoothingSigmasPerLevel([1, 0])
-    registration.SmoothingSigmasAreSpecifiedInPhysicalUnitsOn()
-    registration.SetMovingInitialTransform(initial)
-    registration.SetInitialTransform(bspline, inPlace=True)
-    registration.Execute(fixed_dm, moving_dm)
+    registration = sitk.FastSymmetricForcesDemonsRegistrationFilter()
+    registration.SetNumberOfIterations(config.iterations)
+    registration.SetSmoothDisplacementField(True)
+    registration.SetStandardDeviations(
+        [
+            config.demons_smoothing_sigma_mm / spacing
+            for spacing in fixed_dm.GetSpacing()
+        ]
+    )
+    field = registration.Execute(sitk.Cast(fixed_dm, sitk.sitkFloat32), aligned_dm)
+    if not np.isfinite(sitk.GetArrayViewFromImage(field)).all():
+        raise ValueError("Nonfinite elastic displacement field")
 
     composite = sitk.CompositeTransform(3)
     composite.AddTransform(initial)
-    composite.AddTransform(bspline)
+    # Composite transforms apply the last transform first: initial(residual(p)).
+    composite.AddTransform(sitk.DisplacementFieldTransform(field))
     if not np.isfinite(composite.GetParameters()).all():
         raise ValueError("Nonfinite elastic transform")
     return composite, registration
 
 
 def invert_elastic(transform, fixed, moving):
-    """Validate and numerically invert an elastic transform on the moving grid."""
+    """Validate and invert the linear-plus-Demons reference-to-scan mapping."""
     sitk = backend()
 
     # Validate topology before accepting the deformation. Folded fields cannot
@@ -196,11 +195,22 @@ def invert_elastic(transform, fixed, moving):
     jacobian = sitk.GetArrayFromImage(sitk.DisplacementFieldJacobianDeterminant(field))
     if not np.isfinite(jacobian).all() or np.min(jacobian) <= 0:
         raise ValueError("Elastic transform contains a fold")
-    inverse_filter = sitk.InverseDisplacementFieldImageFilter()
-    inverse_filter.SetReferenceImage(moving)
-    inverse_filter.SetSubsamplingFactor(4)
-    inverse_field = inverse_filter.Execute(field)
-    return sitk.DisplacementFieldTransform(inverse_field)
+    # Invert the residual on its own grid, preserving its direction cosines,
+    # and invert the linear part exactly. For T = linear(residual(p)),
+    # T^-1 = residual^-1(linear^-1(p)).
+    linear = transform.GetNthTransform(0)
+    residual = sitk.DisplacementFieldTransform(transform.GetNthTransform(1))
+    inverse_field = sitk.InvertDisplacementField(
+        residual.GetDisplacementField(),
+        maximumNumberOfIterations=100,
+        enforceBoundaryCondition=False,
+    )
+    if not np.isfinite(sitk.GetArrayViewFromImage(inverse_field)).all():
+        raise ValueError("Nonfinite inverse elastic displacement field")
+    inverse = sitk.CompositeTransform(3)
+    inverse.AddTransform(sitk.DisplacementFieldTransform(inverse_field))
+    inverse.AddTransform(linear.GetInverse())
+    return inverse
 
 
 @dataclass
@@ -405,8 +415,15 @@ def register_pair(fixed_organ, moving_organ, config):
                 dice=candidate_score,
                 input_dice=score,
                 selected=False,
-                optimizer_stop=registration.GetOptimizerStopConditionDescription(),
-                optimizer_iteration=int(registration.GetOptimizerIteration()),
+                optimizer_stop=(
+                    "maximum_iterations"
+                    if registration.GetElapsedIterations() >= config.iterations
+                    else "rms_convergence"
+                ),
+                optimizer_iteration=int(registration.GetElapsedIterations()),
+                metric=float(registration.GetMetric()),
+                rms_change=float(registration.GetRMSChange()),
+                algorithm="FastSymmetricForcesDemonsRegistrationFilter",
             )
             candidate_inverse = None
             if candidate_score > score + DICE_TOLERANCE:

@@ -189,10 +189,10 @@ def test_config_rejects_unknown():
         RegistrationConfig.from_mapping({"afine": True})
 
 
-@pytest.mark.parametrize("value", [0, -1, float("inf"), True])
-def test_bspline_spacing_is_positive_and_finite(value):
-    with pytest.raises(ValueError, match="B-spline spacing"):
-        RegistrationConfig(bspline_ctrl_spacing_mm=value)
+@pytest.mark.parametrize("value", [0, -1, float("inf"), float("nan"), True])
+def test_demons_smoothing_is_positive_and_finite(value):
+    with pytest.raises(ValueError, match="Demons smoothing sigma"):
+        RegistrationConfig(demons_smoothing_sigma_mm=value)
 
 
 def test_cli(tmp_path):
@@ -434,17 +434,70 @@ def test_worse_stage_falls_back_to_previous_best(
     assert result.stages[selected_stage]["selected"] is True
 
 
+def test_demons_preserves_initial_transform_on_different_grids(tmp_path):
+    fixed = organ()
+    moving = sitk.Image(fixed)
+    shift = (4.0, -3.0, 2.0)
+    moving.SetOrigin(tuple(np.array(fixed.GetOrigin()) + shift))
+    initial = sitk.AffineTransform(3)
+    initial.SetTranslation(shift)
+    fixed_dm = organ_registration.distance_map(fixed, padding_mm=5, band_mm=15)
+    moving_dm = organ_registration.distance_map(moving, padding_mm=10, band_mm=15)
+
+    transform, demons = organ_registration.elastic_refine(
+        fixed, moving, fixed_dm, moving_dm, initial, RegistrationConfig(iterations=5)
+    )
+
+    assert demons.GetName() == "FastSymmetricForcesDemonsRegistrationFilter"
+    assert np.allclose(demons.GetStandardDeviations(), 1 / np.array(fixed.GetSpacing()))
+    assert organ_registration.dice(fixed, moving, transform) == 1
+    point = fixed.TransformIndexToPhysicalPoint((15, 13, 11))
+    assert np.allclose(transform.TransformPoint(point), initial.TransformPoint(point))
+    inverse = organ_registration.invert_elastic(transform, fixed, moving)
+    assert np.allclose(
+        inverse.TransformPoint(transform.TransformPoint(point)), point, atol=0.1
+    )
+    path = tmp_path / "demons.h5"
+    sitk.WriteTransform(transform, str(path))
+    restored = sitk.ReadTransform(str(path))
+    assert np.allclose(restored.TransformPoint(point), transform.TransformPoint(point))
+
+
+def test_demons_improves_nonrigid_organ_overlap():
+    fixed = organ()
+    z, y, x = np.indices((24, 28, 32))
+    moving = image(((x - 15) / 9) ** 2 + ((y - 13) / 7) ** 2 + ((z - 11) / 4) ** 2 < 1)
+    initial = sitk.Euler3DTransform()
+    fixed_dm = organ_registration.distance_map(fixed, padding_mm=10, band_mm=15)
+    moving_dm = organ_registration.distance_map(moving, padding_mm=10, band_mm=15)
+    transform, _ = organ_registration.elastic_refine(
+        fixed, moving, fixed_dm, moving_dm, initial, RegistrationConfig(iterations=50)
+    )
+    assert organ_registration.dice(fixed, moving, transform) > organ_registration.dice(
+        fixed, moving, initial
+    )
+    inverse = organ_registration.invert_elastic(transform, fixed, moving)
+    for index in ((15, 13, 11), (20, 13, 11), (15, 17, 11)):
+        point = fixed.TransformIndexToPhysicalPoint(index)
+        assert np.allclose(
+            inverse.TransformPoint(transform.TransformPoint(point)), point, atol=0.2
+        )
+
+
 def test_elastic_stage_can_be_selected_and_retains_inverse(monkeypatch):
     values = iter([0.5, 0.6, 0.7, 0.8])
     forward = sitk.CompositeTransform(3)
     inverse = sitk.TranslationTransform(3)
 
     class Optimizer:
-        def GetOptimizerStopConditionDescription(self):
-            return "done"
+        def GetMetric(self):
+            return 0.01
 
-        def GetOptimizerIteration(self):
+        def GetElapsedIterations(self):
             return 3
+
+        def GetRMSChange(self):
+            return 0.001
 
     monkeypatch.setattr(
         organ_registration,
