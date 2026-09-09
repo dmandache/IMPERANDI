@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 import yaml
 
-from imperandi.process.registration import execution, register, runner
+from imperandi.process.registration import register, runtime
 from imperandi.process.registration.config import RegistrationConfig
 from imperandi.utils.run_state import build_checkpoint_paths
 
@@ -41,9 +41,7 @@ def cohort(tmp_path):
 
 
 def args_for(source, *flags):
-    return register.build_parser().parse_args(
-        [str(source), "--timeout_sec", "0", *flags]
-    )
+    return register.build_parser().parse_args([str(source), "--timeout_sec", "0", *flags])
 
 
 def paths_for(source):
@@ -83,9 +81,7 @@ def test_cli_overrides_manifest_elastic_setting(tmp_path, cohort):
         )
     )
     enabled, _ = register.resolve_config(
-        register.normalize_registration_args(
-            args_for(cohort, "--manifest", str(manifest))
-        )
+        register.normalize_registration_args(args_for(cohort, "--manifest", str(manifest)))
     )
     disabled, _ = register.resolve_config(
         register.normalize_registration_args(
@@ -118,7 +114,7 @@ def test_dry_run_no_backend_or_writes(monkeypatch, cohort, tmp_path):
     def unavailable():
         raise AssertionError("Dry run must not load backend")
 
-    monkeypatch.setattr(runner, "backend", unavailable)
+    monkeypatch.setattr(runtime, "backend", unavailable)
     before = set(tmp_path.rglob("*"))
     register.main(args_for(cohort, "--dry-run"))
     assert set(tmp_path.rglob("*")) == before
@@ -134,12 +130,12 @@ def test_finished_run_skips_and_restores_missing_final_csv(monkeypatch, cohort):
         raise AssertionError("No completed group should run")
         yield
 
-    monkeypatch.setattr(runner, "iter_group_results", forbidden)
+    monkeypatch.setattr(runtime, "iter_group_results", forbidden)
     register.main(args_for(cohort))
     assert output.stat().st_mtime_ns == stat
     # Recover a deleted final table from checkpoints without processing images.
     output.unlink()
-    monkeypatch.setattr(runner, "iter_group_results", lambda *a, **k: (x for x in ()))
+    monkeypatch.setattr(runtime, "iter_group_results", lambda *a, **k: (x for x in ()))
     register.main(args_for(cohort))
     assert output.read_bytes() == original
     assert errors.exists() and paths.state_path.exists()
@@ -164,7 +160,7 @@ def test_registration_uses_shared_task_summary(caplog, cohort):
 
 
 def test_interruption_resumes_only_committed_group(monkeypatch, cohort):
-    actual = runner.iter_group_results
+    actual = runtime.iter_group_results
 
     def interrupted(groups, *args, **kwargs):
         iterator = actual(groups, *args, **kwargs)
@@ -174,7 +170,7 @@ def test_interruption_resumes_only_committed_group(monkeypatch, cohort):
         finally:
             iterator.close()
 
-    monkeypatch.setattr(runner, "iter_group_results", interrupted)
+    monkeypatch.setattr(runtime, "iter_group_results", interrupted)
     with pytest.raises(KeyboardInterrupt):
         register.main(args_for(cohort, "--checkpoint_every_rows", "100"))
     output, _, paths = paths_for(cohort)
@@ -188,7 +184,7 @@ def test_interruption_resumes_only_committed_group(monkeypatch, cohort):
         observed.extend(key for key, _ in groups)
         yield from actual(groups, *args, **kwargs)
 
-    monkeypatch.setattr(runner, "iter_group_results", tracking)
+    monkeypatch.setattr(runtime, "iter_group_results", tracking)
     register.main(args_for(cohort))
     assert len(observed) == 1
     assert observed[0] not in state["completed_indices"]
@@ -205,14 +201,14 @@ def test_missing_artifact_recomputes_only_affected_group(monkeypatch, cohort, mu
         artifact.unlink()
     else:
         artifact.write_bytes(artifact.read_bytes() + b"modified")
-    actual = runner.iter_group_results
+    actual = runtime.iter_group_results
     observed = []
 
     def tracking(groups, *args, **kwargs):
         observed.extend(key for key, _ in groups)
         yield from actual(groups, *args, **kwargs)
 
-    monkeypatch.setattr(runner, "iter_group_results", tracking)
+    monkeypatch.setattr(runtime, "iter_group_results", tracking)
     register.main(args_for(cohort))
     second = pd.read_csv(output)
     assert observed == [first.loc[0, "registration_group_id"]]
@@ -239,14 +235,14 @@ def test_changed_inputs_and_forced_runs_recompute(
         manifest.write_text("registration:\n  method: union\n")
     else:
         flags += ["--" + change]
-    actual = runner.iter_group_results
+    actual = runtime.iter_group_results
     seen = []
 
     def tracking(groups, *args, **kwargs):
         seen.extend(key for key, _ in groups)
         yield from actual(groups, *args, **kwargs)
 
-    monkeypatch.setattr(runner, "iter_group_results", tracking)
+    monkeypatch.setattr(runtime, "iter_group_results", tracking)
     register.main(args_for(cohort, *flags))
     assert len(seen) == 2
 
@@ -263,18 +259,18 @@ def test_strict_resume_hashes_referenced_inputs_and_artifacts(cohort):
 
 
 def test_retry_failed_and_preserve_errors(monkeypatch, cohort):
-    real = runner.iter_group_results
+    real = runtime.iter_group_results
 
     def fail(groups, *args, **kwargs):
         for key, _ in groups:
             yield key, None, "deliberate worker failure"
 
-    monkeypatch.setattr(runner, "iter_group_results", fail)
+    monkeypatch.setattr(runtime, "iter_group_results", fail)
     register.main(args_for(cohort))
     output, errors, _ = paths_for(cohort)
     assert len(pd.read_csv(errors)) == 2
     assert pd.read_csv(output).registration_status.eq("failed").all()
-    monkeypatch.setattr(runner, "iter_group_results", real)
+    monkeypatch.setattr(runtime, "iter_group_results", real)
     register.main(args_for(cohort))
     assert len(pd.read_csv(errors)) == 2
     register.main(args_for(cohort, "--retry_failed"))
@@ -292,12 +288,12 @@ def test_real_spawn_workers(cohort):
 def test_hard_timeout_is_recorded(cohort):
     # Startup itself takes longer than this; verify timed-out processes cannot
     # subsequently publish successful rows or leave active children.
-    before = {p.pid for p in execution.mp.active_children()}
+    before = {p.pid for p in runtime.mp.active_children()}
     register.main(args_for(cohort, "--timeout_sec", "0.001", "--num_workers", "2"))
     output, errors, _ = paths_for(cohort)
     assert pd.read_csv(output).registration_status.eq("failed").all()
     assert pd.read_csv(errors).error.str.contains("timeout").all()
-    assert {p.pid for p in execution.mp.active_children()} == before
+    assert {p.pid for p in runtime.mp.active_children()} == before
 
 
 @pytest.mark.parametrize(
@@ -318,7 +314,7 @@ def test_checkpoint_thresholds_commit_complete_groups(monkeypatch, cohort, trigg
     # The shared manager reads time.time through now_epoch; its elapsed clock is
     # advanced after the first group, before the parent checks checkpoint limits.
     monkeypatch.setattr(run_state.time, "time", lambda: clock[0])
-    real = runner.iter_group_results
+    real = runtime.iter_group_results
     observed = []
 
     def tracking(groups, *args, **kwargs):
@@ -333,7 +329,7 @@ def test_checkpoint_thresholds_commit_complete_groups(monkeypatch, cohort, trigg
         finally:
             iterator.close()
 
-    monkeypatch.setattr(runner, "iter_group_results", tracking)
+    monkeypatch.setattr(runtime, "iter_group_results", tracking)
     flags = (
         ["--checkpoint_every_rows", "1", "--checkpoint_every_sec", "100"]
         if trigger == "rows"
@@ -360,7 +356,7 @@ def test_missing_error_checkpoint_reprocesses_instead_of_losing_errors(
         for key, _ in groups:
             yield key, None, "failure"
 
-    monkeypatch.setattr(runner, "iter_group_results", fail)
+    monkeypatch.setattr(runtime, "iter_group_results", fail)
     register.main(args_for(cohort))
     paths_for(cohort)[2].error_checkpoint_path.unlink()
     seen = []
@@ -369,7 +365,7 @@ def test_missing_error_checkpoint_reprocesses_instead_of_losing_errors(
         seen.extend(groups)
         yield from fail(groups, *args, **kwargs)
 
-    monkeypatch.setattr(runner, "iter_group_results", track)
+    monkeypatch.setattr(runtime, "iter_group_results", track)
     register.main(args_for(cohort))
     assert len(seen) == 2
     assert len(pd.read_csv(paths_for(cohort)[1])) == 2
@@ -392,7 +388,7 @@ def test_qc_and_canonical_paths_survive_resume_and_qc_restoration(monkeypatch, c
         assert not groups
         yield from ()
 
-    monkeypatch.setattr(runner, "iter_group_results", no_work)
+    monkeypatch.setattr(runtime, "iter_group_results", no_work)
     register.main(args_for(cohort))
     second = pd.read_csv(output)
     pd.testing.assert_frame_equal(second, first)

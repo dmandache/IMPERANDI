@@ -1,6 +1,8 @@
-"""Cohort orchestration; backend and consensus functions are replaceable interfaces."""
+"""Cohort preparation, organ alignment, tumor fusion, and artifact publication."""
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -10,31 +12,270 @@ import uuid
 import numpy as np
 import pandas as pd
 
-from .artifacts import write_artifact
-from .config import REGISTRATION_STAGES, RegistrationConfig
-from .consensus import fuse_tumors
-from .completeness import (
+from .config import (
+    CONSENSUS_METHODS,
+    REGISTRATION_STAGES,
+    SUPPORTED_MODALITIES,
+    RegistrationConfig,
+)
+from .alignment import (
     assess_organ_mask,
+    backend,
     coverage_image,
+    dice,
     overlap_qc,
+    read_image,
+    read_mask,
+    register_pair,
     registration_confidence,
+    resample,
 )
-from .grouping import (
-    normalize_modalities,
-    prepare_cohort,
-    reference_rank,
-)
-from .labels import group_label, scan_label
-from .organ import backend, dice, read_image, read_mask, register_pair, resample
-from .qc import (
+from .reporting import (
     ERROR_COLUMNS,
+    QC_FIELDS,
     build_error_record,
+    group_label,
+    scan_label,
     publish_group_log,
     record_stages,
     record_organ_qc,
 )
 
 logger = logging.getLogger(__name__)
+
+
+OBSOLETE_ARTIFACT_COLUMNS = (
+    "registration_report_path",
+    "reg_reference_to_scan_path",
+    "reg_scan_to_reference_path",
+    "reg_tumor_common_path",
+    "reg_tumor_coverage_common_path",
+    "reg_tumor_coverage_native_path",
+    "reg_tumor_probability_common_path",
+    "reg_tumor_probability_native_path",
+    "reg_nifti_path",
+    "reg_organ_path",
+)
+
+
+def stable_id(value) -> str:
+    """Return a filesystem-safe, deterministic identifier for structured values."""
+    payload = json.dumps(value, sort_keys=True, default=str).encode()
+    return hashlib.sha256(payload).hexdigest()[:20]
+
+
+def normalize_label(value) -> str:
+    return "" if pd.isna(value) else str(value).strip().upper()
+
+
+def normalize_modalities(table: pd.DataFrame) -> pd.Series:
+    """Normalize supported modality labels without changing source columns."""
+    return table.Modality.map(normalize_label).replace({"MRI": "MR"})
+
+
+def reference_rank(row, priorities) -> tuple[int, str]:
+    """Rank a reference candidate using configured selectors and a stable tie-break."""
+    rank = next(
+        (
+            index
+            for index, selector in enumerate(priorities)
+            if all(
+                normalize_label(row.get(key)) == normalize_label(value)
+                for key, value in selector.items()
+            )
+        ),
+        len(priorities),
+    )
+    return rank, str(row["registration_scan_id"])
+
+
+def prepare_cohort(table: pd.DataFrame, config) -> pd.DataFrame:
+    """Validate identities and initialize registration output columns."""
+    df = table.drop(columns=OBSOLETE_ARTIFACT_COLUMNS, errors="ignore").reset_index(
+        drop=True
+    )
+
+    # Source columns remain authoritative across repeated registration runs.
+    for column in (config.organ_column, config.tumor_column):
+        source = f"source_{column}"
+        if source not in df:
+            if column == config.organ_column and column not in df:
+                continue
+            df[source] = df[column] if column in df else None
+        df[column] = df[source].astype(object)
+
+    required = [
+        "patient_key",
+        config.visit_column,
+        "Modality",
+        "nifti_path",
+        config.organ_column,
+    ]
+    missing = set(required) - set(df.columns)
+    if missing:
+        raise ValueError(f"Missing registration columns: {sorted(missing)}")
+    for column in ["patient_key", config.visit_column, "Modality", "nifti_path"]:
+        if df[column].isna().any() or df[column].astype(str).str.strip().eq("").any():
+            raise ValueError(f"Missing registration identity: {column}")
+
+    modalities = normalize_modalities(df)
+    if not modalities.isin(SUPPORTED_MODALITIES).all():
+        raise ValueError("Registration supports CT and MR only")
+
+    identities = [
+        [
+            str(row.patient_key),
+            str(row[config.visit_column]),
+            modalities[index],
+            str(Path(row.nifti_path).expanduser().resolve()),
+        ]
+        for index, row in df.iterrows()
+    ]
+    scan_ids = [stable_id(identity) for identity in identities]
+    if len(scan_ids) != len(set(scan_ids)):
+        raise ValueError("Duplicate scan identity in registration input")
+
+    df["registration_scan_id"] = scan_ids
+    df["registration_group_id"] = [
+        stable_id(
+            (str(row.patient_key), str(row[config.visit_column]), modalities[index])
+        )
+        for index, row in df.iterrows()
+    ]
+    df["registration_group_label"] = [
+        group_label(row, config.visit_column) for _, row in df.iterrows()
+    ]
+    df["registration_series_number"] = None
+    df["registration_group_size"] = None
+    for _, group in df.groupby("registration_group_id", sort=False):
+        modality = modalities.loc[group.index[0]]
+        priorities = config.reference_priority.get(modality, [])
+        ordered = sorted(
+            group.index,
+            key=lambda index: reference_rank(df.loc[index], priorities),
+        )
+        for position, index in enumerate(ordered, start=1):
+            df.at[index, "registration_series_number"] = position
+            df.at[index, "registration_group_size"] = len(group)
+    df["registration_scan_label"] = [scan_label(row) for _, row in df.iterrows()]
+
+    derived_columns = [
+        "registration_qc_path",
+        "registration_log_path",
+        *QC_FIELDS,
+        "registration_reference_id",
+        "registration_reference_label",
+        "registration_status",
+        "consensus_status",
+        "reg_tumor_native_path",
+        "reg_organ_native_path",
+    ]
+    for column in derived_columns:
+        df[column] = pd.Series([None] * len(df), dtype=object)
+
+    return df
+
+
+@dataclass
+class ConsensusResult:
+    mask: object
+    coverage: object
+    probability: object | None
+    observation_count: object | None = None
+    support_policy: str = "per_voxel"
+
+
+def fuse_tumors(masks, coverages, *, method, threshold=0.5):
+    """Fuse aligned masks with their spatial observations; anchor is first input.
+
+    Voting uses strict > threshold; STAPLE uses >= threshold. Unknown spatial
+    coverage is excluded from every estimator, and returned separately. STAPLE
+    is restricted to the intersection of observed FOVs, as its backend cannot
+    model missing observations. Native empty masks are filtered by the caller.
+    """
+    sitk = backend()
+    if method not in CONSENSUS_METHODS:
+        raise ValueError(f"Unknown consensus method: {method}")
+    if not masks or len(masks) != len(coverages):
+        raise ValueError("Consensus requires masks and matching coverage")
+    if not 0 < threshold < 1:
+        raise ValueError("threshold must be between zero and one")
+    reference = masks[0]
+    for img in [*masks, *coverages]:
+        if (img.GetSize(), img.GetOrigin(), img.GetSpacing(), img.GetDirection()) != (
+            reference.GetSize(),
+            reference.GetOrigin(),
+            reference.GetSpacing(),
+            reference.GetDirection(),
+        ):
+            raise ValueError("Consensus inputs must share one grid")
+    # Native empty-mask exclusion belongs to the pipeline. A nonempty native
+    # mask can become empty on the reference grid and still supplies negative
+    # observations inside its FOV; do not silently remove that contributor.
+    if method == "anchor":
+        masks, coverages = masks[:1], coverages[:1]
+    values = np.stack([sitk.GetArrayFromImage(m) > 0 for m in masks])
+    observations = np.stack([sitk.GetArrayFromImage(c) > 0 for c in coverages])
+    counts = observations.sum(axis=0)
+    votes = (values & observations).sum(axis=0)
+    support = counts == len(masks) if method == "staple" else counts > 0
+    if not support.any():
+        raise ValueError("Tumor inputs have no observed support for this method")
+    probability = np.divide(
+        votes, counts, out=np.zeros(counts.shape, np.float32), where=counts > 0
+    )
+    if method == "staple" and len(masks) > 1 and values[:, support].any():
+        # STAPLE's estimator is voxelwise: pack only observed samples so padding
+        # cannot affect its estimated prior or rater performance.
+        packed = [
+            sitk.GetImageFromArray(v[support].astype(np.uint8)[None, :]) for v in values
+        ]
+        estimator = sitk.STAPLEImageFilter()
+        estimator.SetForegroundValue(1)
+        estimator.SetMaximumIterations(100)
+        estimated = sitk.GetArrayFromImage(estimator.Execute(packed)).ravel()
+        if not np.isfinite(estimated).all():
+            raise ValueError("STAPLE produced nonfinite probabilities")
+        probability = np.zeros(support.shape, np.float32)
+        probability[support] = estimated
+        binary = probability >= threshold
+    elif method in {"majority", "staple"}:
+        binary = (
+            probability > threshold
+            if method == "majority"
+            else probability >= threshold
+        )
+    elif method == "intersection":
+        binary = (votes == counts) & (counts > 0)
+    else:
+        binary = votes > 0
+
+    def image(array, dtype):
+        out = sitk.GetImageFromArray(array.astype(dtype))
+        out.CopyInformation(reference)
+        return out
+
+    return ConsensusResult(
+        image(binary & support, np.uint8),
+        image(support, np.uint8),
+        image(probability * support, np.float32),
+        image(counts, np.uint32),
+        "common_fov_only" if method == "staple" else "per_voxel",
+    )
+
+
+def write_artifact(image, path) -> str:
+    """Write an image atomically and return its absolute path."""
+    sitk = backend()
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(f".{uuid.uuid4().hex}.{destination.name}")
+    try:
+        sitk.WriteImage(image, str(temporary))
+        temporary.replace(destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return str(destination.resolve())
 
 
 def _missing_file(path):

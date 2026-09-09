@@ -7,10 +7,10 @@ import pandas as pd
 import pytest
 
 from imperandi.process.registration import RegistrationConfig, register_cohort
-from imperandi.process.registration import organ as organ_registration
-from imperandi.process.registration.consensus import fuse_tumors
-from imperandi.process.registration.organ import register_pair
-from imperandi.process.registration.qc import build_qc
+from imperandi.process.registration import alignment
+from imperandi.process.registration.cohort import fuse_tumors
+from imperandi.process.registration.alignment import register_pair
+from imperandi.process.registration.reporting import build_qc
 
 sitk = pytest.importorskip("SimpleITK")
 
@@ -408,13 +408,13 @@ def test_worse_stage_falls_back_to_previous_best(
 ):
     values = iter(scores)
     monkeypatch.setattr(
-        organ_registration,
+        alignment,
         "initialize_pca",
         lambda fixed, moving: sitk.Euler3DTransform(),
     )
-    monkeypatch.setattr(organ_registration, "dice", lambda *args: next(values))
+    monkeypatch.setattr(alignment, "dice", lambda *args: next(values))
 
-    result = organ_registration.register_pair(
+    result = alignment.register_pair(
         organ(),
         organ(),
         RegistrationConfig(
@@ -441,19 +441,19 @@ def test_demons_preserves_initial_transform_on_different_grids(tmp_path):
     moving.SetOrigin(tuple(np.array(fixed.GetOrigin()) + shift))
     initial = sitk.AffineTransform(3)
     initial.SetTranslation(shift)
-    fixed_dm = organ_registration.distance_map(fixed, padding_mm=5, band_mm=15)
-    moving_dm = organ_registration.distance_map(moving, padding_mm=10, band_mm=15)
+    fixed_dm = alignment.distance_map(fixed, padding_mm=5, band_mm=15)
+    moving_dm = alignment.distance_map(moving, padding_mm=10, band_mm=15)
 
-    transform, demons = organ_registration.elastic_refine(
-        fixed, moving, fixed_dm, moving_dm, initial, RegistrationConfig(iterations=5)
+    transform, demons = alignment.elastic_refine(
+        fixed_dm, moving_dm, initial, RegistrationConfig(iterations=5)
     )
 
     assert demons.GetName() == "FastSymmetricForcesDemonsRegistrationFilter"
     assert np.allclose(demons.GetStandardDeviations(), 1 / np.array(fixed.GetSpacing()))
-    assert organ_registration.dice(fixed, moving, transform) == 1
+    assert alignment.dice(fixed, moving, transform) == 1
     point = fixed.TransformIndexToPhysicalPoint((15, 13, 11))
     assert np.allclose(transform.TransformPoint(point), initial.TransformPoint(point))
-    inverse = organ_registration.invert_elastic(transform, fixed, moving)
+    inverse = alignment.invert_elastic(transform, fixed)
     assert np.allclose(
         inverse.TransformPoint(transform.TransformPoint(point)), point, atol=0.1
     )
@@ -468,15 +468,15 @@ def test_demons_improves_nonrigid_organ_overlap():
     z, y, x = np.indices((24, 28, 32))
     moving = image(((x - 15) / 9) ** 2 + ((y - 13) / 7) ** 2 + ((z - 11) / 4) ** 2 < 1)
     initial = sitk.Euler3DTransform()
-    fixed_dm = organ_registration.distance_map(fixed, padding_mm=10, band_mm=15)
-    moving_dm = organ_registration.distance_map(moving, padding_mm=10, band_mm=15)
-    transform, _ = organ_registration.elastic_refine(
-        fixed, moving, fixed_dm, moving_dm, initial, RegistrationConfig(iterations=50)
+    fixed_dm = alignment.distance_map(fixed, padding_mm=10, band_mm=15)
+    moving_dm = alignment.distance_map(moving, padding_mm=10, band_mm=15)
+    transform, _ = alignment.elastic_refine(
+        fixed_dm, moving_dm, initial, RegistrationConfig(iterations=50)
     )
-    assert organ_registration.dice(fixed, moving, transform) > organ_registration.dice(
+    assert alignment.dice(fixed, moving, transform) > alignment.dice(
         fixed, moving, initial
     )
-    inverse = organ_registration.invert_elastic(transform, fixed, moving)
+    inverse = alignment.invert_elastic(transform, fixed)
     for index in ((15, 13, 11), (20, 13, 11), (15, 17, 11)):
         point = fixed.TransformIndexToPhysicalPoint(index)
         assert np.allclose(
@@ -500,17 +500,17 @@ def test_elastic_stage_can_be_selected_and_retains_inverse(monkeypatch):
             return 0.001
 
     monkeypatch.setattr(
-        organ_registration,
+        alignment,
         "initialize_pca",
         lambda fixed, moving: sitk.Euler3DTransform(),
     )
-    monkeypatch.setattr(organ_registration, "dice", lambda *args: next(values))
+    monkeypatch.setattr(alignment, "dice", lambda *args: next(values))
     monkeypatch.setattr(
-        organ_registration,
+        alignment,
         "elastic_refine",
         lambda *args: (forward, Optimizer()),
     )
-    monkeypatch.setattr(organ_registration, "invert_elastic", lambda *args: inverse)
+    monkeypatch.setattr(alignment, "invert_elastic", lambda *args: inverse)
     result = register_pair(
         organ(),
         organ(),
@@ -729,7 +729,7 @@ def test_logs_identify_groups_with_human_attributes(tmp_path, caplog):
 
 
 def test_scan_labels_number_series_within_each_group():
-    from imperandi.process.registration.grouping import prepare_cohort
+    from imperandi.process.registration.cohort import prepare_cohort
 
     rows = [
         {
@@ -763,7 +763,7 @@ def test_scan_labels_number_series_within_each_group():
 
 
 def test_rejected_pair_keeps_qc_and_original_canonical_paths(tmp_path):
-    from imperandi.process.registration.organ import (
+    from imperandi.process.registration.alignment import (
         RegistrationRejected,
         TransformResult,
     )
