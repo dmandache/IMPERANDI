@@ -95,18 +95,24 @@ B-spline refinement. Default masks are
 `mask_liver` and `mask_liver_tumor`; masks must match their native image geometry.
 
 Consensus methods are `anchor`, `majority`, `intersection`, `union`, and `staple`.
-CT references prefer portal venous, arterial, delayed, then native phases;
+Valid complete organs take reference priority over partial organs. Within each
+completeness class, CT references prefer portal venous, arterial, delayed, then native phases;
 MR prefers T1, T2, then DWI. Unlisted scans rank last; ties use deterministic
 scan ordering.
 Anchor uses the reference tumor mask when available, otherwise the next valid
 mask in priority order. Missing, nonexistent, and empty masks are omitted.
-Every available nonempty mask contributes to non-anchor fusion, so
+Every eligible nonempty mask contributes to non-anchor fusion, so
 select independent sequences/phases upstream to avoid duplicate reconstruction
-votes. Whole-volume annotations are assumed. Fusion is limited to common
-observed coverage; outside-coverage zeros are unknown. Majority computes vote
-fractions and uses `> 0.5` (ties negative); STAPLE computes estimated
-probabilities and uses `>= 0.5`. Coverage and probability images remain
-in-memory intermediates.
+votes. Whole-FOV annotations are assumed. For majority, union, and intersection,
+each voxel uses only contributors observing that location: probability is tumor
+votes divided by observed contributors. Majority uses `> threshold` (ties at 0.5
+are negative); union needs one positive vote; intersection needs every observed
+vote positive. No observations means unknown, never a negative vote.
+STAPLE cannot model missing observations with this backend: it is restricted to
+the common FOV of all contributors and uses `>= threshold`. No common support
+produces an explicit consensus error. Coverage, observation counts, and
+probability images remain in memory. Fusion is limited to the reference grid;
+if all scans are partial, anatomy outside that grid cannot be reconstructed.
 
 The stage loads `generic` by default. Use `--manifest generic` for a built-in
 manifest or `--manifest dataset_configs/manifests/operandi.yaml` for a file.
@@ -120,7 +126,9 @@ refinement runs only when enabled and the best PCA/rigid organ Dice is at least
 `affine_min_dice` (default 0.9). Otherwise QC records `skipped_low_dice` and
 retains the best preceding transform. Elastic refinement uses a cubic B-spline
 whose approximate control-point spacing defaults to 90 mm. Its displacement
-field must remain fold-free and numerically invertible. Every PCA, rigid,
+field must remain fold-free and numerically invertible. Elastic also requires
+best linear Dice >= `elastic_min_dice` (default 0.7), using common-FOV Dice for
+partial masks. Every PCA, rigid,
 affine, and elastic candidate is
 compared with the best preceding Dice; a worse candidate is rejected and QC
 records `rejected_worse_dice` with its fallback stage. `reference_priority` maps CT/MR to ordered lists
@@ -131,6 +139,31 @@ and threshold 0.5. These initial QC settings require dataset validation.
 Series with a missing or empty organ mask are excluded from their registration
 group and recorded as `skipped`; they do not produce error-table rows. Unreadable
 or otherwise invalid masks remain failures.
+
+Anatomical QC is separate from geometry/format validation. It records physical
+volume (mm³), foreground bounding box (index start/size in x/y/z), boundary
+contact (low/high per image axis), and the largest face-connected component's
+fraction. Foreground within `boundary_margin_mm` (default 1 mm) of an FOV edge
+is considered potentially partial. This is a heuristic: no edge contact does
+not prove completeness, and anatomical defects away from the edge may escape it.
+Fewer than four voxels, an all-foreground FOV, or largest-component fraction
+below `min_largest_component_fraction` (0.8) yield `invalid_organ_mask`.
+
+`allow_partial_organs: true` permits partial masks; false excludes them.
+With `partial_mask_pca: false` (default), partial pairs use physical identity
+or geometry translation instead of shape moments. Both full/reference-grid
+Dice and common-FOV Dice are retained. Partial stage selection and `min_dice`
+rejection use common-FOV Dice; complete pairs retain full Dice. The fixed/moving
+volume ratio is diagnostic, never sufficient evidence of successful alignment.
+
+Accepted overlap below `min_confidence_dice` (0.5), common-FOV fraction below
+`min_common_fov_fraction` (0.05 of reference voxels), or fewer than four summed
+foreground voxels in common support yields `low_confidence`. Reliable pairs
+are `ok` or `ok_partial_coverage`; errors/rejected pairs are `failed`.
+References retain the legacy `reference` status and expose confidence separately.
+Low-confidence, invalid, and failed registrations do not contribute to or receive
+consensus. These thresholds are conservative starting points and need validation
+for the dataset and organ; none establish clinical segmentation quality.
 
 `nifti_path` always points to the original scan. Registration writes new NIfTI
 files and never modifies the original masks. In the output CSV, successful
@@ -151,6 +184,11 @@ in-memory intermediates.
 `register_qc.csv` contains one row per scan, including failures, with organ
 `dice_baseline`, `dice_pca`, `dice_rigid`, `dice_affine`, `dice_elastic`, and
 `dice_selected`.
+Additional `registration_*` fields include organ completeness/QC, volume ratio,
+`dice_full`, `dice_common_fov`, common-FOV fraction, confidence, consensus
+contributor/exclusion counts and reasons, and support policy. The same fields
+appear under `anatomical_qc` in structured scan logs. Stage details include both
+Dice metrics and the selection metric; `geometry` records partial initialization.
 When both the reference and moving tumor masks are available, corresponding
 `tumor_dice_*` fields provide diagnostic overlap without influencing transform
 selection.
