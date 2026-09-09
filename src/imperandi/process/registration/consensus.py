@@ -15,7 +15,7 @@ class ConsensusResult:
 
 
 def fuse_tumors(masks, coverages, *, method, threshold=0.5):
-    """Anchor is first input. Missing masks must be omitted, empty masks retained.
+    """Fuse nonempty masks, using the first usable input as the anchor.
 
     Voting uses strict > threshold; STAPLE uses >= threshold. Unknown spatial
     coverage is excluded from every estimator, and returned separately.
@@ -36,6 +36,14 @@ def fuse_tumors(masks, coverages, *, method, threshold=0.5):
             reference.GetDirection(),
         ):
             raise ValueError("Consensus inputs must share one grid")
+    usable = [
+        (mask, coverage)
+        for mask, coverage in zip(masks, coverages)
+        if np.any(sitk.GetArrayViewFromImage(mask) > 0)
+    ]
+    if not usable:
+        raise ValueError("Consensus requires at least one nonempty tumor mask")
+    masks, coverages = map(list, zip(*usable))
     if method == "anchor":
         masks, coverages = masks[:1], coverages[:1]
     values = np.stack([sitk.GetArrayFromImage(m) > 0 for m in masks])
