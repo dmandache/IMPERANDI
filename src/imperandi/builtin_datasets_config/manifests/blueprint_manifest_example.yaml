@@ -333,7 +333,6 @@ registration:
   # Completeness heuristics; tune for the dataset and organ, not clinical cutoffs.
   boundary_margin_mm: 1.0
   allow_partial_organs: true
-  partial_mask_pca: false
   min_largest_component_fraction: 0.8
   min_confidence_dice: 0.5
   min_common_fov_fraction: 0.05

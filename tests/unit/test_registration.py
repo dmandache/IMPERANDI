@@ -83,6 +83,46 @@ def test_fusion_votes_and_ties(method, expected):
         ]
 
 
+@pytest.mark.parametrize("partial", [False, True])
+def test_geometry_precedes_pca_and_min_dice_decision(monkeypatch, partial):
+    fixed = organ()
+    if partial:
+        values = sitk.GetArrayFromImage(fixed)
+        values[:11] = 0
+        fixed = image(values)
+    moving = sitk.Image(fixed)
+    shift = np.array([100.0, -80.0, 60.0])
+    moving.SetOrigin(tuple(np.array(fixed.GetOrigin()) + shift))
+    calls = []
+    initializer = sitk.CenteredTransformInitializer
+
+    def geometry(*args):
+        calls.append("geometry")
+        assert args[-1] == sitk.CenteredTransformInitializerFilter.GEOMETRY
+        return initializer(*args)
+
+    def pca(*args):
+        calls.append("pca")
+        return sitk.Euler3DTransform()
+
+    monkeypatch.setattr(sitk, "CenteredTransformInitializer", geometry)
+    monkeypatch.setattr(alignment, "initialize_pca", pca)
+    result = register_pair(
+        fixed, moving, RegistrationConfig(iterations=1, min_dice=0.95)
+    )
+    assert result.dice_before == 0
+    assert result.dice_after == pytest.approx(1)
+    assert calls == (["geometry"] if partial else ["geometry", "pca"])
+    assert result.stage == "geometry"
+    assert result.stages["geometry"]["selected"] is True
+    assert "center_of_mass" not in result.stages
+    if partial:
+        assert result.stages["pca"]["status"] == "skipped_partial_coverage"
+    point = fixed.TransformIndexToPhysicalPoint((15, 13, 11))
+    assert np.allclose(result.reference_to_scan.TransformPoint(point), point + shift)
+    assert np.allclose(result.scan_to_reference.TransformPoint(point + shift), point)
+
+
 @pytest.mark.parametrize(
     "method", ["anchor", "majority", "intersection", "union", "staple"]
 )
@@ -406,7 +446,7 @@ def test_worse_stage_falls_back_to_previous_best(
     fallback_stage,
     selected_dice,
 ):
-    values = iter(scores)
+    values = iter([scores[0], scores[0], *scores[1:]])
     monkeypatch.setattr(
         alignment,
         "initialize_pca",
@@ -485,7 +525,7 @@ def test_demons_improves_nonrigid_organ_overlap():
 
 
 def test_elastic_stage_can_be_selected_and_retains_inverse(monkeypatch):
-    values = iter([0.5, 0.6, 0.7, 0.8])
+    values = iter([0.5, 0.5, 0.6, 0.7, 0.8])
     forward = sitk.CompositeTransform(3)
     inverse = sitk.TranslationTransform(3)
 
