@@ -41,7 +41,9 @@ def cohort(tmp_path):
 
 
 def args_for(source, *flags):
-    return register.build_parser().parse_args([str(source), "--timeout_sec", "0", *flags])
+    return register.build_parser().parse_args(
+        [str(source), "--timeout_sec", "0", *flags]
+    )
 
 
 def paths_for(source):
@@ -81,7 +83,9 @@ def test_cli_overrides_manifest_elastic_setting(tmp_path, cohort):
         )
     )
     enabled, _ = register.resolve_config(
-        register.normalize_registration_args(args_for(cohort, "--manifest", str(manifest)))
+        register.normalize_registration_args(
+            args_for(cohort, "--manifest", str(manifest))
+        )
     )
     disabled, _ = register.resolve_config(
         register.normalize_registration_args(
@@ -99,6 +103,44 @@ def test_cli_overrides_manifest_elastic_setting(tmp_path, cohort):
     assert enabled.demons_smoothing_sigma_mm == 2.0
     assert disabled.elastic is False
     assert disabled.demons_smoothing_sigma_mm == 1.5
+
+
+@pytest.mark.parametrize("entry_point", ["cli", "module"])
+@pytest.mark.parametrize("override", [False, True])
+def test_startup_log_contains_effective_manifest_settings(
+    tmp_path, cohort, caplog, entry_point, override
+):
+    from imperandi import cli
+
+    manifest = tmp_path / "logging.yaml"
+    manifest.write_text(
+        yaml.safe_dump(
+            {"registration": {"method": "majority", "elastic": True, "iterations": 17}}
+        )
+    )
+    flags = ["--manifest", str(manifest), "--dry-run"]
+    if override:
+        flags += ["--method", "union", "--no_elastic"]
+    args = args_for(cohort, *flags)
+    with caplog.at_level(logging.INFO):
+        if entry_point == "cli":
+            cli._handle_register(args)
+        else:
+            register.main(args)
+    records = [
+        r
+        for r in caplog.records
+        if "Running register.py with namespace:" in r.getMessage()
+    ]
+    assert len(records) == 1
+    logged = records[0].args[1]
+    assert logged.method == ("union" if override else "majority")
+    assert logged.elastic is not override
+    assert logged.iterations == 17
+    assert logged.min_dice == RegistrationConfig().min_dice
+    assert logged.manifest == str(manifest)
+    assert logged.csv_path == str(cohort)
+    assert not any(name.startswith("_") for name in vars(logged))
 
 
 def test_default_error_and_qc_filenames_follow_output_directory(cohort, tmp_path):

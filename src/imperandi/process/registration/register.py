@@ -1,6 +1,7 @@
 """Command-line entry point for the ``imperandi register`` stage."""
 
 import argparse
+from dataclasses import asdict
 import logging
 import multiprocessing as mp
 from pathlib import Path
@@ -8,6 +9,7 @@ from pathlib import Path
 import pandas as pd
 
 from imperandi.utils.checkpoint_cli import add_checkpoint_arguments
+from imperandi.utils.logging import log_script_namespace
 from imperandi.utils.manifest import load_manifest
 from imperandi.utils.run_state import build_checkpoint_paths
 from .config import CONSENSUS_METHODS, RegistrationConfig
@@ -219,6 +221,10 @@ def resolve_config(args):
 def main(args):
     args = normalize_registration_args(args)
     config, manifest = resolve_config(args)
+    effective_args = argparse.Namespace(
+        **{**vars(args), **asdict(config), "manifest": args.manifest or "generic"}
+    )
+    log_script_namespace(logger, __file__, effective_args)
     table = pd.read_csv(
         args.csv_path, dtype={"patient_key": str, config.visit_column: str}
     )
