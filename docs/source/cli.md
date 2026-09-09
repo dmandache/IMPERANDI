@@ -9,6 +9,11 @@ imperandi [--log-level LEVEL] [--log-file PATH] [--quiet] COMMAND [OPTIONS]
 Global options must appear before the subcommand. `--log-level` accepts normal
 Python logging levels such as `DEBUG`, `INFO`, and `WARNING`.
 
+Each stage logs its execution arguments after resolving manifest settings.
+The namespace includes the stage's effective configuration and preserves its
+documented override rules. `--dry-run` also reports resolved settings before
+processing data; `ingest` reports both its parse and clean stages.
+
 Run `imperandi COMMAND --help` for the authoritative option list in your
 installed version.
 
