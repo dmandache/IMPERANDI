@@ -6,6 +6,7 @@ from itertools import permutations, product
 import numpy as np
 
 from .config import REGISTRATION_STAGES
+from .completeness import assess_organ_mask, overlap_qc, registration_confidence
 
 DICE_TOLERANCE = 1e-6
 
@@ -94,9 +95,7 @@ def distance_map(mask, *, padding_mm, band_mm):
     distances = sitk.SignedMaurerDistanceMap(
         cropped, insideIsPositive=False, squaredDistance=False, useImageSpacing=True
     )
-    return sitk.Clamp(
-        distances, lowerBound=-float(band_mm), upperBound=float(band_mm)
-    )
+    return sitk.Clamp(distances, lowerBound=-float(band_mm), upperBound=float(band_mm))
 
 
 def _moments(mask):
@@ -194,9 +193,7 @@ def invert_elastic(transform, fixed, moving):
         fixed.GetSpacing(),
         fixed.GetDirection(),
     )
-    jacobian = sitk.GetArrayViewFromImage(
-        sitk.DisplacementFieldJacobianDeterminant(field)
-    )
+    jacobian = sitk.GetArrayFromImage(sitk.DisplacementFieldJacobianDeterminant(field))
     if not np.isfinite(jacobian).all() or np.min(jacobian) <= 0:
         raise ValueError("Elastic transform contains a fold")
     inverse_filter = sitk.InverseDisplacementFieldImageFilter()
@@ -216,6 +213,9 @@ class TransformResult:
     stages: dict = field(default_factory=dict)
     stage_transforms: dict = field(default_factory=dict, repr=False)
     scan_to_reference: object | None = field(default=None, repr=False)
+    confidence: str = "ok"
+    overlap: dict = field(default_factory=dict)
+    organ_volume_ratio: float | None = None
 
 
 class RegistrationRejected(ValueError):
@@ -245,24 +245,54 @@ def _select_candidate(
 
 def register_pair(fixed_organ, moving_organ, config):
     sitk = backend()
+    fixed_qc = assess_organ_mask(fixed_organ, config)
+    moving_qc = assess_organ_mask(moving_organ, config)
+    if "invalid" in (fixed_qc.status, moving_qc.status):
+        raise ValueError("Invalid organ mask for registration")
+    partial = fixed_qc.partial or moving_qc.partial
+    if partial and not config.allow_partial_organs:
+        raise ValueError("Partial organ masks are disabled")
+
+    def score_transform(tx):
+        if not partial:
+            return dice(fixed_organ, moving_organ, tx)
+        metrics = overlap_qc(fixed_organ, moving_organ, tx)
+        if (
+            metrics["common_fov_fraction"] < config.min_common_fov_fraction
+            or metrics["common_foreground_voxels"] < 4
+        ):
+            return 0.0
+        return metrics["dice_common_fov"]
+
     identity = sitk.Euler3DTransform()
-    before = dice(fixed_organ, moving_organ, identity)
+    before = score_transform(identity)
     best, score, stage = identity, before, "baseline"
     warnings = []
     stage_transforms = {"baseline": identity}
-    stages = {
-        "baseline": {"dice": before, "status": "evaluated", "selected": True},
-        "pca": {"dice": None, "status": "not_run"},
-        "rigid": {"dice": None, "status": "not_run"},
-        "affine": {"dice": None, "status": "not_run"},
-        "elastic": {"dice": None, "status": "not_run"},
-    }
+    stages = {name: {"dice": None, "status": "not_run"} for name in REGISTRATION_STAGES}
+    stages["baseline"].update(dice=before, status="evaluated", selected=True)
+    initial_stage = "geometry" if partial and not config.partial_mask_pca else "pca"
+    if initial_stage == "geometry":
+        stages["pca"].update(status="skipped_partial_coverage", selected=False)
     started_pca = time.perf_counter()
     try:
-        initial = initialize_pca(fixed_organ, moving_organ)
+        if partial and not config.partial_mask_pca:
+            # Physical identity is safe for cropped acquisitions sharing patient
+            # coordinates. Geometry translation is an alternative, not a forced
+            # centroid shift that would align the cropped and complete organs.
+            initial = sitk.CenteredTransformInitializer(
+                fixed_organ,
+                moving_organ,
+                sitk.Euler3DTransform(),
+                sitk.CenteredTransformInitializerFilter.GEOMETRY,
+            )
+            if score_transform(initial) <= before:
+                initial = identity
+        else:
+            initial = initialize_pca(fixed_organ, moving_organ)
     except (RuntimeError, ValueError) as exc:
-        warnings.append(f"pca: {exc}")
-        stages["pca"].update(
+        warnings.append(f"{initial_stage}: {exc}")
+        stages[initial_stage].update(
             status="failed",
             selected=False,
             fallback_stage="baseline",
@@ -270,16 +300,16 @@ def register_pair(fixed_organ, moving_organ, config):
             elapsed_seconds=time.perf_counter() - started_pca,
         )
     else:
-        pca_score = dice(fixed_organ, moving_organ, initial)
-        stages["pca"].update(
+        pca_score = score_transform(initial)
+        stages[initial_stage].update(
             dice=pca_score,
             status="evaluated",
             selected=False,
             elapsed_seconds=time.perf_counter() - started_pca,
         )
-        stage_transforms["pca"] = initial
+        stage_transforms[initial_stage] = initial
         best, score, stage = _select_candidate(
-            identity, before, "baseline", initial, pca_score, "pca", stages
+            identity, before, "baseline", initial, pca_score, initial_stage, stages
         )
     fixed_dm = distance_map(
         fixed_organ,
@@ -338,7 +368,7 @@ def register_pair(fixed_organ, moving_organ, config):
             ):
                 raise ValueError("Implausible or nonfinite transform")
             tx.GetInverse()
-            candidate = dice(fixed_organ, moving_organ, tx)
+            candidate = score_transform(tx)
             stage_transforms[name] = tx
             best, score, stage = _select_candidate(
                 best, score, stage, tx, candidate, name, stages
@@ -355,13 +385,21 @@ def register_pair(fixed_organ, moving_organ, config):
         finally:
             stages[name]["elapsed_seconds"] = time.perf_counter() - started
     selected_inverse = None
-    if config.elastic:
+    if config.elastic and score < config.elastic_min_dice:
+        stages["elastic"].update(
+            status="skipped_low_dice",
+            input_dice=score,
+            required_dice=config.elastic_min_dice,
+            selected=False,
+            fallback_stage=stage,
+        )
+    elif config.elastic:
         started = time.perf_counter()
         try:
             candidate, registration = elastic_refine(
                 fixed_organ, moving_organ, fixed_dm, moving_dm, best, config
             )
-            candidate_score = dice(fixed_organ, moving_organ, candidate)
+            candidate_score = score_transform(candidate)
             stage_transforms["elastic"] = candidate
             stages["elastic"].update(
                 dice=candidate_score,
@@ -372,9 +410,7 @@ def register_pair(fixed_organ, moving_organ, config):
             )
             candidate_inverse = None
             if candidate_score > score + DICE_TOLERANCE:
-                candidate_inverse = invert_elastic(
-                    candidate, fixed_organ, moving_organ
-                )
+                candidate_inverse = invert_elastic(candidate, fixed_organ, moving_organ)
             best, score, stage = _select_candidate(
                 best, score, stage, candidate, candidate_score, "elastic", stages
             )
@@ -402,6 +438,13 @@ def register_pair(fixed_organ, moving_organ, config):
         stage_transforms,
         selected_inverse if selected_inverse is not None else best.GetInverse(),
     )
+    result.overlap = overlap_qc(fixed_organ, moving_organ, best)
+    result.organ_volume_ratio = fixed_qc.volume_mm3 / moving_qc.volume_mm3
+    result.confidence = registration_confidence(result.overlap, partial, config)
+    for name, tx in stage_transforms.items():
+        stages[name].update(overlap_qc(fixed_organ, moving_organ, tx))
+        stages[name]["selection_metric"] = "dice_common_fov" if partial else "dice_full"
     if score < config.min_dice:
+        result.confidence = "failed"
         raise RegistrationRejected(f"Organ overlap rejected: Dice={score:.4f}", result)
     return result
