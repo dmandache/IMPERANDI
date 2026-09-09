@@ -237,7 +237,7 @@ segmentation:
       #   close: true
 
 # Intra-visit, intra-modal organ registration and shared tumor segmentation.
-# CLI --method, --affine/--no_affine, and --visit_column override these settings.
+# CLI method, linear/elastic toggles, spacing, and visit options override these settings.
 registration:
   visit_column: study_id
   organ_column: mask_liver
@@ -245,6 +245,8 @@ registration:
   method: anchor
   affine: false
   affine_min_dice: 0.9
+  elastic: false
+  bspline_ctrl_spacing_mm: 90.0
   iterations: 100
   min_dice: 0.1
   crop_padding_mm: 25.0

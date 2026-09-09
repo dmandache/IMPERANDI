@@ -273,14 +273,18 @@ segmentation:
         #   fetch_outputs: [backend_a, backend_b]
         #   extra: {}
       postprocess:
-        # Bare logical names, mask_* column names, and *.nii.gz names are accepted.
+        # Union declared task outputs; logical names, mask_* columns, and
+        # *.nii.gz filenames are accepted.
         merge_keys: [liver, liver_tumor]
+        # Writes liver.nii.gz and mask_liver, replacing that task output.
         output: liver
+        # Closing radius in mm; larger values bridge wider gaps.
         radius_mm: 5.0
+        # Cleanup order: close gaps, fill cavities, then retain the largest CC.
         close: true
         fill_holes: true
         largest_cc: true
-        # Allowed: warn_only (default) or fail.
+        # Input masks are clipped to the result. On merge failure: warn or fail.
         on_failure: warn_only
 
     MR:
@@ -295,6 +299,7 @@ segmentation:
           fetch_output: liver_lesions
           extra: {}
       postprocess:
+        # Same merge and cleanup behavior as CT.
         merge_keys: [liver, liver_tumor]
         output: liver
         radius_mm: 5.0
@@ -304,24 +309,39 @@ segmentation:
         on_failure: fail
 
 # ---------------------------------------------------------------------------
-# Radiomics
+# Registration
 # ---------------------------------------------------------------------------
-# Intra-visit, intra-modal organ registration and shared tumor segmentation.
-# CLI --method, --affine/--no_affine, and --visit_column override these settings.
+# Align organs and fuse tumors within each patient + visit + modality group.
+# Matching CLI options override these values.
 registration:
+  # Visit identifier used for grouping.
   visit_column: study_id
+  # Mask-path columns; originals are retained as source_<column>.
   organ_column: mask_liver
   tumor_column: mask_liver_tumor
+  # Fusion: anchor, majority, intersection, union, or staple.
   method: anchor
+  # Rigid always runs; affine additionally permits scale and shear.
   affine: false
-  # Run affine only after PCA/rigid reaches this organ Dice.
+  # Minimum pre-affine organ Dice.
   affine_min_dice: 0.9
+  # Optional B-spline refinement; unsafe or non-improving results are rejected.
+  elastic: false
+  # Smaller spacing permits finer deformation but costs more and may overfit.
+  bspline_ctrl_spacing_mm: 90.0
+  # Maximum iterations per optimization stage.
   iterations: 100
+  # Minimum accepted organ Dice.
   min_dice: 0.1
+  # Distance-map crop margin in mm.
   crop_padding_mm: 25.0
+  # Signed-distance clamp in mm.
   distance_band_mm: 15.0
+  # Clip transferred tumors to the registered organ.
   constrain_tumor_to_organ: true
+  # Majority/STAPLE probability cutoff.
   threshold: 0.5
+  # Ordered reference preferences; unlisted scans rank last.
   reference_priority:
     CT:
       - {phase: PORTAL_VENOUS}
@@ -333,6 +353,9 @@ registration:
       - {mri_sequence: T2}
       - {mri_sequence: DWI}
 
+# ---------------------------------------------------------------------------
+# Radiomics
+# ---------------------------------------------------------------------------
 radiomics:
   # Passed to PyRadiomics as its native parameter mapping. These representative
   # sections cover settings, voxel settings, image types, and feature classes;
