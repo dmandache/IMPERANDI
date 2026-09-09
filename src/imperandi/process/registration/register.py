@@ -11,8 +11,8 @@ from imperandi.utils.checkpoint_cli import add_checkpoint_arguments
 from imperandi.utils.manifest import load_manifest
 from imperandi.utils.run_state import build_checkpoint_paths
 from .config import CONSENSUS_METHODS, RegistrationConfig
-from .grouping import prepare_cohort
-from .labels import group_label
+from .cohort import prepare_cohort
+from .reporting import group_label
 
 logger = logging.getLogger(__name__)
 
@@ -240,7 +240,7 @@ def main(args):
                 len(group),
             )
         return None
-    from .runner import run_registration
+    from .runtime import run_registration
 
     return run_registration(args, table, config, manifest)
 
