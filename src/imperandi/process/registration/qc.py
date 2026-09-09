@@ -23,6 +23,8 @@ ERROR_COLUMNS = [
     "error",
 ]
 QC_FIELDS = [
+    "registration_skip_reason",
+    "tumor_consensus_input_status",
     "registration_selected_stage",
     "registration_dice_selected",
     *[f"registration_dice_{stage}" for stage in REGISTRATION_STAGES],

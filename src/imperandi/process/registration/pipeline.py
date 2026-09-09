@@ -17,11 +17,20 @@ from .grouping import (
     prepare_cohort,
     reference_rank,
 )
-from .labels import group_label
+from .labels import group_label, scan_label
 from .organ import backend, dice, read_image, read_mask, register_pair, resample
 from .qc import ERROR_COLUMNS, build_error_record, publish_group_log, record_stages
 
 logger = logging.getLogger(__name__)
+
+
+def _missing_file(path):
+    """Return whether a CSV path value is blank or does not name a file."""
+    try:
+        missing = pd.isna(path) or not str(path).strip()
+    except (TypeError, ValueError):
+        return True
+    return missing or not Path(str(path)).expanduser().is_file()
 
 
 def _registration_report(result):
@@ -86,18 +95,47 @@ def register_cohort(
         )
         loaded = {}
         for i in order:
+            organ_path = df.at[i, config.organ_column]
+            if _missing_file(organ_path):
+                df.at[i, "registration_status"] = "skipped"
+                df.at[i, "registration_skip_reason"] = "missing_organ_mask"
+                df.at[i, "consensus_status"] = "skipped"
+                logger.warning(
+                    "Registration series skipped: %s, reason=missing organ mask",
+                    df.at[i, "registration_scan_label"],
+                )
+                continue
             try:
                 image = read_image(df.at[i, "nifti_path"])
-                organ = read_mask(df.at[i, config.organ_column], image)
-                if np.count_nonzero(sitk.GetArrayViewFromImage(organ)) < 4:
-                    raise ValueError("Empty or insufficient organ mask")
+                organ = read_mask(organ_path, image)
+                foreground = np.count_nonzero(sitk.GetArrayViewFromImage(organ))
+                if foreground == 0:
+                    df.at[i, "registration_status"] = "skipped"
+                    df.at[i, "registration_skip_reason"] = "empty_organ_mask"
+                    df.at[i, "consensus_status"] = "skipped"
+                    logger.warning(
+                        "Registration series skipped: %s, reason=empty organ mask",
+                        df.at[i, "registration_scan_label"],
+                    )
+                    continue
+                if foreground < 4:
+                    raise ValueError("Organ mask needs at least four foreground voxels")
                 loaded[i] = image, organ
             except (RuntimeError, ValueError, TypeError) as exc:
                 df.at[i, "registration_status"] = "failed"
                 error(i, "input", exc)
+        active_order = [i for i in order if i in loaded]
+        df.loc[group.index, "registration_series_number"] = None
+        df.loc[group.index, "registration_group_size"] = None
+        for position, i in enumerate(active_order, start=1):
+            df.at[i, "registration_series_number"] = position
+            df.at[i, "registration_group_size"] = len(active_order)
+        for i in group.index:
+            df.at[i, "registration_scan_label"] = scan_label(df.loc[i])
         if not loaded:
             logger.warning("Registration reference unavailable: no valid organ masks")
-            df.loc[group.index, "consensus_status"] = "no_reference"
+            unset = df.loc[group.index, "consensus_status"].isna()
+            df.loc[unset.index[unset], "consensus_status"] = "no_reference"
             df.loc[group.index, "registration_elapsed_seconds"] = (
                 time.perf_counter() - group_started
             )
@@ -187,11 +225,18 @@ def register_cohort(
             if i not in transforms:
                 continue
             path = df.at[i, config.tumor_column] if config.tumor_column in df else None
-            if pd.isna(path) or not str(path).strip():
+            if _missing_file(path):
+                df.at[i, "tumor_consensus_input_status"] = "skipped_missing"
                 continue
             try:
-                tumors[i] = read_mask(path, loaded[i][0])
+                tumor = read_mask(path, loaded[i][0])
+                if not np.count_nonzero(sitk.GetArrayViewFromImage(tumor)):
+                    df.at[i, "tumor_consensus_input_status"] = "skipped_empty"
+                    continue
+                tumors[i] = tumor
+                df.at[i, "tumor_consensus_input_status"] = "contributed"
             except (RuntimeError, ValueError) as exc:
+                df.at[i, "tumor_consensus_input_status"] = "failed"
                 error(i, "tumor_input", exc)
 
         # Tumor overlap is diagnostic only and never affects transform selection.
@@ -226,7 +271,8 @@ def register_cohort(
             coverage.CopyInformation(tumor)
             masks.append(resample(tumor, reference, transforms[i]))
             coverages.append(resample(coverage, reference, transforms[i]))
-        df.loc[group.index, "consensus_status"] = "registration_failed"
+        failed = df.loc[group.index, "registration_status"].eq("failed")
+        df.loc[failed.index[failed], "consensus_status"] = "registration_failed"
         df.loc[list(transforms), "consensus_status"] = "no_tumor_input"
         if masks:
             contributor_labels = [

@@ -99,8 +99,8 @@ CT references prefer portal venous, arterial, delayed, then native phases;
 MR prefers T1, T2, then DWI. Unlisted scans rank last; ties use deterministic
 scan ordering.
 Anchor uses the reference tumor mask when available, otherwise the next valid
-mask in priority order. Missing masks are omitted; readable empty masks vote
-negative. Every available accepted scan contributes to non-anchor fusion, so
+mask in priority order. Missing, nonexistent, and empty masks are omitted.
+Every available nonempty mask contributes to non-anchor fusion, so
 select independent sequences/phases upstream to avoid duplicate reconstruction
 votes. Whole-volume annotations are assumed. Fusion is limited to common
 observed coverage; outside-coverage zeros are unknown. Majority computes vote
@@ -127,6 +127,10 @@ records `rejected_worse_dice` with its fallback stage. `reference_priority` maps
 of column/value selectors, such as `CT: [{phase: PORTAL_VENOUS}]` or
 `MR: [{mri_sequence: T1}]`. Defaults are 100 iterations, minimum organ Dice 0.1,
 and threshold 0.5. These initial QC settings require dataset validation.
+
+Series with a missing or empty organ mask are excluded from their registration
+group and recorded as `skipped`; they do not produce error-table rows. Unreadable
+or otherwise invalid masks remain failures.
 
 `nifti_path` always points to the original scan. Registration writes new NIfTI
 files and never modifies the original masks. In the output CSV, successful

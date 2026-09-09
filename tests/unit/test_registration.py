@@ -86,13 +86,13 @@ def test_fusion_votes_and_ties(method, expected):
 @pytest.mark.parametrize(
     "method", ["anchor", "majority", "intersection", "union", "staple"]
 )
-def test_single_empty_and_coverage(method):
+def test_empty_tumor_is_not_a_consensus_contributor(method):
     empty = image(np.zeros((2, 3, 4)))
     coverage = image(np.ones((2, 3, 4)))
-    result = fuse_tumors([empty], [coverage], method=method)
-    assert not sitk.GetArrayFromImage(result.mask).any()
+    with pytest.raises(ValueError, match="nonempty tumor mask"):
+        fuse_tumors([empty], [coverage], method=method)
     with pytest.raises(ValueError, match="support"):
-        fuse_tumors([empty], [empty], method=method)
+        fuse_tumors([coverage], [empty], method=method)
 
 
 def test_staple_excludes_unknown_voxels():
@@ -292,11 +292,71 @@ def test_invalid_mask_and_missing_tumor(tmp_path):
     out, errors = register_cohort(pd.DataFrame(rows), tmp_path / "out")
     assert errors.empty
     assert out.consensus_status.tolist() == ["no_tumor_input"]
+    assert out.tumor_consensus_input_status.tolist() == ["skipped_missing"]
     rows[0]["mask_liver"] = str(tmp_path / "missing.nii.gz")
     out, errors = register_cohort(pd.DataFrame(rows), tmp_path / "out2")
-    assert out.registration_status.tolist() == ["failed"]
+    assert out.registration_status.tolist() == ["skipped"]
+    assert out.registration_skip_reason.tolist() == ["missing_organ_mask"]
+    assert out.consensus_status.tolist() == ["skipped"]
     assert out.reg_organ_native_path.isna().all()
-    assert len(errors) == 1
+    assert errors.empty
+
+
+def test_empty_organ_is_skipped_and_excluded_from_active_group(tmp_path):
+    rows = [
+        save_scan(tmp_path, "portal", phase="PORTAL_VENOUS"),
+        save_scan(tmp_path, "empty", phase="ARTERIAL"),
+    ]
+    empty = sitk.ReadImage(rows[1]["mask_liver"])
+    empty = sitk.Image(empty.GetSize(), sitk.sitkUInt8)
+    empty.CopyInformation(sitk.ReadImage(rows[1]["nifti_path"]))
+    sitk.WriteImage(empty, rows[1]["mask_liver"])
+
+    out, errors = register_cohort(pd.DataFrame(rows), tmp_path / "out")
+
+    assert errors.empty
+    assert out.registration_status.tolist() == ["reference", "skipped"]
+    assert pd.isna(out.loc[0, "registration_skip_reason"])
+    assert out.loc[1, "registration_skip_reason"] == "empty_organ_mask"
+    assert out.loc[1, "consensus_status"] == "skipped"
+    assert out.loc[0, "registration_group_size"] == 1
+    assert out.loc[0, "registration_series_number"] == 1
+    assert pd.isna(out.loc[1, "registration_group_size"])
+    assert pd.isna(out.loc[1, "registration_series_number"])
+
+
+def test_empty_tumor_is_excluded_from_consensus(tmp_path):
+    rows = [
+        save_scan(tmp_path, "portal", phase="PORTAL_VENOUS"),
+        save_scan(tmp_path, "empty-tumor", phase="ARTERIAL"),
+    ]
+    image = sitk.ReadImage(rows[1]["nifti_path"])
+    empty = sitk.Image(image.GetSize(), sitk.sitkUInt8)
+    empty.CopyInformation(image)
+    sitk.WriteImage(empty, rows[1]["mask_liver_tumor"])
+
+    out, errors = register_cohort(
+        pd.DataFrame(rows),
+        tmp_path / "out",
+        RegistrationConfig(method="majority", iterations=5),
+    )
+
+    assert errors.empty
+    assert out.tumor_consensus_input_status.tolist() == [
+        "contributed",
+        "skipped_empty",
+    ]
+    assert out.consensus_status.tolist() == ["single_contributor"] * 2
+
+
+def test_unreadable_organ_mask_remains_an_input_failure(tmp_path):
+    row = save_scan(tmp_path, "corrupt")
+    Path(row["mask_liver"]).write_text("not a NIfTI image")
+
+    out, errors = register_cohort(pd.DataFrame([row]), tmp_path / "out")
+
+    assert out.registration_status.tolist() == ["failed"]
+    assert errors.stage.tolist() == ["input"]
 
 
 def test_anchor_falls_back_to_moving_mask(tmp_path):

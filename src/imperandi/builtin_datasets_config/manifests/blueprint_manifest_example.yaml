@@ -316,7 +316,8 @@ segmentation:
 registration:
   # Visit identifier used for grouping.
   visit_column: study_id
-  # Mask-path columns; originals are retained as source_<column>.
+  # Mask-path columns; missing/empty organs skip the series, while missing/empty
+  # tumors are omitted from fusion. Originals are retained as source_<column>.
   organ_column: mask_liver
   tumor_column: mask_liver_tumor
   # Fusion: anchor, majority, intersection, union, or staple.
