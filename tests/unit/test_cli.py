@@ -1,12 +1,75 @@
 import sys
 from pathlib import Path
 import json
+import logging
 import pytest
 
 # Ensure src/ is on sys.path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from imperandi import cli
+
+
+@pytest.mark.parametrize(
+    "command", ["parse", "clean", "ingest", "convert", "phase", "segment", "radiomics"]
+)
+def test_startup_logs_resolved_manifest_on_dry_run(command, tmp_path, caplog):
+    from imperandi.utils.manifest import load_manifest
+
+    manifest = load_manifest("generic", base_path=tmp_path)
+    manifest["id_standardization"] = {
+        "hook_module": "example",
+        "function": "standardize",
+    }
+    manifest["radiomics"]["filters"] = {"phase": ["MANIFEST_PHASE"]}
+    manifest["radiomics"]["pyradiomics"]["setting"]["binWidth"] = 17
+    path = tmp_path / "manifest.json.yaml"
+    path.write_text(json.dumps(manifest))
+    source = tmp_path / "input.csv"
+    source.write_text("patient_key,study_id,Modality,nifti_path\n")
+    output = tmp_path / "output"
+    flags = ["--manifest", str(path), "--dry-run"]
+    if command in {"parse", "ingest"}:
+        flags += ["--root_path", str(tmp_path / "dicom"), "--output_dir", str(output)]
+    else:
+        flags += ["--csv_path", str(source)]
+    if command == "radiomics":
+        flags += ["--filter", "phase=CLI_PHASE"]
+    before = set(tmp_path.rglob("*"))
+    args = cli.build_parser().parse_args([command, *flags])
+    with caplog.at_level(logging.INFO):
+        assert args._handler(args) == 0
+    records = [
+        r
+        for r in caplog.records
+        if "Running " in r.getMessage() and "with namespace:" in r.getMessage()
+    ]
+    expected = ["parse.py", "clean.py"] if command == "ingest" else [f"{command}.py"]
+    assert [r.args[0] for r in records] == expected
+    for record in records:
+        name, logged = record.args
+        assert logged.manifest == str(path)
+        assert not hasattr(logged, "_handler")
+        if name == "parse.py":
+            assert logged.id_standardization == manifest["id_standardization"]
+        elif name == "clean.py":
+            assert logged.cleaning["version"] == 1
+            assert logged.cleaning["steps"]
+        elif name == "convert.py":
+            assert logged.checkpoint_manifest_config == manifest
+        elif name == "phase.py":
+            assert (
+                logged.phase_curation["strategies"][0]["name"]
+                == manifest["phase_curation"]["strategies"][0]["name"]
+            )
+        elif name == "segment.py":
+            assert logged.segmentation["modalities"]["CT"]["tasks"]
+        elif name == "radiomics.py":
+            assert logged.filters == {"phase": ["MANIFEST_PHASE"]}
+            assert logged.pyradiomics_settings["setting"]["binWidth"] == 17
+            assert logged.pyradiomics_settings_source == "manifest"
+            assert args.filters == {"phase": ["CLI_PHASE"]}
+    assert set(tmp_path.rglob("*")) == before
 
 
 def test_cli_parse_prefers_flag_paths_over_positionals(tmp_path, capsys):

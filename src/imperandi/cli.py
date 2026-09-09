@@ -8,9 +8,7 @@ from typing import Optional, Sequence
 from imperandi.ingest import clean as clean_module
 from imperandi.ingest import parse as parse_module
 from imperandi.process import convert as convert_module
-from imperandi.utils.logging import log_script_namespace, setup_logging
-from imperandi.utils.manifest import load_manifest
-from imperandi.utils.misc import print_args
+from imperandi.utils.logging import setup_logging
 
 logger = logging.getLogger(__name__)
 
@@ -197,30 +195,13 @@ def _handle_register(args: argparse.Namespace) -> int:
 
 def _handle_parse(args: argparse.Namespace) -> int:
     args = parse_module.normalize_parse_args(args)
-    log_script_namespace(logger, parse_module.__file__, args)
-    if args.dry_run:
-        logger.info("Dry run: parse")
-        print_args(args)
-        return 0
     parse_module.main(args)
     return 0
 
 
 def _handle_clean(args: argparse.Namespace) -> int:
     args = clean_module.normalize_clean_args(args)
-    log_script_namespace(logger, clean_module.__file__, args)
-    if args.dry_run:
-        logger.info("Dry run: clean")
-        print_args(args)
-        return 0
-    manifest = load_manifest(
-        args.manifest, base_path=Path(__file__).resolve().parents[0]
-    )
-    clean_module.clean_and_save_data(
-        args.csv_path,
-        args.csv_path_out,
-        manifest,
-    )
+    clean_module.main(args)
     return 0
 
 
@@ -233,40 +214,20 @@ def _handle_ingest(args: argparse.Namespace) -> int:
         if args.csv_path_out
         else output_dir / "dicom_index_clean.csv"
     )
-    log_script_namespace(logger, parse_module.__file__, args)
-    log_script_namespace(
-        logger,
-        clean_module.__file__,
+    parse_module.main(args)
+    clean_module.main(
         argparse.Namespace(
             csv_path=[str(parsed_csv)],
             csv_path_out=str(clean_out),
             manifest=args.manifest,
-        ),
-    )
-    if args.dry_run:
-        logger.info("Dry run: ingest (parse -> clean)")
-        print_args(args)
-        return 0
-    parse_module.main(args)
-    manifest = load_manifest(
-        args.manifest, base_path=Path(__file__).resolve().parents[0]
-    )
-
-    clean_module.clean_and_save_data(
-        [str(parsed_csv)],
-        str(clean_out),
-        manifest,
+            dry_run=args.dry_run,
+        )
     )
     return 0
 
 
 def _handle_convert(args: argparse.Namespace) -> int:
     args = convert_module.normalize_convert_args(args)
-    log_script_namespace(logger, convert_module.__file__, args)
-    if args.dry_run:
-        logger.info("Dry run: convert")
-        print_args(args)
-        return 0
     convert_module.main(args)
     return 0
 
@@ -274,11 +235,6 @@ def _handle_convert(args: argparse.Namespace) -> int:
 def _handle_phase(args: argparse.Namespace) -> int:
     phase_module = _load_phase_module()
     args = phase_module.normalize_phase_args(args)
-    log_script_namespace(logger, phase_module.__file__, args)
-    if args.dry_run:
-        logger.info("Dry run: phase")
-        print_args(args)
-        return 0
     try:
         phase_module.main(args)
     except RuntimeError as exc:
@@ -293,11 +249,6 @@ def _handle_phase(args: argparse.Namespace) -> int:
 def _handle_radiomics(args: argparse.Namespace) -> int:
     radiomics_module = _load_radiomics_module()
     args = radiomics_module.normalize_radiomics_args(args)
-    log_script_namespace(logger, radiomics_module.__file__, args)
-    if args.dry_run:
-        logger.info("Dry run: radiomics")
-        print_args(args)
-        return 0
     try:
         radiomics_module.main(args)
     except RuntimeError as exc:
@@ -312,11 +263,6 @@ def _handle_radiomics(args: argparse.Namespace) -> int:
 def _handle_segment(args: argparse.Namespace) -> int:
     segment_module = _load_segment_module()
     args = segment_module.normalize_segment_args(args)
-    log_script_namespace(logger, segment_module.__file__, args)
-    if args.dry_run:
-        logger.info("Dry run: segment")
-        print_args(args)
-        return 0
     segment_module.main(args)
     return 0
 

@@ -8,7 +8,11 @@ from typing import Any, Dict, Optional, Tuple
 import pandas as pd
 from tqdm import tqdm
 
-from imperandi.utils.logging import log_task_summary, setup_logging
+from imperandi.utils.logging import (
+    log_script_namespace,
+    log_task_summary,
+    setup_logging,
+)
 from imperandi.utils.misc import print_args
 from imperandi.utils.manifest import load_manifest
 from imperandi.utils.checkpoint_cli import add_checkpoint_arguments
@@ -805,6 +809,22 @@ def main(args: argparse.Namespace) -> None:
         args
     )
     effective_filters = _resolve_radiomics_filters(args)
+    effective_args = log_script_namespace(
+        logger,
+        __file__,
+        args,
+        filters=effective_filters,
+        pyradiomics_settings_source=source_kind,
+        pyradiomics_settings=(
+            settings_dict
+            if source_kind == "manifest"
+            else settings_path if source_kind == "cli_file" else DEFAULT_SETTINGS
+        ),
+    )
+    if getattr(args, "dry_run", False):
+        logger.info("Dry run: radiomics")
+        print_args(effective_args)
+        return
     manifest_arg = getattr(args, "manifest", None)
     manifest_config = (
         load_manifest(
@@ -1018,8 +1038,4 @@ if __name__ == "__main__":
     setup_logging()
     args = parse_arguments()
     setup_logging(verbose=getattr(args, "verbose", False))
-    if getattr(args, "dry_run", False):
-        logger.info("Dry run: radiomics")
-        print_args(args)
-        raise SystemExit(0)
     main(args)

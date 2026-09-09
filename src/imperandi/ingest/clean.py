@@ -26,7 +26,11 @@ from imperandi.curation.phase import (
     phase_curation_input_columns,
     validate_phase_curation,
 )
-from imperandi.utils.logging import log_task_summary, setup_logging
+from imperandi.utils.logging import (
+    log_script_namespace,
+    log_task_summary,
+    setup_logging,
+)
 from imperandi.utils.misc import print_args, report_volumes, report_change
 from imperandi.utils.datetime import to_dates, to_times
 from imperandi.ingest.defaults import (
@@ -2484,18 +2488,32 @@ def clean_and_save_data(
     logger.info("Cleaning done ✔")
 
 
-if __name__ == "__main__":
-    setup_logging()
-    args = parse_arguments()
-    if args.dry_run:
-        logger.info("Dry run: clean")
-        print_args(args)
-        raise SystemExit(0)
+def main(args):
+    """Resolve cleaning settings before logging or executing the pipeline."""
     manifest = load_manifest(
         args.manifest, base_path=Path(__file__).resolve().parents[1]
     )
+    steps = validate_cleaning_manifest(manifest) if "cleaning" in manifest else None
+    effective_args = log_script_namespace(
+        logger,
+        __file__,
+        args,
+        cleaning=(
+            {**manifest["cleaning"], "steps": steps} if steps is not None else None
+        ),
+        phase_curation=manifest.get("phase_curation"),
+    )
+    if getattr(args, "dry_run", False):
+        logger.info("Dry run: clean")
+        print_args(effective_args)
+        return
     clean_and_save_data(
         args.csv_path,
         args.csv_path_out,
         manifest,
     )
+
+
+if __name__ == "__main__":
+    setup_logging()
+    main(parse_arguments())

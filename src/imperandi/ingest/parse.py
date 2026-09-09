@@ -23,7 +23,11 @@ from imperandi.utils.archive_io import (
     is_archive_uri,
     read_archive_member_bytes,
 )
-from imperandi.utils.logging import log_task_summary, setup_logging
+from imperandi.utils.logging import (
+    log_script_namespace,
+    log_task_summary,
+    setup_logging,
+)
 from imperandi.utils.misc import print_args
 from imperandi.utils.manifest import load_manifest
 from imperandi.utils.checkpoint_cli import add_checkpoint_arguments
@@ -1348,11 +1352,21 @@ def main(args):
     args = normalize_parse_args(args)
     root_path = args.root_path
     output_dir = Path(args.output_dir)
-    ensure_directory_exists(output_dir)
-    logger.info("Output directory: %s", output_dir)
     manifest = load_manifest(
         args.manifest, base_path=Path(__file__).resolve().parents[1]
     )
+    effective_args = log_script_namespace(
+        logger,
+        __file__,
+        args,
+        id_standardization=manifest.get("id_standardization") or {},
+    )
+    if getattr(args, "dry_run", False):
+        logger.info("Dry run: parse")
+        print_args(effective_args)
+        return
+    ensure_directory_exists(output_dir)
+    logger.info("Output directory: %s", output_dir)
 
     matched_roots = resolve_root_paths(root_path)
     if glob.has_magic(str(root_path)):
@@ -1503,10 +1517,5 @@ def main(args):
 if __name__ == "__main__":
     setup_logging()
     args = parse_arguments()
-    if args.dry_run:
-        setup_logging(verbose=getattr(args, "verbose", False))
-        logger.info("Dry run: parse")
-        print_args(args)
-        raise SystemExit(0)
     setup_logging(verbose=getattr(args, "verbose", False))
     main(args)

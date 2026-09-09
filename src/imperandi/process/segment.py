@@ -41,8 +41,13 @@ from skimage.morphology import ball
 from tqdm import tqdm
 
 from imperandi.utils.misc import report_volumes  # type: ignore
-from imperandi.utils.logging import log_task_summary, setup_logging
+from imperandi.utils.logging import (
+    log_script_namespace,
+    log_task_summary,
+    setup_logging,
+)
 from imperandi.utils.manifest import load_manifest
+from imperandi.utils.misc import print_args
 from imperandi.utils.checkpoint_cli import add_checkpoint_arguments
 from imperandi.utils.run_state import (
     atomic_write_csv,
@@ -1253,6 +1258,17 @@ def main(args: argparse.Namespace) -> None:
         manifest_arg,
         base_path=Path(__file__).resolve().parents[1],
     )
+    effective_args = log_script_namespace(
+        logger,
+        __file__,
+        args,
+        segmentation=tasks_config,
+        manifest=manifest_arg or "generic",
+    )
+    if getattr(args, "dry_run", False):
+        logger.info("Dry run: segment")
+        print_args(effective_args)
+        return
     source_id_signature = source_id_resume_signature(args.csv_path)
     checkpoint_signature = {
         "manifest_config": manifest_config,
@@ -1897,8 +1913,4 @@ if __name__ == "__main__":
     setup_logging()
     args = build_parser().parse_args()
     args = normalize_segment_args(args)
-    if getattr(args, "dry_run", False):
-        logger.info("Dry run: segment")
-        logger.info("%s", args)
-        raise SystemExit(0)
     main(args)
