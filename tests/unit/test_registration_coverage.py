@@ -80,6 +80,50 @@ def test_complete_partial_and_fragmented_mask_qc():
     assert "fragmented" in fragmented.reasons
 
 
+@pytest.mark.parametrize("axis", [0, 1, 2])
+@pytest.mark.parametrize("side", ["low", "high"])
+def test_internal_straight_side_is_partial(axis, side):
+    mask = complete_mask()
+    values = sitk.GetArrayFromImage(mask)
+    cut = [slice(None)] * 3
+    cut[axis] = slice(None, 20) if side == "low" else slice(21, None)
+    values[tuple(cut)] = 0
+    truncated = sitk.GetImageFromArray(values)
+    truncated.CopyInformation(mask)
+
+    quality = assess_organ_mask(truncated, RegistrationConfig())
+
+    assert quality.status == "partial"
+    assert "straight_side" in quality.reasons
+    assert quality.boundary_contact == ((False, False),) * 3
+
+
+def test_small_flat_tip_is_not_truncation():
+    mask = complete_mask()
+    values = sitk.GetArrayFromImage(mask)
+    values[:8] = 0
+    rounded = sitk.GetImageFromArray(values)
+    rounded.CopyInformation(mask)
+    quality = assess_organ_mask(rounded, RegistrationConfig())
+    assert quality.status == "complete"
+    assert "straight_side" not in quality.reasons
+
+
+def test_internal_straight_side_uses_partial_registration(monkeypatch):
+    fixed = complete_mask()
+    values = sitk.GetArrayFromImage(fixed)
+    values[:20] = 0
+    moving = sitk.GetImageFromArray(values)
+    moving.CopyInformation(fixed)
+    monkeypatch.setattr(
+        organ, "initialize_pca", Mock(side_effect=AssertionError("PCA must be skipped"))
+    )
+    result = organ.register_pair(fixed, moving, RegistrationConfig(iterations=5))
+    assert result.stages["pca"]["status"] == "skipped_partial_coverage"
+    with pytest.raises(ValueError, match="Partial organ masks are disabled"):
+        organ.register_pair(fixed, moving, RegistrationConfig(allow_partial_organs=False))
+
+
 def test_partial_fov_perfect_alignment_uses_common_dice(monkeypatch):
     fixed = complete_mask()
     moving = partial_mask(fixed)
