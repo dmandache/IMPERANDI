@@ -91,7 +91,7 @@ The stage groups by `patient_key`, `study_id`, and normalized `Modality`
 (CT or MR/MRI). Use `--visit_column visit_id` when your dataset supplies a
 different visit identifier. It applies physical-space PCA initialization,
 rigid organ alignment, optional `--affine` refinement, and optional `--elastic`
-B-spline refinement. Default masks are
+Fast Symmetric Forces Demons refinement. Default masks are
 `mask_liver` and `mask_liver_tumor`; masks must match their native image geometry.
 
 Consensus methods are `anchor`, `majority`, `intersection`, `union`, and `staple`.
@@ -123,16 +123,21 @@ if all scans are partial, anatomy outside that grid cannot be reconstructed.
 The stage loads `generic` by default. Use `--manifest generic` for a built-in
 manifest or `--manifest dataset_configs/manifests/operandi.yaml` for a file.
 CLI `--method`, `--affine`/`--no_affine`, `--elastic`/`--no_elastic`,
-`--bspline_ctrl_spacing_mm`, and `--visit_column` override manifest
+`--demons_smoothing_sigma_mm`, and `--visit_column` override manifest
 values. An optional manifest `registration` mapping accepts `visit_column`,
 `organ_column`, `tumor_column`, `method`, `affine`, `affine_min_dice`, `elastic`,
-`bspline_ctrl_spacing_mm`,
+`demons_smoothing_sigma_mm`,
 `iterations`, `min_dice`, `threshold`, and `reference_priority`. Affine
 refinement runs only when enabled and the best PCA/rigid organ Dice is at least
 `affine_min_dice` (default 0.9). Otherwise QC records `skipped_low_dice` and
-retains the best preceding transform. Elastic refinement uses a cubic B-spline
-whose approximate control-point spacing defaults to 90 mm. Its displacement
-field must remain fold-free and numerically invertible. Elastic also requires
+retains the best preceding transform. Elastic refinement uses SimpleITK's
+`FastSymmetricForcesDemonsRegistrationFilter` on signed-distance maps aligned
+by the selected linear transform. Displacement-field Gaussian smoothing defaults
+to a 1 mm sigma (`demons_smoothing_sigma_mm`), converted to voxel units per axis.
+This setting replaces `bspline_ctrl_spacing_mm`; existing manifests and commands
+must use the new setting, whose value is a smoothing sigma, not control-point
+spacing. The residual displacement is composed with the linear transform.
+The resulting field must remain fold-free and numerically invertible. Elastic also requires
 best linear Dice >= `elastic_min_dice` (default 0.7), using common-FOV Dice for
 partial masks. Every PCA, rigid,
 affine, and elastic candidate is
