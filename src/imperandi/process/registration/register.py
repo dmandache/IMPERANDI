@@ -39,6 +39,14 @@ def add_registration_arguments(parser):
     affine = parser.add_mutually_exclusive_group()
     affine.add_argument("--affine", action="store_true", default=None)
     affine.add_argument("--no_affine", action="store_false", dest="affine")
+    elastic = parser.add_mutually_exclusive_group()
+    elastic.add_argument("--elastic", action="store_true", default=None)
+    elastic.add_argument("--no_elastic", action="store_false", dest="elastic")
+    parser.add_argument(
+        "--bspline_ctrl_spacing_mm",
+        type=float,
+        help="Approximate elastic B-spline control-point spacing in mm.",
+    )
     parser.add_argument("--visit_column")
     parser.add_argument(
         "--num_workers",
@@ -166,6 +174,8 @@ def normalize_registration_args(args):
         manifest=None,
         method=None,
         affine=None,
+        elastic=None,
+        bspline_ctrl_spacing_mm=None,
         visit_column=None,
     )
     for name, default in defaults.items():
@@ -193,7 +203,13 @@ def resolve_config(args):
     raw = manifest.get("registration", {})
     RegistrationConfig.from_mapping(raw)
     settings = dict(raw)
-    for name in ["method", "affine", "visit_column"]:
+    for name in [
+        "method",
+        "affine",
+        "elastic",
+        "bspline_ctrl_spacing_mm",
+        "visit_column",
+    ]:
         value = getattr(args, name)
         if value is not None:
             settings[name] = value
@@ -209,11 +225,13 @@ def main(args):
     if args.dry_run:
         planned = prepare_cohort(table, config)
         logger.info(
-            "Registration dry run: series=%d, groups=%d, method=%s, affine=%s",
+            "Registration dry run: series=%d, groups=%d, method=%s, affine=%s, "
+            "elastic=%s",
             len(planned),
             planned.registration_group_id.nunique(),
             config.method,
             config.affine,
+            config.elastic,
         )
         for _, group in planned.groupby("registration_group_id", sort=True):
             logger.info(

@@ -90,7 +90,8 @@ imperandi register --csv_path nifti_index_phased.csv \
 The stage groups by `patient_key`, `study_id`, and normalized `Modality`
 (CT or MR/MRI). Use `--visit_column visit_id` when your dataset supplies a
 different visit identifier. It applies physical-space PCA initialization,
-rigid organ alignment, and optional `--affine` refinement. Default masks are
+rigid organ alignment, optional `--affine` refinement, and optional `--elastic`
+B-spline refinement. Default masks are
 `mask_liver` and `mask_liver_tumor`; masks must match their native image geometry.
 
 Consensus methods are `anchor`, `majority`, `intersection`, `union`, and `staple`.
@@ -109,13 +110,18 @@ in-memory intermediates.
 
 The stage loads `generic` by default. Use `--manifest generic` for a built-in
 manifest or `--manifest dataset_configs/manifests/operandi.yaml` for a file.
-CLI `--method`, `--affine`/`--no_affine`, and `--visit_column` override manifest
+CLI `--method`, `--affine`/`--no_affine`, `--elastic`/`--no_elastic`,
+`--bspline_ctrl_spacing_mm`, and `--visit_column` override manifest
 values. An optional manifest `registration` mapping accepts `visit_column`,
-`organ_column`, `tumor_column`, `method`, `affine`, `affine_min_dice`,
+`organ_column`, `tumor_column`, `method`, `affine`, `affine_min_dice`, `elastic`,
+`bspline_ctrl_spacing_mm`,
 `iterations`, `min_dice`, `threshold`, and `reference_priority`. Affine
 refinement runs only when enabled and the best PCA/rigid organ Dice is at least
 `affine_min_dice` (default 0.9). Otherwise QC records `skipped_low_dice` and
-retains the best preceding transform. Every PCA, rigid, and affine candidate is
+retains the best preceding transform. Elastic refinement uses a cubic B-spline
+whose approximate control-point spacing defaults to 90 mm. Its displacement
+field must remain fold-free and numerically invertible. Every PCA, rigid,
+affine, and elastic candidate is
 compared with the best preceding Dice; a worse candidate is rejected and QC
 records `rejected_worse_dice` with its fallback stage. `reference_priority` maps CT/MR to ordered lists
 of column/value selectors, such as `CT: [{phase: PORTAL_VENOUS}]` or
@@ -139,7 +145,8 @@ Reference-space images, transforms, coverage, and probability images remain
 in-memory intermediates.
 
 `register_qc.csv` contains one row per scan, including failures, with organ
-`dice_baseline`, `dice_pca`, `dice_rigid`, `dice_affine`, and `dice_selected`.
+`dice_baseline`, `dice_pca`, `dice_rigid`, `dice_affine`, `dice_elastic`, and
+`dice_selected`.
 When both the reference and moving tumor masks are available, corresponding
 `tumor_dice_*` fields provide diagnostic overlap without influencing transform
 selection.

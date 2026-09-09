@@ -326,24 +326,39 @@ segmentation:
             output: liver_tumor
 
 # ---------------------------------------------------------------------------
-# Radiomics
+# Registration
 # ---------------------------------------------------------------------------
-# Intra-visit, intra-modal organ registration and shared tumor segmentation.
-# CLI --method, --affine/--no_affine, and --visit_column override these settings.
+# Align organs and fuse tumors within each patient + visit + modality group.
+# Matching CLI options override these values.
 registration:
+  # Visit identifier used for grouping.
   visit_column: study_id
+  # Mask-path columns; originals are retained as source_<column>.
   organ_column: mask_liver
   tumor_column: mask_liver_tumor
+  # Fusion: anchor, majority, intersection, union, or staple.
   method: anchor
+  # Rigid always runs; affine additionally permits scale and shear.
   affine: false
-  # Run affine only after PCA/rigid reaches this organ Dice.
+  # Minimum pre-affine organ Dice.
   affine_min_dice: 0.9
+  # Optional B-spline refinement; unsafe or non-improving results are rejected.
+  elastic: false
+  # Smaller spacing permits finer deformation but costs more and may overfit.
+  bspline_ctrl_spacing_mm: 90.0
+  # Maximum iterations per optimization stage.
   iterations: 100
+  # Minimum accepted organ Dice.
   min_dice: 0.1
+  # Distance-map crop margin in mm.
   crop_padding_mm: 25.0
+  # Signed-distance clamp in mm.
   distance_band_mm: 15.0
+  # Clip transferred tumors to the registered organ.
   constrain_tumor_to_organ: true
+  # Majority/STAPLE probability cutoff.
   threshold: 0.5
+  # Ordered reference preferences; unlisted scans rank last.
   reference_priority:
     CT:
       - {phase: PORTAL_VENOUS}
@@ -355,6 +370,9 @@ registration:
       - {mri_sequence: T2}
       - {mri_sequence: DWI}
 
+# ---------------------------------------------------------------------------
+# Radiomics
+# ---------------------------------------------------------------------------
 radiomics:
   # Select a complete PyRadiomics parameter mapping using the row's Modality.
   # MRI is an alias for MR. Every retained modality must be configured.

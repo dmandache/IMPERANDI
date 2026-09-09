@@ -1,4 +1,4 @@
-"""Physical-space PCA and linear organ registration, independent of tumor masks."""
+"""Physical-space organ registration, independent of tumor masks."""
 
 from dataclasses import dataclass, field
 import time
@@ -138,6 +138,74 @@ def initialize_pca(fixed, moving):
     return max(candidates, key=lambda tx: dice(coarse, moving, tx))
 
 
+def elastic_refine(fixed, moving, fixed_dm, moving_dm, initial, config):
+    """Refine a fixed-to-moving mapping with a cubic B-spline deformation.
+
+    SimpleITK resampling transforms map output points to input points. The
+    returned composite therefore maps the reference (``fixed``) space into the
+    scan (``moving``) space.
+    """
+    sitk = backend()
+    physical_lengths = [
+        max(1.0, (size - 1) * spacing)
+        for size, spacing in zip(fixed_dm.GetSize(), fixed_dm.GetSpacing())
+    ]
+    mesh_size = [
+        max(1, int(round(length / config.bspline_ctrl_spacing_mm)))
+        for length in physical_lengths
+    ]
+    bspline = sitk.BSplineTransformInitializer(fixed_dm, mesh_size, order=3)
+    registration = sitk.ImageRegistrationMethod()
+    registration.SetMetricAsMeanSquares()
+    registration.SetInterpolator(sitk.sitkLinear)
+    registration.SetOptimizerAsGradientDescentLineSearch(
+        learningRate=1.0,
+        numberOfIterations=config.iterations,
+        convergenceMinimumValue=1e-3,
+        convergenceWindowSize=5,
+    )
+    registration.SetOptimizerScalesFromPhysicalShift()
+    registration.SetShrinkFactorsPerLevel([2, 1])
+    registration.SetSmoothingSigmasPerLevel([1, 0])
+    registration.SmoothingSigmasAreSpecifiedInPhysicalUnitsOn()
+    registration.SetMovingInitialTransform(initial)
+    registration.SetInitialTransform(bspline, inPlace=True)
+    registration.Execute(fixed_dm, moving_dm)
+
+    composite = sitk.CompositeTransform(3)
+    composite.AddTransform(initial)
+    composite.AddTransform(bspline)
+    if not np.isfinite(composite.GetParameters()).all():
+        raise ValueError("Nonfinite elastic transform")
+    return composite, registration
+
+
+def invert_elastic(transform, fixed, moving):
+    """Validate and numerically invert an elastic transform on the moving grid."""
+    sitk = backend()
+
+    # Validate topology before accepting the deformation. Folded fields cannot
+    # be safely inverted and can create anatomically invalid transferred masks.
+    field = sitk.TransformToDisplacementField(
+        transform,
+        sitk.sitkVectorFloat64,
+        fixed.GetSize(),
+        fixed.GetOrigin(),
+        fixed.GetSpacing(),
+        fixed.GetDirection(),
+    )
+    jacobian = sitk.GetArrayViewFromImage(
+        sitk.DisplacementFieldJacobianDeterminant(field)
+    )
+    if not np.isfinite(jacobian).all() or np.min(jacobian) <= 0:
+        raise ValueError("Elastic transform contains a fold")
+    inverse_filter = sitk.InverseDisplacementFieldImageFilter()
+    inverse_filter.SetReferenceImage(moving)
+    inverse_filter.SetSubsamplingFactor(4)
+    inverse_field = inverse_filter.Execute(field)
+    return sitk.DisplacementFieldTransform(inverse_field)
+
+
 @dataclass
 class TransformResult:
     reference_to_scan: object
@@ -147,6 +215,7 @@ class TransformResult:
     warnings: list[str]
     stages: dict = field(default_factory=dict)
     stage_transforms: dict = field(default_factory=dict, repr=False)
+    scan_to_reference: object | None = field(default=None, repr=False)
 
 
 class RegistrationRejected(ValueError):
@@ -186,6 +255,7 @@ def register_pair(fixed_organ, moving_organ, config):
         "pca": {"dice": None, "status": "not_run"},
         "rigid": {"dice": None, "status": "not_run"},
         "affine": {"dice": None, "status": "not_run"},
+        "elastic": {"dice": None, "status": "not_run"},
     }
     started_pca = time.perf_counter()
     try:
@@ -284,9 +354,53 @@ def register_pair(fixed_organ, moving_organ, config):
             )
         finally:
             stages[name]["elapsed_seconds"] = time.perf_counter() - started
+    selected_inverse = None
+    if config.elastic:
+        started = time.perf_counter()
+        try:
+            candidate, registration = elastic_refine(
+                fixed_organ, moving_organ, fixed_dm, moving_dm, best, config
+            )
+            candidate_score = dice(fixed_organ, moving_organ, candidate)
+            stage_transforms["elastic"] = candidate
+            stages["elastic"].update(
+                dice=candidate_score,
+                input_dice=score,
+                selected=False,
+                optimizer_stop=registration.GetOptimizerStopConditionDescription(),
+                optimizer_iteration=int(registration.GetOptimizerIteration()),
+            )
+            candidate_inverse = None
+            if candidate_score > score + DICE_TOLERANCE:
+                candidate_inverse = invert_elastic(
+                    candidate, fixed_organ, moving_organ
+                )
+            best, score, stage = _select_candidate(
+                best, score, stage, candidate, candidate_score, "elastic", stages
+            )
+            if stage == "elastic":
+                selected_inverse = candidate_inverse
+        except (RuntimeError, ValueError) as exc:
+            warnings.append(f"elastic: {exc}")
+            stages["elastic"].update(
+                status="failed",
+                error=str(exc),
+                input_dice=score,
+                selected=False,
+                fallback_stage=stage,
+            )
+        finally:
+            stages["elastic"]["elapsed_seconds"] = time.perf_counter() - started
     selected_stage = "identity" if stage == "baseline" else stage
     result = TransformResult(
-        best, selected_stage, before, score, warnings, stages, stage_transforms
+        best,
+        selected_stage,
+        before,
+        score,
+        warnings,
+        stages,
+        stage_transforms,
+        selected_inverse if selected_inverse is not None else best.GetInverse(),
     )
     if score < config.min_dice:
         raise RegistrationRejected(f"Organ overlap rejected: Dice={score:.4f}", result)

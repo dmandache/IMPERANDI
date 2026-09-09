@@ -100,7 +100,8 @@ creates shared tumor masks with anchor, majority, intersection, union, or STAPLE
 - `--error_csv_path` defaults to `register_errors.csv`.
 - `--qc_csv_path` defaults to `register_qc.csv` and records stage Dice and provenance.
 - `--manifest` accepts a built-in name or YAML file; default is `generic`.
-- `--method`, `--affine`/`--no_affine`, and `--visit_column` override manifest settings.
+- `--method`, `--affine`/`--no_affine`, `--elastic`/`--no_elastic`,
+  `--bspline_ctrl_spacing_mm`, and `--visit_column` override manifest settings.
 - `--num_workers`, `--threads_per_worker`, `--start_method`, and `--timeout_sec`
   control group execution. Timeout defaults to 900 seconds; 0 disables it.
 - Common checkpoint controls apply. `--force` starts fresh; `--retry_failed`
