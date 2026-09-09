@@ -95,7 +95,13 @@ B-spline refinement. Default masks are
 `mask_liver` and `mask_liver_tumor`; masks must match their native image geometry.
 
 Consensus methods are `anchor`, `majority`, `intersection`, `union`, and `staple`.
-Valid complete organs take reference priority over partial organs. Within each
+Valid complete organs take reference priority over partial organs. Boundary contact
+or a broad straight cut face marks a segmentation as partial, even when the cut
+lies inside the image. The straight-face heuristic checks both ends of each image
+axis on the largest connected component: the end section must occupy at least
+25% of the largest section and 90% of the adjacent inward section (at least four
+voxels). Small rounded tips are excluded; cuts oblique to the image axes are not
+detected by this heuristic. Within each
 completeness class, CT references prefer portal venous, arterial, delayed, then native phases;
 MR prefers T1, T2, then DWI. Unlisted scans rank last; ties use deterministic
 scan ordering.
