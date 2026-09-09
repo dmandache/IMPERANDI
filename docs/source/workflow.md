@@ -161,8 +161,10 @@ Fewer than four voxels, an all-foreground FOV, or largest-component fraction
 below `min_largest_component_fraction` (0.8) yield `invalid_organ_mask`.
 
 `allow_partial_organs: true` permits partial masks; false excludes them.
-With `partial_mask_pca: false` (default), partial pairs use physical identity
-or geometry translation instead of shape moments. Both full/reference-grid
+Every pair first evaluates geometry translation, aligning the physical image
+centers before refinement and the Dice threshold decisions. PCA is then
+evaluated only when both organ masks are complete; partial pairs skip PCA.
+Each candidate is retained only when it improves overlap. Both full/reference-grid
 Dice and common-FOV Dice are retained. Partial stage selection and `min_dice`
 rejection use common-FOV Dice; complete pairs retain full Dice. The fixed/moving
 volume ratio is diagnostic, never sufficient evidence of successful alignment.
@@ -193,13 +195,13 @@ Reference-space images, transforms, coverage, and probability images remain
 in-memory intermediates.
 
 `register_qc.csv` contains one row per scan, including failures, with organ
-`dice_baseline`, `dice_pca`, `dice_rigid`, `dice_affine`, `dice_elastic`, and
+`dice_baseline`, `dice_geometry`, `dice_pca`, `dice_rigid`, `dice_affine`, `dice_elastic`, and
 `dice_selected`.
 Additional `registration_*` fields include organ completeness/QC, volume ratio,
 `dice_full`, `dice_common_fov`, common-FOV fraction, confidence, consensus
 contributor/exclusion counts and reasons, and support policy. The same fields
 appear under `anatomical_qc` in structured scan logs. Stage details include both
-Dice metrics and the selection metric; `geometry` records partial initialization.
+Dice metrics and the selection metric; `geometry` records initialization for every pair.
 When both the reference and moving tumor masks are available, corresponding
 `tumor_dice_*` fields provide diagnostic overlap without influencing transform
 selection.

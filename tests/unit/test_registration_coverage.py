@@ -157,6 +157,9 @@ def test_equal_volume_does_not_establish_confidence_or_allow_elastic(monkeypatch
     optimizer.GetOptimizerIteration.return_value = 0
     monkeypatch.setattr(sitk, "ImageRegistrationMethod", lambda: optimizer)
     monkeypatch.setattr(
+        sitk, "CenteredTransformInitializer", lambda *args: sitk.Euler3DTransform()
+    )
+    monkeypatch.setattr(
         alignment, "initialize_pca", lambda *args: sitk.Euler3DTransform()
     )
     elastic = Mock(side_effect=AssertionError("Poor overlap must block elastic"))
