@@ -25,12 +25,23 @@ from .reporting import ERROR_COLUMNS, build_error_record, build_qc, group_label
 
 logger = logging.getLogger(__name__)
 
+# Increment when registration behavior changes so old artifacts are not reused.
+REGISTRATION_SCHEMA = 11
+
+
+def _run_group(table, output_dir, config):
+    """Apply the same group failure policy in-process and in worker processes."""
+    try:
+        return register_cohort(table, output_dir, config), None
+    except Exception as exc:
+        return None, f"{type(exc).__name__}: {exc}"
+
 
 def _process_group(connection, table, output_dir, config, threads, log_level):
     setup_logging(level=log_level)
     try:
         backend().ProcessObject.SetGlobalDefaultNumberOfThreads(threads)
-        connection.send((register_cohort(table, output_dir, config), None))
+        connection.send(_run_group(table, output_dir, config))
     except Exception as exc:
         connection.send((None, f"{type(exc).__name__}: {exc}"))
     finally:
@@ -71,7 +82,8 @@ def iter_group_results(
             sitk.ProcessObject.SetGlobalDefaultNumberOfThreads(threads)
             for group_id, table in groups:
                 heartbeat()
-                yield group_id, register_cohort(table, output_dir, config), None
+                result, error = _run_group(table, output_dir, config)
+                yield group_id, result, error
         finally:
             sitk.ProcessObject.SetGlobalDefaultNumberOfThreads(previous)
         return
@@ -170,7 +182,7 @@ def run_registration(args, table, config, manifest):
     signature = argparse.Namespace(
         settings=asdict(config),
         manifest_config=manifest,
-        registration_schema=10,
+        registration_schema=REGISTRATION_SCHEMA,
         backend_version=sitk.Version_VersionString(),
         output_dir=args.output_dir,
         threads_per_worker=args.threads_per_worker,

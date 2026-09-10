@@ -257,6 +257,21 @@ def test_tiny_common_fov_is_low_confidence():
     )
 
 
+@pytest.mark.parametrize("partial", [False, True])
+@pytest.mark.parametrize("value", [float("nan"), float("inf")])
+def test_nonfinite_overlap_is_low_confidence(partial, value):
+    metrics = dict(
+        dice_full=value,
+        dice_common_fov=value,
+        common_fov_fraction=1,
+        common_foreground_voxels=10,
+    )
+    assert (
+        registration_confidence(metrics, partial, RegistrationConfig())
+        == "low_confidence"
+    )
+
+
 @pytest.mark.parametrize(
     "name",
     [

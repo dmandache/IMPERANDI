@@ -91,7 +91,7 @@ The stage groups by `patient_key`, `study_id`, and normalized `Modality`
 (CT or MR/MRI). Use `--visit_column visit_id` when your dataset supplies a
 different visit identifier. It applies physical-space PCA initialization,
 rigid organ alignment, optional `--affine` refinement, and optional `--elastic`
-Fast Symmetric Forces Demons refinement. Default masks are
+Diffeomorphic Demons refinement. Default masks are
 `mask_liver` and `mask_liver_tumor`; masks must match their native image geometry.
 
 Consensus methods are `anchor`, `majority`, `intersection`, `union`, and `staple`.
@@ -131,7 +131,7 @@ values. An optional manifest `registration` mapping accepts `visit_column`,
 refinement runs only when enabled and the best PCA/rigid organ Dice is at least
 `affine_min_dice` (default 0.9). Otherwise QC records `skipped_low_dice` and
 retains the best preceding transform. Elastic refinement uses SimpleITK's
-`FastSymmetricForcesDemonsRegistrationFilter` on signed-distance maps aligned
+`DiffeomorphicDemonsRegistrationFilter` on signed-distance maps aligned
 by the selected linear transform. Displacement-field Gaussian smoothing defaults
 to a 1 mm sigma (`demons_smoothing_sigma_mm`), converted to voxel units per axis.
 This setting replaces `bspline_ctrl_spacing_mm`; existing manifests and commands
