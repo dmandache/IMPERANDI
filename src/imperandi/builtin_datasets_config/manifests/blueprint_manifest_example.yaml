@@ -326,7 +326,7 @@ registration:
   affine: false
   # Minimum pre-affine organ Dice.
   affine_min_dice: 0.9
-  # Optional Fast Symmetric Forces Demons refinement; unsafe or non-improving results are rejected.
+  # Optional Diffeomorphic Demons refinement; unsafe or non-improving results are rejected.
   elastic: false
   # Minimum accepted linear overlap before elastic (common-FOV Dice if partial).
   elastic_min_dice: 0.7

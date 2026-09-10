@@ -172,7 +172,10 @@ def registration_confidence(metrics, partial: bool, config) -> str:
     """Require actual observed foreground and overlap, never volume alone."""
     score = metrics["dice_common_fov" if partial else "dice_full"]
     if (
-        score < config.min_confidence_dice
+        not np.isfinite(
+            [score, metrics["common_fov_fraction"], metrics["common_foreground_voxels"]]
+        ).all()
+        or score < config.min_confidence_dice
         or metrics["common_fov_fraction"] < config.min_common_fov_fraction
         or metrics["common_foreground_voxels"] < 4
     ):
@@ -252,7 +255,7 @@ def initialize_pca(fixed, moving):
 
 
 def elastic_refine(fixed_dm, moving_dm, initial, config):
-    """Refine a fixed-to-moving mapping with Fast Symmetric Forces Demons.
+    """Refine a fixed-to-moving mapping with Diffeomorphic Demons.
 
     SimpleITK resampling transforms map output points to input points. The
     returned composite therefore maps the reference (``fixed``) space into the
@@ -270,7 +273,7 @@ def elastic_refine(fixed_dm, moving_dm, initial, config):
         float(config.distance_band_mm),
         sitk.sitkFloat32,
     )
-    registration = sitk.FastSymmetricForcesDemonsRegistrationFilter()
+    registration = sitk.DiffeomorphicDemonsRegistrationFilter()
     registration.SetNumberOfIterations(config.iterations)
     registration.SetSmoothDisplacementField(True)
     registration.SetStandardDeviations(
@@ -354,6 +357,8 @@ def _select_candidate(
     best, score, stage, candidate, candidate_score, candidate_stage, stages
 ):
     """Accept improvement; otherwise retain the previous transform and annotate QC."""
+    if not np.isfinite(candidate_score):
+        raise ValueError("Nonfinite registration Dice")
     detail = stages[candidate_stage]
     detail.update(dice=candidate_score, input_dice=score, selected=False)
     if candidate_score < score - DICE_TOLERANCE:
@@ -367,6 +372,47 @@ def _select_candidate(
     return candidate, candidate_score, candidate_stage
 
 
+def _record_stage_failure(stages, warnings, name, exc, score, fallback):
+    warnings.append(f"{name}: {exc}")
+    stages[name].update(
+        status="failed",
+        error=str(exc),
+        input_dice=score,
+        selected=False,
+        fallback_stage=fallback,
+    )
+
+
+def linear_refine(fixed_dm, moving_dm, initial, config, *, affine=False):
+    """Optimize a copy of the selected linear transform and validate its geometry."""
+    sitk = backend()
+    if affine:
+        transform = sitk.AffineTransform(3)
+        transform.SetCenter(initial.GetCenter())
+        transform.SetMatrix(initial.GetMatrix())
+        transform.SetTranslation(initial.GetTranslation())
+    else:
+        transform = sitk.Euler3DTransform(initial)
+    registration = sitk.ImageRegistrationMethod()
+    registration.SetMetricAsMeanSquares()
+    registration.SetInterpolator(sitk.sitkLinear)
+    registration.SetOptimizerAsRegularStepGradientDescent(1.0, 0.001, config.iterations)
+    registration.SetOptimizerScalesFromPhysicalShift()
+    registration.SetShrinkFactorsPerLevel([2, 1])
+    registration.SetSmoothingSigmasPerLevel([1, 0])
+    registration.SmoothingSigmasAreSpecifiedInPhysicalUnitsOn()
+    registration.SetInitialTransform(transform, inPlace=True)
+    registration.Execute(fixed_dm, moving_dm)
+    if not np.isfinite(transform.GetParameters()).all():
+        raise ValueError("Nonfinite linear transform")
+    matrix = np.array(transform.GetMatrix()).reshape(3, 3)
+    scales = np.linalg.svd(matrix, compute_uv=False)
+    if np.linalg.det(matrix) <= 0 or min(scales) < 0.5 or max(scales) > 2:
+        raise ValueError("Implausible linear transform")
+    transform.GetInverse()
+    return transform, registration
+
+
 def register_pair(fixed_organ, moving_organ, config):
     sitk = backend()
     fixed_qc = assess_organ_mask(fixed_organ, config)
@@ -377,10 +423,13 @@ def register_pair(fixed_organ, moving_organ, config):
     if partial and not config.allow_partial_organs:
         raise ValueError("Partial organ masks are disabled")
 
-    def score_transform(tx):
+    overlaps = {}
+
+    def score_transform(tx, name):
         if not partial:
             return dice(fixed_organ, moving_organ, tx)
         metrics = overlap_qc(fixed_organ, moving_organ, tx)
+        overlaps[name] = metrics
         if (
             metrics["common_fov_fraction"] < config.min_common_fov_fraction
             or metrics["common_foreground_voxels"] < 4
@@ -389,7 +438,7 @@ def register_pair(fixed_organ, moving_organ, config):
         return metrics["dice_common_fov"]
 
     identity = sitk.Euler3DTransform()
-    before = score_transform(identity)
+    before = score_transform(identity, "baseline")
     best, score, stage = identity, before, "baseline"
     warnings = []
     stage_transforms = {"baseline": identity}
@@ -409,19 +458,13 @@ def register_pair(fixed_organ, moving_organ, config):
                 )
             else:
                 initial = initialize_pca(fixed_organ, moving_organ)
-            initial_score = score_transform(initial)
+            initial_score = score_transform(initial, initial_stage)
             stage_transforms[initial_stage] = initial
             best, score, stage = _select_candidate(
                 best, score, stage, initial, initial_score, initial_stage, stages
             )
         except (RuntimeError, ValueError) as exc:
-            warnings.append(f"{initial_stage}: {exc}")
-            stages[initial_stage].update(
-                status="failed",
-                selected=False,
-                fallback_stage=stage,
-                error=str(exc),
-            )
+            _record_stage_failure(stages, warnings, initial_stage, exc, score, stage)
         finally:
             stages[initial_stage]["elapsed_seconds"] = time.perf_counter() - started
     fixed_dm = distance_map(
@@ -448,53 +491,22 @@ def register_pair(fixed_organ, moving_organ, config):
                 ),
             )
             continue
-        if name == "rigid":
-            tx = sitk.Euler3DTransform(best)
-        else:
-            tx = sitk.AffineTransform(3)
-            tx.SetCenter(best.GetCenter())
-            tx.SetMatrix(best.GetMatrix())
-            tx.SetTranslation(best.GetTranslation())
-        reg = sitk.ImageRegistrationMethod()
-        reg.SetMetricAsMeanSquares()
-        reg.SetInterpolator(sitk.sitkLinear)
-        reg.SetOptimizerAsRegularStepGradientDescent(1.0, 0.001, config.iterations)
-        reg.SetOptimizerScalesFromPhysicalShift()
-        reg.SetShrinkFactorsPerLevel([2, 1])
-        reg.SetSmoothingSigmasPerLevel([1, 0])
-        reg.SmoothingSigmasAreSpecifiedInPhysicalUnitsOn()
-        reg.SetInitialTransform(tx, inPlace=True)
         started = time.perf_counter()
         try:
-            reg.Execute(fixed_dm, moving_dm)
+            tx, reg = linear_refine(
+                fixed_dm, moving_dm, best, config, affine=name == "affine"
+            )
             stages[name].update(
                 optimizer_stop=reg.GetOptimizerStopConditionDescription(),
                 optimizer_iteration=int(reg.GetOptimizerIteration()),
             )
-            matrix = np.array(tx.GetMatrix()).reshape(3, 3)
-            scales = np.linalg.svd(matrix, compute_uv=False)
-            if (
-                not np.isfinite(tx.GetParameters()).all()
-                or np.linalg.det(matrix) <= 0
-                or min(scales) < 0.5
-                or max(scales) > 2
-            ):
-                raise ValueError("Implausible or nonfinite transform")
-            tx.GetInverse()
-            candidate = score_transform(tx)
+            candidate = score_transform(tx, name)
             stage_transforms[name] = tx
             best, score, stage = _select_candidate(
                 best, score, stage, tx, candidate, name, stages
             )
         except (RuntimeError, ValueError) as exc:
-            warnings.append(f"{name}: {exc}")
-            stages[name].update(
-                status="failed",
-                error=str(exc),
-                input_dice=score,
-                selected=False,
-                fallback_stage=stage,
-            )
+            _record_stage_failure(stages, warnings, name, exc, score, stage)
         finally:
             stages[name]["elapsed_seconds"] = time.perf_counter() - started
     selected_inverse = None
@@ -510,7 +522,7 @@ def register_pair(fixed_organ, moving_organ, config):
         started = time.perf_counter()
         try:
             candidate, registration = elastic_refine(fixed_dm, moving_dm, best, config)
-            candidate_score = score_transform(candidate)
+            candidate_score = score_transform(candidate, "elastic")
             stage_transforms["elastic"] = candidate
             stages["elastic"].update(
                 dice=candidate_score,
@@ -524,7 +536,7 @@ def register_pair(fixed_organ, moving_organ, config):
                 optimizer_iteration=int(registration.GetElapsedIterations()),
                 metric=float(registration.GetMetric()),
                 rms_change=float(registration.GetRMSChange()),
-                algorithm="FastSymmetricForcesDemonsRegistrationFilter",
+                algorithm="DiffeomorphicDemonsRegistrationFilter",
             )
             candidate_inverse = None
             if candidate_score > score + DICE_TOLERANCE:
@@ -535,14 +547,7 @@ def register_pair(fixed_organ, moving_organ, config):
             if stage == "elastic":
                 selected_inverse = candidate_inverse
         except (RuntimeError, ValueError) as exc:
-            warnings.append(f"elastic: {exc}")
-            stages["elastic"].update(
-                status="failed",
-                error=str(exc),
-                input_dice=score,
-                selected=False,
-                fallback_stage=stage,
-            )
+            _record_stage_failure(stages, warnings, "elastic", exc, score, stage)
         finally:
             stages["elastic"]["elapsed_seconds"] = time.perf_counter() - started
     selected_stage = "identity" if stage == "baseline" else stage
@@ -556,12 +561,14 @@ def register_pair(fixed_organ, moving_organ, config):
         stage_transforms,
         selected_inverse if selected_inverse is not None else best.GetInverse(),
     )
-    result.overlap = overlap_qc(fixed_organ, moving_organ, best)
+    for name, tx in stage_transforms.items():
+        if name not in overlaps:
+            overlaps[name] = overlap_qc(fixed_organ, moving_organ, tx)
+        stages[name].update(overlaps[name])
+        stages[name]["selection_metric"] = "dice_common_fov" if partial else "dice_full"
+    result.overlap = overlaps[stage]
     result.organ_volume_ratio = fixed_qc.volume_mm3 / moving_qc.volume_mm3
     result.confidence = registration_confidence(result.overlap, partial, config)
-    for name, tx in stage_transforms.items():
-        stages[name].update(overlap_qc(fixed_organ, moving_organ, tx))
-        stages[name]["selection_metric"] = "dice_common_fov" if partial else "dice_full"
     if score < config.min_dice:
         result.confidence = "failed"
         raise RegistrationRejected(f"Organ overlap rejected: Dice={score:.4f}", result)
