@@ -190,6 +190,13 @@ consensus back into fusion. Failed stages retain their original canonical paths,
 so inspect `registration_status` and `consensus_status` before downstream analysis.
 Existing radiomics now consumes the native-space registered masks automatically.
 
+To keep each source organ segmentation, pass `--keep_source_segmentation` or set
+`registration.keep_source_segmentation: true` in the manifest. Registration still
+aligns organs and maps tumor consensus, but the canonical organ path remains the
+source path and no `reg_organ_native_path` artifact is written. Tumor consensus is
+constrained to that scan's source organ when `constrain_tumor_to_organ` is enabled.
+Use `--no_keep_source_segmentation` to override the manifest and restore organ transfer.
+
 The native organ and tumor masks are the only persisted image artifacts.
 Reference-space images, transforms, coverage, and probability images remain
 in-memory intermediates.

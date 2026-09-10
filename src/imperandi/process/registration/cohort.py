@@ -506,19 +506,22 @@ def register_cohort(
                 )
                 inverse = inverse or tx.GetInverse()
                 pair_dir = directory / ids[i]
-                native_organ = resample(reference_organ, image, inverse)
-                if mask_qc[ref].partial:
-                    # Reference has no annotation outside its FOV: retain the
-                    # scan's own organ there instead of erasing unobserved tissue.
-                    known = resample(coverage_image(reference), image, inverse)
-                    native_organ = sitk.Or(
-                        native_organ, sitk.And(organ, sitk.Equal(known, 0))
+                if config.keep_source_segmentation:
+                    native_organ = organ
+                else:
+                    native_organ = resample(reference_organ, image, inverse)
+                    if mask_qc[ref].partial:
+                        # Reference has no annotation outside its FOV: retain the
+                        # scan's own organ there instead of erasing unobserved tissue.
+                        known = resample(coverage_image(reference), image, inverse)
+                        native_organ = sitk.Or(
+                            native_organ, sitk.And(organ, sitk.Equal(known, 0))
+                        )
+                    df.at[i, "reg_organ_native_path"] = write_artifact(
+                        native_organ,
+                        pair_dir / "organ_native.nii.gz",
                     )
-                df.at[i, "reg_organ_native_path"] = write_artifact(
-                    native_organ,
-                    pair_dir / "organ_native.nii.gz",
-                )
-                df.at[i, config.organ_column] = df.at[i, "reg_organ_native_path"]
+                    df.at[i, config.organ_column] = df.at[i, "reg_organ_native_path"]
                 transforms[i] = tx
                 inverse_transforms[i] = inverse
                 native_organs[i] = native_organ

@@ -38,6 +38,19 @@ def add_registration_arguments(parser):
         "--manifest", help="Built-in manifest name or YAML path (default: generic)."
     )
     parser.add_argument("--method", choices=CONSENSUS_METHODS)
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument(
+        "--keep_source_segmentation",
+        action="store_true",
+        default=None,
+        help="Keep source organ masks and use registration to map tumor consensus.",
+    )
+    source.add_argument(
+        "--no_keep_source_segmentation",
+        action="store_false",
+        dest="keep_source_segmentation",
+        help="Replace organ masks with the mapped reference organ (default).",
+    )
     affine = parser.add_mutually_exclusive_group()
     affine.add_argument("--affine", action="store_true", default=None)
     affine.add_argument("--no_affine", action="store_false", dest="affine")
@@ -175,6 +188,7 @@ def normalize_registration_args(args):
         checkpoint_every_sec=300,
         manifest=None,
         method=None,
+        keep_source_segmentation=None,
         affine=None,
         elastic=None,
         demons_smoothing_sigma_mm=None,
@@ -207,6 +221,7 @@ def resolve_config(args):
     settings = dict(raw)
     for name in [
         "method",
+        "keep_source_segmentation",
         "affine",
         "elastic",
         "demons_smoothing_sigma_mm",

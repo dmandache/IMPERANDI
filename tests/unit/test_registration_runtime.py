@@ -453,3 +453,25 @@ def test_custom_qc_output_and_path_collision(cohort, tmp_path):
     assert len(pd.read_csv(qc)) == 2
     with pytest.raises(ValueError, match="differ"):
         register.main(args_for(cohort, "--qc_csv_path", str(cohort)))
+
+
+@pytest.mark.parametrize(
+    "flag,expected",
+    [
+        (None, True),
+        ("--keep_source_segmentation", True),
+        ("--no_keep_source_segmentation", False),
+    ],
+)
+def test_keep_source_segmentation_manifest_and_cli(tmp_path, cohort, flag, expected):
+    manifest = tmp_path / "keep.yaml"
+    manifest.write_text(
+        yaml.safe_dump({"registration": {"keep_source_segmentation": True}})
+    )
+    flags = ["--manifest", str(manifest)]
+    if flag:
+        flags.append(flag)
+    config, _ = register.resolve_config(
+        register.normalize_registration_args(args_for(cohort, *flags))
+    )
+    assert config.keep_source_segmentation is expected
