@@ -347,6 +347,8 @@ registration:
   # Signed-distance clamp in mm.
   distance_band_mm: 15.0
   # Clip transferred tumors to the registered organ.
+  # Keep original organ masks while mapping tumor consensus.
+  keep_source_segmentation: false
   constrain_tumor_to_organ: true
   # Majority/STAPLE probability cutoff.
   threshold: 0.5
