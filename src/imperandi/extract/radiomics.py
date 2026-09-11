@@ -43,7 +43,8 @@ def _load_radiomics_dependencies():
     except ModuleNotFoundError as exc:
         raise RuntimeError(
             "The 'radiomics' command requires optional dependencies. "
-            "Install with: pip install pyradiomics SimpleITK"
+            'Install separately with: python -m pip install '
+            '"pyradiomics @ git+https://github.com/AIM-Harvard/pyradiomics.git@master"'
         ) from exc
 
     try:
@@ -51,7 +52,8 @@ def _load_radiomics_dependencies():
     except ModuleNotFoundError as exc:
         raise RuntimeError(
             "The 'radiomics' command requires optional dependencies. "
-            "Install with: pip install pyradiomics"
+            'Install separately with: python -m pip install '
+            '"pyradiomics @ git+https://github.com/AIM-Harvard/pyradiomics.git@master"'
         ) from exc
 
     return sitk, featureextractor

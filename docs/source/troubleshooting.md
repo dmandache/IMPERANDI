@@ -15,9 +15,15 @@ entry point refer to different environments.
 
 ## Radiomics cannot import PyRadiomics
 
-Install `.[radiomics]`. The project currently sources PyRadiomics from its Git
-repository, so installation requires Git and network access. Confirm the input
-has `nifti_path` and at least one populated `mask_*` column.
+Install PyRadiomics separately in the same environment as IMPERANDI.
+The Git installation is also required after installing `[all]` or `[all-dev]`
+and requires Git and network access:
+
+```bash
+python -m pip install "pyradiomics @ git+https://github.com/AIM-Harvard/pyradiomics.git@master"
+```
+
+Confirm the input has `nifti_path` and at least one populated `mask_*` column.
 
 ## No DICOM files are found
 

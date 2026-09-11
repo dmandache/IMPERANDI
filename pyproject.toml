@@ -44,11 +44,7 @@ segment = [
   "TotalSegmentator",
   "scikit-image",
   "xgboost",  # Required by TotalSegmentator's contrast-phase predictor.
-]
-
-radiomics = [
   "SimpleITK",
-  "pyradiomics@git+https://github.com/radiomics/pyradiomics.git",   # because 3.1.0 sdist metadata is broken on PyPI right now
 ]
 
 viewer = [
@@ -72,7 +68,7 @@ slow = [
   "idc-index",
 ]
 
-all = ["imperandi[segment,radiomics,viewer]"]
+all = ["imperandi[segment,viewer]"]
 all-dev = ["imperandi[all,dev,slow]"]
 
 [project.scripts]

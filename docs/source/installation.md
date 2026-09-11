@@ -21,14 +21,17 @@ imperandi --help
 ## Optional features
 
 The base installation supports DICOM ingest and NIfTI conversion. Install only
-the heavier feature sets needed by your workflow:
+the heavier feature sets needed by your workflow. PyRadiomics must be installed
+separately from Git, including when using `[all]` or `[all-dev]`.
+This keeps IMPERANDI's package metadata compatible with PyPI. The separate
+installation requires Git and network access:
 
 ```bash
 # TotalSegmentator-based segmentation and phase-prediction fallback
 python -m pip install -e ".[segment]"
 
 # PyRadiomics extraction
-python -m pip install -e ".[radiomics]"
+python -m pip install "pyradiomics @ git+https://github.com/AIM-Harvard/pyradiomics.git@master"
 
 # Notebook and web quality-control viewers
 python -m pip install -e ".[viewer]"
@@ -38,9 +41,11 @@ python -m pip install -e ".[dev]"
 
 # All runtime features
 python -m pip install -e ".[all]"
+python -m pip install "pyradiomics @ git+https://github.com/AIM-Harvard/pyradiomics.git@master"
 
 # All runtime features, development tools, and slow-test dependencies
 python -m pip install -e ".[all-dev]"
+python -m pip install "pyradiomics @ git+https://github.com/AIM-Harvard/pyradiomics.git@master"
 ```
 
 TotalSegmentator may download model weights the first time a segmentation task

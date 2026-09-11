@@ -18,6 +18,7 @@ Install all optional dependencies before running the full suite:
 
 ```bash
 python -m pip install -e '.[all-dev]'
+python -m pip install "pyradiomics @ git+https://github.com/AIM-Harvard/pyradiomics.git@master"
 python tests/slow/ircad/download.py
 python tests/slow/tcga_lihc/download.py
 python -m pytest tests/slow -m slow

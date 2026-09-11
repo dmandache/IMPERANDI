@@ -104,7 +104,8 @@ TotalSegmentator when prediction is a later fallback. Prediction requires
 imperandi radiomics [CSV_PATH] [CSV_PATH_OUT] [OPTIONS]
 ```
 
-Requires `imperandi[radiomics]`, `nifti_path`, and `mask_*` columns.
+Requires a separate PyRadiomics installation (see
+[installation](installation.md)), `nifti_path`, and `mask_*` columns.
 
 - `--manifest NAME_OR_YAML`: load settings and filters from `radiomics`.
 - `--pyradiomics_settings PARAMS.yaml`: use explicit PyRadiomics settings.
