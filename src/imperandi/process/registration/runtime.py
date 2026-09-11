@@ -2,6 +2,7 @@
 
 import argparse
 from dataclasses import asdict
+import json
 import logging
 import multiprocessing as mp
 from multiprocessing.connection import wait
@@ -26,7 +27,28 @@ from .reporting import ERROR_COLUMNS, build_error_record, build_qc, group_label
 logger = logging.getLogger(__name__)
 
 # Increment when registration behavior changes so old artifacts are not reused.
-REGISTRATION_SCHEMA = 11
+REGISTRATION_SCHEMA = 12
+
+
+def _has_failed_stage(rows, config):
+    """Recovered optimizer/validation failures are retryable too."""
+    enabled = {"geometry", "pca", "rigid"}
+    if config.affine:
+        enabled.add("affine")
+    if config.elastic:
+        enabled.add("elastic")
+    for value in rows.registration_stage_details.dropna():
+        try:
+            stages = json.loads(value)
+        except (TypeError, ValueError):
+            return True  # Unreadable diagnostics are unsafe to reuse on retry.
+        if not isinstance(stages, dict):
+            return True
+        for name in enabled:
+            detail = stages.get(name, {})
+            if not isinstance(detail, dict) or detail.get("status") == "failed":
+                return True
+    return False
 
 
 def _run_group(table, output_dir, config):
@@ -258,6 +280,7 @@ def run_registration(args, table, config, manifest):
                             ["failed", "low_confidence", "invalid_organ_mask"]
                         ).any()
                         or previous.consensus_status.eq("failed").any()
+                        or _has_failed_stage(previous, config)
                         or (
                             saved_errors is not None
                             and saved_errors.registration_scan_id.isin(scan_ids).any()

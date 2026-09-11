@@ -285,48 +285,148 @@ def elastic_refine(fixed_dm, moving_dm, initial, config):
     field = registration.Execute(sitk.Cast(fixed_dm, sitk.sitkFloat32), aligned_dm)
     if not np.isfinite(sitk.GetArrayViewFromImage(field)).all():
         raise ValueError("Nonfinite elastic displacement field")
+    if not np.isfinite(initial.GetParameters()).all():
+        raise ValueError("Nonfinite linear transform")
+    field = _extend_residual(field)
 
     composite = sitk.CompositeTransform(3)
     composite.AddTransform(initial)
     # Composite transforms apply the last transform first: initial(residual(p)).
     composite.AddTransform(sitk.DisplacementFieldTransform(field))
-    if not np.isfinite(composite.GetParameters()).all():
-        raise ValueError("Nonfinite elastic transform")
     return composite, registration
 
 
-def invert_elastic(transform, fixed):
+def _extend_residual(field):
+    """Keep the crop unchanged and add a smooth transition to zero outside it.
+
+    Displacement transforms are identity outside their domain. Extending the
+    edge values into a tapered collar avoids a jump at a cropped field's edge.
+    The resulting field must still pass the Jacobian and inverse checks.
+    """
+    sitk = backend()
+    values = sitk.GetArrayViewFromImage(field)
+    displacement = float(np.linalg.norm(values, axis=-1).max())
+    spacing = np.asarray(field.GetSpacing())
+    width_mm = max(3 * displacement, 2 * max(spacing))
+    padding = np.ceil(width_mm / spacing).astype(int)
+    padded = np.pad(values, [(p, p) for p in padding[::-1]] + [(0, 0)], mode="edge")
+    for axis, width in enumerate(padding[::-1]):
+        ramp = 0.5 - 0.5 * np.cos(np.pi * np.arange(width) / width)
+        weights = np.ones(padded.shape[axis])
+        weights[:width], weights[-width:] = ramp, ramp[::-1]
+        shape = [1] * 4
+        shape[axis] = len(weights)
+        padded *= weights.reshape(shape)
+    extended = sitk.GetImageFromArray(padded, isVector=True)
+    extended.SetSpacing(field.GetSpacing())
+    extended.SetDirection(field.GetDirection())
+    extended.SetOrigin(field.TransformIndexToPhysicalPoint([-int(p) for p in padding]))
+    return extended
+
+
+def _residual_jacobian(field):
+    """Differentiate displacement components in the image-axis basis.
+
+    Use identity direction on this calculation-only image, so the result is
+    independent of whether an ITK version applies direction cosines itself.
+    For orthonormal D, det(I + D.T @ du/dx @ D) = det(I + du/dx).
+    """
+    sitk = backend()
+    direction = np.asarray(field.GetDirection()).reshape(3, 3)
+    if not np.allclose(direction.T @ direction, np.eye(3), atol=1e-6, rtol=0):
+        raise ValueError("Elastic field direction must be orthonormal")
+    local = sitk.GetImageFromArray(
+        sitk.GetArrayViewFromImage(field) @ direction, isVector=True
+    )
+    local.SetSpacing(field.GetSpacing())
+    return sitk.GetArrayFromImage(sitk.DisplacementFieldJacobianDeterminant(local))
+
+
+def _round_trip_error(field, inverse_field):
+    """Maximum residual composition error in mm at field voxel centers."""
+    sitk = backend()
+    residual = sitk.DisplacementFieldTransform(sitk.Image(field))
+    warped = sitk.Resample(
+        inverse_field, field, residual, sitk.sitkLinear, 0, sitk.sitkVectorFloat64
+    )
+    error = sitk.GetArrayFromImage(warped)
+    error += sitk.GetArrayViewFromImage(field)
+    return float(np.linalg.norm(error, axis=-1).max())
+
+
+def invert_elastic(transform, fixed, diagnostics=None):
     """Validate and invert the linear-plus-Demons reference-to-scan mapping."""
     sitk = backend()
 
-    # Validate topology before accepting the deformation. Folded fields cannot
-    # be safely inverted and can create anatomically invalid transferred masks.
-    field = sitk.TransformToDisplacementField(
-        transform,
-        sitk.sitkVectorFloat64,
-        fixed.GetSize(),
-        fixed.GetOrigin(),
-        fixed.GetSpacing(),
-        fixed.GetDirection(),
+    diagnostics = {} if diagnostics is None else diagnostics
+    diagnostics["validation_phase"] = "jacobian"
+    linear = transform.GetNthTransform(0)
+    residual = sitk.DisplacementFieldTransform(transform.GetNthTransform(1))
+    field = residual.GetDisplacementField()
+    matrix = np.asarray(linear.GetMatrix()).reshape(3, 3)
+    determinant = float(np.linalg.det(matrix))
+    if (
+        not np.isfinite(linear.GetParameters()).all()
+        or not np.isfinite(determinant)
+        or determinant <= 0
+    ):
+        raise ValueError("Invalid elastic linear component")
+    values = sitk.GetArrayViewFromImage(field)
+    if not np.isfinite(values).all():
+        raise ValueError("Nonfinite elastic displacement field")
+    for axis in range(3):
+        if np.any(np.take(values, [0, -1], axis=axis) != 0):
+            raise ValueError(
+                "Elastic field does not transition to identity at its boundary"
+            )
+    # det(J(linear o residual)) = det(linear) * det(J(residual)). Avoid
+    # differentiating a sampled rigid rotation at image borders.
+    jacobian = determinant * _residual_jacobian(field)
+    diagnostics.update(
+        jacobian_min=float(jacobian.min()),
+        jacobian_nonpositive_voxels=int(np.count_nonzero(jacobian <= 0)),
     )
-    jacobian = sitk.GetArrayFromImage(sitk.DisplacementFieldJacobianDeterminant(field))
-    if not np.isfinite(jacobian).all() or np.min(jacobian) <= 0:
+    if not np.isfinite(jacobian).all() or diagnostics["jacobian_nonpositive_voxels"]:
         raise ValueError("Elastic transform contains a fold")
+    del jacobian, values
     # Invert the residual on its own grid, preserving its direction cosines,
     # and invert the linear part exactly. For T = linear(residual(p)),
     # T^-1 = residual^-1(linear^-1(p)).
-    linear = transform.GetNthTransform(0)
-    residual = sitk.DisplacementFieldTransform(transform.GetNthTransform(1))
-    inverse_field = sitk.InvertDisplacementField(
-        residual.GetDisplacementField(),
-        maximumNumberOfIterations=100,
-        enforceBoundaryCondition=False,
-    )
+    diagnostics["validation_phase"] = "inversion"
+    inverter = sitk.InvertDisplacementFieldImageFilter()
+    inverter.SetMaximumNumberOfIterations(100)
+    inverter.SetMeanErrorToleranceThreshold(0.0)
+    inverter.SetMaxErrorToleranceThreshold(0.01)
+    inverter.SetEnforceBoundaryCondition(True)
+    inverse_field = inverter.Execute(field)
     if not np.isfinite(sitk.GetArrayViewFromImage(inverse_field)).all():
         raise ValueError("Nonfinite inverse elastic displacement field")
+    diagnostics.update(
+        inverse_max_error_norm=float(inverter.GetMaxErrorNorm()),
+        inverse_mean_error_norm=float(inverter.GetMeanErrorNorm()),
+        validation_phase="round_trip",
+    )
+    # Check both compositions rather than accepting a finite but inaccurate
+    # inverse. Limit error to half the smallest reference voxel, accounting
+    # conservatively for amplification by the linear transform in scan space.
+    tolerance = 0.5 * min(fixed.GetSpacing())
+    forward_error = _round_trip_error(field, inverse_field)
+    reverse_error = _round_trip_error(inverse_field, field)
+    reverse_error *= float(np.linalg.svd(matrix, compute_uv=False).max())
+    diagnostics.update(
+        inverse_round_trip_max_mm=forward_error,
+        forward_round_trip_max_mm=reverse_error,
+        inverse_tolerance_mm=tolerance,
+    )
+    if (
+        not np.isfinite([forward_error, reverse_error]).all()
+        or max(forward_error, reverse_error) > tolerance
+    ):
+        raise ValueError("Elastic inverse round-trip error exceeds tolerance")
     inverse = sitk.CompositeTransform(3)
     inverse.AddTransform(sitk.DisplacementFieldTransform(inverse_field))
     inverse.AddTransform(linear.GetInverse())
+    diagnostics["validation_phase"] = "complete"
     return inverse
 
 
@@ -540,7 +640,9 @@ def register_pair(fixed_organ, moving_organ, config):
             )
             candidate_inverse = None
             if candidate_score > score + DICE_TOLERANCE:
-                candidate_inverse = invert_elastic(candidate, fixed_organ)
+                candidate_inverse = invert_elastic(
+                    candidate, fixed_organ, stages["elastic"]
+                )
             best, score, stage = _select_candidate(
                 best, score, stage, candidate, candidate_score, "elastic", stages
             )
