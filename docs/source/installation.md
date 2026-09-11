@@ -1,6 +1,6 @@
 # Installation
 
-IMPERANDI requires Python 3.10 or newer. A virtual environment keeps its
+IMPERANDI requires Python 3.10–3.12. A virtual environment keeps its
 scientific dependencies isolated from other projects.
 
 ```bash
@@ -30,11 +30,17 @@ python -m pip install -e ".[segment]"
 # PyRadiomics extraction
 python -m pip install -e ".[radiomics]"
 
-# Tests, linting, and Jupyter tools
+# Notebook and web quality-control viewers
+python -m pip install -e ".[viewer]"
+
+# Tests, linting, and formatting
 python -m pip install -e ".[dev]"
 
-# Every optional feature
+# All runtime features
 python -m pip install -e ".[all]"
+
+# All runtime features, development tools, and slow-test dependencies
+python -m pip install -e ".[all-dev]"
 ```
 
 TotalSegmentator may download model weights the first time a segmentation task
@@ -57,7 +63,7 @@ editing, but CI should treat documentation warnings as errors.
 
 ## Jupyter quality-control viewer
 
-The classic viewer uses the widget backend. After installing the development
+The classic viewer uses the widget backend. After installing the `viewer`
 dependencies, an optional named kernel can be registered with:
 
 ```bash

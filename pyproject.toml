@@ -42,22 +42,23 @@ Issues = "https://github.com/dmandache/IMPERANDI/issues"
 [project.optional-dependencies]
 segment = [
   "TotalSegmentator",
-  "scipy",
   "scikit-image",
-  "xgboost",
-  "SimpleITK"
+  "xgboost",  # Required by TotalSegmentator's contrast-phase predictor.
 ]
 
 radiomics = [
-  "pywavelets",
+  "SimpleITK",
   "pyradiomics@git+https://github.com/radiomics/pyradiomics.git",   # because 3.1.0 sdist metadata is broken on PyPI right now
 ]
 
 viewer = [
+  "ipython",
   "matplotlib",
   "ipykernel",
   "ipympl",
-  "ipywidgets"
+  "ipywidgets",
+  "panel",
+  "param",
 ]
 
 dev = [
@@ -71,7 +72,8 @@ slow = [
   "idc-index",
 ]
 
-all = ["imperandi[dev,segment,radiomics,viewer,slow]"]
+all = ["imperandi[segment,radiomics,viewer]"]
+all-dev = ["imperandi[all,dev,slow]"]
 
 [project.scripts]
 imperandi = "imperandi.cli:main"

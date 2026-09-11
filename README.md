@@ -141,6 +141,12 @@ Radiomics dependencies:
 python -m pip install -e ".[radiomics]"
 ```
 
+Notebook and web quality-control viewers:
+
+```bash
+python -m pip install -e ".[viewer]"
+```
+
 Development and test tooling:
 
 ```bash
@@ -155,10 +161,16 @@ git config core.hooksPath .githooks
 
 With hooks enabled, `git push` strips output/execution state from changed `*.ipynb` files, stages those changes, and stops once so you can commit the cleaned notebooks.
 
-Install everything:
+Install all runtime features:
 
 ```bash
 python -m pip install -e ".[all]"
+```
+
+Install all runtime features, development tools, and slow-test dependencies:
+
+```bash
+python -m pip install -e ".[all-dev]"
 ```
 
 Optional Jupyter kernel setup:
@@ -318,7 +330,7 @@ radiomics workflow on small IRCAD and TCGA-LIHC cohorts. Downloaded inputs and
 generated outputs stay outside version control:
 
 ```bash
-python -m pip install -e '.[all]'
+python -m pip install -e '.[all-dev]'
 python tests/slow/ircad/download.py
 python tests/slow/tcga_lihc/download.py
 python -m pytest tests/slow -m slow

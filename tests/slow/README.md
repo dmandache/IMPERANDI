@@ -17,7 +17,7 @@ IRCAD and TCGA-LIHC use the same directory contract:
 Install all optional dependencies before running the full suite:
 
 ```bash
-python -m pip install -e '.[all]'
+python -m pip install -e '.[all-dev]'
 python tests/slow/ircad/download.py
 python tests/slow/tcga_lihc/download.py
 python -m pytest tests/slow -m slow
