@@ -143,7 +143,8 @@ jobs:
           name: python-package-distributions
           path: dist/
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30
+          overwrite: true
 
   publish-github:
     name: Publish GitHub Release assets
