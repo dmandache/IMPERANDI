@@ -112,7 +112,11 @@ def clean_and_merge_masks(
     fill_holes: bool = True,
     largest_cc: bool = True,
 ) -> bool:
-    """Merge masks and optionally apply morphological cleanup."""
+    """Fetch all requested masks, then merge and optionally clean them.
+
+    Missing or unreadable inputs raise at load time; a partial merge must not
+    be reported as a successful output.
+    """
 
     masks: Dict[str, np.ndarray] = {}
     ref_affine: np.ndarray | None = None
@@ -120,10 +124,6 @@ def clean_and_merge_masks(
 
     for fname in mask_files:
         src = dir_path / fname
-        if not src.exists():
-            logger.warning("Mask missing – skipping merge: %s", src)
-            continue
-
         data, affine, zooms = load_nifti(src)
         if ref_affine is None:
             ref_affine, voxel_zooms = affine, zooms
@@ -623,13 +623,11 @@ def _infer_outputs_from_snapshot(
 
 
 def _merge_key_to_column(merge_key: str) -> str:
-    key = str(merge_key).strip()
+    key = _normalize_output_key(merge_key)
     if not key:
         return "mask_unnamed"
     if key.startswith("mask_"):
         return key
-    if key.endswith(".nii.gz"):
-        key = key[: -len(".nii.gz")]
     return f"mask_{key or 'unnamed'}"
 
 
@@ -639,10 +637,14 @@ def resolve_merge_outputs(
     *,
     output_to_column: Dict[str, str] | None = None,
 ) -> List[str]:
-    """Resolve post-processing merge keys to known logical task outputs.
+    """Resolve merge keys, deferring undeclared outputs to runtime mask loading.
+
+    Task declarations need not enumerate all backend outputs (for example,
+    ``total`` can produce multiple masks). Warn about unknown columns and keep
+    their normalized logical names so the actual files can be fetched later.
 
     Raises:
-        ValueError: If merge keys are absent or refer to unknown mask columns.
+        ValueError: If merge keys are absent.
     """
     merge_keys = _as_str_list(postprocess.get("merge_keys"))
     if not merge_keys:
@@ -657,15 +659,21 @@ def resolve_merge_outputs(
     normalized_columns = [_merge_key_to_column(k) for k in merge_keys]
     missing = [col for col in normalized_columns if col not in column_to_output]
     if missing:
-        raise ValueError(
-            "postprocess.merge_keys references unknown mask column(s): "
-            + ", ".join(missing)
-            + f". merge_keys={merge_keys}, normalized={normalized_columns}, "
-            + "available="
-            + ", ".join(sorted(column_to_output.keys()))
+        logger.warning(
+            "postprocess.merge_keys references undeclared mask column(s): %s. "
+            "Tasks may produce additional masks; deferring validation until "
+            "the actual mask files are fetched. merge_keys=%s, normalized=%s, "
+            "declared=%s",
+            ", ".join(missing),
+            merge_keys,
+            normalized_columns,
+            ", ".join(sorted(column_to_output)) or "(none)",
         )
 
-    return [column_to_output[column] for column in normalized_columns]
+    return [
+        column_to_output.get(column, column.removeprefix("mask_"))
+        for column in normalized_columns
+    ]
 
 
 def iter_modality_segmentation_configs(
@@ -832,9 +840,16 @@ def _has_existing_task_outputs(output_dir: Path, tasks_config: Dict[str, Any]) -
         ):
             return False
     postprocess = tasks_config.get("postprocess")
-    if postprocess and resolve_merge_outputs(
-        postprocess, tasks, output_to_column=build_output_column_map(tasks)
-    ):
+    if postprocess:
+        merge_outputs = resolve_merge_outputs(postprocess, tasks)
+        output_to_fetch = build_output_fetch_map(tasks)
+        if not all(
+            (
+                output_dir / _output_to_filename(output_to_fetch.get(name, name))
+            ).is_file()
+            for name in merge_outputs
+        ):
+            return False
         merged_output = str(postprocess.get("output", "merged")).strip() or "merged"
         return (output_dir / _output_to_filename(merged_output)).exists()
     return True
@@ -932,9 +947,17 @@ def segment_volume(
                 exclude_names={nifti_path.name},
             )
             if not inferred_outputs:
-                raise RuntimeError(
-                    f"Could not infer outputs for task '{task_name}' from created segmentations."
+                if not tasks_config.get("postprocess"):
+                    raise RuntimeError(
+                        f"Could not infer outputs for task '{task_name}' from created segmentations."
+                    )
+                logger.warning(
+                    "Task '%s' produced no newly written masks; it may have reused "
+                    "existing files. Deferring validation until the requested "
+                    "merge masks are fetched after all tasks finish.",
+                    task_name,
                 )
+                continue
             task_outputs = inferred_outputs
             task_fetch_outputs = {
                 output_name: output_name for output_name in inferred_outputs
@@ -963,10 +986,24 @@ def segment_volume(
         _store_resolved_outputs()
         return warnings
 
+    # Include requested masks even when a task did not enumerate them in its
+    # declaration. Preserve explicit backend filename aliases when available.
+    for name in merge_files:
+        output_to_column.setdefault(name, _output_to_column(name))
+        output_to_fetch.setdefault(name, name)
+    merge_paths = [
+        output_dir / _output_to_filename(output_to_fetch[name]) for name in merge_files
+    ]
+
     merged_output = str(postprocess.get("output", "merged")).strip() or "merged"
     merged_name = _output_to_filename(merged_output)
     dst = output_dir / merged_name
-    if dst.exists() and not force and not ran_any_task:
+    if (
+        dst.exists()
+        and not force
+        and not ran_any_task
+        and all(path.is_file() for path in merge_paths)
+    ):
         if verbose:
             logger.info(
                 "Skip postprocess – output exists and row already has task outputs: %s",
@@ -991,7 +1028,7 @@ def segment_volume(
 
     merged_ok = clean_and_merge_masks(
         output_dir,
-        [_output_to_filename(output_to_fetch.get(name, name)) for name in merge_files],
+        [_output_to_filename(output_to_fetch[name]) for name in merge_files],
         output_name=merged_name,
         radius_mm=float(postprocess.get("radius_mm", 5.0)),
         verbose=verbose,

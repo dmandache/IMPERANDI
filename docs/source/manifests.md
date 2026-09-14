@@ -256,6 +256,16 @@ logical masks and apply closing, hole filling, and largest-component cleanup.
 The same logical outputs may be used across modalities, for example mapping
 both `liver_lesions` and `liver_lesions_mr` to `mask_liver_tumor`.
 
+Task output declarations need not enumerate every mask a backend produces.
+For example, `task: total` may supply `liver` without an explicit `output` or
+ROI subset. Undeclared `postprocess.merge_keys` emit a warning during validation;
+the worker resolves them against masks produced by the tasks or their actual
+filenames, including existing masks reused without rewriting them.
+Missing or unreadable requested masks fail when fetched, before any
+merged output is written. `postprocess.on_failure: warn_only` applies to a merge
+that cannot complete after loading its inputs; it does not permit partial
+merges with missing input masks.
+
 `radiomics.pyradiomics` follows the normal PyRadiomics parameter structure.
 `radiomics.filters` maps an existing cohort column to its accepted values. Use
 the canonical `phase` output for phase-based filtering.
