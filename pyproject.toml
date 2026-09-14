@@ -40,6 +40,10 @@ Documentation = "https://imperandi.readthedocs.io/"
 Issues = "https://github.com/dmandache/IMPERANDI/issues"
 
 [project.optional-dependencies]
+postprocess = [
+  "SimpleITK",
+]
+
 segment = [
   "TotalSegmentator",
   "scikit-image",
@@ -68,7 +72,7 @@ slow = [
   "idc-index",
 ]
 
-all = ["imperandi[segment,viewer]"]
+all = ["imperandi[segment,viewer,postprocess]"]
 all-dev = ["imperandi[all,dev,slow]"]
 
 [project.scripts]

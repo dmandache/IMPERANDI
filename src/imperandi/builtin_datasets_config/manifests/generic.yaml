@@ -2,6 +2,19 @@
 # changing the values changes the corresponding pipeline stage.
 dataset_name: generic
 
+# Optional image stage: run explicitly with `imperandi postprocess --manifest generic`.
+# The baseline normalizes MR foreground only; CT rows keep their input images.
+# See blueprint_manifest_example.yaml for N4 and contrast-adjustment examples.
+image_postprocessing:
+  version: 1
+  modalities:
+    MR:
+      mask: nonzero
+      outside_mask: preserve
+      steps:
+        - type: normalization
+          method: zscore
+
 # Parse-time identifier policy. source accepts: auto, tags, or path. The three
 # from_tag values are DICOM keywords; fallback: path uses directory components
 # when the selected tag is unavailable.

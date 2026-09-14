@@ -103,6 +103,8 @@ IMPERANDI ships a single CLI with these subcommands:
 - `clean`: filter and normalize parsed metadata.
 - `ingest`: run `parse` then `clean`.
 - `convert`: convert indexed DICOM volumes to NIfTI.
+- `postprocess`: adjust image contrast, correct N4 bias fields, and normalize
+  intensities (z-score, robust z-score, min-max, or percentile scaling).
 - `segment`: run configurable segmentation on NIfTI volumes (requires _TotalSegmentator_, install with `.[segment]`).
 - `phase`: resolve canonical contrast phase; a TotalSegmentator fallback requires
   `.[segment]`.
@@ -116,6 +118,7 @@ imperandi parse --help
 imperandi clean --help
 imperandi ingest --help
 imperandi convert --help
+imperandi postprocess --help
 imperandi segment --help
 imperandi phase --help
 imperandi radiomics --help
@@ -220,6 +223,23 @@ imperandi phase \
   --csv_path_out /path/to/output/nifti_index_phased.csv \
   --manifest generic
 ```
+
+Optionally postprocess indexed images with dataset-specific settings:
+
+```bash
+imperandi postprocess /path/to/output/nifti_index_phased.csv \
+  --manifest generic
+# Or configure methods directly:
+imperandi postprocess /path/to/output/nifti_index_phased.csv \
+  --normalization zscore --mask nonzero
+```
+
+This creates `nifti_index_postprocessed.csv`, derived float32 NIfTI images,
+and JSON provenance while preserving source images. The new table can feed
+`radiomics`. Configure `image_postprocessing` for ordered steps and CT/MR
+profiles; see the [manifest reference](docs/source/manifests.md#image-intensity-postprocessing).
+N4 requires `python -m pip install -e '.[postprocess]'`; contrast and
+normalization work with the base installation.
 
 Extract radiomics:
 

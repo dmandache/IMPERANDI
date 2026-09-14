@@ -76,9 +76,25 @@ Phase can run immediately after conversion or after segmentation. Segmentation
 must precede radiomics, and a phase-filtered radiomics manifest must receive a
 table containing both `mask_*` columns and the canonical `phase` column.
 
+## Optional image intensity processing
+
+`postprocess` writes derived NIfTI images and a separate CSV for contrast
+adjustment, N4 bias correction, and normalization. It can run after conversion,
+or after segmentation/phase when foreground masks or phase metadata are needed:
+
+```bash
+imperandi postprocess nifti_index_phased.csv --manifest site-a.yaml
+imperandi radiomics nifti_index_postprocessed.csv --manifest site-a.yaml
+```
+
+The new table preserves masks and metadata, places derived paths in
+`nifti_path`, and records the prior paths in `source_nifti_path`. Configure the
+downstream analysis for the resulting intensity scale. Settings and CT/MR
+dispatch are documented under [image postprocessing](manifests.md#image-intensity-postprocessing).
+
 ## Checkpoints and resume
 
-`parse`, `convert`, `segment`, `phase`, and `radiomics` checkpoint long runs.
+`parse`, `convert`, `postprocess`, `segment`, `phase`, and `radiomics` checkpoint long runs.
 Resume is enabled by default when the saved command state and input fingerprint
 match. Common controls are:
 
@@ -89,6 +105,9 @@ match. Common controls are:
   fingerprint; this is safer but slower on large inputs.
 
 Changing material arguments or inputs invalidates an incompatible checkpoint.
+`postprocess` additionally verifies each derived image's sidecar on every run,
+retries failed rows, and rebuilds missing or changed artifacts. Its
+`--strict_resume` hashes source images, masks, and derived images too.
 Do not manually edit checkpoint/state files while a command is running.
 
 ## Example Slurm batch script
@@ -158,4 +177,3 @@ starting from scratch unless you pass `--no_resume`.
 - Start with a small cohort and `--num_workers 1` when validating a manifest.
 - Preserve error CSVs and logs with the corresponding output table.
 - Use explicit output paths in automation instead of relying on defaults.
-

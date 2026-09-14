@@ -304,6 +304,51 @@ segmentation:
         on_failure: fail
 
 # ---------------------------------------------------------------------------
+# Image intensity postprocessing (separate from segmentation mask cleanup)
+# ---------------------------------------------------------------------------
+# Executed only by `imperandi postprocess`; these are illustrative settings.
+# Use either modalities below or global mask/steps for a homogeneous cohort.
+image_postprocessing:
+  version: 1
+  modalities:
+    MR:
+      # all|nonzero|positive, evaluated once on the source image.
+      mask: positive
+      # Optional explicit foreground mask overrides automatic selection.
+      # mask_column: mask_liver
+      # preserve (default) or zero outside the foreground mask.
+      outside_mask: preserve
+      steps:
+        # Bias correction must be first and requires imperandi[postprocess].
+        - type: bias_correction
+          method: n4
+          iterations: [50, 50, 30, 20]
+          shrink_factor: 2
+          convergence_threshold: 0.001
+        - type: contrast
+          method: percentile
+          percentiles: [1, 99]
+        - type: normalization
+          method: zscore
+          # Other methods: robust_zscore, minmax, percentile.
+          # minmax/percentile accept output_range: [0, 1].
+          # percentile also accepts percentiles: [1, 99].
+    CT:
+      mask: all
+      steps:
+        # Example window only; choose bounds for the intended analysis.
+        - type: contrast
+          method: window
+          lower: -150
+          upper: 250
+        - type: normalization
+          method: minmax
+          output_range: [0, 1]
+        # Further contrast alternatives:
+        # - {type: contrast, method: gamma, gamma: 0.8}
+        # - {type: contrast, method: histogram, bins: 256}
+
+# ---------------------------------------------------------------------------
 # Radiomics
 # ---------------------------------------------------------------------------
 radiomics:

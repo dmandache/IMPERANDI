@@ -9,6 +9,7 @@ columns and adds or normalizes the fields needed downstream.
 | `clean` | `<input>_clean.csv` | — | volume grouping, normalized date/time, ordering and geometry fields |
 | `ingest` | `dicom_index_clean.csv` | parse artifacts | parsed and curated volume rows |
 | `convert` | `nifti_index.csv` | `conv_errors.csv` | `nifti_path` |
+| `postprocess` | `nifti_index_postprocessed.csv` | `postprocess_errors.csv`; per-image `postprocess.json` | derived `nifti_path`, `source_nifti_path`, `postprocess_status`, `postprocess_error`, `postprocess_provenance` |
 | `segment` | input CSV in place, or `--csv_path_out` | `seg_errors.csv` and warning report when applicable | `mask_<output>` paths |
 | `phase` | input CSV in place, or `--csv_path_out` | `phase_errors.csv` | canonical `phase`, provenance columns, and `totalseg_*` predictions when used |
 | `radiomics` | `<input>_radiomics.csv` | `radiomics_errors.csv` | ROI-prefixed PyRadiomics features |
@@ -50,4 +51,3 @@ rather than disposable logs. Check all of the following before downstream use:
 Checkpoint files and JSON state may appear beside the configured main/error
 outputs during resumable runs. They are implementation artifacts, not cohort
 tables, and should not be passed to the next stage.
-

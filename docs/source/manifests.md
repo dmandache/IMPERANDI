@@ -28,6 +28,8 @@ One manifest configures the main data path:
    after optional TotalSegmentator prediction during `phase`.
 5. `segmentation` defines TotalSegmentator mask tasks and post-processing.
 6. `radiomics` defines PyRadiomics settings and cohort filters.
+7. `image_postprocessing` defines image bias correction, contrast adjustment,
+   and normalization for the separate `postprocess` command.
 
 The `cleaning.steps` order is executable configuration. In particular,
 `modality_curation` should run after volume grouping and acquisition ordering,
@@ -259,6 +261,87 @@ both `liver_lesions` and `liver_lesions_mr` to `mask_liver_tumor`.
 `radiomics.pyradiomics` follows the normal PyRadiomics parameter structure.
 `radiomics.filters` maps an existing cohort column to its accepted values. Use
 the canonical `phase` output for phase-based filtering.
+
+## Image intensity postprocessing
+
+`image_postprocessing` is independent of `segmentation.modalities.*.postprocess`,
+which operates on segmentation masks. Image processing is opt-in through
+`imperandi postprocess`; conversion does not run it automatically.
+
+```yaml
+image_postprocessing:
+  version: 1
+  modalities:
+    MR:
+      mask: positive
+      outside_mask: preserve
+      # mask_column: mask_liver  # optional, same shape and affine as the image
+      steps:
+        - type: bias_correction
+          method: n4
+          iterations: [50, 50, 30, 20]
+          shrink_factor: 2
+          convergence_threshold: 0.001
+        - type: contrast
+          method: percentile
+          percentiles: [1, 99]
+        - type: normalization
+          method: zscore
+```
+
+Use `CT` and/or `MR` keys; `MRI` aliases `MR`. Omitted modalities are retained
+and skipped. For one recipe applied to every row, put `mask`, `mask_column`,
+`outside_mask`, and `steps` directly under `image_postprocessing` and omit
+`modalities`. Profiles are complete and do not inherit from one another. Unknown
+options, unsupported versions, invalid numeric bounds, and empty steps fail
+validation. The built-in `generic` recipe applies nonzero-mask z-score to MR
+only; the blueprint includes N4 and an illustrative CT window/min-max recipe.
+
+Steps execute in list order. Bias correction, when present, must be first and
+may appear only once. All image calculations and fitted statistics use the
+same foreground selection, fixed from the original image. `mask: all` includes
+zero-valued voxels; `nonzero` excludes zeros; `positive` excludes zeros and
+negative values. An explicit `mask_column` replaces this automatic selection
+with voxels whose mask value is positive. Masks must match the image grid;
+there is no implicit resampling. Unselected voxels are preserved unless
+`outside_mask: zero` is configured.
+
+| Type | Method | Parameters and behavior |
+|---|---|---|
+| `bias_correction` | `n4` | Defaults: `iterations: [50, 50, 30, 20]`, `shrink_factor: 2`, `convergence_threshold: 0.001`. Requires positive foreground intensities and an orthogonal image grid. |
+| `contrast` | `percentile` | Clips to `percentiles: [1, 99]`, retaining intensity units. |
+| `contrast` | `window` | Clips to required `lower` and `upper` intensity bounds. |
+| `contrast` | `gamma` | Scales foreground min/max to [0, 1], applies a positive `gamma` exponent (default 1), then restores the original range. |
+| `contrast` | `histogram` | Global histogram equalization with `bins: 256`; foreground output lies in [0, 1]. |
+| `normalization` | `zscore` | Subtracts foreground mean and divides by population standard deviation (`ddof=0`). |
+| `normalization` | `robust_zscore` | Subtracts foreground median and divides by `1.4826 × median absolute deviation`. |
+| `normalization` | `minmax` | Scales observed foreground min/max to `output_range: [0, 1]`. |
+| `normalization` | `percentile` | Clips at `percentiles: [1, 99]`, then scales those bounds to `output_range: [0, 1]`. |
+
+N4 estimates a field on the shrunken image and evaluates it on the original
+grid, following the [SimpleITK N4 workflow](https://simpleitk.readthedocs.io/en/master/link_N4BiasFieldCorrection_docs.html).
+Only the selected foreground is changed. Every axis must retain at least four
+voxels after shrinking; reduce `shrink_factor` for small images or masks.
+
+An empty foreground, non-finite input, unsupported 4-D/complex data, or mismatched
+mask produces a per-volume failure. Zero-spread normalization produces zeros,
+or the lower `output_range` bound, and records `degenerate: true` in provenance.
+Output voxels are float32; image shape, affine, spacing, and qform/sform codes
+are preserved. The JSON sidecar records effective settings, source/mask and
+output fingerprints, library versions, and foreground statistics before/after
+processing, including fitted normalization centers and scales.
+
+Choose intensity processing for the downstream analysis: normalized CT values
+no longer represent Hounsfield units. Existing masks remain aligned because
+the image grid does not change. Run segmentation/phase on the intended input
+intensity representation, then optionally process its indexed images before
+radiomics; configure radiomics binning, resegmentation ranges, and its own
+normalization consistently with the derived image scale.
+
+Potential extensions are foreground-aware 3-D CLAHE, reference-based histogram
+matching or fitted cohort normalization, saved N4 bias fields, before/after QC
+previews, and parallel volume processing. Reference distributions should be
+fitted on training data and reused for validation/test data.
 
 ## Validation checklist
 

@@ -9,6 +9,7 @@ from typing import Optional, Sequence
 from imperandi.ingest import clean as clean_module
 from imperandi.ingest import parse as parse_module
 from imperandi.process import convert as convert_module
+from imperandi.process import postprocess as postprocess_module
 from imperandi.utils.logging import setup_logging
 from imperandi.utils.manifest import load_manifest
 from imperandi.utils.misc import print_args
@@ -112,6 +113,15 @@ def _add_phase_subcommand(subparsers: argparse._SubParsersAction) -> None:
     parser.set_defaults(_handler=_handle_phase)
 
 
+def _add_postprocess_subcommand(subparsers: argparse._SubParsersAction) -> None:
+    parser = subparsers.add_parser(
+        "postprocess",
+        help="Adjust image contrast, correct bias fields, and normalize intensities.",
+    )
+    postprocess_module.add_postprocess_arguments(parser)
+    parser.set_defaults(_handler=_handle_postprocess)
+
+
 def _add_radiomics_subcommand(subparsers: argparse._SubParsersAction) -> None:
     parser = subparsers.add_parser(
         "radiomics",
@@ -178,6 +188,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_clean_subcommand(subparsers)
     _add_ingest_subcommand(subparsers)
     _add_convert_subcommand(subparsers)
+    _add_postprocess_subcommand(subparsers)
     _add_phase_subcommand(subparsers)
     _add_radiomics_subcommand(subparsers)
     _add_segment_subcommand(subparsers)
@@ -277,6 +288,14 @@ def _handle_phase(args: argparse.Namespace) -> int:
             return 2
         raise
     return 0
+
+
+def _handle_postprocess(args: argparse.Namespace) -> int:
+    try:
+        return postprocess_module.run(args)
+    except (ValueError, FileNotFoundError, RuntimeError) as exc:
+        logger.error("%s", exc)
+        return 2
 
 
 def _handle_radiomics(args: argparse.Namespace) -> int:

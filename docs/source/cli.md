@@ -64,6 +64,56 @@ to the input CSV. If `OUTPUT_DIR`/`--output_dir` is omitted, converted files are
 written to `<project_root>/NIFTI` (the input CSV's directory) and a warning is
 logged. Use `--num_workers` to control conversion parallelism.
 
+## `postprocess`
+
+```bash
+imperandi postprocess [CSV_PATH] [OUTPUT_DIR] [OPTIONS]
+imperandi postprocess nifti_index.csv --normalization zscore --mask nonzero
+imperandi postprocess nifti_index.csv --manifest site-a.yaml
+```
+
+Processes scalar 3-D NIfTI images listed in `nifti_path`. Contrast and
+normalization use the base installation. N4 bias correction requires
+`pip install 'imperandi[postprocess]'`. The standalone module command is
+`python -m imperandi.process.postprocess` with the same arguments.
+
+- `--bias-correction {none,n4}`: optional bias correction, applied first.
+- `--contrast {none,percentile,window,gamma,histogram}`: contrast adjustment.
+- `--normalization {none,zscore,robust_zscore,minmax,percentile}`: intensity
+  normalization. `z-score` and `z_score` are accepted aliases.
+- `--percentiles LOW HIGH`: clipping/scaling percentiles (default 1, 99).
+- `--window LOW HIGH`: required bounds for `--contrast window`.
+- `--gamma VALUE`: positive exponent for `--contrast gamma` (default 1).
+- `--mask {all,nonzero,positive}`: foreground selection (default `nonzero`).
+- `--mask-column COLUMN`: use an existing NIfTI mask from this CSV column.
+- `--outside-mask {preserve,zero}`: treatment of unselected voxels.
+- `--csv_path`, `--output_dir`: named paths override positional paths.
+- `--csv_path_out`: defaults to `nifti_index_postprocessed.csv` beside the input.
+- `--error_csv_path`: defaults to `postprocess_errors.csv` beside the input.
+- `--force`: recompute even when a matching derived image exists.
+
+Supply a manifest `image_postprocessing` section or at least one method flag.
+Any method flag replaces the entire manifest postprocessing configuration with
+a global bias → contrast → normalization sequence. Mask flags can override
+manifest profiles without replacing steps. Algorithm parameters beyond the
+listed flags, including N4 iterations and normalization output ranges, belong
+in the manifest. See [configuration](manifests.md#image-intensity-postprocessing).
+
+The default image root is `<csv_dir>/POSTPROCESSED`. The new CSV points
+`nifti_path` to successful derivatives and retains the input path as
+`source_nifti_path`. Inputs are preserved; input, output, and error CSV paths
+must differ. Each derivative has a JSON provenance sidecar. Unconfigured
+modalities keep their source images with status `skipped`; failed rows have an
+empty `nifti_path` and an error message. Exit codes: 0 success, 1 per-volume
+failures, 2 invalid configuration or missing dependencies.
+
+`--dry-run` validates settings and prints the resolved configuration without
+loading images or optional backends. Shared checkpoint options apply. Resume
+checks each derivative against its source, mask, parameters, library versions,
+and output fingerprint; failures are retried and changed/missing outputs are
+rebuilt. `--strict_resume` hashes image and mask contents as well as the CSV.
+`--no_resume` recomputes all selected volumes.
+
 ## `segment`
 
 ```bash
@@ -118,6 +168,6 @@ explicit YAML path and a warning is emitted.
 
 ## Shared long-running options
 
-`parse`, `convert`, `segment`, `phase`, and `radiomics` accept checkpoint and
+`parse`, `convert`, `postprocess`, `segment`, `phase`, and `radiomics` accept checkpoint and
 resume options described in [Workflow](workflow.md). All commands support
 `--dry-run`.

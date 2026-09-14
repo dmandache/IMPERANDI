@@ -30,6 +30,9 @@ installation requires Git and network access:
 # TotalSegmentator-based segmentation and phase-prediction fallback
 python -m pip install -e ".[segment]"
 
+# N4 image bias correction (other postprocess methods use base dependencies)
+python -m pip install -e ".[postprocess]"
+
 # PyRadiomics extraction
 python -m pip install "pyradiomics @ git+https://github.com/AIM-Harvard/pyradiomics.git@master"
 
@@ -76,4 +79,3 @@ python -m ipykernel install --user \
   --name imperandi \
   --display-name "IMPERANDI"
 ```
-
