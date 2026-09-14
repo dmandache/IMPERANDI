@@ -790,7 +790,14 @@ def correct_volume_ids(
     """
 
     if "volume_id" not in df.columns:
+        logger.info("Skipping volume ID correction: volume_id column is missing")
         return df
+
+    logger.info(
+        "Starting volume ID correction: merging fragments with consistent "
+        "slice spacing, z_tolerance=%s",
+        z_tolerance,
+    )
 
     preferred_group_cols = group_columns or [
         "patient_key",
@@ -846,7 +853,7 @@ def correct_volume_ids(
         else:
             summary = {}
         logger.debug(
-            "Evaluating volume_id correction group: group_cols=%s, summary=%s, "
+            "Evaluating volume ID correction group: group_cols=%s, summary=%s, "
             "volume_ids=%s, rows=%s",
             group_cols,
             summary,
@@ -885,7 +892,7 @@ def correct_volume_ids(
             and "SliceLocation" in group_df.columns
         ):
             logger.debug(
-                "Falling back to SliceLocation for z_positions: "
+                "Falling back to SliceLocation for slice positions: "
                 "ipp_z_count=%s, rows=%s",
                 0 if z_positions is None else len(z_positions),
                 len(group_df),
@@ -907,7 +914,7 @@ def correct_volume_ids(
 
         if z_positions is None or len(z_positions) < 2:
             logger.debug(
-                "Skipping volume_id correction group: insufficient z_positions "
+                "Skipping volume ID correction group: insufficient slice positions "
                 "(count=%s)",
                 0 if z_positions is None else len(z_positions),
             )
@@ -919,26 +926,24 @@ def correct_volume_ids(
 
         consistent_spacing = np.all(np.isclose(z_diff, z_diff[0], atol=z_tolerance))
         logger.debug(
-            "z_positions spacing check: z_sample=%s, diff_sample=%s, "
-            "nonzero_diff_sample=%s, reference_spacing=%s, consistent=%s, "
+            "Slice spacing check: z_sample=%s, diff_sample=%s, "
+            "reference_spacing=%s, consistent=%s, "
             "z_tolerance=%s",
             z_sorted[:5].tolist(),
-            z_diff[:5].tolist(),
             z_diff[:5].tolist(),
             float(z_diff[0]),
             bool(consistent_spacing),
             z_tolerance,
         )
 
-        logger.info(
-            "%s : %s pseudo-volumes, %s total files",
-            summary,
-            len(volume_ids),
-            len(group_df),
-        )
-
         if consistent_spacing:
-            logger.info("👫 Merged")
+            logger.info(
+                "Merging volume fragments with consistent slice spacing: "
+                "volume_count=%s, rows=%s, summary=%s",
+                len(volume_ids),
+                len(group_df),
+                summary,
+            )
             # canonical_id = sorted(map(str, volume_ids))[0]
             canonical_id = hashlib.sha1(
                 "|".join(sorted(map(str, volume_ids))).encode()
@@ -951,7 +956,13 @@ def correct_volume_ids(
             for vol_id in volume_ids:
                 updated_ids[vol_id] = canonical_id
         else:
-            logger.info("👍 They are different volumes")
+            logger.info(
+                "Keeping volumes separate due to inconsistent slice spacing: "
+                "volume_count=%s, rows=%s, summary=%s",
+                len(volume_ids),
+                len(group_df),
+                summary,
+            )
             logger.debug(
                 "Keeping volume_ids separate due to inconsistent z spacing: %s",
                 list(map(str, volume_ids)),
