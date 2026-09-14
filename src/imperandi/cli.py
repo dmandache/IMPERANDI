@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 from pathlib import Path
+from pprint import pformat
 from typing import Optional, Sequence
 
 from imperandi.ingest import clean as clean_module
@@ -16,10 +17,12 @@ logger = logging.getLogger(__name__)
 
 
 def _log_script_namespace(script_file: str, args: argparse.Namespace) -> None:
-    namespace = argparse.Namespace(
-        **{k: v for k, v in vars(args).items() if not k.startswith("_")}
+    namespace = {k: v for k, v in vars(args).items() if not k.startswith("_")}
+    logger.info(
+        "Running %s with arguments:\n%s",
+        Path(script_file).name,
+        pformat(namespace, indent=4, width=88),
     )
-    logger.info("🚀 Running %s with namespace: %s", Path(script_file).name, namespace)
 
 
 def _load_phase_module():
