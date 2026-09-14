@@ -1,6 +1,7 @@
 import argparse
 import copy
 import sys
+import logging
 from pathlib import Path
 import types
 
@@ -1752,7 +1753,15 @@ def test_main_subprocess_mode_currently_degrades_to_serial(tmp_path, monkeypatch
     assert out_df.loc[0, "mask_liver"].endswith("liver.nii.gz")
 
 
-def test_main_resume_skips_completed_rows(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "existing_masks, force", [(False, False), (True, False), (True, True)]
+)
+def test_main_resume_skips_completed_rows(
+    tmp_path, monkeypatch, caplog, existing_masks, force
+):
+    caplog.set_level(logging.INFO, logger=segment_module.__name__)
+    if existing_masks:
+        (tmp_path / "liver.nii.gz").write_text("mask")
     nifti = tmp_path / "vol.nii.gz"
     nifti.write_text("nifti")
     csv_path = tmp_path / "nifti_index.csv"
@@ -1800,7 +1809,7 @@ def test_main_resume_skips_completed_rows(tmp_path, monkeypatch):
         manifest=str(config_path),
         num_workers=1,
         verbose=False,
-        force=False,
+        force=force,
         start_method="spawn",
         timeout_sec=10,
         checkpoint_every_rows=1,
@@ -1809,6 +1818,8 @@ def test_main_resume_skips_completed_rows(tmp_path, monkeypatch):
         strict_resume=False,
     )
     segment_module.main(args)
+    expected_resumed = int(existing_masks and not force)
+    assert f"{expected_resumed} resumed" in caplog.text
     assert calls["count"] == 1
 
     calls["count"] = 0

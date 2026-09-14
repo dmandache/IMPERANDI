@@ -1116,7 +1116,7 @@ def process_with_checkpoint(
             skipped_rows=len(df),
             failed_rows=0,
             success_label="parsed",
-            extra_counts={"skipped by finished checkpoint": len(df)},
+            resumed_rows=len(df),
         )
         if return_df:
             return pd.read_csv(output_path)
@@ -1333,7 +1333,7 @@ def process_with_checkpoint(
         skipped_rows=resume_skipped_count,
         failed_rows=0,
         success_label="parsed",
-        extra_counts={"skipped by resume": resume_skipped_count},
+        resumed_rows=resume_skipped_count,
     )
     if return_df:
         return out

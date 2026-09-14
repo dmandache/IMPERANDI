@@ -200,8 +200,9 @@ def test_main_resume_skips_completed_rows(tmp_path, monkeypatch):
 
 
 def test_main_skips_rows_with_existing_totalseg_phase_when_not_forced(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, caplog
 ):
+    caplog.set_level(logging.INFO, logger=phase_module.__name__)
     nifti = tmp_path / "valid.nii.gz"
     nifti.write_text("nifti")
     csv_path = tmp_path / "nifti_index.csv"
@@ -241,6 +242,7 @@ def test_main_skips_rows_with_existing_totalseg_phase_when_not_forced(
     assert calls["count"] == 0
     out_df = pd.read_csv(args.csv_path_out)
     assert out_df.loc[0, "totalseg_phase"] == "portal"
+    assert "1 resumed" in caplog.text
 
 
 def test_main_force_recomputes_existing_totalseg_phase(tmp_path, monkeypatch):

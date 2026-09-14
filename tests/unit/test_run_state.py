@@ -4,6 +4,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 import argparse
+import logging
 import pandas as pd
 
 from imperandi.utils.run_state import (
@@ -12,10 +13,30 @@ from imperandi.utils.run_state import (
     build_checkpoint_paths,
     ensure_source_id_column,
     load_state,
+    log_finished_resume_summary,
     merge_with_existing_output,
     prepare_resume_context,
     source_id_resume_signature,
 )
+
+
+def test_finished_resume_summary_excludes_prior_failures(tmp_path, caplog):
+    error_path = tmp_path / "errors.csv"
+    pd.DataFrame({"_source_idx": ["failed", "unrelated"]}).to_csv(
+        error_path, index=False
+    )
+    logger = logging.getLogger("imperandi.tests.finished_resume")
+    with caplog.at_level(logging.DEBUG, logger=logger.name):
+        log_finished_resume_summary(
+            logger,
+            "Conversion",
+            {"completed_indices": ["passed", "failed"]},
+            error_path,
+        )
+
+    assert "0 succeeded, 1 resumed, 1 skipped, 0 failed" in caplog.text
+    assert "1 resumed" in caplog.text
+    assert "1 skipped by resume after prior failure" in caplog.text
 
 
 def test_build_checkpoint_paths_contract(tmp_path):

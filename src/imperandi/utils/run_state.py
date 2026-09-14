@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import tempfile
 import time
@@ -10,6 +11,35 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 import pandas as pd
+
+from imperandi.utils.logging import log_task_summary
+
+
+def log_finished_resume_summary(
+    logger: logging.Logger,
+    task_name: str,
+    state: Mapping[str, Any] | None,
+    error_checkpoint_path: Path,
+) -> None:
+    """Report checkpoint skips without treating prior failures as successes."""
+    resumed_ids = normalize_source_ids((state or {}).get("completed_indices", []))
+    prior_failed_ids = set()
+    if error_checkpoint_path.exists():
+        prior_errors = pd.read_csv(error_checkpoint_path)
+        error_key = "_source_idx" if "_source_idx" in prior_errors else "idx"
+        if error_key in prior_errors:
+            prior_failed_ids = normalize_source_ids(prior_errors[error_key])
+    prior_failed_count = len(resumed_ids & prior_failed_ids)
+    log_task_summary(
+        logger,
+        task_name,
+        processed_rows=0,
+        succeeded_rows=0,
+        skipped_rows=len(resumed_ids),
+        resumed_rows=len(resumed_ids) - prior_failed_count,
+        extra_counts={"skipped by resume after prior failure": prior_failed_count},
+    )
+
 
 STATE_SCHEMA_VERSION = 2
 DEFAULT_HASH_EXCLUDE_KEYS = frozenset(

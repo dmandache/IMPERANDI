@@ -23,6 +23,7 @@ from imperandi.utils.misc import report_volumes, report_change, print_args
 from imperandi.utils.manifest import load_manifest
 from imperandi.utils.checkpoint_cli import add_checkpoint_arguments
 from imperandi.utils.run_state import (
+    log_finished_resume_summary,
     atomic_write_csv,
     CheckpointManager,
     ensure_source_id_column,
@@ -531,17 +532,18 @@ def convert_dicom_to_nifti_parallel(
             if on_result is not None:
                 on_result(k, export_path, error_row, status)
 
-    log_task_summary(
-        logger,
-        "Conversion",
-        total_rows=n_samples,
-        processed_rows=converted_count + skipped_count + failed_count,
-        succeeded_rows=converted_count,
-        skipped_rows=skipped_count,
-        failed_rows=failed_count,
-        success_label="converted",
-        skipped_label="skipped already valid",
-    )
+    if on_result is None:
+        log_task_summary(
+            logger,
+            "Conversion",
+            total_rows=n_samples,
+            processed_rows=converted_count + skipped_count + failed_count,
+            succeeded_rows=converted_count,
+            skipped_rows=skipped_count,
+            resumed_rows=skipped_count,
+            failed_rows=failed_count,
+            success_label="converted",
+        )
 
     return df, df_err
 
@@ -598,6 +600,9 @@ def main(args):
         logger.info(
             "Resume enabled and matching convert run already finished; skipping execution."
         )
+        log_finished_resume_summary(
+            logger, "Conversion", state, paths.error_checkpoint_path
+        )
         return
 
     if args.verbose:
@@ -650,6 +655,10 @@ def main(args):
                     except Exception:
                         continue
 
+    resumed_ids = set(df_all["_source_idx"]) & completed_indices
+    resume_failed_count = len(resumed_ids & set(errors_by_idx))
+    run_counts = {"converted": 0, "skipped": 0, "failed": 0}
+
     def _checkpoint_write(*, force: bool = False) -> None:
         err_df = (
             pd.DataFrame(list(errors_by_idx.values()))
@@ -673,6 +682,7 @@ def main(args):
         work_df, df_archive_err = materialize_archive_dicom_paths(
             work_df, archive_session
         )
+        run_counts["failed"] += len(df_archive_err)
         if not df_archive_err.empty:
             for _, row in df_archive_err.iterrows():
                 if "_source_idx" in row:
@@ -684,6 +694,8 @@ def main(args):
 
         def _on_result(k: int, export_path, error_row, status: str) -> None:
             ckpt.mark_processed()
+            if status in run_counts:
+                run_counts[status] += 1
             source_idx = normalize_source_id(work_df.iloc[k]["_source_idx"])
             completed_indices.add(source_idx)
             if export_path is not None:
@@ -744,6 +756,21 @@ def main(args):
             report_volumes(df_err)
         atomic_write_csv(df_err, args.error_csv_path, index=False)
 
+    log_task_summary(
+        logger,
+        "Conversion",
+        total_rows=len(df_all),
+        processed_rows=sum(run_counts.values()),
+        succeeded_rows=run_counts["converted"],
+        skipped_rows=len(resumed_ids) + run_counts["skipped"],
+        resumed_rows=len(resumed_ids) - resume_failed_count + run_counts["skipped"],
+        failed_rows=run_counts["failed"],
+        success_label="converted",
+        extra_counts={
+            "skipped already valid": run_counts["skipped"],
+            "skipped by resume after prior failure": resume_failed_count,
+        },
+    )
     logger.info("Conversion done ✔")
     ckpt.finalize_state(completed_indices=completed_indices)
 

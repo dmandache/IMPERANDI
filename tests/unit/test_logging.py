@@ -18,7 +18,7 @@ log_task_summary = _LOGGING_MODULE.log_task_summary
 def test_log_task_summary_reports_shared_row_counts(caplog):
     logger = logging.getLogger("imperandi.tests.summary")
 
-    with caplog.at_level(logging.INFO, logger=logger.name):
+    with caplog.at_level(logging.DEBUG, logger=logger.name):
         log_task_summary(
             logger,
             "Phase extraction",
@@ -26,21 +26,29 @@ def test_log_task_summary_reports_shared_row_counts(caplog):
             processed_rows=3,
             succeeded_rows=2,
             skipped_rows=2,
+            resumed_rows=1,
             failed_rows=1,
             success_label="phase extracted",
             extra_counts={
-                "skipped by resume": 1,
                 "skipped with existing phase": 1,
                 "skipped by filters": 0,
             },
         )
 
     assert (
-        "Phase extraction summary: 5 total row(s), 3 processed, "
-        "2 phase extracted, 2 skipped, 1 failed, 1 skipped by resume, "
-        "1 skipped with existing phase"
+        "Phase extraction summary: 5 total, "
+        "2 phase extracted, 1 resumed, 1 skipped, 1 failed"
     ) in caplog.text
+    assert "Phase extraction details: 3 processed, 1 skipped with existing phase" in caplog.text
     assert "skipped by filters" not in caplog.text
+
+
+def test_log_task_summary_reports_zero_resumed_rows(caplog):
+    logger = logging.getLogger("imperandi.tests.summary.zero_resume")
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        log_task_summary(logger, "Conversion", processed_rows=2, resumed_rows=0)
+
+    assert "0 resumed" in caplog.text
 
 
 def test_log_task_summary_defaults_successes_to_processed_minus_failed(caplog):
@@ -58,6 +66,6 @@ def test_log_task_summary_defaults_successes_to_processed_minus_failed(caplog):
         )
 
     assert (
-        "Conversion summary: 4 processed, 3 converted, "
+        "Conversion summary: 3 converted, "
         "1 skipped already valid, 1 failed"
     ) in caplog.text

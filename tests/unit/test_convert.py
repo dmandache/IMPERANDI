@@ -427,7 +427,11 @@ def test_main_resume_reprocesses_when_error_checkpoint_path_changes(
     assert work_sizes == [1, 1]
 
 
-def test_main_uses_volume_id_as_checkpoint_source_idx(tmp_path, monkeypatch):
+@pytest.mark.parametrize("status, resumed", [("converted", 0), ("skipped", 1)])
+def test_main_uses_volume_id_as_checkpoint_source_idx(
+    tmp_path, monkeypatch, caplog, status, resumed
+):
+    caplog.set_level(logging.INFO, logger=convert_module.__name__)
     csv_path = tmp_path / "dicom_index.csv"
     pd.DataFrame(
         [
@@ -447,7 +451,7 @@ def test_main_uses_volume_id_as_checkpoint_source_idx(tmp_path, monkeypatch):
     def fake_convert(work_df, output_dir, verbose, num_workers, on_result):
         seen_source_ids.extend(work_df["_source_idx"].tolist())
         for i in range(len(work_df)):
-            on_result(i, Path(output_dir) / "scan.nii.gz", None, "converted")
+            on_result(i, Path(output_dir) / "scan.nii.gz", None, status)
         return work_df, pd.DataFrame()
 
     monkeypatch.setattr(convert_module, "convert_dicom_to_nifti_parallel", fake_convert)
@@ -478,6 +482,7 @@ def test_main_uses_volume_id_as_checkpoint_source_idx(tmp_path, monkeypatch):
     )
     convert_module.main(args)
 
+    assert f"{resumed} resumed" in caplog.text
     assert seen_source_ids == ["vol-a"]
     paths = build_checkpoint_paths(args.csv_path_out, args.error_csv_path, "convert")
     state = load_state(paths.state_path)

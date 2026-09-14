@@ -45,6 +45,7 @@ from imperandi.utils.logging import log_task_summary, setup_logging
 from imperandi.utils.manifest import load_manifest
 from imperandi.utils.checkpoint_cli import add_checkpoint_arguments
 from imperandi.utils.run_state import (
+    log_finished_resume_summary,
     atomic_write_csv,
     CheckpointManager,
     ensure_source_id_column,
@@ -818,6 +819,27 @@ def prefetch_totalsegmentator_models(
         download_pretrained_weights(task_id)
 
 
+def _has_existing_task_outputs(output_dir: Path, tasks_config: Dict[str, Any]) -> bool:
+    """Check whether all configured tasks and postprocessing can reuse outputs."""
+    tasks = tasks_config.get("tasks", [])
+    if not tasks:
+        return False
+    for task in tasks:
+        outputs = infer_task_fetch_outputs(task)
+        if not outputs or not all(
+            (output_dir / _output_to_filename(name)).exists()
+            for name in outputs.values()
+        ):
+            return False
+    postprocess = tasks_config.get("postprocess")
+    if postprocess and resolve_merge_outputs(
+        postprocess, tasks, output_to_column=build_output_column_map(tasks)
+    ):
+        merged_output = str(postprocess.get("output", "merged")).strip() or "merged"
+        return (output_dir / _output_to_filename(merged_output)).exists()
+    return True
+
+
 def segment_volume(
     nifti_path: Path,
     output_dir: Path,
@@ -1292,6 +1314,9 @@ def main(args: argparse.Namespace) -> None:
         logger.info(
             "Resume enabled and matching segment run already finished; skipping execution."
         )
+        log_finished_resume_summary(
+            logger, "Segmentation", state, paths.error_checkpoint_path
+        )
         return
 
     from imperandi.utils.multiprocessing import (
@@ -1390,6 +1415,8 @@ def main(args: argparse.Namespace) -> None:
                         errors_by_idx[source_idx] = str(row["error_message"])
                 except Exception:
                     continue
+
+    resume_failed_count = len(completed_indices & set(errors_by_idx))
 
     modality_skipped_count = 0
     for idx in df.index[~eligible_by_modality]:
@@ -1783,6 +1810,20 @@ def main(args: argparse.Namespace) -> None:
     processed_source_ids = {
         normalize_source_id(df.at[i, "_source_idx"]) for i in row_indices
     }
+    existing_output_ids = set()
+    if not args.force:
+        for i in row_indices:
+            row = df.loc[i]
+            nifti_path = row.get("nifti_path")
+            if not isinstance(nifti_path, (str, Path)):
+                continue
+            resolved_config = resolve_segmentation_config_for_modality(
+                tasks_config, row.get("Modality")
+            )
+            if resolved_config and _has_existing_task_outputs(
+                Path(nifti_path).parent, resolved_config
+            ):
+                existing_output_ids.add(normalize_source_id(df.at[i, "_source_idx"]))
     run_serial = strategy.mode == "serial" or effective_workers <= 1
     if strategy.mode == "subprocess_per_case":
         # logger.warning(
@@ -1874,18 +1915,25 @@ def main(args: argparse.Namespace) -> None:
 
     ckpt.finalize_state(completed_indices=completed_indices)
     run_failed_count = len(processed_source_ids & set(errors_by_idx))
+    existing_output_count = len(existing_output_ids - set(errors_by_idx))
     log_task_summary(
         logger,
         "Segmentation",
         total_rows=len(df),
         processed_rows=len(row_indices),
-        succeeded_rows=max(0, len(row_indices) - run_failed_count),
-        skipped_rows=resume_skipped_count + modality_skipped_count,
+        succeeded_rows=max(
+            0, len(row_indices) - run_failed_count - existing_output_count
+        ),
+        skipped_rows=(
+            resume_skipped_count + modality_skipped_count + existing_output_count
+        ),
         failed_rows=run_failed_count,
         success_label="segmented",
+        resumed_rows=resume_skipped_count - resume_failed_count + existing_output_count,
         extra_counts={
-            "skipped by resume": resume_skipped_count,
+            "skipped by resume after prior failure": resume_failed_count,
             "skipped by modality": modality_skipped_count,
+            "skipped with existing masks": existing_output_count,
         },
     )
     logger.info("Segmentation done ✔")

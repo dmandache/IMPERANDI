@@ -36,6 +36,7 @@ def log_task_summary(
     *,
     processed_rows: int,
     skipped_rows: int = 0,
+    resumed_rows: Optional[int] = None,
     failed_rows: int = 0,
     total_rows: Optional[int] = None,
     succeeded_rows: Optional[int] = None,
@@ -43,11 +44,16 @@ def log_task_summary(
     skipped_label: str = "skipped",
     extra_counts: Optional[Mapping[str, int]] = None,
 ) -> None:
-    """Log a consistent end-of-task row processing summary."""
+    """Log outcomes, separating reused successes from other skipped rows.
+
+    ``skipped_rows`` includes ``resumed_rows`` (checkpoint or existing outputs).
+    Processing counts and skip reasons are available at DEBUG level.
+    """
 
     processed = _coerce_count(processed_rows)
     skipped = _coerce_count(skipped_rows)
     failed = _coerce_count(failed_rows)
+    resumed = _coerce_count(resumed_rows)
     if succeeded_rows is None:
         succeeded = max(0, processed - failed)
     else:
@@ -55,21 +61,21 @@ def log_task_summary(
 
     parts: list[str] = []
     if total_rows is not None:
-        parts.append(f"{_coerce_count(total_rows)} total row(s)")
-    parts.extend(
-        [
-            f"{processed} processed",
-            f"{succeeded} {success_label}",
-            f"{skipped} {skipped_label}",
-            f"{failed} failed",
-        ]
-    )
+        parts.append(f"{_coerce_count(total_rows)} total")
+    parts.append(f"{succeeded} {success_label}")
+    if resumed_rows is not None:
+        parts.append(f"{resumed} resumed")
+    parts.extend([f"{max(0, skipped - resumed)} {skipped_label}", f"{failed} failed"])
+
+    logger.info("%s summary: %s", task_name, ", ".join(parts))
+
+    details = [f"{processed} processed"]
     for label, count in (extra_counts or {}).items():
         count = _coerce_count(count)
         if count:
-            parts.append(f"{count} {label}")
+            details.append(f"{count} {label}")
 
-    logger.info("%s summary: %s", task_name, ", ".join(parts))
+    logger.debug("%s details: %s", task_name, ", ".join(details))
 
 
 def setup_logging(

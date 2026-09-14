@@ -13,6 +13,7 @@ from imperandi.utils.misc import print_args
 from imperandi.utils.manifest import load_manifest
 from imperandi.utils.checkpoint_cli import add_checkpoint_arguments
 from imperandi.utils.run_state import (
+    log_finished_resume_summary,
     atomic_write_csv,
     CheckpointManager,
     ensure_source_id_column,
@@ -860,6 +861,9 @@ def main(args: argparse.Namespace) -> None:
         logger.info(
             "Resume enabled and matching radiomics run already finished; skipping execution."
         )
+        log_finished_resume_summary(
+            logger, "Radiomics extraction", state, paths.error_checkpoint_path
+        )
         return
 
     sitk_module, featureextractor_module = _load_radiomics_dependencies()
@@ -919,6 +923,8 @@ def main(args: argparse.Namespace) -> None:
                         errors_by_idx[source_idx] = row.to_dict()
                 except Exception:
                     pass
+
+    resume_failed_count = len(completed_indices & set(errors_by_idx))
 
     def _checkpoint_write(*, force: bool = False) -> None:
         err_df = (
@@ -1008,8 +1014,9 @@ def main(args: argparse.Namespace) -> None:
         skipped_rows=resume_skipped_count + filter_skipped_count,
         failed_rows=run_failed_count,
         success_label="features extracted",
+        resumed_rows=resume_skipped_count - resume_failed_count,
         extra_counts={
-            "skipped by resume": resume_skipped_count,
+            "skipped by resume after prior failure": resume_failed_count,
             "skipped by filters": filter_skipped_count,
         },
     )
