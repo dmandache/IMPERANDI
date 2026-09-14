@@ -369,17 +369,23 @@ registration:
   constrain_tumor_to_organ: true
   # Majority/STAPLE probability cutoff.
   threshold: 0.5
-  # Ordered reference preferences; unlisted scans rank last.
+  # Criteria are evaluated in list order, one column per item. A category list
+  # gives most-to-least preferred values; min/max orders finite numeric values.
+  # Later criteria break ties. Missing/unlisted values rank last per criterion.
+  # Complete organs always precede partial organs. Move the organ-volume max
+  # criterion earlier to make size more important than phase or resolution.
   reference_priority:
     CT:
-      - {phase: PORTAL_VENOUS}
-      - {phase: ARTERIAL}
-      - {phase: DELAYED}
-      - {phase: NATIVE}
+      - phase: [PORTAL_VENOUS, ARTERIAL, DELAYED, NATIVE]
+      - PixelSpacingXY: min
+      - SliceThickness: min
+      - registration_organ_volume_mm3: max
     MR:
-      - {mri_sequence: T1}
-      - {mri_sequence: T2}
-      - {mri_sequence: DWI}
+      - mri_sequence: [T1, T2, DWI]
+      - phase: [PORTAL_VENOUS]
+      - PixelSpacingXY: min
+      - SliceThickness: min
+      - registration_organ_volume_mm3: max
 
 # ---------------------------------------------------------------------------
 # Radiomics

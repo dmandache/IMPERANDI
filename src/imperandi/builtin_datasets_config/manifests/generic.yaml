@@ -271,16 +271,16 @@ registration:
   threshold: 0.5
   reference_priority:
     CT:
-      - {phase: PORTAL_VENOUS}
-      - {phase: DELAYED}
-      - {phase: ARTERIAL}
-      - {phase: NATIVE}
-      - {phase: UNKNOWN}
+      - phase: [PORTAL_VENOUS, DELAYED, ARTERIAL, NATIVE, UNKNOWN]
+      - PixelSpacingXY: min
+      - SliceThickness: min
+      - registration_organ_volume_mm3: max
     MR:
-      - {mri_sequence: T1, phase: PORTAL_VENOUS}
-      - {mri_sequence: T1}
-      - {mri_sequence: T2}
-      - {mri_sequence: DWI}
+      - mri_sequence: [T1, T2, DWI]
+      - phase: [PORTAL_VENOUS]
+      - PixelSpacingXY: min
+      - SliceThickness: min
+      - registration_organ_volume_mm3: max
 
 radiomics:
   # `pyradiomics` follows the native PyRadiomics parameter-file structure.

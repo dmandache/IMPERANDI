@@ -30,6 +30,27 @@ def test_bundled_manifests_are_loadable(manifest_name, dataset_name):
     assert "resegmentRange" not in radiomics["MR"]["pyradiomics"]["setting"]
 
 
+@pytest.mark.parametrize(
+    "manifest_name",
+    [
+        "generic",
+        "blueprint_manifest_example",
+        "dataset_configs/manifests/operandi.yaml",
+    ],
+)
+def test_registration_manifests_use_ordered_reference_criteria(manifest_name):
+    from imperandi.process.registration.config import RegistrationConfig
+
+    manifest = load_manifest(
+        manifest_name, base_path=Path(__file__).resolve().parents[2]
+    )
+    config = RegistrationConfig.from_mapping(manifest["registration"])
+    assert config.reference_priority["MR"][0] == {"mri_sequence": ["T1", "T2", "DWI"]}
+    assert config.reference_priority["MR"][-1] == {
+        "registration_organ_volume_mm3": "max"
+    }
+
+
 def test_load_generic_manifest_and_hook_resolution():
     base_path = Path(__file__).resolve().parents[2] / "src" / "imperandi"
     manifest = load_manifest("generic", base_path=base_path)

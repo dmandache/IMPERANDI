@@ -927,7 +927,7 @@ def test_keep_source_segmentation_maps_tumor_to_source_organ(tmp_path, keep):
             RegistrationConfig(iterations=10, keep_source_segmentation=True),
         )
         assert errors.empty
-        assert rerun.mask_liver.equals(out.source_mask_liver)
+        assert rerun.mask_liver.tolist() == out.source_mask_liver.tolist()
 
 
 def test_keep_source_segmentation_requires_boolean():

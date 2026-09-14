@@ -101,12 +101,16 @@ lies inside the image. The straight-face heuristic checks both ends of each imag
 axis on the largest connected component: the end section must occupy at least
 25% of the largest section and 90% of the adjacent inward section (at least four
 voxels). Small rounded tips are excluded; cuts oblique to the image axes are not
-detected by this heuristic. Within each
-completeness class, CT references prefer portal venous, arterial, delayed, then native phases;
-MR prefers T1, T2, then DWI. Unlisted scans rank last; ties use deterministic
-scan ordering.
+detected by this heuristic. Within each completeness class, `reference_priority`
+applies criteria in list order: later criteria break ties in earlier criteria.
+The API defaults prefer portal venous, arterial, delayed, then native phases for
+CT; MR prefers T1, T2, then DWI, followed by portal venous phase. Both then prefer
+smaller `PixelSpacingXY`, smaller `SliceThickness`, and larger segmented organ
+volume in mm³. Complete ties use deterministic scan IDs. Dataset manifests can
+change this order.
 Anchor uses the reference tumor mask when available, otherwise the next valid
-mask in priority order. Missing, nonexistent, and empty masks are omitted.
+mask in the same completeness and criterion order. Missing, nonexistent, and empty
+masks are omitted.
 Every eligible nonempty mask contributes to non-anchor fusion, so
 select independent sequences/phases upstream to avoid duplicate reconstruction
 votes. Whole-FOV annotations are assumed. For majority, union, and intersection,
@@ -142,10 +146,43 @@ best linear Dice >= `elastic_min_dice` (default 0.7), using common-FOV Dice for
 partial masks. Every PCA, rigid,
 affine, and elastic candidate is
 compared with the best preceding Dice; a worse candidate is rejected and QC
-records `rejected_worse_dice` with its fallback stage. `reference_priority` maps CT/MR to ordered lists
-of column/value selectors, such as `CT: [{phase: PORTAL_VENOUS}]` or
-`MR: [{mri_sequence: T1}]`. Defaults are 100 iterations, minimum organ Dice 0.1,
-and threshold 0.5. These initial QC settings require dataset validation.
+records `rejected_worse_dice` with its fallback stage. Defaults are 100 iterations,
+minimum organ Dice 0.1, and threshold 0.5. These initial QC settings require
+dataset validation.
+
+`reference_priority` maps CT/MR to ordered lists of criteria, with exactly one
+column per item. For example:
+
+```yaml
+registration:
+  reference_priority:
+    MR:
+      - mri_sequence: [T1, T2]
+      - phase: [PORTAL_VENOUS]
+      - PixelSpacingXY: min
+      - SliceThickness: min
+      - registration_organ_volume_mm3: max
+```
+
+A categorical list orders its values from most to least preferred; matching
+ignores case and surrounding whitespace. Unlisted and missing values tie after
+the listed categories. `min` and `max` compare finite numeric values, including
+numbers stored as CSV strings. Missing columns, malformed numbers, booleans, and
+nonfinite numbers rank last for either numeric direction. Spacing and thickness
+criteria use the cohort columns. `registration_organ_volume_mm3` is recomputed
+from each native organ mask and voxel spacing during QC; previous-run values are
+discarded. Dry runs use available metadata without loading images, so their
+provisional ordering cannot account for organ completeness or volume.
+
+In the example, T1 outranks T2 even if the T2 scan has smaller pixels. Move
+`registration_organ_volume_mm3: max` to the first criterion to favor the largest
+organ before sequence, phase, or resolution, within the same completeness class.
+Its position controls its influence; there is no separate volume cutoff.
+Each modality's supplied list replaces its defaults; an omitted modality uses
+only completeness and scan ID. To migrate the old selector syntax, combine
+repeated scalar preferences into one list, for example `- mri_sequence: [T1, T2]`,
+and split compound selectors into separate criteria in the desired order.
+Scalar categorical selectors such as `- mri_sequence: T1` are rejected.
 
 Series with a missing or empty organ mask are excluded from their registration
 group and recorded as `skipped`; they do not produce error-table rows. Unreadable
