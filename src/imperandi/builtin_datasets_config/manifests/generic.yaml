@@ -58,10 +58,9 @@ phase_curation:
     - NONE
   fallback: OTHER
 
-# Executable, ordered cleaning pipeline. version currently must be 1. Step
-# order matters: row cleanup precedes volume grouping, then volume curation.
+# Executable, ordered cleaning pipeline. Step order matters: row cleanup
+# precedes volume grouping, then volume curation.
 cleaning:
-  version: 1
   steps:
     # - type: hook
     #   function: "imperandi.builtin_datasets_config.hooks.generic:standardize_patient_key"

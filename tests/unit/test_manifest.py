@@ -22,7 +22,7 @@ def test_bundled_manifests_are_loadable(manifest_name, dataset_name):
     manifest = load_manifest(manifest_name, base_path=base_path)
 
     assert manifest["dataset_name"] == dataset_name
-    assert manifest["cleaning"]["version"] == 1
+    assert manifest["cleaning"]["steps"]
     assert manifest["phase_curation"]["strategies"]
     assert manifest["segmentation"]["backend"] == "totalsegmentator"
 

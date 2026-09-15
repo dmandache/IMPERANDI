@@ -1665,8 +1665,6 @@ def _resolve_cleaning_config(manifest: dict) -> dict:
     cleaning = manifest.get("cleaning")
     if not isinstance(cleaning, dict):
         raise ValueError("Cleaning manifest must define a 'cleaning' object.")
-    if cleaning.get("version") != 1:
-        raise ValueError("Cleaning manifest must define 'cleaning.version' equal to 1.")
     steps = cleaning.get("steps")
     if not isinstance(steps, list) or not steps:
         raise ValueError("Cleaning manifest must define a non-empty 'steps' list.")

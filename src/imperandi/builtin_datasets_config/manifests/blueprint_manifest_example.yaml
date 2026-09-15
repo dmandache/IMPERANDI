@@ -105,8 +105,6 @@ phase_curation:
 # Ordered cleaning pipeline
 # ---------------------------------------------------------------------------
 cleaning:
-  # Only version 1 is currently supported.
-  version: 1
   steps:
     # Optional `name` may be added to any step to improve log labels.
     - type: hook

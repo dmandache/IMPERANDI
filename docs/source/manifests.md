@@ -75,7 +75,6 @@ phase_curation:
   fallback: OTHER
 
 cleaning:
-  version: 1
   steps:
     - type: hook
       function: "imperandi.builtin_datasets_config.hooks.generic:standardize_patient_key"
@@ -263,7 +262,6 @@ def extract_site_fields(patient_key):
 
 ```yaml
 cleaning:
-  version: 1
   steps:
     - type: hook
       function: "site_config.hooks.site_a:extract_site_fields"

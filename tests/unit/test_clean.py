@@ -796,7 +796,6 @@ def test_load_data_and_read_csv_with_valid_columns(tmp_path):
 def test_validate_cleaning_manifest_uses_hook_output_metadata():
     manifest = {
         "cleaning": {
-            "version": 1,
             "steps": [
                 {
                     "type": "hook",
@@ -824,7 +823,6 @@ def test_validate_cleaning_manifest_uses_hook_output_metadata():
 def test_validate_cleaning_manifest_requires_phase_curation_for_modality_step():
     manifest = {
         "cleaning": {
-            "version": 1,
             "steps": [{"type": "modality_curation"}],
         }
     }
@@ -846,7 +844,6 @@ def test_phase_curation_sources_are_loaded_for_modality_curation():
             ]
         },
         "cleaning": {
-            "version": 1,
             "steps": [
                 {"type": "compute_acquisition_order"},
                 {"type": "modality_curation"},
@@ -864,7 +861,6 @@ def test_phase_curation_sources_are_loaded_for_modality_curation():
 def test_single_rule_filter_defaults_missing_logic_to_and():
     manifest = {
         "cleaning": {
-            "version": 1,
             "steps": [
                 {
                     "type": "filter",
@@ -884,7 +880,6 @@ def test_single_rule_filter_defaults_missing_logic_to_and():
 def test_multiple_rule_filter_requires_logic():
     manifest = {
         "cleaning": {
-            "version": 1,
             "steps": [
                 {
                     "type": "filter",
@@ -949,7 +944,7 @@ def test_multiple_rule_filter_requires_logic():
     ],
 )
 def test_validate_cleaning_manifest_rejects_invalid_step_configs(step, message):
-    manifest = {"cleaning": {"version": 1, "steps": [step]}}
+    manifest = {"cleaning": {"steps": [step]}}
 
     with pytest.raises(ValueError) as exc:
         clean.validate_cleaning_manifest(manifest)
@@ -1034,7 +1029,6 @@ def test_run_clean_pipeline_supports_all_filter_operators(
     )
     manifest = {
         "cleaning": {
-            "version": 1,
             "steps": [
                 {
                     "type": "filter",
@@ -1134,9 +1128,7 @@ def test_keep_null_preserves_incomplete_rows_for_both_filter_kinds(kind):
         "keep_null": True,
         "rules": [{"column": "value", "op": "gte", "value": 5.0}],
     }
-    validated_step = clean.validate_cleaning_manifest(
-        {"cleaning": {"version": 1, "steps": [step]}}
-    )[0]
+    validated_step = clean.validate_cleaning_manifest({"cleaning": {"steps": [step]}})[0]
 
     out = clean.run_clean_pipeline(df, [validated_step])
 
@@ -1238,7 +1230,6 @@ def test_run_clean_pipeline_executes_all_supported_step_types(monkeypatch):
             "fallback": "OTHER",
         },
         "cleaning": {
-            "version": 1,
             "steps": [
                 {
                     "type": "hook",
@@ -1329,7 +1320,6 @@ def test_clean_and_save_data_runs_manifest_pipeline(tmp_path):
 
     manifest = {
         "cleaning": {
-            "version": 1,
             "steps": [
                 {
                     "type": "hook",

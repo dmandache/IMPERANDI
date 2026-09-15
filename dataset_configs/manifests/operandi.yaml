@@ -78,10 +78,9 @@ phase_curation:
     - NONE
   fallback: OTHER
 
-# Ordered cleaning workflow; version must currently be 1. Hook functions use
-# `module:function` syntax and must declare outputs with @clean_hook.
+# Ordered cleaning workflow. Hook functions use `module:function` syntax
+# and must declare outputs with @clean_hook.
 cleaning:
-  version: 1
   steps:
     - type: hook
       function: "dataset_configs.hooks.operandi:standardize_operandi_patient_key"
