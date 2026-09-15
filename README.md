@@ -212,6 +212,10 @@ imperandi segment \
   --csv_path_out /path/to/output/nifti_index_segmented.csv
 ```
 
+Use `--manifest /path/to/manifest.yaml` to configure ordered logical and
+morphological mask operations under each modality's `postprocess.operations`.
+See the [mask operation examples](docs/source/manifests.md#sequential-mask-operations).
+
 Curate contrast phase:
 
 ```bash

@@ -9,7 +9,7 @@ The module supports both CLI and library usage:
 2. spawns a multiprocessing pool (``spawn`` context – required for
    PyTorch + CUDA),
 3. runs config‑driven segmentation tasks per volume,
-4. optionally merges / cleans masks, and
+4. optionally runs sequential logical / morphological mask operations, and
 5. writes updated CSVs with output paths and a separate error CSV.
 """
 
@@ -32,14 +32,16 @@ from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-import nibabel as nib
-import numpy as np
 import pandas as pd
-from scipy.ndimage import binary_closing, binary_fill_holes
-from skimage.measure import label, regionprops
-from skimage.morphology import ball
 from tqdm import tqdm
 
+from imperandi.process.mask_operations import (
+    MaskGeometryError,
+    apply_operations,
+    operation_sources,
+    operations_are_current,
+    validate_operations,
+)
 from imperandi.utils.misc import report_volumes  # type: ignore
 from imperandi.utils.logging import log_task_summary, setup_logging
 from imperandi.utils.manifest import load_manifest
@@ -70,108 +72,6 @@ LIVER_LESIONS_MIN_TOTALSEGMENTATOR_VERSION = "2.13.0"
 LIVER_LESIONS_TASKS = frozenset({"liver_lesions", "liver_lesions_mr"})
 
 logger = logging.getLogger(__name__)
-
-# -----------------------------------------------------------------------------
-# I/O helpers
-# -----------------------------------------------------------------------------
-
-
-def load_nifti(path: Path) -> Tuple[np.ndarray, np.ndarray, Tuple[float, ...]]:
-    """Return image data, affine matrix and voxel sizes (zoom)."""
-    img = nib.load(str(path))
-    return img.get_fdata(), img.affine, img.header.get_zooms()
-
-
-def save_nifti(
-    data: np.ndarray, affine: np.ndarray, out_path: Path, *, dtype=np.uint8
-) -> None:
-    """Write *data* to *out_path* as a NIfTI‑1 file with *dtype*."""
-    img = nib.Nifti1Image(data.astype(dtype, copy=False), affine)
-    nib.save(img, str(out_path))
-
-
-def compute_struct_elem(zooms: Tuple[float, ...], radius_mm: float = 5.0) -> np.ndarray:
-    """Create a spherical structuring element with *radius_mm* in real units."""
-    radii_vox = [max(1, int(round(radius_mm / z))) for z in zooms]
-    return ball(max(radii_vox))
-
-
-# -----------------------------------------------------------------------------
-# Mask post‑processing
-# -----------------------------------------------------------------------------
-
-
-def clean_and_merge_masks(
-    dir_path: Path,
-    mask_files: List[str],
-    *,
-    output_name: str,
-    radius_mm: float = 5.0,
-    verbose: bool = False,
-    close: bool = True,
-    fill_holes: bool = True,
-    largest_cc: bool = True,
-) -> bool:
-    """Fetch all requested masks, then merge and optionally clean them.
-
-    Missing or unreadable inputs raise at load time; a partial merge must not
-    be reported as a successful output.
-    """
-
-    masks: Dict[str, np.ndarray] = {}
-    ref_affine: np.ndarray | None = None
-    voxel_zooms: Tuple[float, ...] | None = None
-
-    for fname in mask_files:
-        src = dir_path / fname
-        data, affine, zooms = load_nifti(src)
-        if ref_affine is None:
-            ref_affine, voxel_zooms = affine, zooms
-        elif not np.allclose(ref_affine, affine):
-            logger.error("Affine mismatch for %s – aborting merge.", src.name)
-            return False
-        masks[fname] = data > 0
-
-    if not masks:
-        logger.error("No valid masks found to merge in %s", dir_path)
-        return False
-
-    if len({m.shape for m in masks.values()}) > 1:
-        logger.error("Mask shape mismatch in %s – aborting merge.", dir_path)
-        return False
-
-    merged = np.logical_or.reduce(list(masks.values()))
-    if close:
-        merged = binary_closing(
-            merged, structure=compute_struct_elem(voxel_zooms, radius_mm)
-        )
-    if fill_holes:
-        merged = binary_fill_holes(merged)
-
-    # Keep only the largest connected component (CC)
-    if largest_cc:
-        labeled, n_cc = label(merged, return_num=True)
-        if n_cc > 1:
-            largest = max(regionprops(labeled), key=lambda r: r.area)
-            merged = labeled == largest.label
-            if verbose:
-                logger.info(
-                    f"{dir_path} : kept largest CC ({largest.area} voxels) out of {n_cc}"
-                )
-        elif verbose:
-            logger.info(f"{dir_path} : single connected component")
-
-    save_nifti(merged, ref_affine, dir_path / output_name)
-
-    # Optional: overwrite the originals with their cleaned‑up version
-    for fname, mask in masks.items():
-        if fname == output_name:
-            # Keep merged output intact when destination name overlaps an input.
-            continue
-        save_nifti(mask & merged, ref_affine, dir_path / fname)
-
-    return True
-
 
 # -----------------------------------------------------------------------------
 # Segmentation of one 3‑D volume
@@ -230,12 +130,40 @@ def _default_segmentation_config() -> Dict[str, Any]:
                     },
                 ],
                 "postprocess": {
-                    "merge_keys": ["liver", "liver_tumor"],
-                    "output": "liver_all",
-                    "radius_mm": 5.0,
-                    "largest_cc": True,
-                    "fill_holes": True,
-                    "close": True,
+                    "on_failure": "warn_only",
+                    "operations": [
+                        {
+                            "op": "union",
+                            "inputs": ["liver", "liver_tumor"],
+                            "output": "liver_all",
+                        },
+                        {
+                            "op": "close",
+                            "input": "liver_all",
+                            "output": "liver_all",
+                            "radius_mm": 5.0,
+                        },
+                        {
+                            "op": "fill_holes",
+                            "input": "liver_all",
+                            "output": "liver_all",
+                        },
+                        {
+                            "op": "largest_cc",
+                            "input": "liver_all",
+                            "output": "liver_all",
+                        },
+                        {
+                            "op": "intersection",
+                            "inputs": ["liver", "liver_all"],
+                            "output": "liver",
+                        },
+                        {
+                            "op": "intersection",
+                            "inputs": ["liver_tumor", "liver_all"],
+                            "output": "liver_tumor",
+                        },
+                    ],
                 },
             },
             "MR": {
@@ -255,12 +183,40 @@ def _default_segmentation_config() -> Dict[str, Any]:
                     },
                 ],
                 "postprocess": {
-                    "merge_keys": ["liver", "liver_tumor"],
-                    "output": "liver_all",
-                    "radius_mm": 5.0,
-                    "largest_cc": True,
-                    "fill_holes": True,
-                    "close": True,
+                    "on_failure": "warn_only",
+                    "operations": [
+                        {
+                            "op": "union",
+                            "inputs": ["liver", "liver_tumor"],
+                            "output": "liver_all",
+                        },
+                        {
+                            "op": "close",
+                            "input": "liver_all",
+                            "output": "liver_all",
+                            "radius_mm": 5.0,
+                        },
+                        {
+                            "op": "fill_holes",
+                            "input": "liver_all",
+                            "output": "liver_all",
+                        },
+                        {
+                            "op": "largest_cc",
+                            "input": "liver_all",
+                            "output": "liver_all",
+                        },
+                        {
+                            "op": "intersection",
+                            "inputs": ["liver", "liver_all"],
+                            "output": "liver",
+                        },
+                        {
+                            "op": "intersection",
+                            "inputs": ["liver_tumor", "liver_all"],
+                            "output": "liver_tumor",
+                        },
+                    ],
                 },
             },
         },
@@ -329,7 +285,11 @@ def _validate_resolved_segmentation_config(
         if not isinstance(postprocess, Mapping):
             raise ValueError(f"{field}.postprocess must be a mapping.")
         normalized["postprocess"] = copy.deepcopy(dict(postprocess))
-        resolve_merge_outputs(normalized["postprocess"], normalized_tasks)
+        normalized["postprocess"]["operations"] = validate_operations(
+            postprocess,
+            task_outputs=set(build_output_column_map(normalized_tasks)),
+            field=f"{field}.postprocess",
+        )
     return normalized
 
 
@@ -563,16 +523,6 @@ def _output_to_filename(output_name: str) -> str:
     return f"{value}.nii.gz"
 
 
-def _warning_dedupe_key(message: str) -> str:
-    if message.startswith(
-        "Postprocess output will overwrite existing file and continue:"
-    ):
-        return "postprocess_overwrite_existing_output"
-    if "matches a task output key and will override it." in message:
-        return "postprocess_output_key_override"
-    return message
-
-
 def build_output_column_map(tasks: List[Dict[str, Any]]) -> Dict[str, str]:
     """Map each unique logical task output to its ``mask_*`` CSV column."""
     output_to_column: Dict[str, str] = {}
@@ -622,60 +572,6 @@ def _infer_outputs_from_snapshot(
     return inferred
 
 
-def _merge_key_to_column(merge_key: str) -> str:
-    key = _normalize_output_key(merge_key)
-    if not key:
-        return "mask_unnamed"
-    if key.startswith("mask_"):
-        return key
-    return f"mask_{key or 'unnamed'}"
-
-
-def resolve_merge_outputs(
-    postprocess: Dict[str, Any],
-    tasks: List[Dict[str, Any]],
-    *,
-    output_to_column: Dict[str, str] | None = None,
-) -> List[str]:
-    """Resolve merge keys, deferring undeclared outputs to runtime mask loading.
-
-    Task declarations need not enumerate all backend outputs (for example,
-    ``total`` can produce multiple masks). Warn about unknown columns and keep
-    their normalized logical names so the actual files can be fetched later.
-
-    Raises:
-        ValueError: If merge keys are absent.
-    """
-    merge_keys = _as_str_list(postprocess.get("merge_keys"))
-    if not merge_keys:
-        raise ValueError("postprocess.merge_keys is required for postprocess merging.")
-
-    output_to_column = output_to_column or build_output_column_map(tasks)
-    column_to_output: Dict[str, str] = {}
-    for output_name, column_name in output_to_column.items():
-        if column_name not in column_to_output:
-            column_to_output[column_name] = output_name
-
-    normalized_columns = [_merge_key_to_column(k) for k in merge_keys]
-    missing = [col for col in normalized_columns if col not in column_to_output]
-    if missing:
-        logger.warning(
-            "postprocess.merge_keys references undeclared mask column(s): %s. "
-            "Tasks may produce additional masks; deferring validation until "
-            "the actual mask files are fetched. merge_keys=%s, normalized=%s, "
-            "declared=%s",
-            ", ".join(missing),
-            merge_keys,
-            normalized_columns,
-            ", ".join(sorted(column_to_output)) or "(none)",
-        )
-
-    return [
-        column_to_output.get(column, column.removeprefix("mask_"))
-        for column in normalized_columns
-    ]
-
-
 def iter_modality_segmentation_configs(
     config: Mapping[str, Any], modalities: set[str] | None = None
 ):
@@ -711,14 +607,17 @@ def build_segmentation_output_maps(
                     f"across modalities: {output_name!r} -> "
                     f"{existing!r}/{fetch_name!r}."
                 )
-        if resolved.get("postprocess"):
-            output_name = (
-                str(resolved["postprocess"].get("output", "merged")).strip() or "merged"
-            )
+        for output_name in _postprocess_output_names(resolved.get("postprocess")):
             output_to_column.setdefault(output_name, _output_to_column(output_name))
             output_to_fetch.setdefault(output_name, output_name)
             postprocess_outputs.add(output_name)
     return output_to_column, output_to_fetch, postprocess_outputs
+
+
+def _postprocess_output_names(postprocess: Mapping[str, Any] | None) -> List[str]:
+    if not postprocess:
+        return []
+    return list(dict.fromkeys(step["output"] for step in postprocess["operations"]))
 
 
 def prefetch_totalsegmentator_models(
@@ -840,18 +739,13 @@ def _has_existing_task_outputs(output_dir: Path, tasks_config: Dict[str, Any]) -
         ):
             return False
     postprocess = tasks_config.get("postprocess")
-    if postprocess:
-        merge_outputs = resolve_merge_outputs(postprocess, tasks)
-        output_to_fetch = build_output_fetch_map(tasks)
-        if not all(
-            (
-                output_dir / _output_to_filename(output_to_fetch.get(name, name))
-            ).is_file()
-            for name in merge_outputs
-        ):
-            return False
-        merged_output = str(postprocess.get("output", "merged")).strip() or "merged"
-        return (output_dir / _output_to_filename(merged_output)).exists()
+    if postprocess is not None:
+        operations = validate_operations(
+            postprocess, task_outputs=set(build_output_column_map(tasks))
+        )
+        return operations_are_current(
+            output_dir, operations, build_output_fetch_map(tasks)
+        )
     return True
 
 
@@ -879,17 +773,20 @@ def segment_volume(
     backend = backend or TotalSegmentatorBackend()
     output_to_column = build_output_column_map(tasks)
     output_to_fetch = build_output_fetch_map(tasks)
+    postprocess = tasks_config.get("postprocess")
+    operations = None
+    if postprocess is not None:
+        operations = validate_operations(
+            postprocess, task_outputs=set(output_to_column)
+        )
+        postprocess = {**postprocess, "operations": operations}
 
     def _store_resolved_outputs() -> None:
         if resolved_output_to_fetch is None:
             return
         resolved = dict(output_to_fetch)
-        postprocess_config = tasks_config.get("postprocess")
-        if postprocess_config:
-            merged_output = (
-                str(postprocess_config.get("output", "merged")).strip() or "merged"
-            )
-            resolved[merged_output] = merged_output
+        for output_name in _postprocess_output_names(postprocess):
+            resolved[output_name] = output_to_fetch.get(output_name, output_name)
         resolved_output_to_fetch.clear()
         resolved_output_to_fetch.update(resolved)
 
@@ -954,7 +851,7 @@ def segment_volume(
                 logger.warning(
                     "Task '%s' produced no newly written masks; it may have reused "
                     "existing files. Deferring validation until the requested "
-                    "merge masks are fetched after all tasks finish.",
+                    "postprocess masks are fetched after all tasks finish.",
                     task_name,
                 )
                 continue
@@ -974,75 +871,32 @@ def segment_volume(
         if verbose:
             logger.info("Masks saved for %s", task_name)
 
-    postprocess = tasks_config.get("postprocess")
     if not postprocess:
         _store_resolved_outputs()
         return warnings
 
-    merge_files = resolve_merge_outputs(
-        postprocess, tasks, output_to_column=output_to_column
-    )
-    if not merge_files:
-        _store_resolved_outputs()
-        return warnings
-
-    # Include requested masks even when a task did not enumerate them in its
-    # declaration. Preserve explicit backend filename aliases when available.
-    for name in merge_files:
-        output_to_column.setdefault(name, _output_to_column(name))
+    for name in operation_sources(operations):
         output_to_fetch.setdefault(name, name)
-    merge_paths = [
-        output_dir / _output_to_filename(output_to_fetch[name]) for name in merge_files
-    ]
-
-    merged_output = str(postprocess.get("output", "merged")).strip() or "merged"
-    merged_name = _output_to_filename(merged_output)
-    dst = output_dir / merged_name
     if (
-        dst.exists()
-        and not force
-        and not ran_any_task
-        and all(path.is_file() for path in merge_paths)
+        force
+        or ran_any_task
+        or not operations_are_current(output_dir, operations, output_to_fetch)
     ):
-        if verbose:
-            logger.info(
-                "Skip postprocess – output exists and row already has task outputs: %s",
-                dst,
-            )
-        _store_resolved_outputs()
-        return warnings
-    if dst.exists():
-        warnings.append(
-            f"Postprocess output will overwrite existing file and continue: {dst}"
-        )
-    if merged_output in output_to_column:
-        warnings.append(
-            f"Postprocess output '{merged_output}' matches a task output key and will override it."
-        )
-
-    on_failure = str(postprocess.get("on_failure", "warn_only")).strip().lower()
-    if on_failure not in {"warn_only", "fail"}:
-        raise ValueError(
-            f"Invalid postprocess.on_failure='{on_failure}'. Use 'warn_only' or 'fail'."
-        )
-
-    merged_ok = clean_and_merge_masks(
-        output_dir,
-        [_output_to_filename(output_to_fetch[name]) for name in merge_files],
-        output_name=merged_name,
-        radius_mm=float(postprocess.get("radius_mm", 5.0)),
-        verbose=verbose,
-        close=bool(postprocess.get("close", True)),
-        fill_holes=bool(postprocess.get("fill_holes", True)),
-        largest_cc=bool(postprocess.get("largest_cc", True)),
-    )
-    if not merged_ok or not dst.exists():
-        message = f"Postprocess merge did not produce expected output: {dst}"
-        if on_failure == "fail":
-            raise RuntimeError(message)
-        logger.warning(message)
-        warnings.append(message)
-
+        try:
+            apply_operations(output_dir, operations, output_to_fetch)
+        except MaskGeometryError as exc:
+            if postprocess.get("on_failure", "fail") == "fail":
+                raise
+            message = f"Postprocess operations failed: {exc}"
+            logger.warning(message)
+            warnings.append(message)
+            # A failed sequence must not advertise stale derived masks.
+            if resolved_output_to_fetch is not None:
+                resolved_output_to_fetch.clear()
+                resolved_output_to_fetch.update(output_to_fetch)
+            return warnings
+    elif verbose:
+        logger.info("Skip postprocess – completed operations and masks are unchanged")
     _store_resolved_outputs()
     return warnings
 
@@ -1523,7 +1377,7 @@ def main(args: argparse.Namespace) -> None:
                 if mask_path.exists():
                     df.at[idx, column_name] = str(mask_path)
                 elif output_name in postprocess_outputs:
-                    row_warnings.append(f"missing merged mask: {mask_path}")
+                    row_warnings.append(f"missing postprocess mask: {mask_path}")
                 else:
                     row_warnings.append(f"missing mask: {mask_path}")
             if warning_msg:
@@ -1533,16 +1387,9 @@ def main(args: argparse.Namespace) -> None:
                     if message and message.strip()
                 ]
                 for message in warning_messages:
-                    key = _warning_dedupe_key(message)
-                    is_global_warning = key in {
-                        "postprocess_overwrite_existing_output",
-                        "postprocess_output_key_override",
-                    }
-                    if key not in logged_warning_keys:
+                    if message not in logged_warning_keys:
                         logger.warning(message)
-                        logged_warning_keys.add(key)
-                    if is_global_warning:
-                        continue
+                        logged_warning_keys.add(message)
                     row_warnings.append(message)
             if row_warnings:
                 df.at[idx, "warning_message"] = " | ".join(row_warnings)
