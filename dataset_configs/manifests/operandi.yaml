@@ -223,13 +223,24 @@ segmentation:
           output: liver_tumor
           fetch_output: liver_lesions
       postprocess:
-        # merge_keys refer to logical task outputs, not backend filenames.
-        merge_keys: [liver, liver_tumor]
-        output: liver
-        radius_mm: 5.0
-        largest_cc: true
-        fill_holes: true
-        close: true
+        on_failure: warn_only
+        operations:
+          - op: union
+            inputs: [liver, liver_tumor]
+            output: liver
+          - op: close
+            input: liver
+            output: liver
+            radius_mm: 5.0
+          - op: fill_holes
+            input: liver
+            output: liver
+          - op: largest_cc
+            input: liver
+            output: liver
+          - op: intersection
+            inputs: [liver_tumor, liver]
+            output: liver_tumor
     MR:
       tasks:
         - task: total_mr
@@ -239,12 +250,24 @@ segmentation:
           output: liver_tumor
           fetch_output: liver_lesions
       postprocess:
-        merge_keys: [liver, liver_tumor]
-        output: liver
-        radius_mm: 5.0
-        largest_cc: true
-        fill_holes: true
-        close: true
+        on_failure: warn_only
+        operations:
+          - op: union
+            inputs: [liver, liver_tumor]
+            output: liver
+          - op: close
+            input: liver
+            output: liver
+            radius_mm: 5.0
+          - op: fill_holes
+            input: liver
+            output: liver
+          - op: largest_cc
+            input: liver
+            output: liver
+          - op: intersection
+            inputs: [liver_tumor, liver]
+            output: liver_tumor
 
 radiomics:
   # Native PyRadiomics parameter mapping plus cohort filters applied before

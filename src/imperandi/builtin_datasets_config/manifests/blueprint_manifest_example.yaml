@@ -274,14 +274,27 @@ segmentation:
         #   extra: {}
       postprocess:
         # Bare logical names, mask_* column names, and *.nii.gz names are accepted.
-        merge_keys: [liver, liver_tumor]
-        output: liver
-        radius_mm: 5.0
-        close: true
-        fill_holes: true
-        largest_cc: true
-        # Allowed: warn_only (default) or fail.
-        on_failure: warn_only
+        # Steps execute in order; outputs can be used by later steps.
+        operations:
+          - op: largest_cc
+            input: liver
+            output: liver_clean
+          - op: union
+            inputs: [liver_clean, liver_tumor]
+            output: liver_all
+          - op: close
+            input: liver_all
+            output: liver_all
+            radius_mm: 5.0
+          - op: fill_holes
+            input: liver_all
+            output: liver_all
+          - op: difference
+            inputs: [liver_all, liver_tumor]
+            output: liver_without_tumor
+        # Geometry failures: fail (default for operations) or warn_only.
+        # Missing or unreadable inputs always fail.
+        on_failure: fail
 
     MR:
       # MR task names resolve to TotalSegmentator's *_mr models.
@@ -295,13 +308,24 @@ segmentation:
           fetch_output: liver_lesions
           extra: {}
       postprocess:
-        merge_keys: [liver, liver_tumor]
-        output: liver
-        radius_mm: 5.0
-        close: true
-        fill_holes: true
-        largest_cc: true
         on_failure: fail
+        operations:
+          - op: union
+            inputs: [liver, liver_tumor]
+            output: liver
+          - op: close
+            input: liver
+            output: liver
+            radius_mm: 5.0
+          - op: fill_holes
+            input: liver
+            output: liver
+          - op: largest_cc
+            input: liver
+            output: liver
+          - op: intersection
+            inputs: [liver_tumor, liver]
+            output: liver_tumor
 
 # ---------------------------------------------------------------------------
 # Radiomics

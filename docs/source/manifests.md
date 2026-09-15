@@ -102,8 +102,24 @@ segmentation:
           output: liver_tumor
           fetch_output: liver_lesions
       postprocess:
-        merge_keys: [liver, liver_tumor]
-        output: liver
+        on_failure: warn_only
+        operations:
+          - op: union
+            inputs: [liver, liver_tumor]
+            output: liver
+          - op: close
+            input: liver
+            output: liver
+            radius_mm: 5.0
+          - op: fill_holes
+            input: liver
+            output: liver
+          - op: largest_cc
+            input: liver
+            output: liver
+          - op: intersection
+            inputs: [liver_tumor, liver]
+            output: liver_tumor
     MR:
       tasks:
         - task: total_mr
@@ -113,8 +129,24 @@ segmentation:
           output: liver_tumor
           fetch_output: liver_lesions
       postprocess:
-        merge_keys: [liver, liver_tumor]
-        output: liver
+        on_failure: warn_only
+        operations:
+          - op: union
+            inputs: [liver, liver_tumor]
+            output: liver
+          - op: close
+            input: liver
+            output: liver
+            radius_mm: 5.0
+          - op: fill_holes
+            input: liver
+            output: liver
+          - op: largest_cc
+            input: liver
+            output: liver
+          - op: intersection
+            inputs: [liver_tumor, liver]
+            output: liver_tumor
 
 radiomics:
   pyradiomics:
@@ -251,20 +283,143 @@ but skipped, and only models needed by modalities present in the cohort are
 prefetched.
 
 Optional task keys include `extra`, `output`, `outputs`, `fetch_output`, and
-`fetch_outputs`. Each modality may define its own `postprocess` block to merge
-logical masks and apply closing, hole filling, and largest-component cleanup.
+`fetch_outputs`. Each modality may define its own `postprocess` block to combine
+logical masks and apply morphological operations in a configurable order.
 The same logical outputs may be used across modalities, for example mapping
 both `liver_lesions` and `liver_lesions_mr` to `mask_liver_tumor`.
 
 Task output declarations need not enumerate every mask a backend produces.
 For example, `task: total` may supply `liver` without an explicit `output` or
-ROI subset. Undeclared `postprocess.merge_keys` emit a warning during validation;
-the worker resolves them against masks produced by the tasks or their actual
-filenames, including existing masks reused without rewriting them.
-Missing or unreadable requested masks fail when fetched, before any
-merged output is written. `postprocess.on_failure: warn_only` applies to a merge
-that cannot complete after loading its inputs; it does not permit partial
-merges with missing input masks.
+ROI subset. The worker resolves undeclared input names against masks produced
+by the tasks or their actual filenames, including existing masks reused without
+rewriting them. Explicit `fetch_output` aliases are respected.
+
+### Sequential mask operations
+
+Set `postprocess.operations` to an ordered list under each modality. Every step
+names an `op`, its `input` (one mask) or `inputs` (a list), and an `output`.
+Cleanup settings belong to the individual operations that use them.
+Inputs can refer to task outputs or results of earlier steps. Bare logical names,
+`mask_*` column names, and `.nii.gz` filenames are accepted and normalized to
+logical names.
+
+For example, clean the liver mask, combine it with the tumor mask, clean the
+combined result, and subtract the tumor to create a separate tissue mask:
+
+```yaml
+# Under segmentation.modalities.CT (or MR), alongside tasks:
+postprocess:
+  operations:
+    - op: largest_cc
+      input: liver
+      output: liver_clean
+    - op: union
+      inputs: [liver_clean, liver_tumor]
+      output: liver_all
+    - op: close
+      input: liver_all
+      output: liver_all
+      radius_mm: 3.0
+    - op: fill_holes
+      input: liver_all
+      output: liver_all
+    - op: difference
+      inputs: [liver_all, liver_tumor]
+      output: liver_without_tumor
+```
+
+| `op` | Inputs | Behavior |
+| --- | --- | --- |
+| `union` (alias `or`) | One or more | Foreground in any input; one input copies the mask |
+| `intersection` (alias `and`) | One or more | Foreground in every input |
+| `difference` (alias `subtract`) | Two or more | First input minus all remaining inputs |
+| `xor` | One or more | Foreground in an odd number of inputs |
+| `not` | One | Invert foreground/background within the image volume |
+| `dilate` / `erode` | One | Expand / shrink foreground |
+| `open` / `close` | One | Erosion then dilation / dilation then erosion |
+| `fill_holes` | One | Fill enclosed background regions |
+| `largest_cc` | One | Keep the largest connected foreground component |
+
+Morphology also accepts the names `dilation`, `erosion`, `opening`, and `closing`;
+`largest_component` aliases `largest_cc`.
+
+For `dilate`, `erode`, `open`, and `close`, `radius_mm` defaults to `1.0` and must
+be finite and non-negative. The spherical neighborhood uses each axis's voxel
+spacing, so thick slices are handled independently of in-plane resolution.
+Alternatively, set a finite, non-negative `radius_vox` to use a sphere measured
+in voxels, independent of spacing. Supply only one of `radius_mm` and `radius_vox`.
+Radius zero is an identity operation. `iterations` defaults to `1` and must be a
+positive integer; for opening/closing it repeats each erosion/dilation phase.
+Outside the image volume is treated as background.
+
+`fill_holes` and `largest_cc` accept `connectivity: 1`, `2`, or `3` (face,
+face-and-edge, or face-edge-and-corner neighbors). Defaults are `1` for hole
+filling and `3` for largest-component selection. Empty masks remain empty under
+morphology and component selection.
+
+Masks must be 3-D; logical combinations require matching shapes and affines.
+Positive voxels are treated as foreground. Each distinct output is saved as a
+binary `uint8` NIfTI and appears in the corresponding `mask_<output>` CSV column,
+including intermediate outputs. New names create `<output>.nii.gz`; existing
+logical task names write to their configured `fetch_output` filename.
+Reusing an output name replaces its current value for subsequent steps and saves
+its final value.
+Only explicitly named outputs are written. To clip an original mask to a merged
+result, add an `intersection` step with that original mask as the output.
+For example, an output named `liver_tumor` mapped to `fetch_output: liver_lesions`
+updates `liver_lesions.nii.gz`, and `mask_liver_tumor` still points to that file.
+
+The full sequence is computed before any output is written. Missing or
+unreadable input files always fail the row. Geometry errors also fail by default;
+`postprocess.on_failure: warn_only` records a warning and returns the input masks
+without reporting derived outputs when geometry prevents the sequence completing.
+Unknown operations, inappropriate parameters, and references to later results
+are rejected during manifest validation. If an initial backend mask is also the
+output of a later step, declare it in the task's `output`/`outputs` or ROI subset
+so validation can distinguish it from a forward reference.
+`operations: []` disables postprocessing.
+
+Completed sequences are reused when their operation list and input/output file
+signatures match the local completion record. If a sequence overwrites an input,
+use `--force` to regenerate backend masks before applying a changed sequence;
+otherwise the changed sequence starts from the current files.
+
+### Merge, clean, and clip masks
+
+This sequence combines the masks, applies closing, fills holes, keeps the largest
+component, and clips each source mask to the cleaned merge:
+
+```yaml
+postprocess:
+  on_failure: warn_only
+  operations:
+    - op: union
+      inputs: [liver, liver_tumor]
+      output: liver_all
+    - op: close
+      input: liver_all
+      output: liver_all
+      radius_mm: 5.0
+    - op: fill_holes
+      input: liver_all
+      output: liver_all
+    - op: largest_cc
+      input: liver_all
+      output: liver_all
+    - op: intersection
+      inputs: [liver, liver_all]
+      output: liver
+    - op: intersection
+      inputs: [liver_tumor, liver_all]
+      output: liver_tumor
+```
+
+Include the cleanup operations needed for the dataset. A `union` with one input
+copies the mask before cleanup. If the merged output
+replaces a source (for example, `output: liver`), write the union and cleanup
+steps to that name and omit its final intersection so the merge stays intact.
+
+### Radiomics
 
 `radiomics.pyradiomics` follows the normal PyRadiomics parameter structure.
 `radiomics.filters` maps an existing cohort column to its accepted values. Use

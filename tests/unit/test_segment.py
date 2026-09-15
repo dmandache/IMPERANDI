@@ -19,6 +19,10 @@ from imperandi.utils.multiprocessing import MPStrategy
 import imperandi.utils.multiprocessing as mp_utils
 
 
+def save_nifti(data, affine, path):
+    nib.save(nib.Nifti1Image(data.astype(np.uint8), affine), path)
+
+
 class DummyBackend:
     def __init__(self, outputs):
         self.outputs = outputs
@@ -282,33 +286,6 @@ def test_prefetch_downloads_only_models_for_active_modalities(monkeypatch):
     assert calls == [850, 851]
 
 
-def test_resolve_merge_outputs_requires_merge_keys():
-    postprocess = {"merge_outputs": ["a.nii.gz"]}
-    tasks = [{"key": "a", "output": "a.nii.gz"}]
-    with pytest.raises(ValueError, match="merge_keys is required"):
-        segment_module.resolve_merge_outputs(postprocess, tasks)
-
-
-@pytest.mark.parametrize(
-    "key", ["liver", "mask_liver", "liver.nii.gz", "mask_liver.nii.gz"]
-)
-def test_resolve_merge_outputs_warns_and_retains_undeclared_keys(key, caplog):
-    postprocess = {"merge_keys": [key]}
-    tasks = [{"output": "a.nii.gz"}]
-    assert segment_module.resolve_merge_outputs(postprocess, tasks) == ["liver"]
-    assert "undeclared mask column(s): mask_liver" in caplog.text
-    assert "actual mask files are fetched" in caplog.text
-
-
-def test_resolve_merge_outputs_supports_bare_and_mask_column_keys():
-    postprocess = {"merge_keys": ["a", "mask_b"]}
-    tasks = [{"output": "a.nii.gz"}, {"output": "b.nii.gz"}]
-    assert segment_module.resolve_merge_outputs(postprocess, tasks) == [
-        "a",
-        "b",
-    ]
-
-
 def test_infer_task_fetch_outputs_supports_aliasing_backend_filename():
     task = {
         "task": "liver_lesions",
@@ -319,51 +296,6 @@ def test_infer_task_fetch_outputs_supports_aliasing_backend_filename():
     assert segment_module.infer_task_fetch_outputs(task) == {
         "liver_tumor": "liver_lesion"
     }
-
-
-def test_segment_volume_calls_postprocess(tmp_path, monkeypatch):
-    nifti = tmp_path / "vol.nii.gz"
-    nifti.write_text("nifti")
-
-    tasks_config = {
-        "backend": "totalsegmentator",
-        "tasks": [
-            {"key": "a", "task": "task_a", "output": "a.nii.gz", "extra": {}},
-            {"key": "b", "task": "task_b", "output": "b.nii.gz", "extra": {}},
-        ],
-        "postprocess": {
-            "merge_keys": ["a", "b"],
-            "output": "merged.nii.gz",
-            "radius_mm": 2.0,
-            "largest_cc": True,
-            "fill_holes": True,
-            "close": True,
-        },
-    }
-
-    backend = DummyBackend({"task_a": "a.nii.gz", "task_b": "b.nii.gz"})
-
-    calls = {}
-
-    def fake_clean(dir_path, mask_files, *, output_name, **kwargs):
-        calls["dir_path"] = dir_path
-        calls["mask_files"] = mask_files
-        calls["output_name"] = output_name
-        return True
-
-    monkeypatch.setattr(segment_module, "clean_and_merge_masks", fake_clean)
-
-    segment_module.segment_volume(
-        nifti,
-        tmp_path,
-        tasks_config,
-        verbose=False,
-        force=True,
-        backend=backend,
-    )
-
-    assert calls["output_name"] == "merged.nii.gz"
-    assert set(calls["mask_files"]) == {"a.nii.gz", "b.nii.gz"}
 
 
 def test_segment_volume_infers_outputs_from_created_segmentations(tmp_path):
@@ -399,10 +331,10 @@ def test_segment_volume_infers_outputs_from_created_segmentations(tmp_path):
 @pytest.mark.parametrize("declare_total_output", [False, True])
 @pytest.mark.parametrize("reuse_total_masks", [False, True])
 def test_merge_accepts_masks_not_enumerated_by_total(
-    tmp_path, caplog, declare_total_output, reuse_total_masks
+    tmp_path, declare_total_output, reuse_total_masks
 ):
     nifti = tmp_path / "vol.nii.gz"
-    segment_module.save_nifti(np.zeros((4, 4, 4)), np.eye(4), nifti)
+    save_nifti(np.zeros((4, 4, 4)), np.eye(4), nifti)
     total = {"task": "total"}
     if declare_total_output:
         total["output"] = "spleen"
@@ -419,17 +351,18 @@ def test_merge_accepts_masks_not_enumerated_by_total(
                         },
                     ],
                     "postprocess": {
-                        "merge_keys": ["liver", "liver_tumor"],
-                        "output": "merged",
-                        "close": False,
-                        "fill_holes": False,
-                        "largest_cc": False,
+                        "operations": [
+                            {
+                                "op": "union",
+                                "inputs": ["liver", "liver_tumor"],
+                                "output": "merged",
+                            }
+                        ]
                     },
                 }
             },
         }
     )
-    assert "undeclared mask column(s): mask_liver" in caplog.text
     calls = []
     liver = np.zeros((4, 4, 4), dtype=np.uint8)
     liver[1, 1, 1] = 1
@@ -437,7 +370,7 @@ def test_merge_accepts_masks_not_enumerated_by_total(
     tumor[2, 2, 2] = 1
     if reuse_total_masks:
         for name in ("liver", "spleen"):
-            segment_module.save_nifti(liver, np.eye(4), tmp_path / f"{name}.nii.gz")
+            save_nifti(liver, np.eye(4), tmp_path / f"{name}.nii.gz")
 
     class MultiMaskBackend:
         def run(self, *, input_path, output_dir, task, **kwargs):
@@ -450,9 +383,7 @@ def test_merge_accepts_masks_not_enumerated_by_total(
                 else {"liver_lesions": tumor}
             )
             for name, data in outputs.items():
-                segment_module.save_nifti(
-                    data, np.eye(4), output_dir / f"{name}.nii.gz"
-                )
+                save_nifti(data, np.eye(4), output_dir / f"{name}.nii.gz")
 
     idx, out_dir, error, warning, outputs = segment_module.process_single_volume(
         0,
@@ -482,11 +413,11 @@ def test_merge_accepts_masks_not_enumerated_by_total(
 
 
 @pytest.mark.parametrize("missing_first", [True, False])
-def test_clean_and_merge_masks_fails_at_fetch_without_writing_partial_merge(
+def test_operations_fail_at_fetch_without_writing_partial_merge(
     tmp_path, missing_first
 ):
     present = tmp_path / "present.nii.gz"
-    segment_module.save_nifti(np.ones((4, 4, 4)), np.eye(4), present)
+    save_nifti(np.ones((4, 4, 4)), np.eye(4), present)
     original = present.read_bytes()
     masks = (
         ["missing.nii.gz", present.name]
@@ -494,16 +425,18 @@ def test_clean_and_merge_masks_fails_at_fetch_without_writing_partial_merge(
         else [present.name, "missing.nii.gz"]
     )
     with pytest.raises(FileNotFoundError, match="missing.nii.gz"):
-        segment_module.clean_and_merge_masks(
-            tmp_path, masks, output_name="merged.nii.gz"
+        operations = segment_module.validate_operations(
+            {"operations": [{"op": "union", "inputs": masks, "output": "merged"}]},
+            task_outputs={"present"},
         )
+        segment_module.apply_operations(tmp_path, operations, {})
     assert not (tmp_path / "merged.nii.gz").exists()
     assert present.read_bytes() == original
 
 
-def test_undeclared_missing_mask_fails_after_all_tasks_run(tmp_path, caplog):
+def test_undeclared_missing_mask_fails_after_all_tasks_run(tmp_path):
     nifti = tmp_path / "vol.nii.gz"
-    segment_module.save_nifti(np.zeros((4, 4, 4)), np.eye(4), nifti)
+    save_nifti(np.zeros((4, 4, 4)), np.eye(4), nifti)
     config = segment_module.validate_segmentation_config(
         {
             "modalities": {
@@ -517,24 +450,26 @@ def test_undeclared_missing_mask_fails_after_all_tasks_run(tmp_path, caplog):
                         },
                     ],
                     "postprocess": {
-                        "merge_keys": ["liver", "liver_tumor"],
-                        "output": "merged",
+                        "operations": [
+                            {
+                                "op": "union",
+                                "inputs": ["liver", "liver_tumor"],
+                                "output": "merged",
+                            }
+                        ],
                         "on_failure": "warn_only",
                     },
                 }
             },
         }
     )
-    assert "undeclared mask column(s): mask_liver" in caplog.text
     calls = []
 
     class MissingLiverBackend:
         def run(self, *, input_path, output_dir, task, **kwargs):
             calls.append(task)
             name = "spleen" if task == "total" else "liver_lesions"
-            segment_module.save_nifti(
-                np.ones((4, 4, 4)), np.eye(4), output_dir / f"{name}.nii.gz"
-            )
+            save_nifti(np.ones((4, 4, 4)), np.eye(4), output_dir / f"{name}.nii.gz")
 
     _, out_dir, error, _, _ = segment_module.process_single_volume(
         0,
@@ -554,17 +489,17 @@ def test_undeclared_missing_mask_fails_after_all_tasks_run(tmp_path, caplog):
 @pytest.mark.parametrize("has_liver", [False, True])
 def test_existing_merged_output_does_not_hide_missing_merge_input(tmp_path, has_liver):
     nifti = tmp_path / "vol.nii.gz"
-    segment_module.save_nifti(np.zeros((4, 4, 4)), np.eye(4), nifti)
+    save_nifti(np.zeros((4, 4, 4)), np.eye(4), nifti)
     config = {
         "tasks": [{"task": "total", "output": "spleen"}],
-        "postprocess": {"merge_keys": ["liver"], "output": "merged"},
+        "postprocess": {
+            "operations": [{"op": "union", "inputs": ["liver"], "output": "merged"}]
+        },
     }
     for name in ["spleen", "merged", *(["liver"] if has_liver else [])]:
-        segment_module.save_nifti(
-            np.ones((4, 4, 4)), np.eye(4), tmp_path / f"{name}.nii.gz"
-        )
+        save_nifti(np.ones((4, 4, 4)), np.eye(4), tmp_path / f"{name}.nii.gz")
     merged_before = (tmp_path / "merged.nii.gz").read_bytes()
-    assert segment_module._has_existing_task_outputs(tmp_path, config) is has_liver
+    assert not segment_module._has_existing_task_outputs(tmp_path, config)
 
     class UnexpectedBackend:
         def run(self, **kwargs):
@@ -583,208 +518,13 @@ def test_existing_merged_output_does_not_hide_missing_merge_input(tmp_path, has_
             == []
         )
         assert resolved["liver"] == "liver"
+        assert segment_module._has_existing_task_outputs(tmp_path, config)
     else:
         with pytest.raises(FileNotFoundError, match="liver.nii.gz"):
             segment_module.segment_volume(
                 nifti, tmp_path, config, backend=UnexpectedBackend()
             )
     assert (tmp_path / "merged.nii.gz").read_bytes() == merged_before
-
-
-def test_segment_volume_uses_fetch_output_alias_for_expected_and_merge_paths(
-    tmp_path, monkeypatch
-):
-    nifti = tmp_path / "vol.nii.gz"
-    nifti.write_text("nifti")
-
-    tasks_config = {
-        "backend": "totalsegmentator",
-        "tasks": [
-            {"task": "total", "output": "liver.nii.gz", "extra": {}},
-            {
-                "task": "liver_lesions",
-                "output": "liver_tumor.nii.gz",
-                "fetch_output": "liver_lesion.nii.gz",
-                "extra": {},
-            },
-        ],
-        "postprocess": {
-            "merge_keys": ["liver", "liver_tumor"],
-            "output": "merged.nii.gz",
-        },
-    }
-
-    backend = DummyBackend(
-        {"total": "liver.nii.gz", "liver_lesions": "liver_lesion.nii.gz"}
-    )
-
-    calls = {}
-
-    def fake_clean(dir_path, mask_files, *, output_name, **kwargs):
-        calls["dir_path"] = dir_path
-        calls["mask_files"] = mask_files
-        calls["output_name"] = output_name
-        (Path(dir_path) / output_name).write_text("merged")
-        return True
-
-    monkeypatch.setattr(segment_module, "clean_and_merge_masks", fake_clean)
-
-    segment_module.segment_volume(
-        nifti,
-        tmp_path,
-        tasks_config,
-        verbose=False,
-        force=True,
-        backend=backend,
-    )
-
-    assert calls["output_name"] == "merged.nii.gz"
-    assert set(calls["mask_files"]) == {"liver.nii.gz", "liver_lesion.nii.gz"}
-
-
-def test_segment_volume_skips_postprocess_when_outputs_already_checkpointed(
-    tmp_path, monkeypatch
-):
-    nifti = tmp_path / "vol.nii.gz"
-    nifti.write_text("nifti")
-    (tmp_path / "a.nii.gz").write_text("mask")
-    (tmp_path / "b.nii.gz").write_text("mask")
-    (tmp_path / "merged.nii.gz").write_text("merged")
-
-    tasks_config = {
-        "backend": "totalsegmentator",
-        "tasks": [
-            {"key": "a", "task": "task_a", "output": "a.nii.gz", "extra": {}},
-            {"key": "b", "task": "task_b", "output": "b.nii.gz", "extra": {}},
-        ],
-        "postprocess": {
-            "merge_keys": ["a", "b"],
-            "output": "merged.nii.gz",
-        },
-    }
-
-    backend = DummyBackend({"task_a": "a.nii.gz", "task_b": "b.nii.gz"})
-    merge_calls = {"count": 0}
-
-    def fake_clean(*args, **kwargs):
-        merge_calls["count"] += 1
-        return True
-
-    monkeypatch.setattr(segment_module, "clean_and_merge_masks", fake_clean)
-
-    warnings = segment_module.segment_volume(
-        nifti,
-        tmp_path,
-        tasks_config,
-        verbose=False,
-        force=False,
-        backend=backend,
-    )
-
-    assert merge_calls["count"] == 0
-    assert warnings == []
-
-
-def test_segment_volume_runs_postprocess_when_any_task_ran(tmp_path, monkeypatch):
-    nifti = tmp_path / "vol.nii.gz"
-    nifti.write_text("nifti")
-    (tmp_path / "a.nii.gz").write_text("mask")
-    (tmp_path / "merged.nii.gz").write_text("merged")
-
-    tasks_config = {
-        "backend": "totalsegmentator",
-        "tasks": [
-            {"key": "a", "task": "task_a", "output": "a.nii.gz", "extra": {}},
-            {"key": "b", "task": "task_b", "output": "b.nii.gz", "extra": {}},
-        ],
-        "postprocess": {
-            "merge_keys": ["a", "b"],
-            "output": "merged.nii.gz",
-        },
-    }
-
-    backend = DummyBackend({"task_a": "a.nii.gz", "task_b": "b.nii.gz"})
-    merge_calls = {"count": 0}
-
-    def fake_clean(*args, **kwargs):
-        merge_calls["count"] += 1
-        return True
-
-    monkeypatch.setattr(segment_module, "clean_and_merge_masks", fake_clean)
-
-    warnings = segment_module.segment_volume(
-        nifti,
-        tmp_path,
-        tasks_config,
-        verbose=False,
-        force=False,
-        backend=backend,
-    )
-
-    assert merge_calls["count"] == 1
-    assert any("overwrite existing file" in message for message in warnings)
-
-
-def test_segment_volume_warn_only_when_merge_missing(tmp_path, monkeypatch):
-    nifti = tmp_path / "vol.nii.gz"
-    nifti.write_text("nifti")
-
-    tasks_config = {
-        "backend": "totalsegmentator",
-        "tasks": [
-            {"key": "a", "task": "task_a", "output": "a.nii.gz", "extra": {}},
-        ],
-        "postprocess": {
-            "merge_keys": ["a"],
-            "output": "merged.nii.gz",
-            "on_failure": "warn_only",
-        },
-    }
-
-    backend = DummyBackend({"task_a": "a.nii.gz"})
-    monkeypatch.setattr(segment_module, "clean_and_merge_masks", lambda *a, **k: False)
-
-    warnings = segment_module.segment_volume(
-        nifti,
-        tmp_path,
-        tasks_config,
-        verbose=False,
-        force=True,
-        backend=backend,
-    )
-
-    assert warnings
-    assert "merged.nii.gz" in warnings[0]
-
-
-def test_segment_volume_fail_policy_when_merge_missing(tmp_path, monkeypatch):
-    nifti = tmp_path / "vol.nii.gz"
-    nifti.write_text("nifti")
-
-    tasks_config = {
-        "backend": "totalsegmentator",
-        "tasks": [
-            {"key": "a", "task": "task_a", "output": "a.nii.gz", "extra": {}},
-        ],
-        "postprocess": {
-            "merge_keys": ["a"],
-            "output": "merged.nii.gz",
-            "on_failure": "fail",
-        },
-    }
-
-    backend = DummyBackend({"task_a": "a.nii.gz"})
-    monkeypatch.setattr(segment_module, "clean_and_merge_masks", lambda *a, **k: False)
-
-    with pytest.raises(RuntimeError, match="merged.nii.gz"):
-        segment_module.segment_volume(
-            nifti,
-            tmp_path,
-            tasks_config,
-            verbose=False,
-            force=True,
-            backend=backend,
-        )
 
 
 def test_process_single_volume_success(tmp_path):
@@ -987,7 +727,15 @@ def test_main_writes_mask_columns(tmp_path, monkeypatch):
                 "extra": {},
             },
         ],
-        "postprocess": {"merge_keys": ["liver", "vessels"], "output": "merged.nii.gz"},
+        "postprocess": {
+            "operations": [
+                {
+                    "op": "union",
+                    "inputs": ["liver", "vessels"],
+                    "output": "merged.nii.gz",
+                }
+            ]
+        },
     }
 
     config_path = tmp_path / "manifest.yaml"
@@ -1076,8 +824,13 @@ def test_main_maps_fetch_output_path_into_logical_mask_column(tmp_path, monkeypa
             },
         ],
         "postprocess": {
-            "merge_keys": ["liver", "liver_tumor"],
-            "output": "merged.nii.gz",
+            "operations": [
+                {
+                    "op": "union",
+                    "inputs": ["liver", "liver_tumor"],
+                    "output": "merged.nii.gz",
+                }
+            ]
         },
     }
 
@@ -1212,7 +965,11 @@ def test_main_records_warning_when_merged_mask_missing(tmp_path, monkeypatch):
         "tasks": [
             {"key": "liver", "task": "total", "output": "liver.nii.gz", "extra": {}},
         ],
-        "postprocess": {"merge_keys": ["liver"], "output": "merged.nii.gz"},
+        "postprocess": {
+            "operations": [
+                {"op": "union", "inputs": ["liver"], "output": "merged.nii.gz"}
+            ]
+        },
     }
 
     config_path = tmp_path / "manifest.yaml"
@@ -1271,7 +1028,7 @@ def test_main_records_warning_when_merged_mask_missing(tmp_path, monkeypatch):
 
     out_df = pd.read_csv(args.csv_path_out)
     assert "warning_message" in out_df.columns
-    assert "missing merged mask" in out_df.loc[0, "warning_message"]
+    assert "missing postprocess mask" in out_df.loc[0, "warning_message"]
     assert pd.isna(out_df.loc[0, "mask_merged"])
 
 
