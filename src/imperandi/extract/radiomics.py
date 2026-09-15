@@ -35,6 +35,9 @@ DEFAULT_SETTINGS = {
     "resegmentRange": [-150, 250],  # typical HU range for soft tissue
     "correctMask": True,  # enable mask correction to ensure valid feature extraction, especially for shape features
 }
+DEFAULT_MR_SETTINGS = {
+    key: value for key, value in DEFAULT_SETTINGS.items() if key != "resegmentRange"
+}
 YAML_SUFFIXES = (".yaml", ".yml")
 
 
@@ -175,6 +178,11 @@ def _normalize_pyradiomics_settings_path(value: Optional[str]) -> Optional[str]:
     return str(path.resolve())
 
 
+def _normalize_modality(value: Any) -> str:
+    modality = str(value).strip().upper()
+    return "MR" if modality == "MRI" else modality
+
+
 def _load_manifest_radiomics_settings(
     manifest_arg: Optional[str],
 ) -> Optional[Dict[str, Any]]:
@@ -191,6 +199,35 @@ def _load_manifest_radiomics_settings(
         raise ValueError(
             "Manifest radiomics settings must be an object under key 'radiomics'."
         )
+    if "modalities" in radiomics_settings:
+        if "pyradiomics" in radiomics_settings:
+            raise ValueError(
+                "Use either radiomics.modalities or radiomics.pyradiomics, not both."
+            )
+        raw_modalities = radiomics_settings["modalities"]
+        if not isinstance(raw_modalities, dict) or not raw_modalities:
+            raise ValueError(
+                "Manifest radiomics.modalities must be a non-empty object."
+            )
+        modalities = {}
+        for raw_modality, config in raw_modalities.items():
+            modality = _normalize_modality(raw_modality)
+            if modality not in {"CT", "MR"}:
+                raise ValueError(
+                    "Manifest radiomics.modalities keys must be CT, MR, or MRI."
+                )
+            if modality in modalities:
+                raise ValueError(f"Duplicate radiomics modality: {modality}.")
+            if not isinstance(config, dict) or not isinstance(
+                config.get("pyradiomics"), dict
+            ):
+                raise ValueError(
+                    f"Manifest radiomics.modalities.{raw_modality}.pyradiomics "
+                    "must be an object."
+                )
+            modalities[modality] = config["pyradiomics"]
+        return {"modalities": modalities}
+
     pyradiomics_settings = radiomics_settings.get("pyradiomics")
     if pyradiomics_settings is None:
         return None
@@ -292,7 +329,7 @@ def _resolve_pyradiomics_settings_source(
     if manifest_settings is not None:
         if cli_settings_path:
             logger.warning(
-                "Manifest contains a 'radiomics.pyradiomics' settings section; "
+                "Manifest contains PyRadiomics settings; "
                 "preferring manifest settings over --pyradiomics_settings."
             )
         logger.info("PyRadiomics settings source: manifest")
@@ -304,6 +341,61 @@ def _resolve_pyradiomics_settings_source(
 
     logger.info("PyRadiomics settings source: defaults")
     return "defaults", None, None
+
+
+def _create_extractors_for_rows(
+    df: pd.DataFrame,
+    featureextractor_module,
+    *,
+    source_kind: str,
+    settings_path: Optional[str],
+    settings_dict: Optional[Dict[str, Any]],
+):
+    """Create one extractor set per modality, or one shared set for legacy settings."""
+    if source_kind == "manifest" and "modalities" in settings_dict:
+        if "Modality" not in df.columns:
+            raise KeyError(
+                "column 'Modality' missing; radiomics.modalities requires it"
+            )
+        sources = {
+            modality: {"settings_dict": config}
+            for modality, config in settings_dict["modalities"].items()
+        }
+        row_modalities = df["Modality"].map(_normalize_modality)
+    elif source_kind == "defaults":
+        sources = {
+            "CT": {"settings": DEFAULT_SETTINGS},
+            "MR": {"settings": DEFAULT_MR_SETTINGS},
+        }
+        # Preserve support for older CT-only tables without a Modality column.
+        row_modalities = (
+            df["Modality"].map(_normalize_modality)
+            if "Modality" in df.columns
+            else pd.Series("CT", index=df.index)
+        )
+    else:
+        sources = {
+            "shared": (
+                {"settings_dict": settings_dict}
+                if source_kind == "manifest"
+                else {"settings_path": settings_path}
+            )
+        }
+        row_modalities = pd.Series("shared", index=df.index)
+
+    missing = set(row_modalities) - set(sources)
+    if missing:
+        raise ValueError(
+            "No radiomics settings configured for Modality value(s): "
+            + ", ".join(sorted(missing))
+        )
+    extractors = {}
+    for modality in row_modalities.unique():
+        logger.info("Creating radiomics extractors | modality=%s", modality)
+        extractors[modality] = _create_radiomics_extractors(
+            featureextractor_module, **sources[modality]
+        )
+    return row_modalities, extractors
 
 
 def _resolve_radiomics_filters(args: argparse.Namespace) -> dict[str, list[Any]]:
@@ -447,7 +539,7 @@ def add_radiomics_arguments(
 def build_parser(add_help: bool = True) -> argparse.ArgumentParser:
     """Build the standalone PyRadiomics extraction parser."""
     parser = argparse.ArgumentParser(
-        description="Extract PyRadiomics features from CT volumes and masks.",
+        description="Extract PyRadiomics features from CT/MR volumes and masks.",
         add_help=add_help,
     )
     add_radiomics_arguments(parser)
@@ -745,11 +837,11 @@ def _extract_row_features(
     if not isinstance(image_path, str) or not Path(image_path).exists():
         row_label = row_idx if row_idx is not None else "-"
         logger.warning(
-            "Radiomics issue | row=%s | organ=all | CT image path is missing or invalid: %s",
+            "Radiomics issue | row=%s | organ=all | image path is missing or invalid: %s",
             row_label,
             image_path,
         )
-        return {}, [f"CT image path is missing or invalid: {image_path}"]
+        return {}, [f"image path is missing or invalid: {image_path}"]
 
     mask_columns_set = set(mask_columns)
     for mask_col in mask_columns:
@@ -828,6 +920,11 @@ def main(args: argparse.Namespace) -> None:
         "pyradiomics_settings_source": source_kind,
         "pyradiomics_settings": settings_dict,
     }
+    if source_kind == "defaults":
+        checkpoint_signature["pyradiomics_defaults"] = {
+            "CT": DEFAULT_SETTINGS,
+            "MR": DEFAULT_MR_SETTINGS,
+        }
     if source_id_signature:
         checkpoint_signature["source_id"] = source_id_signature
     resume_args = argparse.Namespace(
@@ -871,22 +968,6 @@ def main(args: argparse.Namespace) -> None:
         enabled=bool(getattr(args, "verbose", False)),
         verbose=bool(getattr(args, "verbose", False)),
     )
-    if source_kind == "manifest":
-        extractors = _create_radiomics_extractors(
-            featureextractor_module,
-            settings_dict=settings_dict,
-        )
-    elif source_kind == "cli_file":
-        extractors = _create_radiomics_extractors(
-            featureextractor_module,
-            settings_path=settings_path,
-        )
-    else:
-        extractors = _create_radiomics_extractors(
-            featureextractor_module,
-            DEFAULT_SETTINGS,
-        )
-
     if can_resume and paths.main_checkpoint_path.exists():
         logger.info(
             "Resuming radiomics from checkpoint: %s", paths.main_checkpoint_path
@@ -902,6 +983,13 @@ def main(args: argparse.Namespace) -> None:
     df = _apply_explicit_filters(df, effective_filters)
     filter_skipped_count = rows_before_filter - len(df)
     mask_columns = _get_mask_columns(df)
+    row_modalities, extractors_by_modality = _create_extractors_for_rows(
+        df,
+        featureextractor_module,
+        source_kind=source_kind,
+        settings_path=settings_path,
+        settings_dict=settings_dict,
+    )
 
     logger.info("Extracting radiomics from %d rows and ROIs: %s", len(df), mask_columns)
     _log_dataset_strategy(mask_columns)
@@ -955,12 +1043,12 @@ def main(args: argparse.Namespace) -> None:
         features, messages = _extract_row_features(
             row,
             mask_columns,
-            extractors=extractors,
+            extractors=extractors_by_modality[row_modalities.at[idx]],
             sitk_module=sitk_module,
             row_idx=src_idx,
         )
 
-        if messages and "CT image path is missing or invalid" in messages[0]:
+        if messages and "image path is missing or invalid" in messages[0]:
             error_row = row.to_dict()
             error_row["error_message"] = messages[0]
             errors_by_idx[src_idx] = error_row

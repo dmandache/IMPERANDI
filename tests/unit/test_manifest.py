@@ -25,6 +25,9 @@ def test_bundled_manifests_are_loadable(manifest_name, dataset_name):
     assert manifest["cleaning"]["steps"]
     assert manifest["phase_curation"]["strategies"]
     assert manifest["segmentation"]["backend"] == "totalsegmentator"
+    radiomics = manifest["radiomics"]["modalities"]
+    assert radiomics["CT"]["pyradiomics"]["setting"]["resegmentRange"] == [-150, 250]
+    assert "resegmentRange" not in radiomics["MR"]["pyradiomics"]["setting"]
 
 
 def test_load_generic_manifest_and_hook_resolution():

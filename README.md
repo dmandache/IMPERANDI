@@ -81,7 +81,7 @@ Impact: enables phase-aware stratification and analysis without manual review of
 - Extracts PyRadiomics features for organ and tumor regions from CT/MRI + masks.
 - Includes a organ-minus-tumor extraction path for cleaner parenchyma characterization.
 - Supports optional cohort filtering controls and error-aware output generation.
-- Supports PyRadiomics parameterization from either `--pyradiomics_settings /path/to/Params.yaml` or manifest `radiomics` settings.
+- Supports separate CT/MR settings under `radiomics.modalities`, or shared settings from `--pyradiomics_settings /path/to/Params.yaml` or `radiomics.pyradiomics`.
 
 Impact: accelerates feature exctraction for prognostic and response modeling pipelines.
 
@@ -301,8 +301,31 @@ Hooks are normal Python callables referenced by manifest keys
 `hook_module` and `function`: `id_standardization` hook rewrites
 `patient_key`, while `derived_columns` hook can add fields based on an existing column.
 
-For configuring radiomic extraction, manifest key `radiomics` can directly contain a PyRadiomics-style
-settings object (same structure as `Params.yaml` content).
+Configure radiomics separately for CT and MR under
+`radiomics.modalities.<modality>.pyradiomics`. Each entry is a complete PyRadiomics
+parameter mapping, selected using the CSV's `Modality` column (`MRI` aliases `MR`):
+
+```yaml
+radiomics:
+  modalities:
+    CT:
+      pyradiomics:
+        setting:
+          binWidth: 25
+          resegmentRange: [-150, 250]
+    MR:
+      pyradiomics:
+        setting:
+          binWidth: 25
+```
+
+Every modality retained after filtering must have a configuration. Existing
+`radiomics.pyradiomics` mappings and `--pyradiomics_settings` files still apply
+one shared configuration to all rows. Use either `modalities` or the shared
+`pyradiomics` mapping in a manifest. Without explicit settings, CT keeps its
+existing defaults and MR omits the CT intensity range. Older tables without a
+`Modality` column continue to use CT defaults.
+
 Official PyRadiomics parameter guide:
 [PyRadiomics customization docs](https://pyradiomics.readthedocs.io/en/latest/customization.html).
 

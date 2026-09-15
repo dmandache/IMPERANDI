@@ -148,11 +148,20 @@ segmentation:
             output: liver_tumor
 
 radiomics:
-  pyradiomics:
-    setting:
-      binWidth: 25
-    imageType:
-      Original: {}
+  modalities:
+    CT:
+      pyradiomics:
+        setting:
+          binWidth: 25
+          resegmentRange: [-150, 250]
+        imageType:
+          Original: {}
+    MR:
+      pyradiomics:
+        setting:
+          binWidth: 25
+        imageType:
+          Original: {}
   filters:
     phase: [ARTERIAL, PORTAL_VENOUS]
 ```
@@ -419,7 +428,22 @@ steps to that name and omit its final intersection so the merge stays intact.
 
 ### Radiomics
 
-`radiomics.pyradiomics` follows the normal PyRadiomics parameter structure.
+`radiomics.modalities.CT.pyradiomics` and `radiomics.modalities.MR.pyradiomics`
+each contain a complete PyRadiomics parameter mapping. The CSV's `Modality`
+column selects the configuration; names are case-insensitive and `MRI` aliases
+`MR`. Every modality retained after filtering must be configured, and missing
+or unknown modality values produce an error before extraction.
+
+The bundled CT settings retain the HU resegmentation range; MR omits it.
+Adjust each mapping's intensity settings for your dataset. Without explicit
+settings, the defaults also omit this range for MR. Older tables without a
+`Modality` column use CT defaults.
+
+For a shared configuration, the existing `radiomics.pyradiomics` mapping and
+`--pyradiomics_settings` YAML file remain supported. A manifest must use either
+`modalities` or the shared `pyradiomics` mapping; configurations are not merged.
+Manifest settings take precedence over the CLI settings file.
+
 `radiomics.filters` maps an existing cohort column to its accepted values. Use
 the canonical `phase` output for phase-based filtering.
 

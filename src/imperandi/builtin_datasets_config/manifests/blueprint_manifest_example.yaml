@@ -329,35 +329,46 @@ segmentation:
 # Radiomics
 # ---------------------------------------------------------------------------
 radiomics:
-  # Passed to PyRadiomics as its native parameter mapping. These representative
-  # sections cover settings, voxel settings, image types, and feature classes;
-  # exact keys/values depend on the installed PyRadiomics version.
-  pyradiomics:
-    setting:
-      binWidth: 25
-      resampledPixelSpacing: [1, 1, 1]
-      interpolator: sitkBSpline
-      normalize: false
-      removeOutliers: null
-      resegmentRange: [-150, 250]
-      correctMask: true
-    voxelSetting:
-      kernelRadius: 1
-      maskedKernel: true
-      initValue: .nan
-    imageType:
-      Original: {}
-      LoG:
-        sigma: [1.0, 2.0, 3.0]
-      Wavelet: {}
-    featureClass:
-      firstorder: []
-      shape: []
-      glcm: []
-      glrlm: []
-      glszm: []
-      gldm: []
-      ngtdm: []
+  # Select a complete PyRadiomics parameter mapping using the row's Modality.
+  # MRI is an alias for MR. Every retained modality must be configured.
+  # These representative keys/values depend on the installed PyRadiomics version.
+  modalities:
+    CT:
+      pyradiomics:
+        setting:
+          binWidth: 25
+          resampledPixelSpacing: [1, 1, 1]
+          interpolator: sitkBSpline
+          normalize: false
+          removeOutliers: null
+          resegmentRange: [-150, 250]
+          correctMask: true
+        voxelSetting:
+          kernelRadius: 1
+          maskedKernel: true
+          initValue: .nan
+        imageType:
+          Original: {}
+          LoG:
+            sigma: [1.0, 2.0, 3.0]
+          Wavelet: {}
+        featureClass:
+          firstorder: []
+          shape: []
+          glcm: []
+          glrlm: []
+          glszm: []
+          gldm: []
+          ngtdm: []
+    MR:
+      pyradiomics:
+        setting:
+          binWidth: 25
+          resampledPixelSpacing: [1, 1, 1]
+          # MR intensities do not use the CT HU resegmentation range.
+          correctMask: true
+        imageType:
+          Original: {}
 
   # Map any existing cohort column to a non-empty accepted-value list. Multiple
   # columns are ANDed; values retain their YAML scalar types.

@@ -8,6 +8,7 @@ import argparse
 import logging
 import pandas as pd
 import pytest
+import yaml
 
 from imperandi.extract import radiomics as radiomics_module
 
@@ -137,17 +138,25 @@ def test_normalize_radiomics_args_rejects_missing_or_non_yaml_settings_path(tmp_
         radiomics_module.normalize_radiomics_args(args_bad_suffix)
 
 
+@pytest.mark.parametrize(
+    "radiomics_config, expected_settings",
+    [
+        ({"pyradiomics": {"setting": {"binWidth": 9}}}, {"setting": {"binWidth": 9}}),
+        (
+            {"modalities": {" mri ": {"pyradiomics": {"setting": {"binWidth": 5}}}}},
+            {"modalities": {"MR": {"setting": {"binWidth": 5}}}},
+        ),
+    ],
+)
 def test_resolve_pyradiomics_settings_source_prefers_manifest_and_warns_twice(
-    tmp_path, monkeypatch, caplog
+    tmp_path, monkeypatch, caplog, radiomics_config, expected_settings
 ):
     settings_path = tmp_path / "params.yaml"
     settings_path.write_text("setting:\n  binWidth: 5\n")
     monkeypatch.setattr(
         radiomics_module,
         "load_manifest",
-        lambda *args, **kwargs: {
-            "radiomics": {"pyradiomics": {"setting": {"binWidth": 9}}}
-        },
+        lambda *args, **kwargs: {"radiomics": radiomics_config},
     )
 
     args = argparse.Namespace(
@@ -162,7 +171,7 @@ def test_resolve_pyradiomics_settings_source_prefers_manifest_and_warns_twice(
 
     assert source_kind == "manifest"
     assert source_path is None
-    assert source_dict == {"setting": {"binWidth": 9}}
+    assert source_dict == expected_settings
     warnings = [
         record.message for record in caplog.records if record.levelno >= logging.WARNING
     ]
@@ -196,6 +205,176 @@ def test_resolve_pyradiomics_settings_source_uses_cli_file_when_manifest_has_no_
     ]
     assert len(warnings) == 1
     assert "Both --manifest and --pyradiomics_settings were provided" in warnings[0]
+
+
+@pytest.mark.parametrize(
+    "config, message",
+    [
+        ({"modalities": []}, "non-empty object"),
+        ({"modalities": {}}, "non-empty object"),
+        ({"modalities": {"PT": {"pyradiomics": {}}}}, "CT, MR, or MRI"),
+        ({"modalities": {"CT": {}}}, "pyradiomics must be an object"),
+        ({"modalities": {"MR": {"pyradiomics": []}}}, "pyradiomics must be an object"),
+        (
+            {"modalities": {"MR": {"pyradiomics": {}}, "MRI": {"pyradiomics": {}}}},
+            "Duplicate radiomics modality",
+        ),
+        (
+            {"modalities": {"CT": {"pyradiomics": {}}}, "pyradiomics": {}},
+            "not both",
+        ),
+    ],
+)
+def test_manifest_rejects_invalid_modality_settings(monkeypatch, config, message):
+    monkeypatch.setattr(
+        radiomics_module, "load_manifest", lambda *a, **k: {"radiomics": config}
+    )
+    with pytest.raises(ValueError, match=message):
+        radiomics_module._load_manifest_radiomics_settings("generic")
+
+
+@pytest.mark.parametrize(
+    "rows, error_type, message",
+    [
+        ([{}], KeyError, "Modality.*missing"),
+        ([{"Modality": "MR"}], ValueError, "Modality value.*MR"),
+        ([{"Modality": "PT"}], ValueError, "Modality value.*PT"),
+        ([{"Modality": None}], ValueError, "Modality value"),
+    ],
+)
+def test_modality_settings_require_a_match_for_every_row(rows, error_type, message):
+    with pytest.raises(error_type, match=message):
+        radiomics_module._create_extractors_for_rows(
+            pd.DataFrame(rows),
+            object(),
+            source_kind="manifest",
+            settings_path=None,
+            settings_dict={"modalities": {"CT": {}}},
+        )
+
+
+@pytest.mark.parametrize(
+    "source_kind", ["defaults", "manifest", "shared_manifest", "cli_file"]
+)
+def test_main_selects_settings_by_modality(tmp_path, monkeypatch, source_kind):
+    image_path = tmp_path / "image.nii.gz"
+    image_path.touch()
+    csv_path = tmp_path / "nifti_index.csv"
+    pd.DataFrame(
+        [
+            {
+                "nifti_path": str(image_path),
+                "Modality": modality,
+                "mask_liver": "liver.nii.gz",
+                "mask_liver_tumor": "tumor.nii.gz",
+                "phase": phase,
+            }
+            for modality, phase in [
+                ("CT", "portal"),
+                ("MR", "portal"),
+                (" mri ", "portal"),
+                ("ct", "portal"),
+                ("PT", "other"),
+            ]
+        ]
+    ).to_csv(csv_path, index=False)
+    manifest_path = tmp_path / "manifest.yaml"
+    manifest = {
+        "radiomics": {
+            "modalities": {
+                "CT": {"pyradiomics": {"setting": {"resegmentRange": [-150, 250]}}},
+                "MR": {"pyradiomics": {"setting": {"binWidth": 5}}},
+            }
+        }
+    }
+    if source_kind == "shared_manifest":
+        manifest = {"radiomics": {"pyradiomics": {"setting": {"binWidth": 11}}}}
+    manifest_path.write_text(yaml.safe_dump(manifest))
+    settings_path = tmp_path / "params.yaml"
+    settings_path.write_text("setting:\n  binWidth: 11\n")
+    created_settings = []
+
+    def fake_create(module, settings=None, *, settings_dict=None, settings_path=None):
+        if settings_path:
+            settings_dict = yaml.safe_load(Path(settings_path).read_text())
+        selected = settings_dict["setting"] if settings_dict is not None else settings
+        created_settings.append(selected)
+        return {name: selected for name in ("all", "shape", "non_shape")}
+
+    def fake_extract(
+        image_path, mask_path, tumor_path=None, *, prefix, extractors, **kwargs
+    ):
+        settings = extractors["all"]
+        assert extractors["shape"] == extractors["non_shape"] == settings
+        # Expose both the selected value and unwanted CT-to-MR inheritance.
+        return {
+            f"{prefix}_bin_width": settings.get("binWidth", 25),
+            f"{prefix}_has_ct_range": int("resegmentRange" in settings),
+        }, None
+
+    monkeypatch.setattr(
+        radiomics_module, "_load_radiomics_dependencies", lambda: (object(), object())
+    )
+    monkeypatch.setattr(radiomics_module, "_create_radiomics_extractors", fake_create)
+    monkeypatch.setattr(
+        radiomics_module, "extract_radiomics_organ_minus_tumor", fake_extract
+    )
+    monkeypatch.setattr(
+        radiomics_module,
+        "extract_radiomics_safe",
+        lambda image, mask, prefix, **kwargs: fake_extract(
+            image, mask, prefix=prefix, **kwargs
+        ),
+    )
+    args = argparse.Namespace(
+        csv_path=str(csv_path),
+        csv_path_out=str(tmp_path / "out.csv"),
+        error_csv_path=str(tmp_path / "errors.csv"),
+        filters={"phase": ["portal"]},
+        skip_filter=False,
+        manifest=(
+            str(manifest_path)
+            if source_kind in {"manifest", "shared_manifest"}
+            else None
+        ),
+        pyradiomics_settings=str(settings_path) if source_kind == "cli_file" else None,
+        verbose=False,
+        resume=False,
+    )
+    radiomics_module.main(args)
+    out = pd.read_csv(args.csv_path_out)
+    expected_widths = {
+        "defaults": [25, 25, 25, 25],
+        "manifest": [25, 5, 5, 25],
+        "shared_manifest": [11, 11, 11, 11],
+        "cli_file": [11, 11, 11, 11],
+    }[source_kind]
+    for prefix in ("liver", "liver_tumor"):
+        assert out[f"{prefix}_bin_width"].tolist() == expected_widths
+        assert out[f"{prefix}_has_ct_range"].tolist() == (
+            [0, 0, 0, 0]
+            if source_kind in {"cli_file", "shared_manifest"}
+            else [1, 0, 0, 1]
+        )
+    assert len(created_settings) == (
+        1 if source_kind in {"cli_file", "shared_manifest"} else 2
+    )
+
+    if source_kind == "manifest":
+        args.resume = True
+        radiomics_module.main(args)
+        assert len(created_settings) == 2
+        manifest["radiomics"]["modalities"]["MR"]["pyradiomics"]["setting"][
+            "binWidth"
+        ] = 7
+        manifest_path.write_text(yaml.safe_dump(manifest))
+        radiomics_module.main(args)
+        assert pd.read_csv(args.csv_path_out)["liver_bin_width"].tolist() == [
+            25,
+            7,
+            7,
+            25,
+        ]
 
 
 def test_normalize_radiomics_args_parses_filters(tmp_path):

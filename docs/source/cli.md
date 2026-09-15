@@ -107,7 +107,9 @@ imperandi radiomics [CSV_PATH] [CSV_PATH_OUT] [OPTIONS]
 Requires a separate PyRadiomics installation (see
 [installation](installation.md)), `nifti_path`, and `mask_*` columns.
 
-- `--manifest NAME_OR_YAML`: load settings and filters from `radiomics`.
+- `--manifest NAME_OR_YAML`: load settings and filters from `radiomics`; use
+  `radiomics.modalities.CT.pyradiomics` and `.MR.pyradiomics` for separate settings
+  selected by the CSV's `Modality` column (`MRI` aliases `MR`).
 - `--pyradiomics_settings PARAMS.yaml`: use explicit PyRadiomics settings.
 - `--filter column=value1,value2`: filter rows; repeat for more columns.
 - `--skip_filter`: ignore both CLI and manifest filters.

@@ -271,13 +271,24 @@ segmentation:
 radiomics:
   # Native PyRadiomics parameter mapping plus cohort filters applied before
   # extraction. Multiple filter columns are combined with AND.
-  pyradiomics:
-    setting:
-      binWidth: 25
-      resampledPixelSpacing: [1, 1, 1]
-      resegmentRange: [-150, 250]
-      correctMask: true
-    imageType:
-      Original: {}
+  modalities:
+    CT:
+      pyradiomics:
+        setting:
+          binWidth: 25
+          resampledPixelSpacing: [1, 1, 1]
+          resegmentRange: [-150, 250]
+          correctMask: true
+        imageType:
+          Original: {}
+    MR:
+      pyradiomics:
+        setting:
+          binWidth: 25
+          resampledPixelSpacing: [1, 1, 1]
+          # MR intensities do not use the CT HU resegmentation range.
+          correctMask: true
+        imageType:
+          Original: {}
   filters:
     phase: [ARTERIAL, PORTAL_VENOUS]

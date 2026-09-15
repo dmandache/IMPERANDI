@@ -245,14 +245,25 @@ segmentation:
 
 radiomics:
   # `pyradiomics` follows the native PyRadiomics parameter-file structure.
-  pyradiomics:
-    setting:
-      binWidth: 25
-      resampledPixelSpacing: [1, 1, 1]
-      resegmentRange: [-150, 250]
-      correctMask: true
-    imageType:
-      Original: {}
+  modalities:
+    CT:
+      pyradiomics:
+        setting:
+          binWidth: 25
+          resampledPixelSpacing: [1, 1, 1]
+          resegmentRange: [-150, 250]
+          correctMask: true
+        imageType:
+          Original: {}
+    MR:
+      pyradiomics:
+        setting:
+          binWidth: 25
+          resampledPixelSpacing: [1, 1, 1]
+          # MR intensities do not use the CT HU resegmentation range.
+          correctMask: true
+        imageType:
+          Original: {}
   filters:
     # Each key is a cohort-table column; a row is retained when its value is in
     # the configured list. Multiple filter keys are combined with AND.
