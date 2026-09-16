@@ -158,19 +158,6 @@ def operation_sources(operations: list[dict[str, Any]]) -> list[str]:
     return list(dict.fromkeys(sources))
 
 
-def physical_structuring_element(zooms, radius_mm: float) -> np.ndarray:
-    """Sample a sphere in millimetres on a possibly anisotropic voxel grid."""
-    spacing = np.asarray(zooms, dtype=float)
-    if spacing.shape != (3,) or not np.all(np.isfinite(spacing) & (spacing > 0)):
-        raise MaskGeometryError(
-            "Morphology requires three finite, positive voxel sizes."
-        )
-    radii = np.floor(radius_mm / spacing).astype(int)
-    grid = np.ogrid[tuple(slice(-radius, radius + 1) for radius in radii)]
-    distance_squared = sum((axis * size) ** 2 for axis, size in zip(grid, spacing))
-    return distance_squared <= radius_mm**2 + 1e-12
-
-
 def _state(
     directory: Path,
     operations: list[dict[str, Any]],
@@ -187,7 +174,7 @@ def _state(
     for name in sorted(paths):
         stat = (directory / name).stat()
         files[name] = [stat.st_mtime_ns, stat.st_size]
-    return {"version": 1, "operations": operations, "sources": sources, "files": files}
+    return {"version": 2, "operations": operations, "sources": sources, "files": files}
 
 
 def operations_are_current(directory, operations, output_to_fetch) -> bool:
@@ -253,20 +240,42 @@ def apply_operations(
         elif op == "not":
             result = ~mask
         elif op in _MORPHOLOGY:
-            function = {
-                "dilate": ndimage.binary_dilation,
-                "erode": ndimage.binary_erosion,
-                "open": ndimage.binary_opening,
-                "close": ndimage.binary_closing,
-            }[op]
-            result = function(
-                mask,
-                structure=physical_structuring_element(
-                    (1, 1, 1) if "radius_vox" in step else zooms,
-                    step.get("radius_vox", step.get("radius_mm")),
-                ),
-                iterations=step["iterations"],
+            from skimage.morphology import (
+                isotropic_closing,
+                isotropic_dilation,
+                isotropic_erosion,
+                isotropic_opening,
             )
+
+            functions = {
+                "dilate": isotropic_dilation,
+                "erode": isotropic_erosion,
+                "open": isotropic_opening,
+                "close": isotropic_closing,
+            }
+            spacing = np.asarray(
+                (1, 1, 1) if "radius_vox" in step else zooms, dtype=float
+            )
+            if spacing.shape != (3,) or not np.all(
+                np.isfinite(spacing) & (spacing > 0)
+            ):
+                raise MaskGeometryError(
+                    "Morphology requires three finite, positive voxel sizes."
+                )
+            radius = step.get("radius_vox", step.get("radius_mm"))
+            iterations = step["iterations"]
+            phases = [op]
+            if iterations > 1 and op in {"open", "close"}:
+                phases = ["erode", "dilate"] if op == "open" else ["dilate", "erode"]
+            result = mask.copy()
+            if radius > 0:
+                for phase in phases:
+                    for _ in range(iterations):
+                        # Distance transforms of an empty foreground can produce
+                        # spurious corner voxels during dilation.
+                        if not result.any():
+                            break
+                        result = functions[phase](result, radius=radius, spacing=spacing)
         elif op == "fill_holes":
             result = ndimage.binary_fill_holes(
                 mask,

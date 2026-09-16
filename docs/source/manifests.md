@@ -471,7 +471,9 @@ Alternatively, set a finite, non-negative `radius_vox` to use a sphere measured
 in voxels, independent of spacing. Supply only one of `radius_mm` and `radius_vox`.
 Radius zero is an identity operation. `iterations` defaults to `1` and must be a
 positive integer; for opening/closing it repeats each erosion/dilation phase.
-Outside the image volume is treated as background.
+Morphology uses scikit-image's distance-transform-based `isotropic_dilation`,
+`isotropic_erosion`, `isotropic_opening`, and `isotropic_closing`, including their
+image-boundary behavior.
 
 `fill_holes` and `largest_cc` accept `connectivity: 1`, `2`, or `3` (face,
 face-and-edge, or face-edge-and-corner neighbors). Defaults are `1` for hole

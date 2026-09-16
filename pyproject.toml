@@ -42,7 +42,7 @@ Issues = "https://github.com/dmandache/IMPERANDI/issues"
 [project.optional-dependencies]
 segment = [
   "TotalSegmentator",
-  "scikit-image",
+  "scikit-image>=0.20",
   "xgboost",  # Required by TotalSegmentator's contrast-phase predictor.
   "SimpleITK",
 ]

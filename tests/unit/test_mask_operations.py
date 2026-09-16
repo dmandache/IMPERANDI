@@ -122,6 +122,35 @@ def test_opening_removes_isolated_voxel(tmp_path, op):
     assert result[5, 5, 5] == 1
 
 
+@pytest.mark.parametrize("op", ["open", "close"])
+def test_opening_and_closing_iterations_repeat_each_phase(tmp_path, op):
+    from scipy import ndimage
+
+    data = np.zeros((19, 19, 19), dtype=bool)
+    data[4:15, 4:15, 4:15] = True
+    data[8:11, 8:11, 8:11] = False
+    data[2, 2, 2] = True
+    save_mask(tmp_path, "a", data)
+    run_operations(
+        tmp_path,
+        [{"op": op, "input": "a", "output": "result", "iterations": 2}],
+    )
+    reference = ndimage.binary_opening if op == "open" else ndimage.binary_closing
+    expected = reference(data, iterations=2)
+    np.testing.assert_array_equal(read_mask(tmp_path, "result"), expected)
+
+
+@pytest.mark.parametrize("op", ["dilate", "erode", "open", "close"])
+@pytest.mark.parametrize("iterations", [1, 2])
+def test_morphology_keeps_empty_masks_empty(tmp_path, op, iterations):
+    save_mask(tmp_path, "a", np.zeros((5, 5, 5)))
+    run_operations(
+        tmp_path,
+        [{"op": op, "input": "a", "output": "result", "iterations": iterations}],
+    )
+    assert not read_mask(tmp_path, "result").any()
+
+
 @pytest.mark.parametrize("op", ["close", "closing", "fill_holes"])
 def test_closing_and_filling_repair_internal_hole(tmp_path, op):
     data = np.zeros((9, 9, 9))
