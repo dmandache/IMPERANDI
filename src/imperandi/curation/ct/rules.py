@@ -22,7 +22,7 @@ RX_CT_NATIVE = token(
 )
 RX_CT_ARTERIAL = token(r"art(?:eriel|erial|[eé]rielle?)?|artery|aorte|aortic|angio|cta")
 RX_CT_PORTAL = token(
-    r"portal|porto|portovenous|portal\s*venous|vein|venous|veineux|veineuse|vp|pv|parenchymateux|parenchymal"
+    r"portal(?:e)|porto|portovenous|portal\s*venous|vein|venous|veineux|veineuse|vp|pv|parenchymateux|parenchymal"
 )
 RX_CT_DELAYED = token(
     r"delay(?:ed)?|delai|d[eé]lai|tardif|tardive|late|equilibrium|equilibre|[eé]quilibre"
