@@ -40,7 +40,7 @@ RX_MIP_MPR = token(
 )
 RX_QUANT_OR_REPORT = token(
     rf"quant|carto|maps?|mapping|reports?|results?|reading|histo"
-    rf"|iron{SEP}reports?|elasto|error|dose"
+    rf"|iron{SEP}reports?|elasto|error|dose(?:{SEP}reports?)?"
 )
 RX_DERIVED_LOW_VALUE = token(
     RX_KEY_IMAGES, RX_SUBTRACTION, RX_MIP_MPR, RX_QUANT_OR_REPORT
@@ -66,7 +66,7 @@ RX_RESP_TRIGGERED = token(
 INJECTION = r"inj(?:ect(?:ed|ion|e|ee|é|ée)?)?"
 CONTRAST = r"contrast(?:ed|[eé]e?)?"
 RX_PHASE_NATIVE = token(
-    rf"native|natif|unenhanced|un{SEP}enhanced|non{SEP}enhanced"
+    rf"native|natif|un{SEP}enhanced|non{SEP}enhanced"
     rf"|pr[eé](?:{SEP}(?:{CONTRAST}|iv|{INJECTION}))?"
     rf"|avant(?:{SEP}{INJECTION})?"
     rf"|sans(?:{SEP}(?:iv|{INJECTION}|{CONTRAST}))?"
@@ -107,15 +107,16 @@ MINUTE = r"(?:mn|min(?:ute)?s?)"
 HOUR = r"(?:h|hrs?|hours?|heures?)"
 NUMBER = r"\d+(?:[.,]\d+)?"
 RX_DURATION = token(
-    rf"(?<![\d:.,])(?:"
-    rf"(?P<clock_minutes>\d+):(?P<clock_seconds>[0-5]\d)(?:{SEP}{MINUTE})?"
+    rf"(?<!\d[.,:])(?:"
+    rf"(?P<clock_minutes>\d+):(?P<clock_seconds>[0-5]\d)(?![.,:]\d)"
+    rf"(?:{SEP}{MINUTE})?"
     rf"|(?P<hours>{NUMBER}){SEP}{HOUR}"
     rf"(?:{SEP}(?P<hour_minutes>\d{{1,2}})(?:{SEP}{MINUTE})?"
     rf"(?:{SEP}(?P<hour_seconds>{NUMBER}){SEP}{SECOND})?)?"
     rf"|(?P<minutes>{NUMBER}){SEP}{MINUTE}"
     rf"(?:{SEP}(?P<minute_seconds>{NUMBER}){SEP}{SECOND})?"
     rf"|(?P<seconds>{NUMBER}){SEP}{SECOND}"
-    rf")(?![.,:]\d)"
+    rf")"
 )
 
 
@@ -170,7 +171,8 @@ def _durations(text: str) -> list[tuple[re.Match, float]]:
         }
         seconds = (
             values["hours"] * 3600
-            + (values["clock_minutes"] + values["hour_minutes"] + values["minutes"]) * 60
+            + (values["clock_minutes"] + values["hour_minutes"] + values["minutes"])
+            * 60
             + values["clock_seconds"]
             + values["hour_seconds"]
             + values["minute_seconds"]

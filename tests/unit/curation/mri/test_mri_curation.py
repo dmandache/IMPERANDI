@@ -219,9 +219,13 @@ def test_low_level_phase_regexes_do_not_classify_ordinal_phases():
 )
 def test_phase_time_windows_follow_curation_policy(phase, accepted, rejected):
     for text in accepted:
-        assert mc.detect_explicit_phase_from_text(pd.Series(row(text)))[0] == phase, text
+        assert (
+            mc.detect_explicit_phase_from_text(pd.Series(row(text)))[0] == phase
+        ), text
     for text in rejected:
-        assert mc.detect_explicit_phase_from_text(pd.Series(row(text)))[0] != phase, text
+        assert (
+            mc.detect_explicit_phase_from_text(pd.Series(row(text)))[0] != phase
+        ), text
 
 
 def test_water_lava_alone_is_not_native():

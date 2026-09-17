@@ -23,9 +23,7 @@ RX_PHASE_DELAYED = shared.RX_PHASE_DELAYED
 RX_PHASE_ORDINAL = shared.RX_PHASE_ORDINAL
 
 # Reusable MR families and contrast agents.
-GADOLINIUM = (
-    r"gd|gad|gado|gadopdc|gadolinium|eovist|primovist|gadoxetate|gadoxetic"
-)
+GADOLINIUM = r"gd|gad|gado|gadopdc|gadolinium|eovist|primovist|gadoxetate|gadoxetic"
 DIXON = rf"(?:[mqe]{SEP})?dixon"
 T1_GRE = (
     rf"vibe|lava|e?thrive|twist|grasp|dynava|fspgr|spgr|tfe"
@@ -83,7 +81,7 @@ PHASE_RULES = shared.phase_rules(
 
 # These profiles describe MR multivolume containers, not a single pure phase.
 RX_PHASE_ART_PORT_DYNAMIC = token(
-    rf"art{SEP}port(?:al(?:e)?)?|arterio{SEP}portal"
+    rf"{shared.ARTERIAL}{SEP}port(?:al(?:e)?)?|art[eé]rio{SEP}portal(?:e)?"
 )
 RX_PHASE_MASK_MULTIART_DYNAMIC = token(
     rf"mas(?:k|q(?:ue)?){SEP}(?:(?:multi|\d+){SEP})?{shared.ARTERIAL}"
@@ -104,13 +102,9 @@ RX_T1_DYNAMIC = token(
 
 # Features used to rank MR diagnostic candidates.
 RX_T2_FATSAT = token(rf"fs|fat{SEP}sat|spair|spir|stir|tirm")
-RX_T2_MOTION_ROBUST = token(
-    T2_MOTION_ROBUST, r"multivane|radial", RX_RESP_TRIGGERED
-)
+RX_T2_MOTION_ROBUST = token(T2_MOTION_ROBUST, r"multivane|radial", RX_RESP_TRIGGERED)
 RX_T2_HASTE_SSFSE = token(T2_SINGLE_SHOT, rf"single{SEP}shot")
-RX_T2_TSE_FSE = token(
-    T2_FAST_SPIN, rf"sense|te{SEP}\d+|fast{SEP}spin|turbo{SEP}spin"
-)
+RX_T2_TSE_FSE = token(T2_FAST_SPIN, rf"sense|te{SEP}\d+|fast{SEP}spin|turbo{SEP}spin")
 RX_T2_MRCP_BILIARY = token(r"mrcp|bili|biliary|biliaire|chol|cholangio|cholangi")
 RX_T1_3D_GRE = token(r"3d", T1_GRE)
 

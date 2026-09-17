@@ -21,7 +21,12 @@ from imperandi.curation.common import (
     stable_text,
 )
 from imperandi.curation.phase import apply_phase_curation
-from imperandi.curation.rules import RX_IMAGE_ORIGINAL, RX_IMAGE_PRIMARY, match_phase, match_plane
+from imperandi.curation.rules import (
+    RX_IMAGE_ORIGINAL,
+    RX_IMAGE_PRIMARY,
+    match_phase,
+    match_plane,
+)
 from . import rules
 
 

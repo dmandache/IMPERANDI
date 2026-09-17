@@ -12,8 +12,6 @@ RX_CT_DELAYED = shared.RX_PHASE_DELAYED
 
 # Angiography identifies the arterial acquisition in CT. In MR, angiography can
 # be a separate sequence family, so its name alone must not label a T1 phase.
-RX_CT_ARTERIAL = token(
-    shared.RX_PHASE_ARTERIAL, rf"angio(?:graph(?:y|ie))?|ct{SEP}a"
-)
+RX_CT_ARTERIAL = token(shared.RX_PHASE_ARTERIAL, rf"angio(?:graph(?:y|ie))?|ct{SEP}a")
 PHASE_RULES = shared.phase_rules(arterial=RX_CT_ARTERIAL)
 CT_PHASE_PRIORITY = shared.PHASE_PRIORITY

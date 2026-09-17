@@ -213,6 +213,35 @@ These rules use sequence descriptions, timing, acquisition order, and other
 DICOM-derived features. An optional `mapping` can rename their canonical
 outputs, although the built-in labels normally need no mapping.
 
+CT and MR share phase vocabulary, localizer and derived-image exclusions,
+anatomical planes, and selection priorities. Matching is case-insensitive and
+uses whole tokens, including accented letters. Spaces, underscores, dots,
+pluses, hyphens, and slashes are interchangeable separators within compound
+terms; compact spellings such as `noninjected` also match.
+
+Explicit phase names take precedence over timing. Within one text field,
+native takes precedence over post-contrast phases, portal over arterial, and
+arterial over generic delayed terms such as `late`. Fields are evaluated
+separately in their configured order, so a lower-priority protocol or study
+description cannot override a recognized series description.
+
+The shared timing policy recognizes arterial delays of 20–35 seconds, portal
+delays of 60–90 seconds, and delayed acquisitions at 3–15 minutes. It parses
+complete durations: `1 min 31 sec` is 91 seconds and does not match the arterial
+window through its seconds component. Colon notation denotes minutes and
+seconds (`1:30 min`); decimal notation denotes fractional units (`1.5 min`).
+Conflicting durations without an explicit phase label remain unresolved.
+An adjacent duration on a named delayed phase must also fit the delayed window.
+These windows are curation heuristics, not universal acquisition standards.
+
+CT adds angiography/CTA terms. MR adds gadolinium-related terms, hepatobiliary
+labels and timing (20 minutes or 2 hours through 2h59m59s), sequence families,
+Dixon components, and dynamic acquisition-order inference. MR hepatobiliary
+names precede portal, arterial, and delayed names. The common vocabulary and
+timing policy live in `imperandi.curation.rules`; the CT and MR rule modules
+contain their respective extensions. `RX_PHASE_*` patterns match words;
+`match_phase` combines them with complete-duration matching.
+
 ```yaml
 phase_curation:
   strategies:
