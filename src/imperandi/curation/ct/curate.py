@@ -94,7 +94,7 @@ def score_ct(row: pd.Series) -> float:
             score -= 10
 
     score -= 500 if f["is_localizer"] else 0
-    score -= 500 if f["is_derived_low_value"] else 0
+    score -= 200 if f["is_derived_low_value"] else 0
     return float(score)
 
 
