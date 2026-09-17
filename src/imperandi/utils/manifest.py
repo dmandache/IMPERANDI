@@ -9,6 +9,28 @@ YAML_SUFFIXES = (".yaml", ".yml")
 BUILTIN_CONFIG_PACKAGE = "imperandi.builtin_datasets_config"
 
 
+class Manifest(dict):
+    """Manifest values with their YAML origin retained outside the public schema."""
+
+    def __init__(self, values: dict, *, source_path: Path):
+        super().__init__(values)
+        self.source_path = source_path
+
+
+def resolve_manifest_resource(manifest: dict, source: str) -> Path:
+    """Resolve a nested resource against its YAML file, never an implicit cwd."""
+    path = Path(source)
+    if path.is_absolute():
+        return path
+    origin = getattr(manifest, "source_path", None)
+    if origin is None:
+        raise ValueError(
+            "Relative phase_curation ontology source requires a manifest loaded "
+            "with load_manifest(); use an absolute source for an in-memory manifest."
+        )
+    return (origin.parent / path).resolve()
+
+
 def _named_manifest_candidates(manifest_arg: str) -> list[Path]:
     filename = (
         manifest_arg
@@ -45,7 +67,7 @@ def load_manifest(manifest_arg: Optional[str], *, base_path: Path) -> dict:
 
     if not isinstance(manifest, dict):
         raise ValueError(f"Manifest must contain a YAML mapping: {manifest_path}")
-    return manifest
+    return Manifest(manifest, source_path=manifest_path.resolve())
 
 
 def _import_hook_module(module_name: str):

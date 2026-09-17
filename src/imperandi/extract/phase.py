@@ -13,8 +13,11 @@ from tqdm import tqdm
 from imperandi.curation.phase import (
     apply_phase_curation,
     phase_needs_strategy,
-    validate_phase_curation,
+    prepare_phase_curation,
+    resolve_phase_curation,
+    validate_phase_cohort,
 )
+from imperandi.utils.ontology_cli import add_ontology_argument, normalize_ontology_arg
 from imperandi.utils.manifest import load_manifest
 from imperandi.utils.logging import log_task_summary, setup_logging
 from imperandi.utils.misc import print_args
@@ -52,6 +55,7 @@ def add_phase_arguments(
     include_dry_run: bool = True,
 ) -> None:
     """Add phase-extraction paths, force, and resume options to a parser."""
+    add_ontology_argument(parser)
     parser.add_argument(
         "csv_path_pos",
         nargs="?",
@@ -129,6 +133,7 @@ def normalize_phase_args(args: argparse.Namespace) -> argparse.Namespace:
         FileNotFoundError: If the input table does not exist.
         ValueError: If the input table is not a CSV file.
     """
+    normalize_ontology_arg(args)
     csv_in = args.csv_path_opt if args.csv_path_opt is not None else args.csv_path_pos
     csv_path = Path(csv_in) if csv_in else (Path.cwd() / "nifti_index.csv")
 
@@ -219,9 +224,12 @@ def main(args: argparse.Namespace) -> None:
         manifest_arg,
         base_path=Path(__file__).resolve().parents[1],
     )
-    if "phase_curation" not in manifest:
+    if "phase_curation" not in manifest and getattr(args, "ontology_path", None) is None:
         raise ValueError("Manifest must define a phase_curation section.")
-    phase_curation = validate_phase_curation(manifest["phase_curation"])
+    phase_curation = prepare_phase_curation(
+        resolve_phase_curation(manifest, ontology_path=getattr(args, "ontology_path", None)),
+        progress_logger=logger,
+    )
     logger.info(
         "Phase strategy order: %s",
         " -> ".join(
@@ -254,6 +262,10 @@ def main(args: argparse.Namespace) -> None:
         args=resume_args,
         command="phase",
         inputs=args.csv_path,
+        content_inputs=[
+            strategy["source"] for strategy in phase_curation["strategies"]
+            if strategy["type"] == "ontology" and "source" in strategy
+        ],
         output_path=output_path,
         error_path=error_path,
         exclude_hash_args=exclude_hash_args,
@@ -279,6 +291,7 @@ def main(args: argparse.Namespace) -> None:
     else:
         df = pd.read_csv(args.csv_path).copy()
     df = ensure_source_id_column(df)
+    validate_phase_cohort(df, phase_curation)
 
     errors_by_idx: Dict[str, Dict[str, Any]] = {}
     completed_indices: set[str] = set()

@@ -24,8 +24,12 @@ from imperandi.ingest.hooks import (
 from imperandi.curation import curate_by_modality
 from imperandi.curation.phase import (
     phase_curation_input_columns,
+    prepare_phase_curation,
+    resolve_phase_curation,
+    validate_phase_cohort,
     validate_phase_curation,
 )
+from imperandi.utils.ontology_cli import add_ontology_argument, normalize_ontology_arg
 from imperandi.utils.logging import log_task_summary, setup_logging
 from imperandi.utils.misc import print_args, report_volumes, report_change
 from imperandi.utils.datetime import to_dates, to_times
@@ -84,6 +88,7 @@ def add_clean_arguments(
     include_dry_run: bool = True,
 ) -> None:
     """Add metadata-cleaning paths and manifest options."""
+    add_ontology_argument(parser)
     if include_csv_path:
         parser.add_argument(
             "csv_path_pos",
@@ -177,6 +182,7 @@ def _default_clean_output_path(csv_path: Path) -> Path:
 
 def normalize_clean_args(args: argparse.Namespace) -> argparse.Namespace:
     """Resolve clean input/output paths in-place."""
+    normalize_ontology_arg(args)
     csv_in = (
         args.csv_path_opt
         if getattr(args, "csv_path_opt", None) is not None
@@ -1150,7 +1156,7 @@ def _sorted_unique(values, col_name):
     return sorted(unique_vals, key=key_fn)
 
 
-def group_volumes(df):
+def group_volumes(df, *, preserve_columns: set[str] | None = None):
     """Aggregate instance metadata into one row per volume.
 
     The canonical ``time`` column represents the volume acquisition start, so
@@ -1172,7 +1178,10 @@ def group_volumes(df):
 
     df = df.groupby("volume_id").agg(agg_fun)
     df = df.reset_index()
-    df = df.dropna(axis=1, how="all")
+    df = df.drop(columns=[
+        col for col in df.columns
+        if df[col].isna().all() and col not in (preserve_columns or set())
+    ])
     return df
 
 
@@ -2059,7 +2068,7 @@ def _collect_required_input_columns(
             if col not in produced:
                 required.add(col)
         produced.update(_get_step_outputs(step))
-    if any(step["type"] == "modality_curation" for step in steps):
+    if phase_curation is not None or any(step["type"] == "modality_curation" for step in steps):
         required.update(phase_curation_input_columns(phase_curation))
     return sorted(required)
 
@@ -2393,9 +2402,14 @@ def _run_modality_curation_step(
     return curated
 
 
-def _run_finalize_step(df: pd.DataFrame, step: dict) -> pd.DataFrame:
+def _run_finalize_step(
+    df: pd.DataFrame, step: dict, *, preserve_columns: set[str] | None = None
+) -> pd.DataFrame:
     """Drop empty helper columns and restore the canonical output ordering."""
-    df = df.dropna(axis=1, how="all")
+    df = df.drop(columns=[
+        col for col in df.columns
+        if df[col].isna().all() and col not in (preserve_columns or set())
+    ])
     df = reorder_columns(df)
     df = reorder_rows(df)
     return df
@@ -2431,16 +2445,25 @@ def run_clean_pipeline(
     phase_curation: dict | None = None,
 ) -> pd.DataFrame:
     """Run validated cleaning steps sequentially with per-step reporting."""
+    preserve_columns = phase_curation_input_columns(phase_curation) if phase_curation is not None else set()
+    if phase_curation is not None:
+        phase_curation = prepare_phase_curation(phase_curation, progress_logger=logger)
     report_volumes(df, "initial load")
 
     for step in steps:
         df_prev = df.copy()
         if step["type"] == "modality_curation":
+            if phase_curation is not None:
+                validate_phase_cohort(df, phase_curation)
             df = _run_modality_curation_step(
                 df,
                 step,
                 phase_curation=phase_curation,
             )
+        elif step["type"] == "group_volumes":
+            df = group_volumes(df, preserve_columns=preserve_columns)
+        elif step["type"] == "finalize":
+            df = _run_finalize_step(df, step, preserve_columns=preserve_columns)
         else:
             df = STEP_REGISTRY[step["type"]](df, step)
         label = _step_label(step)
@@ -2455,6 +2478,8 @@ def run_clean_pipeline(
         except Exception:
             logger.debug("Could not compute detailed change report for step %s", label)
 
+    if phase_curation is not None:
+        validate_phase_cohort(df, phase_curation)
     return df
 
 
@@ -2462,10 +2487,18 @@ def clean_and_save_data(
     csv_path,
     csv_path_out,
     manifest,
+    *,
+    ontology_path: str | None = None,
 ):
     """Run the manifest-defined metadata-curation pipeline and write its CSV output."""
-    steps = validate_cleaning_manifest(manifest)
-    phase_curation = manifest.get("phase_curation")
+    phase_curation = (
+        resolve_phase_curation(manifest, ontology_path=ontology_path)
+        if "phase_curation" in manifest or ontology_path is not None else None
+    )
+    validated_manifest = dict(manifest)
+    if phase_curation is not None:
+        validated_manifest["phase_curation"] = phase_curation
+    steps = validate_cleaning_manifest(validated_manifest)
     required_columns = _collect_required_input_columns(steps, phase_curation)
     df = load_data(csv_path, required_columns=required_columns)
     input_rows = len(df)
@@ -2507,4 +2540,5 @@ if __name__ == "__main__":
         args.csv_path,
         args.csv_path_out,
         manifest,
+        ontology_path=getattr(args, "ontology_path", None),
     )

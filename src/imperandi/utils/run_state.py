@@ -88,7 +88,9 @@ def _normalize_for_json(value: Any) -> Any:
         return str(value)
     if isinstance(value, Mapping):
         return {str(k): _normalize_for_json(v) for k, v in sorted(value.items())}
-    if isinstance(value, (list, tuple, set)):
+    if isinstance(value, set):
+        return [_normalize_for_json(v) for v in sorted(value, key=str)]
+    if isinstance(value, (list, tuple)):
         return [_normalize_for_json(v) for v in value]
     return value
 
@@ -308,6 +310,7 @@ def prepare_resume_context(
     output_path: str | Path,
     error_path: str | Path,
     exclude_hash_args: Iterable[str] = (),
+    content_inputs: Sequence[str | Path] = (),
 ) -> dict[str, Any]:
     paths = build_checkpoint_paths(output_path, error_path, command)
     hash_exclude_keys = tuple(
@@ -317,6 +320,7 @@ def prepare_resume_context(
     input_fp = fingerprint_inputs(
         inputs, strict=bool(getattr(args, "strict_resume", False))
     )
+    input_fp.extend(fingerprint_inputs(content_inputs, strict=True))
     state = load_state(paths.state_path)
     resume_enabled = bool(getattr(args, "resume", False))
     state_is_compatible = resume_enabled and state_matches(

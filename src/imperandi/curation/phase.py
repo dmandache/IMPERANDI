@@ -6,10 +6,15 @@ import copy
 import logging
 import re
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
+from imperandi.curation.ontology import OntologyIndex, load_ontology
+from imperandi.utils.manifest import resolve_manifest_resource
+
+logger = logging.getLogger(__name__)
 SUPPORTED_PHASE_STRATEGIES = {"ontology", "rules", "totalsegmentator"}
 DEFAULT_UNRESOLVED_LABELS = ["", "OTHER", "UNKNOWN", "UNCLASSIFIED", "NONE"]
 DEFAULT_PHASE_CURATION = {
@@ -17,6 +22,14 @@ DEFAULT_PHASE_CURATION = {
     "fallback": "OTHER",
     "unresolved_labels": DEFAULT_UNRESOLVED_LABELS,
 }
+
+
+class PreparedPhaseCuration(dict[str, Any]):
+    """Validated settings and command-scoped indexes, kept out of serialization."""
+
+    def __init__(self, config: dict[str, Any], ontologies: dict[str, OntologyIndex]):
+        super().__init__(config)
+        self.ontologies = ontologies
 
 
 def normalize_phase_label(value: Any) -> str | None:
@@ -63,6 +76,8 @@ def _validate_mapping(value: Any, field: str, *, required: bool) -> dict[str, st
 
 def validate_phase_curation(config: Mapping[str, Any] | None) -> dict[str, Any]:
     """Validate and normalize the manifest ``phase_curation`` section."""
+    if isinstance(config, PreparedPhaseCuration):
+        return config
     if config is None:
         config = DEFAULT_PHASE_CURATION
     if not isinstance(config, Mapping):
@@ -98,12 +113,42 @@ def validate_phase_curation(config: Mapping[str, Any] | None) -> dict[str, Any]:
         strategy["name"] = name.strip()
 
         if strategy_type == "ontology":
-            strategy["columns"] = _validate_string_list(
-                strategy.get("columns"), f"{field}.columns"
+            external = any(
+                key in strategy for key in ("source", "match_columns", "value_column")
             )
-            strategy["mapping"] = _validate_mapping(
-                strategy.get("mapping"), f"{field}.mapping", required=True
-            )
+            if external:
+                if "columns" in strategy:
+                    raise ValueError(
+                        f"{field}.columns is incompatible with external ontology "
+                        "source, match_columns, and value_column (ambiguous modes)."
+                    )
+                strategy["match_columns"] = _validate_string_list(
+                    strategy.get("match_columns"), f"{field}.match_columns"
+                )
+                if len(set(strategy["match_columns"])) != len(strategy["match_columns"]):
+                    raise ValueError(f"{field}.match_columns must contain unique columns.")
+                value_column = strategy.get("value_column")
+                if not isinstance(value_column, str) or not value_column.strip():
+                    raise ValueError(f"{field}.value_column must be a non-empty string.")
+                strategy["value_column"] = value_column.strip()
+                source = strategy.get("source")
+                if not isinstance(source, str) or not source.strip():
+                    raise ValueError(f"{field}.source must be a non-empty file path.")
+                if Path(source).suffix.lower() not in {".csv", ".parquet"}:
+                    raise ValueError(f"{field}.source must use a .csv or .parquet extension.")
+                if "mapping" in strategy:
+                    strategy["mapping"] = _validate_mapping(
+                        strategy["mapping"], f"{field}.mapping", required=True
+                    )
+                    if any(not isinstance(v, str) for v in raw_strategy["mapping"].values()):
+                        raise ValueError(f"{field}.mapping values must be phase-label strings.")
+            else:
+                strategy["columns"] = _validate_string_list(
+                    strategy.get("columns"), f"{field}.columns"
+                )
+                strategy["mapping"] = _validate_mapping(
+                    strategy.get("mapping"), f"{field}.mapping", required=True
+                )
             confidence = strategy.get("confidence", "high")
             if not isinstance(confidence, (str, int, float)):
                 raise ValueError(f"{field}.confidence must be a scalar value.")
@@ -162,13 +207,73 @@ def validate_phase_curation(config: Mapping[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def resolve_phase_curation(
+    manifest: dict, *, ontology_path: str | None = None
+) -> dict[str, Any]:
+    """Apply only the CLI source override and resolve paths using their origins."""
+    config = copy.deepcopy(manifest.get("phase_curation"))
+    if ontology_path is not None:
+        strategies = config.get("strategies", []) if isinstance(config, Mapping) else []
+        ontology = next(
+            (
+                strategy
+                for strategy in strategies
+                if isinstance(strategy, Mapping)
+                and str(strategy.get("type", "")).strip().lower() == "ontology"
+            ),
+            None,
+        ) if isinstance(strategies, list) else None
+        if ontology is None or not ontology.get("match_columns") or not ontology.get("value_column"):
+            raise ValueError(
+                "--ontology_path requires a manifest ontology strategy with "
+                "non-empty match_columns and value_column."
+            )
+        if not ontology_path.strip():
+            raise ValueError("--ontology_path must be a non-empty path.")
+        path = Path(ontology_path)
+        ontology["source"] = str(path if path.is_absolute() else path.resolve())
+        ontology["_source_origin"] = "CLI"
+    normalized = validate_phase_curation(config)
+    for strategy in normalized["strategies"]:
+        if strategy["type"] == "ontology" and "source" in strategy:
+            strategy["source"] = str(resolve_manifest_resource(manifest, strategy["source"]))
+            strategy.setdefault("_source_origin", "manifest")
+    return normalized
+
+
+def prepare_phase_curation(
+    config: Mapping[str, Any] | None,
+    *,
+    progress_logger: logging.Logger | None = None,
+) -> PreparedPhaseCuration:
+    """Load and index each external ontology once for this curation invocation."""
+    if isinstance(config, PreparedPhaseCuration):
+        return config
+    normalized = validate_phase_curation(config)
+    ontologies = {
+        strategy["name"]: load_ontology(
+            strategy, normalize_phase=normalize_phase_label,
+            progress_logger=progress_logger if progress_logger is not None else logger,
+        )
+        for strategy in normalized["strategies"]
+        if strategy["type"] == "ontology" and "source" in strategy
+    }
+    return PreparedPhaseCuration(normalized, ontologies)
+
+
+def validate_phase_cohort(df: pd.DataFrame, config: PreparedPhaseCuration) -> None:
+    """Check external match columns even when no row reaches the strategy."""
+    for name, ontology in config.ontologies.items():
+        ontology.validate_cohort(df, name=name)
+
+
 def phase_curation_input_columns(config: Mapping[str, Any] | None) -> set[str]:
     """Return source columns referenced by manifest-defined strategies."""
     normalized = validate_phase_curation(config)
     columns: set[str] = set()
     for strategy in normalized["strategies"]:
         if strategy["type"] == "ontology":
-            columns.update(strategy["columns"])
+            columns.update(strategy.get("match_columns", strategy.get("columns", [])))
         elif strategy["type"] == "totalsegmentator":
             columns.add(strategy["column"])
             columns.update(strategy["confidence_columns"])
@@ -251,7 +356,8 @@ def _strategy_applies(row: Mapping[str, Any], strategy: Mapping[str, Any]) -> bo
 
 
 def _resolve_strategy(
-    row: Mapping[str, Any], strategy: Mapping[str, Any]
+    row: Mapping[str, Any], strategy: Mapping[str, Any],
+    ontology: OntologyIndex | None = None,
 ) -> tuple[str | None, Any, str | None]:
     strategy_type = strategy["type"]
     mapping = strategy.get("mapping", {})
@@ -260,6 +366,12 @@ def _resolve_strategy(
         return None, None, None
 
     if strategy_type == "ontology":
+        if ontology is not None:
+            phase = ontology.match(row)
+            if phase is None:
+                return None, None, None
+            values = ", ".join(f"{column}={row[column]!r}" for column in ontology.columns)
+            return phase, strategy["confidence"], f"ontology {strategy['name']} matched {values}"
         for column in strategy["columns"]:
             phase, raw = _map_value(row.get(column), mapping, allow_unmapped=False)
             if phase is not None:
@@ -296,7 +408,8 @@ def apply_phase_curation(
     When ``progress_logger`` is provided, emit one compact summary per applied
     strategy with the number of newly resolved and still-unresolved volumes.
     """
-    normalized = validate_phase_curation(config)
+    normalized = prepare_phase_curation(config, progress_logger=progress_logger)
+    validate_phase_cohort(df, normalized)
     source = df.copy()
     out = df.copy()
     out["phase"] = pd.Series(pd.NA, index=out.index, dtype="object")
@@ -324,7 +437,7 @@ def apply_phase_curation(
             if not is_unresolved:
                 continue
             phase, confidence, reason = _resolve_strategy(
-                source.iloc[row_position], strategy
+                source.iloc[row_position], strategy, normalized.ontologies.get(strategy["name"])
             )
             if phase is None or phase in normalized["unresolved_labels"]:
                 continue
@@ -344,6 +457,11 @@ def apply_phase_curation(
                 strategy["type"],
                 resolved_count,
                 sum(unresolved),
+            )
+        elif strategy["type"] == "ontology" and "source" in strategy:
+            logger.info(
+                "Ontology strategy %s matched %d cohort row(s); %d unresolved",
+                strategy["name"], resolved_count, sum(unresolved),
             )
 
     if apply_fallback and normalized["fallback"] is not None:
@@ -375,7 +493,8 @@ def phase_needs_strategy(
     strategy_type: str,
 ) -> pd.Series:
     """Return eligible rows unresolved before ``strategy_type`` is reached."""
-    normalized = validate_phase_curation(config)
+    normalized = prepare_phase_curation(config)
+    validate_phase_cohort(df, normalized)
     wanted = strategy_type.strip().lower()
     strategy = next(
         (item for item in normalized["strategies"] if item["type"] == wanted),

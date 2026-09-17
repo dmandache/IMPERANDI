@@ -12,6 +12,7 @@ from imperandi.process import convert as convert_module
 from imperandi.utils.logging import setup_logging
 from imperandi.utils.manifest import load_manifest
 from imperandi.utils.misc import print_args
+from imperandi.utils.ontology_cli import normalize_ontology_arg
 
 logger = logging.getLogger(__name__)
 
@@ -210,12 +211,14 @@ def _handle_clean(args: argparse.Namespace) -> int:
         args.csv_path,
         args.csv_path_out,
         manifest,
+        ontology_path=args.ontology_path,
     )
     return 0
 
 
 def _handle_ingest(args: argparse.Namespace) -> int:
     args = parse_module.normalize_parse_args(args)
+    normalize_ontology_arg(args)
     output_dir = Path(args.output_dir)
     parsed_csv = output_dir / "dicom_index.csv"
     clean_out = (
@@ -245,6 +248,7 @@ def _handle_ingest(args: argparse.Namespace) -> int:
         [str(parsed_csv)],
         str(clean_out),
         manifest,
+        ontology_path=args.ontology_path,
     )
     return 0
 
