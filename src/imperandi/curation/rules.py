@@ -63,14 +63,14 @@ RX_RESP_TRIGGERED = token(
 )
 
 # Generic contrast vocabulary. Contrast-agent names belong in modality modules.
-INJECTION = r"inj(?:ect(?:ed|ion|e|ee|é|ée)?)?"
-CONTRAST = r"contrast(?:ed|[eé]e?)?"
+INJECTION = r"inj(?:ect(?:ed|ion|e|ee|é|ée)?)?|iv"
+CONTRAST = r"contrast(?:ed|[eé]e?)?|c\+"
 RX_PHASE_NATIVE = token(
     rf"native|natif|un{SEP}enhanced|non{SEP}enhanced"
-    rf"|pr[eé](?:{SEP}(?:{CONTRAST}|iv|{INJECTION}))?"
+    rf"|pr[eé](?:{SEP}(?:{CONTRAST}|{INJECTION}))?"
     rf"|avant(?:{SEP}{INJECTION})?"
     rf"|sans(?:{SEP}(?:iv|{INJECTION}|{CONTRAST}))?"
-    rf"|without{SEP}(?:{CONTRAST}|iv|{INJECTION})"
+    rf"|without{SEP}(?:{CONTRAST}|{INJECTION})"
     rf"|non{SEP}(?:{INJECTION}|{CONTRAST})"
     rf"|ss{SEP}(?:iv|i)|si|blanc|c-"
 )
@@ -89,7 +89,8 @@ RX_PHASE_DELAYED = token(
     rf"|eq|interstit(?:iel|ial)|phase{SEP}d"
 )
 RX_PHASE_POST_CONTRAST = token(
-    rf"post(?:{SEP}(?:{CONTRAST}|iv|{INJECTION}))?"
+    rf"post(?:{SEP}(?:{CONTRAST}|{INJECTION}))?"
+    rf"avec(?:{SEP}(?:{CONTRAST}|{INJECTION}))?"
     rf"|{CONTRAST}|{INJECTION}|enhanced|c\+"
 )
 RX_PHASE_ORDINAL = token(rf"ph(?:ase)?{SEP}([1-9])(?!\d)")
