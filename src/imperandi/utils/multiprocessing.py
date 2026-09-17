@@ -299,18 +299,6 @@ def decide_multiprocessing_strategy(
             start_method = "spawn"
         reasons["start_method_reason"] = "non-CUDA -> respect hint if valid"
 
-    # Threads/env knobs: prevent oversubscription & reduce memory spikes
-    env = {
-        "OMP_NUM_THREADS": "1",
-        "MKL_NUM_THREADS": "1",
-        "OPENBLAS_NUM_THREADS": "1",
-        "NUMEXPR_NUM_THREADS": "1",
-        "VECLIB_MAXIMUM_THREADS": "1",
-        "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS": "1",
-    }
-    # If you want PyTorch to not spawn tons of CPU threads in preprocessing
-    env["TORCH_NUM_THREADS"] = "1"
-
     # Executor recycling (helps leaks/fragmentation, especially after long runs)
     if enable_recycling and mode == "process_pool":
         rec = max(1, int(recycle_every))
@@ -325,6 +313,22 @@ def decide_multiprocessing_strategy(
         max_in_flight = 1
         if mode == "serial":
             max_workers = 1
+
+    # Share CPUs across the resolved workers, leaving one thread per worker
+    # for coordination / I/O when possible.
+    threads_per_worker = max(1, cpu_count // max_workers)
+    compute_threads = max(1, threads_per_worker - 1)
+    reasons["threads_per_worker"] = threads_per_worker
+    reasons["compute_threads"] = compute_threads
+    env = {
+        "OMP_NUM_THREADS": str(compute_threads),
+        "MKL_NUM_THREADS": str(compute_threads),
+        "OPENBLAS_NUM_THREADS": str(compute_threads),
+        "NUMEXPR_NUM_THREADS": str(compute_threads),
+        "VECLIB_MAXIMUM_THREADS": str(compute_threads),
+        "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS": str(compute_threads),
+        "TORCH_NUM_THREADS": str(compute_threads),
+    }
 
     return MPStrategy(
         mode=mode,
@@ -343,11 +347,12 @@ def decide_multiprocessing_strategy(
 def apply_strategy_env(strategy: MPStrategy) -> None:
     """
     Apply the environment variables recommended by decide_multiprocessing_strategy().
+    Strategy values overwrite any existing environment values.
     Call this *before* creating any pools/executors and ideally before importing
     heavy numeric stacks if you can.
     """
     for k, v in strategy.env.items():
-        os.environ.setdefault(k, v)
+        os.environ[k] = v
 
 
 def strategy_to_log_dict(strategy: MPStrategy) -> Dict[str, Any]:

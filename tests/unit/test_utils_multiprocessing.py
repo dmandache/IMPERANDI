@@ -153,14 +153,65 @@ def test_decide_strategy_cpu_only_respects_hint_and_serial_case(monkeypatch):
     assert serial_strategy.recycle_every == 0
 
 
-def test_apply_strategy_env_uses_setdefault(monkeypatch):
+@pytest.mark.parametrize(
+    "cpus,gpus,requested_workers,ram_mb,workers,threads_per_worker,compute_threads",
+    [
+        pytest.param(6, 2, 4, 64000, 2, 3, 2, id="gpu-cap"),
+        # The existing CPU cap reserves one core, so 2 CPUs allow only 1 worker.
+        pytest.param(2, 0, 2, 64000, 1, 2, 1, id="two-cpus"),
+        pytest.param(3, 0, 2, 64000, 2, 1, 1, id="two-workers-minimum"),
+        pytest.param(1, 0, 1, 64000, 1, 1, 1, id="single-cpu"),
+        pytest.param(6, 0, 1, 64000, 1, 6, 5, id="serial"),
+        pytest.param(6, 1, 4, 64000, 1, 6, 5, id="single-gpu"),
+        pytest.param(8, 0, 4, 8000, 2, 4, 3, id="memory-cap"),
+        pytest.param(7, 0, 3, 64000, 3, 2, 1, id="uneven-allocation"),
+    ],
+)
+def test_decide_strategy_allocates_cpu_threads_to_resolved_workers(
+    monkeypatch,
+    cpus,
+    gpus,
+    requested_workers,
+    ram_mb,
+    workers,
+    threads_per_worker,
+    compute_threads,
+):
+    monkeypatch.setattr(mp_utils, "_slurm_cpus", lambda: cpus)
+    monkeypatch.setattr(mp_utils, "_ram_total_mb", lambda: ram_mb)
+    monkeypatch.setattr(mp_utils, "_visible_cuda_devices_from_env", lambda: gpus)
+    monkeypatch.setattr(mp_utils, "_torch_gpu_count", lambda: None)
+    monkeypatch.setattr(mp_utils, "_nvidia_smi_gpu_count", lambda: None)
+
+    strategy = mp_utils.decide_multiprocessing_strategy(
+        requested_workers=requested_workers,
+    )
+
+    assert strategy.max_workers == workers
+    assert strategy.reasons["threads_per_worker"] == threads_per_worker
+    assert strategy.reasons["compute_threads"] == compute_threads
+    assert strategy.env == {
+        "OMP_NUM_THREADS": str(compute_threads),
+        "MKL_NUM_THREADS": str(compute_threads),
+        "OPENBLAS_NUM_THREADS": str(compute_threads),
+        "NUMEXPR_NUM_THREADS": str(compute_threads),
+        "VECLIB_MAXIMUM_THREADS": str(compute_threads),
+        "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS": str(compute_threads),
+        "TORCH_NUM_THREADS": str(compute_threads),
+    }
+    diagnostics = mp_utils.strategy_to_log_dict(strategy)
+    assert diagnostics["reasons"]["threads_per_worker"] == threads_per_worker
+    assert diagnostics["reasons"]["compute_threads"] == compute_threads
+
+
+def test_apply_strategy_env_overwrites_existing_values(monkeypatch):
     strategy = mp_utils.MPStrategy(
         mode="serial",
         start_method="spawn",
         max_workers=1,
         max_in_flight=1,
         recycle_every=0,
-        env={"OMP_NUM_THREADS": "1", "CUSTOM_TEST_ENV": "xyz"},
+        env={"OMP_NUM_THREADS": "2", "CUSTOM_TEST_ENV": "xyz"},
         use_gpu=False,
         gpu_count=0,
         hard_timeout_supported=False,
@@ -171,7 +222,7 @@ def test_apply_strategy_env_uses_setdefault(monkeypatch):
 
     mp_utils.apply_strategy_env(strategy)
 
-    assert os.environ["OMP_NUM_THREADS"] == "8"
+    assert os.environ["OMP_NUM_THREADS"] == "2"
     assert os.environ["CUSTOM_TEST_ENV"] == "xyz"
 
 
