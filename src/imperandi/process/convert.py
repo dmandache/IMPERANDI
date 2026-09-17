@@ -376,10 +376,10 @@ def process_single_volume(k, row, output_dir, verbose, return_status=False):
 
     try:
         dicom_dir_path = row["series_dir"]
-        files_in_vol = row["dicom_path"]
+        files_in_vol = _flatten_dicom_paths(row["dicom_path"])
         files_in_dir = list(Path(dicom_dir_path).iterdir())
 
-        n_files_in_vol = len(files_in_vol) if isinstance(files_in_vol, list) else 1
+        n_files_in_vol = len(files_in_vol)
         n_files_in_dir = len(files_in_dir)
         series_id = (
             row.series_id + "_" + str(row.volume_ordinal_in_series)
@@ -400,6 +400,14 @@ def process_single_volume(k, row, output_dir, verbose, return_status=False):
             and export_path.stat().st_size > 0
         ):
             return _result(export_path, None, "skipped")
+
+        if n_files_in_vol == 0:
+            raise ValueError("DICOM volume contains no readable slice paths")
+        if n_files_in_vol == 1:
+            raise ValueError(
+                "DICOM volume contains only one slice; at least two slices are "
+                "required for NIfTI conversion"
+            )
 
         if not export_dir.exists():
             os.makedirs(export_dir, exist_ok=True)

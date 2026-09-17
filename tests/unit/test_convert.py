@@ -99,12 +99,14 @@ def make_series(tmp_path, output_dir, create_nifti=False):
     series_dir.mkdir()
     f1 = series_dir / "img1.dcm"
     f1.write_text("dummy")
+    f2 = series_dir / "img2.dcm"
+    f2.write_text("dummy")
 
     # fields required by process_single_volume
     row = pd.Series(
         {
             "series_dir": str(series_dir),
-            "dicom_path": [str(f1)],
+            "dicom_path": [str(f1), str(f2)],
             "volume_ordinal_in_series": 1,
             "series_id": "S1",
             "patient_key": "P1",
@@ -200,11 +202,15 @@ def test_process_single_volume_successful_conversion(tmp_path, monkeypatch):
     series_dir = tmp_path / "series"
     series_dir.mkdir()
     (series_dir / "img1.dcm").write_text("dummy")
+    (series_dir / "img2.dcm").write_text("dummy")
 
     row = pd.Series(
         {
             "series_dir": str(series_dir),
-            "dicom_path": [str(series_dir / "img1.dcm")],
+            "dicom_path": [
+                str(series_dir / "img1.dcm"),
+                str(series_dir / "img2.dcm"),
+            ],
             "volume_ordinal_in_series": 1,
             "series_id": "S1",
             "patient_key": "P1",
@@ -233,6 +239,44 @@ def test_process_single_volume_successful_conversion(tmp_path, monkeypatch):
     assert error is None
     assert export_path is not None
     assert "P1" in str(export_path)
+
+
+@pytest.mark.parametrize("as_list", [False, True])
+def test_process_single_volume_rejects_single_slice_volume(
+    tmp_path, monkeypatch, as_list
+):
+    out_root = tmp_path / "out"
+    out_root.mkdir()
+    series_dir = tmp_path / "series"
+    series_dir.mkdir()
+    dicom_path = series_dir / "img1.dcm"
+    dicom_path.write_text("dummy")
+    row = pd.Series(
+        {
+            "series_dir": str(series_dir),
+            "dicom_path": [str(dicom_path)] if as_list else str(dicom_path),
+            "volume_ordinal_in_series": 1,
+            "series_id": "S1",
+            "patient_key": "P1",
+            "study_id": "ST1",
+            "Modality": "CT",
+        }
+    )
+    copy_calls = []
+    monkeypatch.setattr(
+        convert_module,
+        "copy_files_to_temp_dir",
+        lambda **kwargs: copy_calls.append(kwargs),
+    )
+
+    _, export_path, error_row, status = convert_module.process_single_volume(
+        0, row, out_root, verbose=False, return_status=True
+    )
+
+    assert export_path is None
+    assert status == "failed"
+    assert "contains only one slice" in error_row["error"]
+    assert copy_calls == []
 
 
 def _make_archive_with_dicom(tmp_path: Path) -> tuple[Path, str]:
