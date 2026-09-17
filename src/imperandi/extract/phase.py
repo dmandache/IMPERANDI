@@ -24,6 +24,7 @@ from imperandi.utils.run_state import (
     atomic_write_csv,
     CheckpointManager,
     ensure_source_id_column,
+    fingerprint_inputs,
     merge_with_existing_output,
     normalize_source_id,
     normalize_source_ids,
@@ -240,11 +241,11 @@ def main(args: argparse.Namespace) -> None:
         "checkpoint_every_rows",
         "checkpoint_every_sec",
         "strict_resume",
+        "manifest",
     }
     source_id_signature = source_id_resume_signature(args.csv_path)
     resume_values = {
         **vars(args),
-        "checkpoint_manifest_config": manifest,
         "checkpoint_phase_curation": phase_curation,
     }
     if source_id_signature:
@@ -422,7 +423,12 @@ def main(args: argparse.Namespace) -> None:
         )
         atomic_write_csv(df_err, args.error_csv_path, index=False)
         logger.warning("%d rows failed -> %s", len(df_err), args.error_csv_path)
-    ckpt.finalize_state(completed_indices=completed_indices)
+    ckpt.finalize_state(
+        completed_indices=completed_indices,
+        input_fingerprint=fingerprint_inputs(
+            args.csv_path, strict=bool(getattr(args, "strict_resume", False))
+        ),
+    )
 
     run_failed_count = len(processed_source_ids & set(errors_by_idx))
     log_task_summary(

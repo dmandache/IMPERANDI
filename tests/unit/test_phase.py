@@ -181,7 +181,7 @@ def test_main_resume_skips_completed_rows(tmp_path, monkeypatch):
 
     args = argparse.Namespace(
         csv_path=str(csv_path),
-        csv_path_out=str(tmp_path / "out.csv"),
+        csv_path_out=str(csv_path),
         error_csv_path=str(tmp_path / "errors.csv"),
         verbose=False,
         checkpoint_every_rows=1,

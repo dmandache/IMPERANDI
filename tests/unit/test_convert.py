@@ -359,6 +359,9 @@ def test_main_resume_uses_checkpoint_state(tmp_path, monkeypatch):
     assert work_sizes[-1] == 1
 
     args.resume = True
+    # Conversion has no manifest-driven behavior, so even a nonexistent manifest
+    # must not invalidate or block an otherwise compatible checkpoint.
+    args.manifest = str(tmp_path / "unrelated-manifest.yaml")
     convert_module.main(args)
     assert work_sizes == [1]
 

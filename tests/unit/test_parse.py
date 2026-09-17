@@ -488,6 +488,32 @@ def test_process_with_checkpoint_keeps_csv_outputs(tmp_path):
     assert state["finished"] is True
 
 
+def test_parse_manifest_resume_config_only_tracks_parse_sections():
+    base = {
+        "dataset_name": "one",
+        "id_extraction": {"source": "auto"},
+        "id_standardization": {"function": "example:normalize"},
+        "segmentation": {"backend": "first"},
+    }
+    unrelated_change = {
+        **base,
+        "dataset_name": "two",
+        "segmentation": {"backend": "second"},
+    }
+
+    assert parse._parse_manifest_resume_config(base) == (
+        parse._parse_manifest_resume_config(unrelated_change)
+    )
+
+    standardization_change = {
+        **base,
+        "id_standardization": {"function": "example:other"},
+    }
+    assert parse._parse_manifest_resume_config(base) != (
+        parse._parse_manifest_resume_config(standardization_change)
+    )
+
+
 def test_process_with_checkpoint_preserves_all_empty_columns_per_chunk(tmp_path):
     df_paths = pd.DataFrame({"dicom_path": ["a.dcm", "b.dcm"]})
 

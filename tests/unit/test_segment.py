@@ -1920,6 +1920,13 @@ def test_main_resume_reprocesses_when_segmentation_config_changes(
 
     assert calls == ["liver.nii.gz", "spleen.nii.gz"]
 
+    manifest = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    manifest["dataset_name"] = "unrelated change"
+    config_path.write_text(yaml.safe_dump(manifest), encoding="utf-8")
+    segment_module.main(args)
+
+    assert calls == ["liver.nii.gz", "spleen.nii.gz"]
+
 
 def test_main_does_not_blank_existing_mask_or_warning_columns(tmp_path, monkeypatch):
     nifti_a = tmp_path / "a.nii.gz"

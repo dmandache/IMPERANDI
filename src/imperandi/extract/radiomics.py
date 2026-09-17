@@ -915,7 +915,9 @@ def main(args: argparse.Namespace) -> None:
     source_id_signature = source_id_resume_signature(args.csv_path)
     checkpoint_signature = {
         "effective_filters": effective_filters,
-        "manifest_config": manifest_config,
+        "manifest_config": (
+            manifest_config.get("radiomics") if manifest_config is not None else None
+        ),
         "pyradiomics_settings_fingerprint": settings_fingerprint,
         "pyradiomics_settings_source": source_kind,
         "pyradiomics_settings": settings_dict,
@@ -939,6 +941,7 @@ def main(args: argparse.Namespace) -> None:
         "checkpoint_every_rows",
         "checkpoint_every_sec",
         "strict_resume",
+        "manifest",
     }
     resume_ctx = prepare_resume_context(
         args=resume_args,
@@ -1090,7 +1093,12 @@ def main(args: argparse.Namespace) -> None:
         )
         atomic_write_csv(df_err, args.error_csv_path, index=False)
         logger.warning("%d rows failed -> %s", len(df_err), args.error_csv_path)
-    ckpt.finalize_state(completed_indices=completed_indices)
+    ckpt.finalize_state(
+        completed_indices=completed_indices,
+        input_fingerprint=fingerprint_inputs(
+            args.csv_path, strict=bool(getattr(args, "strict_resume", False))
+        ),
+    )
 
     run_failed_count = len(processed_source_ids & set(errors_by_idx))
     log_task_summary(

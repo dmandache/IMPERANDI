@@ -167,6 +167,45 @@ def test_checkpoint_manager_flush_and_finalize(tmp_path):
     assert state2["finished"] is True
 
 
+def test_finalize_can_refresh_fingerprint_after_in_place_output(tmp_path):
+    csv_path = tmp_path / "in-place.csv"
+    err = tmp_path / "errors.csv"
+    pd.DataFrame({"value": [1]}).to_csv(csv_path, index=False)
+    args = argparse.Namespace(
+        checkpoint_every_rows=1,
+        checkpoint_every_sec=1,
+        resume=True,
+        strict_resume=False,
+    )
+    ctx = prepare_resume_context(
+        args=args,
+        command="phase",
+        inputs=csv_path,
+        output_path=csv_path,
+        error_path=err,
+    )
+    manager = CheckpointManager(paths=ctx["paths"], config=ctx["config"])
+
+    pd.DataFrame({"value": [1], "derived": [2]}).to_csv(csv_path, index=False)
+    refreshed = prepare_resume_context(
+        args=args,
+        command="phase",
+        inputs=csv_path,
+        output_path=csv_path,
+        error_path=err,
+    )["config"].input_fingerprint
+    manager.finalize_state(completed_indices=[0], input_fingerprint=refreshed)
+
+    resumed = prepare_resume_context(
+        args=args,
+        command="phase",
+        inputs=csv_path,
+        output_path=csv_path,
+        error_path=err,
+    )
+    assert resumed["already_finished"]
+
+
 def test_prepare_resume_context_ignores_resume_checkpoint_flags_by_default(tmp_path):
     output = tmp_path / "out.csv"
     err = tmp_path / "errors.csv"

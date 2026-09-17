@@ -434,12 +434,17 @@ class CheckpointManager:
         completed_indices: Iterable[Any],
         finished: bool,
         extra_state: Mapping[str, Any] | None,
+        input_fingerprint: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "schema_version": STATE_SCHEMA_VERSION,
             "command": self.config.command,
             "args_hash": self.config.args_hash,
-            "input_fingerprint": self.config.input_fingerprint,
+            "input_fingerprint": (
+                self.config.input_fingerprint
+                if input_fingerprint is None
+                else input_fingerprint
+            ),
             "completed_indices": sorted(normalize_source_ids(completed_indices)),
             "updated_at_epoch": now_epoch(),
         }
@@ -483,12 +488,19 @@ class CheckpointManager:
         *,
         completed_indices: Iterable[Any],
         extra_state: Mapping[str, Any] | None = None,
+        input_fingerprint: list[dict[str, Any]] | None = None,
     ) -> None:
+        """Mark a run complete, optionally recording a refreshed input snapshot.
+
+        A refreshed fingerprint matters for commands that overwrite their input CSV:
+        the file on disk after a successful run is then the correct resume baseline.
+        """
         atomic_write_json(
             self.paths.state_path,
             self._build_state_payload(
                 completed_indices=completed_indices,
                 finished=True,
                 extra_state=extra_state,
+                input_fingerprint=input_fingerprint,
             ),
         )

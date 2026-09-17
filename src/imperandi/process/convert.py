@@ -20,13 +20,13 @@ from imperandi.utils.archive_io import (
 from imperandi.utils.files import copy_files_to_temp_dir, check_file, is_valid_nifti
 from imperandi.utils.logging import log_task_summary, setup_logging
 from imperandi.utils.misc import report_volumes, report_change, print_args
-from imperandi.utils.manifest import load_manifest
 from imperandi.utils.checkpoint_cli import add_checkpoint_arguments
 from imperandi.utils.run_state import (
     log_finished_resume_summary,
     atomic_write_csv,
     CheckpointManager,
     ensure_source_id_column,
+    fingerprint_inputs,
     merge_with_existing_output,
     normalize_source_id,
     normalize_source_ids,
@@ -558,13 +558,6 @@ def main(args):
     """
     output_path = Path(args.csv_path_out)
     error_path = Path(args.error_csv_path)
-    manifest_config = None
-    if hasattr(args, "manifest") and args.manifest:
-        manifest_config = load_manifest(
-            args.manifest,
-            base_path=Path(__file__).resolve().parents[1],
-        )
-
     exclude_hash_args = {
         "csv_path_out",
         "dry_run",
@@ -573,12 +566,10 @@ def main(args):
         "checkpoint_every_rows",
         "checkpoint_every_sec",
         "strict_resume",
+        "manifest",
     }
     source_id_signature = source_id_resume_signature(args.csv_path)
-    resume_values = {
-        **vars(args),
-        "checkpoint_manifest_config": manifest_config,
-    }
+    resume_values = {**vars(args)}
     if source_id_signature:
         resume_values["checkpoint_source_id"] = source_id_signature
     resume_args = argparse.Namespace(**resume_values)
@@ -772,7 +763,12 @@ def main(args):
         },
     )
     logger.info("Conversion done ✔")
-    ckpt.finalize_state(completed_indices=completed_indices)
+    ckpt.finalize_state(
+        completed_indices=completed_indices,
+        input_fingerprint=fingerprint_inputs(
+            args.csv_path, strict=bool(getattr(args, "strict_resume", False))
+        ),
+    )
 
 
 if __name__ == "__main__":

@@ -1017,6 +1017,14 @@ def _series_has_any_true(series: pd.Series) -> bool:
     return bool(series.map(_to_bool).any())
 
 
+def _parse_manifest_resume_config(manifest: dict) -> dict:
+    """Return only manifest values that can affect parse output."""
+    return {
+        "id_extraction": manifest.get("id_extraction"),
+        "id_standardization": manifest.get("id_standardization"),
+    }
+
+
 def process_with_checkpoint(
     df_paths: pd.DataFrame,
     read_func,
@@ -1443,7 +1451,7 @@ def main(args):
         "archive_mode": bool(archive_mode),
         "archive_max_depth": int(args.archive_max_depth),
     }
-    parse_manifest_config = manifest.get("id_extraction", {})
+    parse_manifest_config = _parse_manifest_resume_config(manifest)
 
     resume_signature = {
         "effective_tags": effective_tags,
@@ -1454,7 +1462,6 @@ def main(args):
         "patient_key_from": args.patient_key_from,
         "study_id_from": args.study_id_from,
         "series_id_from": args.series_id_from,
-        "manifest": args.manifest,
         "manifest_config": parse_manifest_config,
     }
     process_with_checkpoint(

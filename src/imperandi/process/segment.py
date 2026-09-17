@@ -51,6 +51,7 @@ from imperandi.utils.run_state import (
     atomic_write_csv,
     CheckpointManager,
     ensure_source_id_column,
+    fingerprint_inputs,
     merge_with_existing_output,
     normalize_source_id,
     normalize_source_ids,
@@ -1158,17 +1159,12 @@ def main(args: argparse.Namespace) -> None:
     output_path = Path(args.csv_path_out)
     error_path = Path(args.error_csv_path)
     manifest_arg = getattr(args, "manifest", None)
-    manifest_config = load_manifest(
-        manifest_arg or "generic",
-        base_path=Path(__file__).resolve().parents[1],
-    )
     tasks_config = load_segmentation_config(
         manifest_arg,
         base_path=Path(__file__).resolve().parents[1],
     )
     source_id_signature = source_id_resume_signature(args.csv_path)
     checkpoint_signature = {
-        "manifest_config": manifest_config,
         "segmentation": tasks_config,
     }
     if source_id_signature:
@@ -1186,6 +1182,7 @@ def main(args: argparse.Namespace) -> None:
         "checkpoint_every_rows",
         "checkpoint_every_sec",
         "strict_resume",
+        "manifest",
     }
     resume_ctx = prepare_resume_context(
         args=resume_args,
@@ -1797,7 +1794,12 @@ def main(args: argparse.Namespace) -> None:
         except Exception:
             logger.debug("report_volumes() failed – continuing")
 
-    ckpt.finalize_state(completed_indices=completed_indices)
+    ckpt.finalize_state(
+        completed_indices=completed_indices,
+        input_fingerprint=fingerprint_inputs(
+            args.csv_path, strict=bool(getattr(args, "strict_resume", False))
+        ),
+    )
     run_failed_count = len(processed_source_ids & set(errors_by_idx))
     existing_output_count = len(existing_output_ids - set(errors_by_idx))
     log_task_summary(
