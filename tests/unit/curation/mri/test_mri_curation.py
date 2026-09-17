@@ -198,30 +198,30 @@ def test_low_level_phase_regexes_do_not_classify_ordinal_phases():
 
 
 @pytest.mark.parametrize(
-    "pattern,accepted,rejected",
+    "phase,accepted,rejected",
     [
         (
-            mc.rules.RX_PHASE_ARTERIAL,
+            "ARTERIAL",
             ["20 sec", "35 seconds", "0:20 min", "0.35 mn"],
             ["19 sec", "36 sec", "0:15 min", "0:40 min"],
         ),
         (
-            mc.rules.RX_PHASE_PORTAL,
+            "PORTAL_VENOUS",
             ["60 sec", "90 seconds", "1 min", "1:30 min", "1 min 30 sec"],
             ["59 sec", "91 sec", "1:31 min", "1 min 31 sec"],
         ),
         (
-            mc.rules.RX_PHASE_DELAYED,
+            "DELAYED",
             ["3 min", "5 min", "10 min", "15 mn", "tardif"],
             ["2 min", "16 min", "tardif 2 min", "tardif 20 min"],
         ),
     ],
 )
-def test_phase_time_windows_follow_curation_policy(pattern, accepted, rejected):
+def test_phase_time_windows_follow_curation_policy(phase, accepted, rejected):
     for text in accepted:
-        assert re.search(pattern, text), text
+        assert mc.detect_explicit_phase_from_text(pd.Series(row(text)))[0] == phase, text
     for text in rejected:
-        assert not re.search(pattern, text), text
+        assert mc.detect_explicit_phase_from_text(pd.Series(row(text)))[0] != phase, text
 
 
 def test_water_lava_alone_is_not_native():

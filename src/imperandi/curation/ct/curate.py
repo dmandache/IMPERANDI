@@ -13,6 +13,7 @@ import pandas as pd
 
 from imperandi.curation.common import (
     build_series_text,
+    first_text_column_value,
     get_exam_group_cols,
     norm_label,
     safe_float,
@@ -20,26 +21,24 @@ from imperandi.curation.common import (
     stable_text,
 )
 from imperandi.curation.phase import apply_phase_curation
+from imperandi.curation.rules import RX_IMAGE_ORIGINAL, RX_IMAGE_PRIMARY, match_phase, match_plane
 from . import rules
 
 
 def detect_ct_phase(row: pd.Series) -> tuple[str, str, str]:
-    text = build_series_text(row)
-
-    if re.search(rules.RX_CT_NATIVE, text):
-        return "NATIVE", "matched CT native/non-injected keyword", "high"
-    if re.search(rules.RX_CT_ARTERIAL, text):
-        return "ARTERIAL", "matched CT arterial keyword", "high"
-    if re.search(rules.RX_CT_PORTAL, text):
-        return "PORTAL_VENOUS", "matched CT portal/venous keyword", "high"
-    if re.search(rules.RX_CT_DELAYED, text):
-        return "DELAYED", "matched CT delayed keyword", "high"
+    match = first_text_column_value(
+        row, lambda text: match_phase(text, rules.PHASE_RULES)
+    )
+    if match is not None:
+        label, description = match
+        return label, f"matched CT {description} keyword", "high"
     return "OTHER", "no CT phase keyword matched", "low"
 
 
 def detect_ct_features(row: pd.Series) -> dict:
     text = build_series_text(row)
     image_type = safe_str(row.get("ImageType"))
+    plane = first_text_column_value(row, match_plane)
     rows = safe_float(row.get("Rows"))
     cols = safe_float(row.get("Columns"))
     n_slices = safe_float(
@@ -54,9 +53,10 @@ def detect_ct_features(row: pd.Series) -> dict:
 
     return {
         "is_localizer": bool(re.search(rules.RX_CT_LOCALIZER, text)),
-        "is_axial": bool(re.search(rules.RX_CT_AXIAL, text))
-        or (pd.notna(rows) and pd.notna(cols) and rows == cols),
-        "is_original": "original" in image_type and "primary" in image_type,
+        "is_axial": plane == "AXIAL"
+        or (plane is None and pd.notna(rows) and pd.notna(cols) and rows == cols),
+        "is_original": bool(re.search(RX_IMAGE_ORIGINAL, image_type))
+        and bool(re.search(RX_IMAGE_PRIMARY, image_type)),
         "is_derived_low_value": bool(re.search(rules.RX_CT_DERIVED_LOW_VALUE, text)),
         "rows": rows,
         "cols": cols,

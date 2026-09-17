@@ -87,9 +87,25 @@ def build_series_text(
     row: pd.Series,
     cols: Sequence[str] | None = None,
 ) -> str:
-    cols = list(cols or TEXT_COLS_DEFAULT)
-    parts = [safe_str(row.get(c)) for c in cols if c in row.index]
-    return " | ".join(part for part in parts if part)
+    return " | ".join(text for _, text in iter_series_text_columns(row, cols))
+
+
+def iter_series_text_columns(row: pd.Series, cols: Sequence[str] | None = None):
+    """Yield normalized, nonempty fields in their configured precedence order."""
+    for col in TEXT_COLS_DEFAULT if cols is None else cols:
+        if col in row.index:
+            text = safe_str(row.get(col))
+            if text:
+                yield col, text
+
+
+def first_text_column_value(row: pd.Series, evaluator, cols=None):
+    """Evaluate fields separately so unrelated fields cannot form a new rule."""
+    for _, text in iter_series_text_columns(row, cols):
+        value = evaluator(text)
+        if value is not None:
+            return value
+    return None
 
 
 def get_exam_group_cols(

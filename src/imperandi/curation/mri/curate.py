@@ -23,13 +23,21 @@ from __future__ import annotations
 from ast import literal_eval
 import re
 import logging
-from pathlib import Path
 from typing import Sequence
 
 import numpy as np
 import pandas as pd
 
+from imperandi.curation import common
+from imperandi.curation.common import (
+    clean_text as clean_text,
+    get_exam_group_cols,
+    is_missing as _is_missing,
+    read_csv,
+    safe_str,
+)
 from imperandi.curation.phase import apply_phase_curation
+from imperandi.curation.rules import SEP_CHARS, match_phase, match_plane
 
 from . import rules
 
@@ -58,19 +66,6 @@ ART_PORT_CONTEXT_PENDING = "art_port_context_pending"
 MASK_MULTIART_CONTEXT_PENDING = "mask_multiart_context_pending"
 
 
-def read_csv(path: str | Path, **kwargs) -> pd.DataFrame:
-    return pd.read_csv(Path(path).expanduser(), low_memory=False, **kwargs)
-
-
-def _is_missing(value) -> bool:
-    if value is None:
-        return True
-    try:
-        return bool(pd.isna(value))
-    except (TypeError, ValueError):
-        return False
-
-
 def _first_numeric(value) -> float:
     if isinstance(value, (list, tuple, set, np.ndarray)):
         parsed = [_first_numeric(v) for v in value]
@@ -88,16 +83,6 @@ def _stable_text(value) -> str:
     if _is_missing(value):
         return ""
     return str(value)
-
-
-def clean_text(x) -> str:
-    return re.sub(r"\s+", " ", str(x).strip().lower())
-
-
-def safe_str(x) -> str:
-    if isinstance(x, (list, tuple, set, np.ndarray)):
-        return clean_text(" ".join(safe_str(v) for v in x if safe_str(v)))
-    return clean_text(x) if pd.notna(x) else ""
 
 
 def _display_str(x) -> str:
@@ -204,12 +189,7 @@ def iter_series_text_columns(
     row: pd.Series,
     cols: Sequence[str] | None = None,
 ):
-    for col in _resolve_text_cols(cols):
-        if col not in row.index:
-            continue
-        text = safe_str(row.get(col))
-        if text:
-            yield col, text
+    yield from common.iter_series_text_columns(row, _resolve_text_cols(cols))
 
 
 def _first_text_column_value(
@@ -217,11 +197,7 @@ def _first_text_column_value(
     evaluator,
     cols: Sequence[str] | None = None,
 ):
-    for _, text in iter_series_text_columns(row, cols=cols):
-        value = evaluator(text)
-        if value is not None:
-            return value
-    return None
+    return common.first_text_column_value(row, evaluator, _resolve_text_cols(cols))
 
 
 def _row_matches_pattern(
@@ -276,10 +252,8 @@ def _row_matches_all_patterns(
 
 
 def build_series_text(row: pd.Series, cols: Sequence[str] | None = None) -> str:
-    """Use all useful text fields, not only SeriesDescription."""
-    cols = _resolve_text_cols(cols)
-    parts = [safe_str(row.get(c)) for c in cols if c in row.index]
-    return " | ".join(part for part in parts if part)
+    """Combine the configured metadata fields into normalized display text."""
+    return common.build_series_text(row, _resolve_text_cols(cols))
 
 
 def build_display_text(row: pd.Series, cols: Sequence[str] | None = None) -> str:
@@ -287,20 +261,6 @@ def build_display_text(row: pd.Series, cols: Sequence[str] | None = None) -> str
     cols = _resolve_text_cols(cols)
     parts = [_display_str(row.get(c)) for c in cols if c in row.index]
     return " | ".join(part for part in parts if part)
-
-
-def get_exam_group_cols(
-    df: pd.DataFrame,
-    patient_col: str = "patient_key",
-    study_col: str | None = "study_id",
-    date_col: str = "date",
-) -> list[str]:
-    cols = [patient_col]
-    if study_col is not None and study_col in df.columns:
-        cols.append(study_col)
-    if date_col in df.columns:
-        cols.append(date_col)
-    return [c for c in cols if c in df.columns]
 
 
 # -----------------------------------------------------------------------------
@@ -529,55 +489,16 @@ def detect_ordinal_phase_index(row: pd.Series) -> int | None:
 def detect_explicit_phase_from_text(row: pd.Series) -> tuple[str | None, str, str, str]:
     match = _first_text_column_value(
         row,
-        lambda text: (
-            (
-                "NATIVE",
-                "matched explicit native/non-injected keyword",
-                "explicit",
-                "explicit_text",
-            )
-            if re.search(rules.RX_PHASE_NATIVE, text)
-            else (
-                (
-                    "HEPATOBILIARY",
-                    "matched explicit hepatobiliary/2h keyword",
-                    "explicit",
-                    "explicit_text",
-                )
-                if re.search(rules.RX_PHASE_HEPATOBILIARY, text)
-                else (
-                    (
-                        "PORTAL_VENOUS",
-                        "matched explicit portal/venous keyword",
-                        "explicit",
-                        "explicit_text",
-                    )
-                    if re.search(rules.RX_PHASE_PORTAL, text)
-                    else (
-                        (
-                            "ARTERIAL",
-                            "matched explicit arterial keyword",
-                            "explicit",
-                            "explicit_text",
-                        )
-                        if re.search(rules.RX_PHASE_ARTERIAL, text)
-                        else (
-                            (
-                                "DELAYED",
-                                "matched explicit delayed/tardif keyword",
-                                "explicit",
-                                "explicit_text",
-                            )
-                            if re.search(rules.RX_PHASE_DELAYED, text)
-                            else None
-                        )
-                    )
-                )
-            )
-        ),
+        lambda text: match_phase(text, rules.PHASE_RULES),
     )
     if match is not None:
-        return match
+        label, description = match
+        return (
+            label,
+            f"matched explicit {description} keyword",
+            "explicit",
+            "explicit_text",
+        )
 
     return None, "no explicit T1 perfusion phase keyword matched", "unknown", "none"
 
@@ -1299,31 +1220,8 @@ def add_mri_perfusion_columns(
 
 def detect_plane(value: pd.Series | str, cols: Sequence[str] | None = None) -> str:
     if isinstance(value, pd.Series):
-        plane = _first_text_column_value(
-            value,
-            lambda text: (
-                "AXIAL"
-                if re.search(rules.RX_PLANE_AXIAL, text)
-                else (
-                    "CORONAL"
-                    if re.search(rules.RX_PLANE_CORONAL, text)
-                    else (
-                        "SAGITTAL" if re.search(rules.RX_PLANE_SAGITTAL, text) else None
-                    )
-                )
-            ),
-            cols=cols,
-        )
-        return plane or "UNKNOWN"
-
-    text = safe_str(value)
-    if re.search(rules.RX_PLANE_AXIAL, text):
-        return "AXIAL"
-    if re.search(rules.RX_PLANE_CORONAL, text):
-        return "CORONAL"
-    if re.search(rules.RX_PLANE_SAGITTAL, text):
-        return "SAGITTAL"
-    return "UNKNOWN"
+        return _first_text_column_value(value, match_plane, cols=cols) or "UNKNOWN"
+    return match_plane(safe_str(value)) or "UNKNOWN"
 
 
 def parse_image_type_tokens(value: object) -> list[str]:
@@ -1409,7 +1307,7 @@ def detect_dixon_component_from_image_type(value: object) -> str | None:
 
 def _free_text_component_tokens(text: str) -> set[str]:
     """Parse compact reconstruction suffixes only after Dixon context is known."""
-    return {token.upper() for token in re.split(r"[\s_.+\-/]+", text) if token}
+    return {token.upper() for token in re.split(rf"{SEP_CHARS}+", text) if token}
 
 
 def _detect_dixon_component_from_text(text: str) -> tuple[str, str, str] | None:
