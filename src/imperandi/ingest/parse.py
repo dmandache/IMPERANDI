@@ -1443,6 +1443,8 @@ def main(args):
         "archive_mode": bool(archive_mode),
         "archive_max_depth": int(args.archive_max_depth),
     }
+    parse_manifest_config = manifest.get("id_extraction", {})
+
     resume_signature = {
         "effective_tags": effective_tags,
         "force_dicom_read": bool(args.force_dicom_read),
@@ -1453,7 +1455,7 @@ def main(args):
         "study_id_from": args.study_id_from,
         "series_id_from": args.series_id_from,
         "manifest": args.manifest,
-        "manifest_config": manifest,
+        "manifest_config": parse_manifest_config,
     }
     process_with_checkpoint(
         df_paths=df,
