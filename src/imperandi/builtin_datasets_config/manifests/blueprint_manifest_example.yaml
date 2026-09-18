@@ -56,6 +56,7 @@ derived_columns:
 # labels are normalized uppercase strings; typical values are NATIVE, ARTERIAL,
 # PORTAL_VENOUS, DELAYED, and OTHER, but custom non-empty labels are accepted.
 phase_curation:
+  exam_group_columns: [patient_key, study_id, date]
   strategies:
     # Exact, case-insensitive site-ontology mapping. columns are tried in order.
     - type: ontology

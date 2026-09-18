@@ -155,17 +155,25 @@ def validate_phase_curation(config: Mapping[str, Any] | None) -> dict[str, Any]:
     }
     unresolved_labels.add("")
 
+    exam_columns = config.get("exam_group_columns")
+    if exam_columns is not None:
+        exam_columns = _validate_string_list(
+            exam_columns, "phase_curation.exam_group_columns"
+        )
+        if len(set(exam_columns)) != len(exam_columns):
+            raise ValueError("phase_curation.exam_group_columns must be unique.")
     return {
         "strategies": normalized_strategies,
         "fallback": fallback,
         "unresolved_labels": unresolved_labels,
+        "exam_group_columns": exam_columns,
     }
 
 
 def phase_curation_input_columns(config: Mapping[str, Any] | None) -> set[str]:
     """Return source columns referenced by manifest-defined strategies."""
     normalized = validate_phase_curation(config)
-    columns: set[str] = set()
+    columns: set[str] = set(normalized["exam_group_columns"] or [])
     for strategy in normalized["strategies"]:
         if strategy["type"] == "ontology":
             columns.update(strategy["columns"])

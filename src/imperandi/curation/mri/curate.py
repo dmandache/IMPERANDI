@@ -36,7 +36,7 @@ from imperandi.curation.common import (
     read_csv,
     safe_str,
 )
-from imperandi.curation.phase import apply_phase_curation
+from imperandi.curation.phase import apply_phase_curation, validate_phase_curation
 from imperandi.curation.rules import SEP_CHARS, match_phase, match_plane
 
 from . import rules
@@ -1095,7 +1095,9 @@ def add_mri_perfusion_columns(
 
     group_cols = [c for c in (exam_group_cols or []) if c in out.columns]
     if group_cols:
-        grouped = out.groupby(group_cols, dropna=False).groups.values()
+        grouped = out.groupby(
+            [out[col].map(common.stable_text) for col in group_cols], dropna=False
+        ).groups.values()
     else:
         grouped = [out.index]
 
@@ -1602,6 +1604,7 @@ def select_best_candidates(
     study_col: str | None = "study_id",
     date_col: str = "date",
     display_text_col_count: int | None = None,
+    exam_group_columns: Sequence[str] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Return selected_long and selected_wide.
 
@@ -1622,7 +1625,11 @@ def select_best_candidates(
 
     data = add_tiebreaker_columns(data)
     exam_cols = get_exam_group_cols(
-        data, patient_col=patient_col, study_col=study_col, date_col=date_col
+        data,
+        patient_col=patient_col,
+        study_col=study_col,
+        date_col=date_col,
+        exam_group_columns=exam_group_columns,
     )
 
     selectable = data[
@@ -1641,6 +1648,19 @@ def select_best_candidates(
 
     # Discard clearly invalid derived/subtraction candidates for final selection.
     selectable = selectable[selectable["selection_score"].fillna(-9999) > -500].copy()
+
+    if selectable.empty:
+        return selectable, pd.DataFrame(columns=exam_cols)
+
+    # Stable keys retain exams with missing or aggregated identifier values.
+    exam_key_cols = [f"_exam_key_{col}" for col in exam_cols]
+    for col, key in zip(exam_cols, exam_key_cols):
+        selectable[key] = selectable[col].apply(common.stable_text)
+    exam_lookup = selectable[[*exam_key_cols, *exam_cols]].drop_duplicates(
+        exam_key_cols
+    )
+    original_exam_cols = exam_cols
+    exam_cols = exam_key_cols
 
     sort_cols = [
         *exam_cols,
@@ -1720,6 +1740,15 @@ def select_best_candidates(
         ]
     ]
 
+    selected_wide = exam_lookup.merge(selected_wide, on=exam_cols, how="right")
+    selected_wide = selected_wide.drop(columns=exam_key_cols)
+    selected_wide = selected_wide[
+        [
+            *original_exam_cols,
+            *[c for c in selected_wide if c not in original_exam_cols],
+        ]
+    ]
+    selected_long = selected_long.drop(columns=exam_key_cols)
     return selected_long, selected_wide
 
 
@@ -1756,6 +1785,9 @@ def annotate_mri(
         patient_col=patient_col,
         study_col=study_col,
         date_col=date_col,
+        exam_group_columns=validate_phase_curation(phase_curation)[
+            "exam_group_columns"
+        ],
     )
     out = add_mri_perfusion_columns(out, exam_group_cols=exam_cols)
     out["rule_phase"] = out["mri_perfusion_label"]
@@ -1796,6 +1828,9 @@ def curate_mri(
         study_col=study_col,
         date_col=date_col,
         display_text_col_count=display_text_col_count,
+        exam_group_columns=validate_phase_curation(phase_curation)[
+            "exam_group_columns"
+        ],
     )
 
     return {

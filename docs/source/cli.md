@@ -98,6 +98,15 @@ TotalSegmentator when prediction is a later fallback. Prediction requires
 `--force` recomputes existing predictions. The command writes canonical
 `phase` and provenance columns. Failures default to `phase_errors.csv`.
 
+Automatically saves `selected_long`, the best eligible series per exam, to
+`<input_stem>_selected.csv` beside the input CSV, and `selected_wide` to
+`<input_stem>_selected_qc.csv` for QC. Override with
+`--selected_csv_path selected.csv` (QC then goes to `selected_qc.csv`).
+The full output remains intact. Exam identification is
+configured by `phase_curation.exam_group_columns` in the manifest. `clean` and
+`ingest` also save these tables with a `modality_curation` step, always using
+the input-derived default paths. The override is available only on `phase`.
+
 ## `radiomics`
 
 ```bash

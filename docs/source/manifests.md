@@ -187,6 +187,61 @@ The metadata engines also retain their unmodified result in `rule_phase`,
 `rule_phase_confidence`, and `rule_phase_reason`. This lets the post-conversion
 `phase` command apply the same manifest without losing clean-time evidence.
 
+### Best series per exam
+
+`clean` saves all curated rows and `phase` saves all input rows with resolved
+phases. Both also save the best-series dataframe and its QC table automatically
+beside the input CSV as `<input_stem>_selected.csv` and
+`<input_stem>_selected_qc.csv`. For example, `cohort.csv` produces
+`cohort_selected.csv` and `cohort_selected_qc.csv`, even when the main output
+has a different name or directory. For multiple cleaning inputs, the first
+input supplies the default directory and stem. `ingest` uses its intermediate
+`dicom_index.csv` as the cleaning input.
+
+`clean` and `ingest` always use these default paths. For `phase`, override
+them with the CLI option `--selected_csv_path`:
+
+```bash
+imperandi phase nifti_index.csv --manifest site.yaml --selected_csv_path selected_phase.csv
+```
+
+Configure the exam identification columns in the manifest:
+
+```yaml
+phase_curation:
+  exam_group_columns: [patient_key, study_id, date]
+  strategies:
+    - type: rules
+  fallback: OTHER
+```
+
+`--selected_csv_path` applies only to `phase`. Relative paths resolve from the working
+directory. Omitting the option uses the input-derived defaults; it is not a
+manifest setting. Cleaning pipelines without `modality_curation` do not
+produce selection exports.
+The main output retains all its rows.
+The selected CSV saves `selected_long`: one best eligible CT volume per phase
+and one best eligible MR volume per sequence/phase slot, per exam. It retains identifiers,
+image paths, resolved phase provenance, and selection scores.
+`selected_wide` is saved beside it as `<selected_stem>_qc.csv` (for example,
+`selected_phase_qc.csv`). This QC table has one row per exam and modality,
+with selection slots as columns and candidate descriptions and scores as
+values; MR slots also retain their alternative-candidate columns.
+Unsupported modalities and exams without eligible candidates contribute no selected rows.
+Both tables use the final cohort and phases, including TotalSegmentator results
+when running `phase`. Existing selected and QC exports are replaced, and a
+completed resumed `phase` run regenerates both exports from its saved main output (resume
+is enabled by default).
+
+`exam_group_columns` defines the columns that together identify an exam for
+CT/MR selection and MR phase inference. An explicit list must be nonempty,
+unique, and present in the table; a missing column raises an error. `null` or
+omission preserves the default: use whichever of `patient_key`, `study_id`,
+and `date` are available. If none are available, the command logs a warning
+and writes empty selected and QC tables because it cannot identify exams.
+For example, `[patient_key, visit_id]` groups series by patient and
+visit rather than study. Custom columns are loaded by the cleaning pipeline.
+
 ### Explicit ontology
 
 Use `type: ontology` when the input already carries a controlled site label.

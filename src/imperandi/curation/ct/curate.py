@@ -20,7 +20,7 @@ from imperandi.curation.common import (
     safe_str,
     stable_text,
 )
-from imperandi.curation.phase import apply_phase_curation
+from imperandi.curation.phase import apply_phase_curation, validate_phase_curation
 from imperandi.curation.rules import (
     RX_IMAGE_ORIGINAL,
     RX_IMAGE_PRIMARY,
@@ -124,9 +124,12 @@ def select_ct_per_exam(
     patient_col: str = "patient_key",
     study_col: str | None = "study_id",
     date_col: str = "date",
+    exam_group_columns: list[str] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     data = curated.copy()
-    exam_cols = get_exam_group_cols(data, patient_col, study_col, date_col)
+    exam_cols = get_exam_group_cols(
+        data, patient_col, study_col, date_col, exam_group_columns
+    )
     candidates = data[data["selection_score"].fillna(-9999) > 0].copy()
 
     if candidates.empty:
@@ -197,6 +200,9 @@ def curate_ct(
         patient_col=patient_col,
         study_col=study_col,
         date_col=date_col,
+        exam_group_columns=validate_phase_curation(phase_curation)[
+            "exam_group_columns"
+        ],
     )
     return {
         "curated": curated,

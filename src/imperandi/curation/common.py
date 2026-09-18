@@ -113,7 +113,13 @@ def get_exam_group_cols(
     patient_col: str = "patient_key",
     study_col: str | None = "study_id",
     date_col: str = "date",
+    exam_group_columns: Sequence[str] | None = None,
 ) -> list[str]:
+    if exam_group_columns is not None:
+        missing = [col for col in exam_group_columns if col not in df.columns]
+        if missing:
+            raise ValueError(f"Exam grouping requires missing columns: {missing}")
+        return list(exam_group_columns)
     cols = [patient_col]
     if study_col is not None and study_col in df.columns:
         cols.append(study_col)

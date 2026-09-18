@@ -22,6 +22,10 @@ from imperandi.ingest.hooks import (
     get_clean_hook_outputs,
 )
 from imperandi.curation import curate_by_modality
+from imperandi.curation.export import (
+    save_selected_candidates,
+    selected_output_path,
+)
 from imperandi.curation.phase import (
     phase_curation_input_columns,
     validate_phase_curation,
@@ -2466,10 +2470,22 @@ def clean_and_save_data(
     """Run the manifest-defined metadata-curation pipeline and write its CSV output."""
     steps = validate_cleaning_manifest(manifest)
     phase_curation = manifest.get("phase_curation")
+    has_curation = any(step["type"] == "modality_curation" for step in steps)
+    first_input = csv_path[0] if isinstance(csv_path, (list, tuple)) else csv_path
+    selected_path = selected_output_path(
+        None,
+        csv_path_out or first_input,
+        input_path=first_input if has_curation else None,
+        protected_paths=csv_path if isinstance(csv_path, (list, tuple)) else [csv_path],
+    )
     required_columns = _collect_required_input_columns(steps, phase_curation)
     df = load_data(csv_path, required_columns=required_columns)
     input_rows = len(df)
     df = run_clean_pipeline(df, steps, phase_curation=phase_curation)
+
+    if selected_path is not None:
+        selected_count = save_selected_candidates(df, selected_path, phase_curation)
+        logger.info("Saved %d selected series -> %s", selected_count, selected_path)
 
     if csv_path_out:
         df.to_csv(csv_path_out, index=False)

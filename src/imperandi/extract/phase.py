@@ -15,6 +15,11 @@ from imperandi.curation.phase import (
     phase_needs_strategy,
     validate_phase_curation,
 )
+from imperandi.curation.export import (
+    add_selected_csv_argument,
+    save_selected_candidates,
+    selected_output_path,
+)
 from imperandi.utils.manifest import load_manifest
 from imperandi.utils.logging import log_task_summary, setup_logging
 from imperandi.utils.misc import print_args
@@ -53,6 +58,7 @@ def add_phase_arguments(
     include_dry_run: bool = True,
 ) -> None:
     """Add phase-extraction paths, force, and resume options to a parser."""
+    add_selected_csv_argument(parser)
     parser.add_argument(
         "csv_path_pos",
         nargs="?",
@@ -233,7 +239,14 @@ def main(args: argparse.Namespace) -> None:
 
     output_path = Path(args.csv_path_out)
     error_path = Path(args.error_csv_path)
+    selected_path = selected_output_path(
+        getattr(args, "selected_csv_path", None),
+        output_path,
+        input_path=args.csv_path,
+        protected_paths=[args.csv_path, error_path],
+    )
     exclude_hash_args = {
+        "selected_csv_path",
         "csv_path_out",
         "dry_run",
         "verbose",
@@ -266,6 +279,11 @@ def main(args: argparse.Namespace) -> None:
     ckpt = CheckpointManager(paths=paths, config=resume_ctx["config"])
 
     if already_finished:
+        if selected_path is not None:
+            selected_count = save_selected_candidates(
+                pd.read_csv(output_path), selected_path, phase_curation
+            )
+            logger.info("Saved %d selected series -> %s", selected_count, selected_path)
         logger.info(
             "Resume enabled and matching phase run already finished; skipping execution."
         )
@@ -416,6 +434,9 @@ def main(args: argparse.Namespace) -> None:
     )
     atomic_write_csv(df_out, args.csv_path_out, index=False)
     logger.info("Wrote main table -> %s", args.csv_path_out)
+    if selected_path is not None:
+        selected_count = save_selected_candidates(df_out, selected_path, phase_curation)
+        logger.info("Saved %d selected series -> %s", selected_count, selected_path)
 
     if errors_by_idx:
         df_err = pd.DataFrame(list(errors_by_idx.values())).drop(
