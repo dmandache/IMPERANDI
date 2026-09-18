@@ -2211,7 +2211,14 @@ def _rule_mask(df: pd.DataFrame, rule: dict) -> pd.Series:
 def _run_filter_step(df: pd.DataFrame, step: dict) -> pd.DataFrame:
     """Apply a manifest filter step using explicit keep/discard semantics."""
     required_columns = {rule["column"] for rule in step["rules"]}
-    _ensure_columns_present(df, required_columns, step)
+    missing_columns = sorted(required_columns.difference(df.columns))
+    if missing_columns:
+        logger.warning(
+            "Skipping filter step '%s'; required columns are missing: %s",
+            _step_label(step),
+            missing_columns,
+        )
+        return df
 
     masks = [_rule_mask(df, rule).fillna(False) for rule in step["rules"]]
     mask = masks[0].copy()

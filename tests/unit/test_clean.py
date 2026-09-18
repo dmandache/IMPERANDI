@@ -1174,6 +1174,44 @@ def test_filter_step_log_includes_name_and_lists_each_column_once(caplog):
     )
 
 
+@pytest.mark.parametrize("scope", ["row", "volume"])
+def test_filter_step_warns_and_skips_when_required_columns_are_missing(
+    scope, caplog
+):
+    df = pd.DataFrame(
+        {
+            "patient_key": ["p1", "p2"],
+            "Modality": ["CT", "MR"],
+        }
+    )
+    step = {
+        "type": "filter",
+        "name": "requires_description",
+        "kind": "keep",
+        "scope": scope,
+        "logic": "and",
+        "rules": [
+            {"column": "Modality", "op": "eq", "value": "CT"},
+            {
+                "column": "SeriesDescription",
+                "op": "icontains",
+                "value": "abdomen",
+            },
+        ],
+    }
+
+    with caplog.at_level(logging.WARNING, logger="imperandi.ingest.clean"):
+        out = clean.run_clean_pipeline(df, [step])
+
+    pd.testing.assert_frame_equal(out, df)
+    assert (
+        "Skipping filter step 'keep "
+        f"{scope} filter 'requires_description' on column(s) Modality, "
+        "SeriesDescription'; required columns are missing: ['SeriesDescription']"
+        in caplog.text
+    )
+
+
 def test_run_clean_pipeline_executes_all_supported_step_types(monkeypatch):
     real_resolver = clean.resolve_function_path
 
