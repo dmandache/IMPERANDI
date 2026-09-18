@@ -227,6 +227,13 @@ image paths, resolved phase provenance, and selection scores.
 `qc_selected_phase.csv`). This QC table has one row per exam and modality,
 with selection slots as columns and candidate descriptions and scores as
 values; MR slots also retain their alternative-candidate columns.
+`qc_unresolved_phase.csv` is also saved in the same directory. It includes
+all rows still unresolved after the configured phase strategies, before
+fallback, including rows excluded from best-series selection. The `phase`
+and phase provenance fields are empty; raw rule/model evidence and other
+metadata are retained. Resolved rows with the same label as the configured
+fallback are excluded. The file is written even when there are no unresolved
+rows, replacing previous contents; it is also regenerated on resume.
 Unsupported modalities and exams without eligible candidates contribute no selected rows.
 Both tables use the final cohort and phases, including TotalSegmentator results
 when running `phase`. Existing selected and QC exports are replaced, and a

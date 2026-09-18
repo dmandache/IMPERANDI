@@ -11,8 +11,9 @@ from imperandi.curation.export import (
     save_selected_candidates,
     selected_output_path,
     selected_qc_path,
+    unresolved_phase_qc_path,
 )
-from imperandi.curation.phase import validate_phase_curation
+from imperandi.curation.phase import apply_phase_curation, validate_phase_curation
 from imperandi.extract import phase
 
 
@@ -157,6 +158,10 @@ def test_export_path_cannot_overwrite_input_or_main_output(tmp_path):
         selected_output_path(path, selected_qc_path(path))
     with pytest.raises(ValueError, match="QC path must differ"):
         selected_output_path(path, main, protected_paths=[selected_qc_path(path)])
+    with pytest.raises(ValueError, match="QC path must differ"):
+        selected_output_path(path, unresolved_phase_qc_path(path))
+    with pytest.raises(ValueError, match="must be distinct"):
+        selected_output_path(unresolved_phase_qc_path(path), main)
 
 
 def test_default_export_paths_follow_input_even_with_different_main_output(tmp_path):
@@ -252,8 +257,79 @@ def test_phase_cli_can_export_on_finished_resume_without_prediction(
     # Replacing a stale export must not retain rows absent from the selection.
     pd.DataFrame([{"volume_id": "stale"}]).to_csv(selected, index=False)
     pd.DataFrame([{"stale": True}]).to_csv(qc_path, index=False)
+    unresolved_path = unresolved_phase_qc_path(selected)
+    pd.DataFrame([{"stale": True}]).to_csv(unresolved_path, index=False)
     assert cli.main([*args, "--selected_csv_path", str(selected)]) == 0
     assert set(pd.read_csv(selected)["volume_id"]) == {"v0", "v2"}
     qc = pd.read_csv(qc_path)
     assert "stale" not in qc
     assert qc["visit"].tolist() == [1, 2]
+    assert pd.read_csv(unresolved_path).empty
+    assert "stale" not in pd.read_csv(unresolved_path).columns
+
+
+@pytest.mark.parametrize("fallback", ["OTHER", "ARTERIAL", None])
+def test_unresolved_qc_matches_pre_fallback_rows_and_preserves_evidence(tmp_path, fallback):
+    df = cohort()
+    df["site_phase"] = ["known", "unmapped", "unmapped"]
+    df["rule_phase"] = ["OTHER", "ARTERIAL", "UNKNOWN"]
+    df["totalseg_phase"] = ["unknown", "unknown", "unknown"]
+    df["_source_idx"] = [0, 1, 2]
+    phase_config = {
+        **config(),
+        "strategies": [
+            {
+                "type": "ontology",
+                "name": "fallback",  # A strategy name alone cannot identify fallback.
+                "columns": ["site_phase"],
+                "mapping": {"known": fallback or "ARTERIAL"},
+            },
+            {"type": "rules"},
+            {"type": "totalsegmentator"},
+        ],
+        "unresolved_labels": ["UNKNOWN"],
+        "fallback": fallback,
+    }
+    before = apply_phase_curation(df, phase_config, apply_fallback=False)
+    final = apply_phase_curation(df, phase_config)
+    path = tmp_path / "cohort_curated.csv"
+    save_selected_candidates(final, path, phase_config)
+    report = pd.read_csv(unresolved_phase_qc_path(path))
+    assert report["volume_id"].tolist() == before.loc[before["phase"].isna(), "volume_id"].tolist() == ["v2"]
+    assert report["phase"].isna().all()
+    assert report[["phase_source", "phase_confidence", "phase_reason"]].isna().all().all()
+    assert report.loc[0, "rule_phase"] == "UNKNOWN"
+    assert report.loc[0, "totalseg_phase"] == "unknown"
+    assert report.loc[0, "nifti_path"] == "volume2.nii.gz"
+    assert "_source_idx" not in report
+    if fallback:
+        assert final.loc[2, "phase"] == fallback
+
+
+@pytest.mark.parametrize("command", ["clean", "phase"])
+def test_cli_exports_unresolved_cases_excluded_from_selection(tmp_path, command):
+    df = cohort()
+    df["SeriesDescription"] = ["portal venous", "localizer scout", "localizer scout"]
+    df["rule_phase"] = ["PORTAL_VENOUS", "OTHER", "UNKNOWN"]
+    source, main = tmp_path / "input.csv", tmp_path / "output.csv"
+    df.to_csv(source, index=False)
+    manifest = tmp_path / "site.yaml"
+    manifest.write_text(yaml.safe_dump({
+        "phase_curation": config(),
+        "cleaning": {"steps": [{"type": "modality_curation"}]},
+    }))
+    args = [command, str(source), str(main), "--manifest", str(manifest)]
+    assert cli.main(args) == 0
+    report_path = tmp_path / "qc_unresolved_phase.csv"
+    report = pd.read_csv(report_path)
+    assert report["volume_id"].tolist() == ["v1", "v2"]
+    assert report["phase"].isna().all()
+    assert set(pd.read_csv(tmp_path / "input_curated.csv")["volume_id"]) == {"v0"}
+    assert pd.read_csv(main)["phase"].tolist() == ["PORTAL_VENOUS", "OTHER", "OTHER"]
+
+    # A later fully resolved run replaces the report, including its old rows.
+    df["SeriesDescription"] = "portal venous"
+    df["rule_phase"] = "PORTAL_VENOUS"
+    df.to_csv(source, index=False)
+    assert cli.main([*args, *(["--no_resume"] if command == "phase" else [])]) == 0
+    assert pd.read_csv(report_path).empty

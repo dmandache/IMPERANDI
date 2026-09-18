@@ -102,6 +102,8 @@ Automatically saves `selected_long`, the best eligible series per exam, to
 `<input_stem>_curated.csv` beside the input CSV, and `selected_wide` to
 `qc_<input_stem>_curated.csv` for QC. Override with
 `--selected_csv_path selected.csv` (QC then goes to `qc_selected.csv`).
+Also writes `qc_unresolved_phase.csv` beside these exports with all cases
+unresolved before fallback, retaining their raw rule/model evidence.
 The full output remains intact. Exam identification is
 configured by `phase_curation.exam_group_columns` in the manifest. `clean` and
 `ingest` also save these tables with a `modality_curation` step, always using

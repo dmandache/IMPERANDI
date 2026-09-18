@@ -36,6 +36,31 @@ def selected_qc_path(path: Path) -> Path:
     return path.with_name(f"qc_{path.stem}.csv")
 
 
+def unresolved_phase_qc_path(path: Path) -> Path:
+    """Keep unresolved phase cases beside the other curation exports."""
+    return path.with_name("qc_unresolved_phase.csv")
+
+
+def save_unresolved_phase_cases(df: pd.DataFrame, path: Path) -> None:
+    """Export pre-fallback cases from the resolver's recorded provenance.
+
+    Retain raw rule/model evidence, but clear the phase and provenance assigned
+    by fallback. This also works when fallback is disabled or a run is resumed.
+    """
+    empty = pd.Series(pd.NA, index=df.index, dtype="object")
+    fallback = df.get("phase_source", empty).eq("fallback") & df.get(
+        "phase_reason", empty
+    ).eq("no phase strategy resolved")
+    unresolved = df.loc[
+        df.get("phase", empty).isna() | fallback.fillna(False)
+    ].copy()
+    for column in ("phase", "phase_source", "phase_confidence", "phase_reason"):
+        unresolved[column] = pd.NA
+    unresolved = unresolved.drop(columns=["_source_idx"], errors="ignore")
+    atomic_write_csv(unresolved, path, index=False)
+    logger.info("Saved %d unresolved phase cases before fallback -> %s", len(unresolved), path)
+
+
 def selected_output_path(
     configured, output_path, *, input_path=None, protected_paths=()
 ) -> Path | None:
@@ -54,19 +79,19 @@ def selected_output_path(
         for value in (input_path, output_path, *protected_paths)
         if value
     }
-    if any(
-        candidate.resolve() in protected
-        for candidate in (path, selected_qc_path(path))
-    ):
+    exports = [path, selected_qc_path(path), unresolved_phase_qc_path(path)]
+    if any(candidate.resolve() in protected for candidate in exports):
         raise ValueError(
             "selected_csv_path and its QC path must differ from input "
             "and main/error outputs."
         )
+    if len({candidate.resolve() for candidate in exports}) != len(exports):
+        raise ValueError("Curation and QC output paths must be distinct.")
     return path
 
 
 def save_selected_candidates(df: pd.DataFrame, path: Path, config) -> int:
-    """Save selected_long and companion selected_wide QC from the final cohort."""
+    """Save selected_long, selected_wide QC, and all pre-fallback phase cases."""
     normalized = validate_phase_curation(config)
     exam_columns = normalized["exam_group_columns"]
     ct, mr, _ = split_by_modality(df)
@@ -134,4 +159,5 @@ def save_selected_candidates(df: pd.DataFrame, path: Path, config) -> int:
     qc_path = selected_qc_path(path)
     atomic_write_csv(selected_wide, qc_path, index=False)
     logger.info("Saved %d exam/modality rows for QC -> %s", len(selected_wide), qc_path)
+    save_unresolved_phase_cases(df, unresolved_phase_qc_path(path))
     return len(selected_long)
