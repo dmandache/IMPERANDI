@@ -130,7 +130,7 @@ def select_ct_per_exam(
     exam_cols = get_exam_group_cols(
         data, patient_col, study_col, date_col, exam_group_columns
     )
-    candidates = data[data["selection_score"].fillna(-9999) > 0].copy()
+    candidates = data[data["selection_score"].fillna(-9999) > -500].copy()
 
     if candidates.empty:
         return candidates, pd.DataFrame(columns=[*exam_cols])
