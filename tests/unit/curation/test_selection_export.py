@@ -164,7 +164,7 @@ def test_default_export_paths_follow_input_even_with_different_main_output(tmp_p
     main = tmp_path / "results" / "phase.csv"
     selected = selected_output_path(None, main, input_path=source)
     assert selected == tmp_path / "cohort.v2_curated.csv"
-    assert selected_qc_path(selected) == tmp_path / "cohort.v2_curated_qc.csv"
+    assert selected_qc_path(selected) == tmp_path / "qc_cohort.v2_curated.csv"
     custom = tmp_path / "custom.csv"
     assert selected_output_path(custom, main, input_path=source) == custom
     with pytest.raises(ValueError, match="must differ"):
@@ -211,7 +211,7 @@ def test_missing_exam_identifiers_produce_empty_default_exports(tmp_path, caplog
     )
     assert cli.main(["phase", str(source)]) == 0
     assert pd.read_csv(tmp_path / "volumes_curated.csv").empty
-    assert pd.read_csv(tmp_path / "volumes_curated_qc.csv").empty
+    assert pd.read_csv(tmp_path / "qc_volumes_curated.csv").empty
     assert "No exam grouping columns" in caplog.text
 
 

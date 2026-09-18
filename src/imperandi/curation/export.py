@@ -25,7 +25,7 @@ def add_selected_csv_argument(parser) -> None:
         default=None,
         help=(
             "Save selected_long (best series per exam) to this CSV and "
-            "selected_wide QC to <stem>_qc.csv beside it. "
+            "selected_wide QC to qc_<stem>.csv beside it. "
             "Default: <input_stem>_curated.csv beside the input CSV."
         ),
     )
@@ -33,7 +33,7 @@ def add_selected_csv_argument(parser) -> None:
 
 def selected_qc_path(path: Path) -> Path:
     """Return the companion path for the selected_wide QC table."""
-    return path.with_name(f"{path.stem}_qc.csv")
+    return path.with_name(f"qc_{path.stem}.csv")
 
 
 def selected_output_path(

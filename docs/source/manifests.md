@@ -192,8 +192,8 @@ The metadata engines also retain their unmodified result in `rule_phase`,
 `clean` saves all curated rows and `phase` saves all input rows with resolved
 phases. Both also save the best-series dataframe and its QC table automatically
 beside the input CSV as `<input_stem>_curated.csv` and
-`<input_stem>_curated_qc.csv`. For example, `cohort.csv` produces
-`cohort_curated.csv` and `cohort_curated_qc.csv`, even when the main output
+`qc_<input_stem>_curated.csv`. For example, `cohort.csv` produces
+`cohort_curated.csv` and `qc_cohort_curated.csv`, even when the main output
 has a different name or directory. For multiple cleaning inputs, the first
 input supplies the default directory and stem. `ingest` uses its intermediate
 `dicom_index.csv` as the cleaning input.
@@ -223,8 +223,8 @@ The main output retains all its rows.
 The selected CSV saves `selected_long`: one best eligible CT volume per phase
 and one best eligible MR volume per sequence/phase slot, per exam. It retains identifiers,
 image paths, resolved phase provenance, and selection scores.
-`selected_wide` is saved beside it as `<selected_stem>_qc.csv` (for example,
-`selected_phase_qc.csv`). This QC table has one row per exam and modality,
+`selected_wide` is saved beside it as `qc_<selected_stem>.csv` (for example,
+`qc_selected_phase.csv`). This QC table has one row per exam and modality,
 with selection slots as columns and candidate descriptions and scores as
 values; MR slots also retain their alternative-candidate columns.
 Unsupported modalities and exams without eligible candidates contribute no selected rows.
