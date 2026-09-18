@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from typing import Sequence
 
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 TEXT_COLS_DEFAULT = [
     "SeriesDescription",
@@ -118,7 +121,14 @@ def get_exam_group_cols(
     if exam_group_columns is not None:
         missing = [col for col in exam_group_columns if col not in df.columns]
         if missing:
-            raise ValueError(f"Exam grouping requires missing columns: {missing}")
+            fallback = [col for col in ("patient_key", "date") if col in df.columns]
+            logger.warning(
+                "Exam grouping columns are missing: %s; falling back to "
+                "available patient_key/date columns: %s",
+                missing,
+                fallback,
+            )
+            return fallback
         return list(exam_group_columns)
     cols = [patient_col]
     if study_col is not None and study_col in df.columns:

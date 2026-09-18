@@ -234,8 +234,9 @@ completed resumed `phase` run regenerates both exports from its saved main outpu
 is enabled by default).
 
 `exam_group_columns` defines the columns that together identify an exam for
-CT/MR selection and MR phase inference. An explicit list must be nonempty,
-unique, and present in the table; a missing column raises an error. `null` or
+CT/MR selection and MR phase inference. An explicit list must be nonempty
+and unique. If any configured columns are missing, the command logs a warning
+and falls back to the available `patient_key` and `date` columns. `null` or
 omission preserves the default: use whichever of `patient_key`, `study_id`,
 and `date` are available. If none are available, the command logs a warning
 and writes empty selected and QC tables because it cannot identify exams.

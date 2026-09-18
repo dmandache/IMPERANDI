@@ -28,7 +28,8 @@ id_extraction:
 # strategy types are ontology, rules, and totalsegmentator (at most one each).
 phase_curation:
   # null uses available patient_key, study_id, date columns. An explicit list
-  # requires every named column, e.g. [patient_key, study_id, date].
+  # uses the named columns, e.g. [patient_key, study_id, date]; if any are missing,
+  # warn and fall back to the available patient_key and date columns.
   exam_group_columns: null
   strategies:
     - type: rules

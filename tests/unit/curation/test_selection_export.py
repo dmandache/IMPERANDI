@@ -6,6 +6,7 @@ import yaml
 
 from imperandi import cli
 from imperandi.curation import curate_by_modality
+from imperandi.curation.common import get_exam_group_cols
 from imperandi.curation.export import (
     save_selected_candidates,
     selected_output_path,
@@ -62,9 +63,27 @@ def test_invalid_exam_columns_are_rejected(columns):
         validate_phase_curation({**config(), "exam_group_columns": columns})
 
 
-def test_missing_explicit_exam_column_is_rejected():
-    with pytest.raises(ValueError, match="missing columns.*visit"):
-        curate_by_modality(cohort().drop(columns="visit"), phase_curation=config())
+@pytest.mark.parametrize("modality", ["CT", "MR"])
+def test_missing_explicit_exam_column_warns_and_uses_patient_date(modality, caplog):
+    df = cohort(modality).drop(columns="visit")
+    df["date"] = ["2020-01-01", "2020-01-01", "2020-01-02"]
+    df["study_id"] = ["s1", "s2", "s3"]
+    results = curate_by_modality(df, phase_curation=config())
+    assert set(results["selected_long_all"]["volume_id"]) == {"v0", "v2"}
+    assert "columns are missing: ['visit']" in caplog.text
+    assert (
+        "falling back to available patient_key/date columns: ['patient_key', 'date']"
+        in caplog.text
+    )
+
+
+@pytest.mark.parametrize("available", [["patient_key"], ["date"], []])
+def test_missing_exam_columns_fall_back_only_to_available_patient_date(
+    available, caplog
+):
+    df = pd.DataFrame(columns=[*available, "study_id"])
+    assert get_exam_group_cols(df, exam_group_columns=["missing"]) == available
+    assert "falling back" in caplog.text
 
 
 @pytest.mark.parametrize("modality", ["CT", "MR"])
