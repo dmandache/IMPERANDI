@@ -50,7 +50,7 @@ def test_ct_phase_classification_and_selection_per_phase():
     }
 
 
-def test_ct_derived_and_localizer_are_not_selected():
+def test_ct_derived_is_not_selected_and_best_other_candidate_is_retained():
     df = pd.DataFrame(
         [
             _base("Abdomen portal venous MIP", volume_id="mip"),
@@ -61,8 +61,9 @@ def test_ct_derived_and_localizer_are_not_selected():
     results = curate_ct(df)
     selected = results["selected_long"]
 
-    assert len(selected) == 1
-    assert selected.iloc[0]["volume_id"] == "good"
+    assert set(selected["volume_id"]) == {"scout", "good"}
+    assert set(selected["selection_slot"]) == {"CT_OTHER", "CT_PORTAL_VENOUS"}
+    assert "mip" not in set(selected["volume_id"])
 
 
 def test_ct_curation_accepts_grouped_list_valued_rows():

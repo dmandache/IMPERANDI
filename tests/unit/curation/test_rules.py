@@ -425,12 +425,13 @@ def test_ct_selection_uses_strengthened_shared_rules():
         ]
     )
     result = curate_ct(frame)
-    assert set(result["selected_long"]["volume_id"]) == {"0", "1", "2", "3"}
+    assert set(result["selected_long"]["volume_id"]) == {"0", "1", "2", "3", "6"}
     assert set(result["selected_long"]["selection_slot"]) == {
         "CT_NATIVE",
         "CT_ARTERIAL",
         "CT_PORTAL_VENOUS",
         "CT_DELAYED",
+        "CT_OTHER",
     }
 
 

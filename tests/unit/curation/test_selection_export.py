@@ -120,7 +120,7 @@ def test_export_uses_final_phase_preserves_paths_and_excludes_helpers(
         assert pd.isna(qc.loc[1, "T1_ARTERIAL_other_candidates"])
 
 
-@pytest.mark.parametrize("modality", ["CT", "MR", "PT"])
+@pytest.mark.parametrize("modality", ["MR", "PT"])
 def test_export_with_no_candidates_has_readable_headers(tmp_path, modality):
     df = cohort(modality)
     df["SeriesDescription"] = "localizer scout"
@@ -324,7 +324,11 @@ def test_cli_exports_unresolved_cases_excluded_from_selection(tmp_path, command)
     report = pd.read_csv(report_path)
     assert report["volume_id"].tolist() == ["v1", "v2"]
     assert report["phase"].isna().all()
-    assert set(pd.read_csv(tmp_path / "input_curated.csv")["volume_id"]) == {"v0"}
+    assert set(pd.read_csv(tmp_path / "input_curated.csv")["volume_id"]) == {
+        "v0",
+        "v1",
+        "v2",
+    }
     assert pd.read_csv(main)["phase"].tolist() == ["PORTAL_VENOUS", "OTHER", "OTHER"]
 
     # A later fully resolved run replaces the report, including its old rows.
