@@ -247,6 +247,10 @@ cleaning:
 segmentation:
   # Currently the only accepted value.
   backend: totalsegmentator
+  # Optional in-place crop after backend segmentation and before postprocess.
+  # The retained in-bounds margin never introduces synthetic padding.
+  crop: false
+  crop_margin_mm: 50.0
   # Keys may be CT and/or MR; MRI is accepted as an alias for MR. A modality
   # omitted here is retained in the table but skipped by segmentation.
   modalities:

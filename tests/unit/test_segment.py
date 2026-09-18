@@ -84,11 +84,18 @@ def patch_strategy(monkeypatch, **overrides):
 def write_segmentation_manifest(path, config, *, modality="CT"):
     resolved = copy.deepcopy(config)
     backend = resolved.pop("backend", "totalsegmentator")
+    crop = resolved.pop("crop", None)
+    crop_margin_mm = resolved.pop("crop_margin_mm", None)
+    segmentation = {
+        "backend": backend,
+        "modalities": {modality: resolved},
+    }
+    if crop is not None:
+        segmentation["crop"] = crop
+    if crop_margin_mm is not None:
+        segmentation["crop_margin_mm"] = crop_margin_mm
     manifest = {
-        "segmentation": {
-            "backend": backend,
-            "modalities": {modality: resolved},
-        }
+        "segmentation": segmentation
     }
     path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
 
@@ -132,6 +139,229 @@ def test_normalize_segment_args_prefers_flag_csv_path_out_over_positional(tmp_pa
     assert out.csv_path_out == str(csv_out_opt)
 
 
+def test_crop_cli_uses_default_or_explicit_margin():
+    parser = segment_module.build_parser()
+
+    defaults = parser.parse_args(["--crop"])
+    explicit = parser.parse_args(["--crop", "--crop-margin-mm", "7.5"])
+    inherited = parser.parse_args([])
+    disabled = parser.parse_args(["--no-crop"])
+
+    assert defaults.crop and defaults.crop_margin_mm is None
+    assert explicit.crop and explicit.crop_margin_mm == 7.5
+    assert inherited.crop is None and inherited.crop_margin_mm is None
+    assert disabled.crop is False
+
+
+def test_crop_cli_and_manifest_precedence():
+    config = {"crop": True, "crop_margin_mm": 35.0}
+
+    assert (
+        segment_module._requested_crop_margin(argparse.Namespace(), config) == 35.0
+    )
+    assert (
+        segment_module._requested_crop_margin(
+            argparse.Namespace(crop=True, crop_margin_mm=7.5), config
+        )
+        == 7.5
+    )
+    assert (
+        segment_module._requested_crop_margin(
+            argparse.Namespace(crop=False, crop_margin_mm=None), config
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize("margin", [-1, float("nan"), float("inf")])
+def test_normalize_segment_args_rejects_invalid_crop_margin(tmp_path, margin):
+    csv_path = tmp_path / "nifti_index.csv"
+    csv_path.write_text("nifti_path\n")
+    args = argparse.Namespace(
+        csv_path_pos=str(csv_path),
+        csv_path_opt=None,
+        csv_path_out_pos=None,
+        csv_path_out=None,
+        error_csv_path=None,
+        crop=True,
+        crop_margin_mm=margin,
+    )
+
+    with pytest.raises(ValueError, match="--crop-margin-mm"):
+        segment_module.normalize_segment_args(args)
+
+
+def test_crop_to_segmented_organs_uses_union_margin_and_preserves_world_space(
+    tmp_path,
+):
+    affine = np.array(
+        [
+            [2.0, 0.0, 0.0, 10.0],
+            [0.0, 1.0, 0.0, -5.0],
+            [0.0, 0.0, 4.0, 30.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ]
+    )
+    image_path = tmp_path / "scan.nii.gz"
+    liver_path = tmp_path / "liver.nii.gz"
+    spleen_path = tmp_path / "spleen.nii.gz"
+    image_data = np.arange(10 * 12 * 8, dtype=np.int16).reshape(10, 12, 8)
+    liver = np.zeros(image_data.shape, dtype=np.uint8)
+    spleen = np.zeros_like(liver)
+    liver[3:5, 4:7, 2:4] = 1
+    spleen[6:8, 8:10, 4:6] = 1
+    nib.save(nib.Nifti1Image(image_data, affine), image_path)
+    save_nifti(liver, affine, liver_path)
+    save_nifti(spleen, affine, spleen_path)
+
+    assert segment_module.crop_to_segmented_organs(
+        image_path, [liver_path, spleen_path], margin_mm=2.0
+    )
+
+    # Margin in voxels is ceil(2 mm / [2, 1, 4]) == [1, 2, 1].
+    expected_slice = np.s_[2:9, 2:12, 1:7]
+    cropped_image = nib.load(image_path)
+    cropped_liver = nib.load(liver_path)
+    cropped_spleen = nib.load(spleen_path)
+    assert cropped_image.shape == (7, 10, 6)
+    assert cropped_liver.shape == cropped_image.shape == cropped_spleen.shape
+    np.testing.assert_array_equal(
+        np.asanyarray(cropped_image.dataobj), image_data[expected_slice]
+    )
+    np.testing.assert_array_equal(
+        np.asanyarray(cropped_liver.dataobj), liver[expected_slice]
+    )
+    np.testing.assert_array_equal(
+        np.asanyarray(cropped_spleen.dataobj), spleen[expected_slice]
+    )
+    np.testing.assert_allclose(
+        cropped_image.affine,
+        affine
+        @ np.array(
+            [
+                [1, 0, 0, 2],
+                [0, 1, 0, 2],
+                [0, 0, 1, 1],
+                [0, 0, 0, 1],
+            ]
+        ),
+    )
+    # The first retained voxel keeps its pre-crop world coordinate.
+    np.testing.assert_allclose(
+        nib.affines.apply_affine(cropped_image.affine, [0, 0, 0]),
+        nib.affines.apply_affine(affine, [2, 2, 1]),
+    )
+
+
+def test_crop_to_segmented_organs_skips_all_empty_masks(tmp_path):
+    affine = np.eye(4)
+    image_path = tmp_path / "scan.nii.gz"
+    mask_path = tmp_path / "liver.nii.gz"
+    image = np.arange(64, dtype=np.int16).reshape(4, 4, 4)
+    nib.save(nib.Nifti1Image(image, affine), image_path)
+    save_nifti(np.zeros_like(image), affine, mask_path)
+
+    assert not segment_module.crop_to_segmented_organs(
+        image_path, [mask_path], margin_mm=0
+    )
+    np.testing.assert_array_equal(np.asanyarray(nib.load(image_path).dataobj), image)
+
+
+def test_crop_margin_is_clipped_to_true_image_size_without_padding(tmp_path):
+    affine = np.eye(4)
+    image_path = tmp_path / "scan.nii.gz"
+    mask_path = tmp_path / "liver.nii.gz"
+    image = np.arange(4**3, dtype=np.int16).reshape(4, 4, 4)
+    mask = np.zeros_like(image, dtype=np.uint8)
+    mask[2, 2, 2] = 1
+    nib.save(nib.Nifti1Image(image, affine), image_path)
+    save_nifti(mask, affine, mask_path)
+
+    assert segment_module.crop_to_segmented_organs(
+        image_path, [mask_path], margin_mm=50
+    )
+
+    # The requested margin exceeds the available extent, so the true image
+    # size wins; no synthetic voxels are added.
+    assert nib.load(image_path).shape == image.shape
+    assert nib.load(mask_path).shape == mask.shape
+    np.testing.assert_array_equal(np.asanyarray(nib.load(image_path).dataobj), image)
+
+
+def test_process_single_volume_crops_image_and_resolved_masks(tmp_path):
+    affine = np.eye(4)
+    image_path = tmp_path / "scan.nii.gz"
+    image = np.arange(6**3, dtype=np.int16).reshape(6, 6, 6)
+    nib.save(nib.Nifti1Image(image, affine), image_path)
+    config = {
+        "backend": "totalsegmentator",
+        "tasks": [{"task": "total", "output": "liver", "extra": {}}],
+    }
+
+    class NiftiBackend:
+        def run(self, *, input_path, output_dir, task, **kwargs):
+            liver = np.zeros((6, 6, 6), dtype=np.uint8)
+            liver[2:4, 1:5, 3:5] = 1
+            save_nifti(liver, affine, output_dir / "liver.nii.gz")
+
+    idx, out_dir, error, warning, outputs = segment_module.process_single_volume(
+        4,
+        {"nifti_path": str(image_path)},
+        config,
+        verbose=False,
+        force=True,
+        crop_margin_mm=0,
+        backend=NiftiBackend(),
+    )
+
+    assert (idx, out_dir, error, warning) == (4, str(tmp_path), None, None)
+    assert outputs == {"liver": "liver"}
+    assert nib.load(image_path).shape == (2, 4, 2)
+    assert nib.load(tmp_path / "liver.nii.gz").shape == (2, 4, 2)
+
+
+def test_segment_volume_crops_before_morphological_postprocessing(tmp_path):
+    affine = np.eye(4)
+    image_path = tmp_path / "scan.nii.gz"
+    nib.save(nib.Nifti1Image(np.zeros((7, 7, 7)), affine), image_path)
+    config = {
+        "backend": "totalsegmentator",
+        "tasks": [{"task": "total", "output": "liver", "extra": {}}],
+        "postprocess": {
+            "operations": [
+                {
+                    "op": "dilate",
+                    "input": "liver",
+                    "output": "dilated",
+                    "radius_vox": 1,
+                }
+            ]
+        },
+    }
+
+    class SingleVoxelBackend:
+        def run(self, *, input_path, output_dir, task, **kwargs):
+            liver = np.zeros((7, 7, 7), dtype=np.uint8)
+            liver[3, 3, 3] = 1
+            save_nifti(liver, affine, output_dir / "liver.nii.gz")
+
+    segment_module.segment_volume(
+        image_path,
+        tmp_path,
+        config,
+        force=True,
+        crop_margin_mm=0,
+        backend=SingleVoxelBackend(),
+    )
+
+    # With pre-postprocessing cropping the dilation runs on a 1x1x1 grid and
+    # cannot expand beyond it. Cropping after dilation would produce 3x3x3.
+    assert nib.load(image_path).shape == (1, 1, 1)
+    dilated = nib.load(tmp_path / "dilated.nii.gz")
+    assert dilated.shape == (1, 1, 1)
+    assert np.asanyarray(dilated.dataobj).sum() == 1
+
+
 def test_load_segmentation_config_default():
     cfg = segment_module.load_segmentation_config(
         None, base_path=Path(__file__).resolve().parents[2] / "src" / "imperandi"
@@ -140,6 +370,8 @@ def test_load_segmentation_config_default():
     assert cfg["modalities"]["CT"]["tasks"][0]["task"] == "total"
     assert cfg["modalities"]["MR"]["tasks"][0]["task"] == "total_mr"
     assert cfg["backend"] == "totalsegmentator"
+    assert cfg["crop"] is False
+    assert cfg["crop_margin_mm"] == 50.0
 
 
 def test_load_segmentation_config_missing(tmp_path):
@@ -157,6 +389,39 @@ def test_validate_segmentation_config_requires_modality_map():
             {
                 "backend": "totalsegmentator",
                 "tasks": [{"task": "total"}],
+            }
+        )
+
+
+def test_validate_segmentation_config_accepts_crop_settings():
+    config = segment_module.validate_segmentation_config(
+        {
+            "crop": True,
+            "crop_margin_mm": 12,
+            "modalities": {"CT": {"tasks": [{"task": "total"}]}},
+        }
+    )
+
+    assert config["crop"] is True
+    assert config["crop_margin_mm"] == 12.0
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "message"),
+    [
+        ("crop", "yes", "segmentation.crop"),
+        ("crop_margin_mm", -1, "segmentation.crop_margin_mm"),
+        ("crop_margin_mm", float("inf"), "segmentation.crop_margin_mm"),
+    ],
+)
+def test_validate_segmentation_config_rejects_invalid_crop_settings(
+    key, value, message
+):
+    with pytest.raises(ValueError, match=message):
+        segment_module.validate_segmentation_config(
+            {
+                key: value,
+                "modalities": {"CT": {"tasks": [{"task": "total"}]}},
             }
         )
 

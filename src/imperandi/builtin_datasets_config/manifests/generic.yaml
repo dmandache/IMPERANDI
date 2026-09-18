@@ -202,6 +202,10 @@ cleaning:
 # backend; output/fetch_output rename a produced mask in the cohort table.
 segmentation:
   backend: totalsegmentator
+  # Crop the image and raw masks before post-processing. The margin retains
+  # existing in-bounds voxels only; it never adds synthetic padding.
+  crop: false
+  crop_margin_mm: 50.0
   modalities:
     CT:
       tasks:

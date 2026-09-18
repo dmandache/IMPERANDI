@@ -381,6 +381,28 @@ must resolve to an `_mr` task. Rows without a configured modality are retained
 but skipped, and only models needed by modalities present in the cohort are
 prefetched.
 
+Cropping can be configured for the complete segmentation stage:
+
+```yaml
+segmentation:
+  backend: totalsegmentator
+  crop: true
+  crop_margin_mm: 50.0
+  modalities:
+    CT:
+      tasks:
+        - task: total
+          extra:
+            roi_subset: [liver]
+```
+
+Cropping runs after backend segmentation and before modality-specific
+post-processing. It uses one foreground bounding box for the image and masks,
+retains up to `crop_margin_mm` of existing image data on each side, and never
+adds padded voxels beyond the true image extent. The defaults are `crop: false`
+and `crop_margin_mm: 50.0`. CLI `--crop` or `--no-crop` overrides the manifest;
+`--crop-margin-mm` overrides its margin for that run.
+
 Optional task keys include `extra`, `output`, `outputs`, `fetch_output`, and
 `fetch_outputs`. Each modality may define its own `postprocess` block to combine
 logical masks and apply morphological operations in a configurable order.

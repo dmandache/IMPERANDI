@@ -23,6 +23,7 @@ from collections.abc import Mapping
 from importlib.metadata import PackageNotFoundError, version as distribution_version
 import logging
 import multiprocessing as mp
+from numbers import Real
 import os
 import re
 import time
@@ -32,6 +33,8 @@ from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
+import nibabel as nib
+import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
@@ -68,6 +71,7 @@ from imperandi.utils.run_state import (
 DEFAULT_TIMEOUT = 15 * 60  # seconds – hard wall per study inside the pool
 DEFAULT_CHECKPOINT_EVERY_ROWS = 50
 DEFAULT_CHECKPOINT_EVERY_SEC = 5 * 60  # seconds
+DEFAULT_CROP_MARGIN_MM = 50.0
 
 LIVER_LESIONS_MIN_TOTALSEGMENTATOR_VERSION = "2.13.0"
 LIVER_LESIONS_TASKS = frozenset({"liver_lesions", "liver_lesions_mr"})
@@ -113,6 +117,8 @@ class TotalSegmentatorBackend:
 def _default_segmentation_config() -> Dict[str, Any]:
     return {
         "backend": "totalsegmentator",
+        "crop": False,
+        "crop_margin_mm": DEFAULT_CROP_MARGIN_MM,
         "modalities": {
             "CT": {
                 "tasks": [
@@ -302,6 +308,20 @@ def validate_segmentation_config(config: Mapping[str, Any]) -> Dict[str, Any]:
     if backend != "totalsegmentator":
         raise ValueError(f"Unsupported backend: {backend}")
 
+    crop = config.get("crop", False)
+    if type(crop) is not bool:
+        raise ValueError("segmentation.crop must be true or false.")
+    crop_margin_mm = config.get("crop_margin_mm", DEFAULT_CROP_MARGIN_MM)
+    if (
+        isinstance(crop_margin_mm, bool)
+        or not isinstance(crop_margin_mm, Real)
+        or not np.isfinite(crop_margin_mm)
+        or crop_margin_mm < 0
+    ):
+        raise ValueError(
+            "segmentation.crop_margin_mm must be finite and non-negative."
+        )
+
     raw_modalities = config.get("modalities")
     if not isinstance(raw_modalities, Mapping) or not raw_modalities:
         raise ValueError("segmentation.modalities must be a non-empty mapping.")
@@ -336,7 +356,12 @@ def validate_segmentation_config(config: Mapping[str, Any]) -> Dict[str, Any]:
                     f"segmentation.modalities.{raw_modality}."
                 )
 
-    return {"backend": backend, "modalities": modalities}
+    return {
+        "backend": backend,
+        "crop": crop,
+        "crop_margin_mm": float(crop_margin_mm),
+        "modalities": modalities,
+    }
 
 
 def resolve_segmentation_config_for_modality(
@@ -757,6 +782,8 @@ def segment_volume(
     *,
     verbose: bool = False,
     force: bool = False,
+    crop_margin_mm: float | None = None,
+    crop_mask_paths: List[Path] | None = None,
     backend: TotalSegmentatorBackend | None = None,
     resolved_output_to_fetch: Dict[str, str] | None = None,
 ) -> List[str]:
@@ -872,12 +899,31 @@ def segment_volume(
         if verbose:
             logger.info("Masks saved for %s", task_name)
 
+    if postprocess:
+        for name in operation_sources(operations):
+            output_to_fetch.setdefault(name, name)
+
+    # Crop the source image and raw segmentation masks before post-processing,
+    # so every logical and morphological operation runs on the reduced grid.
+    if crop_margin_mm is not None:
+        masks_to_crop = [
+            output_dir / _output_to_filename(fetch_name)
+            for fetch_name in dict.fromkeys(output_to_fetch.values())
+        ]
+        masks_to_crop.extend(crop_mask_paths or [])
+        if not crop_to_segmented_organs(
+            nifti_path,
+            masks_to_crop,
+            margin_mm=crop_margin_mm,
+        ):
+            warnings.append(
+                f"Crop skipped for {nifti_path}: all segmentation masks are empty"
+            )
+
     if not postprocess:
         _store_resolved_outputs()
         return warnings
 
-    for name in operation_sources(operations):
-        output_to_fetch.setdefault(name, name)
     if (
         force
         or ran_any_task
@@ -902,6 +948,132 @@ def segment_volume(
     return warnings
 
 
+def _crop_nifti_image(
+    image: nib.spatialimages.SpatialImage,
+    spatial_slices: Tuple[slice, slice, slice],
+) -> nib.spatialimages.SpatialImage:
+    """Crop an image while keeping its original world-coordinate system."""
+    full_slices = spatial_slices + (slice(None),) * (len(image.shape) - 3)
+    starts = np.asarray([axis.start or 0 for axis in spatial_slices], dtype=float)
+    voxel_translation = np.eye(4)
+    voxel_translation[:3, 3] = starts
+    cropped_affine = image.affine @ voxel_translation
+    cropped = image.__class__(
+        np.asanyarray(image.dataobj[full_slices]),
+        cropped_affine,
+        header=image.header.copy(),
+        extra=image.extra.copy(),
+    )
+
+    # Preserve both NIfTI transforms and their codes. They may intentionally
+    # differ, so translate each independently rather than copying one affine.
+    if hasattr(image, "get_qform") and hasattr(cropped, "set_qform"):
+        qform, qform_code = image.get_qform(coded=True)
+        if qform is not None:
+            cropped.set_qform(qform @ voxel_translation, int(qform_code))
+    if hasattr(image, "get_sform") and hasattr(cropped, "set_sform"):
+        sform, sform_code = image.get_sform(coded=True)
+        if sform is not None:
+            cropped.set_sform(sform @ voxel_translation, int(sform_code))
+    return cropped
+
+
+def crop_to_segmented_organs(
+    nifti_path: Path,
+    mask_paths: List[Path],
+    *,
+    margin_mm: float = DEFAULT_CROP_MARGIN_MM,
+) -> bool:
+    """Crop an image and its masks to their union bbox plus a physical margin.
+
+    Returns ``False`` when every mask is empty, and ``True`` when a non-empty
+    bounding box was found (including when it already spans the whole image).
+    """
+    if not np.isfinite(margin_mm) or margin_mm < 0:
+        raise ValueError("crop margin must be finite and non-negative")
+
+    image = nib.load(str(nifti_path), mmap=False)
+    if len(image.shape) < 3:
+        raise MaskGeometryError(
+            f"NIfTI image must have at least three dimensions; got {image.shape}."
+        )
+    spatial_shape = tuple(int(size) for size in image.shape[:3])
+    mask_images: List[Tuple[Path, nib.spatialimages.SpatialImage]] = []
+    lower = np.asarray(spatial_shape, dtype=int)
+    upper = np.zeros(3, dtype=int)
+    found_foreground = False
+
+    unique_mask_paths: List[Path] = []
+    seen_mask_paths: set[Path] = set()
+    for mask_path in mask_paths:
+        canonical_path = mask_path.resolve()
+        if canonical_path not in seen_mask_paths:
+            seen_mask_paths.add(canonical_path)
+            unique_mask_paths.append(mask_path)
+
+    for mask_path in unique_mask_paths:
+        mask = nib.load(str(mask_path), mmap=False)
+        if len(mask.shape) != 3:
+            raise MaskGeometryError(
+                f"Mask {mask_path} must be 3-D; got shape {mask.shape}."
+            )
+        if tuple(mask.shape) != spatial_shape or not np.allclose(
+            mask.affine, image.affine
+        ):
+            raise MaskGeometryError(
+                f"Mask {mask_path} does not share the image shape and affine."
+            )
+        mask_images.append((mask_path, mask))
+        foreground = np.asanyarray(mask.dataobj) > 0
+        if foreground.any():
+            found_foreground = True
+            for axis in range(3):
+                other_axes = tuple(index for index in range(3) if index != axis)
+                occupied = np.flatnonzero(foreground.any(axis=other_axes))
+                lower[axis] = min(lower[axis], int(occupied[0]))
+                upper[axis] = max(upper[axis], int(occupied[-1]) + 1)
+
+    if not found_foreground:
+        return False
+
+    voxel_sizes = nib.affines.voxel_sizes(image.affine)[:3]
+    if not np.all(np.isfinite(voxel_sizes) & (voxel_sizes > 0)):
+        raise MaskGeometryError("Cropping requires finite, positive voxel sizes.")
+    margin_voxels = np.ceil(float(margin_mm) / voxel_sizes).astype(int)
+    lower = np.maximum(0, lower - margin_voxels)
+    upper = np.minimum(np.asarray(spatial_shape), upper + margin_voxels)
+    spatial_slices = tuple(
+        slice(int(start), int(stop)) for start, stop in zip(lower, upper)
+    )
+
+    # Do not rewrite already-cropped files on resumed/idempotent runs.
+    if np.all(lower == 0) and np.all(upper == np.asarray(spatial_shape)):
+        return True
+
+    images_to_crop = [
+        (nifti_path, image),
+        *(
+            (path, mask)
+            for path, mask in mask_images
+            if path.resolve() != nifti_path.resolve()
+        ),
+    ]
+    temporary_paths: List[Tuple[Path, Path]] = []
+    try:
+        for path, source in images_to_crop:
+            suffix = ".nii.gz" if path.name.endswith(".nii.gz") else path.suffix
+            stem = path.name[: -len(suffix)] if suffix else path.name
+            temporary_path = path.with_name(f".{stem}.crop-tmp{suffix}")
+            nib.save(_crop_nifti_image(source, spatial_slices), temporary_path)
+            temporary_paths.append((temporary_path, path))
+        for temporary_path, path in temporary_paths:
+            temporary_path.replace(path)
+    finally:
+        for temporary_path, _ in temporary_paths:
+            temporary_path.unlink(missing_ok=True)
+    return True
+
+
 # -----------------------------------------------------------------------------
 # Worker wrapper (called in pool)
 # -----------------------------------------------------------------------------
@@ -914,6 +1086,7 @@ def process_single_volume(
     *,
     verbose: bool,
     force: bool,
+    crop_margin_mm: float | None = None,
     backend: TotalSegmentatorBackend | None = None,
 ) -> Tuple[int, str | None, str | None, str | None, Dict[str, str] | None]:
     """Return ``(idx, output_dir|None, error_msg|None, warning_msg|None, outputs|None)``."""
@@ -938,12 +1111,25 @@ def process_single_volume(
 
     try:
         resolved_output_to_fetch: Dict[str, str] = {}
+        crop_mask_paths: List[Path] = []
+        if crop_margin_mm is not None:
+            for column_name, value in row.items():
+                if (
+                    str(column_name).startswith("mask_")
+                    and isinstance(value, (str, Path))
+                    and str(value).strip()
+                ):
+                    existing_mask_path = Path(value)
+                    if existing_mask_path.exists():
+                        crop_mask_paths.append(existing_mask_path)
         warnings = segment_volume(
             nifti_path,
             nifti_path.parent,
             resolved_tasks_config,
             verbose=verbose,
             force=force,
+            crop_margin_mm=crop_margin_mm,
+            crop_mask_paths=crop_mask_paths,
             backend=backend,
             resolved_output_to_fetch=resolved_output_to_fetch,
         )
@@ -1075,6 +1261,34 @@ def add_segment_arguments(
         action="store_true",
         help="Re‑run even if output masks already exist",
     )
+    crop_group = parser.add_mutually_exclusive_group()
+    crop_group.add_argument(
+        "--crop",
+        dest="crop",
+        action="store_true",
+        default=None,
+        help=(
+            "Crop each NIfTI image and its masks in place to the segmented-organ "
+            "bounding box after backend segmentation and before post-processing."
+        ),
+    )
+    crop_group.add_argument(
+        "--no-crop",
+        dest="crop",
+        action="store_false",
+        help="Disable cropping even when enabled by the manifest.",
+    )
+    parser.add_argument(
+        "--crop_margin_mm",
+        "--crop-margin-mm",
+        type=float,
+        default=None,
+        metavar="MM",
+        help=(
+            "Override the manifest's in-bounds physical crop margin "
+            f"(default without a manifest setting: {DEFAULT_CROP_MARGIN_MM:g} mm)."
+        ),
+    )
     parser.add_argument(
         "--start_method",
         choices=["spawn", "fork", "forkserver"],
@@ -1145,12 +1359,43 @@ def normalize_segment_args(args: argparse.Namespace) -> argparse.Namespace:
     else:
         args.error_csv_path = str(Path(args.csv_path).parent / "seg_errors.csv")
 
+    crop_margin_mm = getattr(args, "crop_margin_mm", None)
+    if crop_margin_mm is not None and (
+        not np.isfinite(crop_margin_mm) or crop_margin_mm < 0
+    ):
+        raise ValueError("--crop-margin-mm must be finite and non-negative")
+    if crop_margin_mm is not None:
+        args.crop_margin_mm = float(crop_margin_mm)
+
     del args.csv_path_pos
     del args.csv_path_opt
     if hasattr(args, "csv_path_out_pos"):
         del args.csv_path_out_pos
 
     return args
+
+
+def _requested_crop_margin(
+    args: argparse.Namespace, segmentation_config: Mapping[str, Any]
+) -> float | None:
+    cli_crop = getattr(args, "crop", None)
+    crop_enabled = (
+        bool(segmentation_config.get("crop", False))
+        if cli_crop is None
+        else bool(cli_crop)
+    )
+    if not crop_enabled:
+        return None
+    cli_margin = getattr(args, "crop_margin_mm", None)
+    value = (
+        segmentation_config.get("crop_margin_mm", DEFAULT_CROP_MARGIN_MM)
+        if cli_margin is None
+        else cli_margin
+    )
+    margin = float(value)
+    if not np.isfinite(margin) or margin < 0:
+        raise ValueError("--crop-margin-mm must be finite and non-negative")
+    return margin
 
 
 def main(args: argparse.Namespace) -> None:
@@ -1163,6 +1408,7 @@ def main(args: argparse.Namespace) -> None:
         manifest_arg,
         base_path=Path(__file__).resolve().parents[1],
     )
+    crop_margin_mm = _requested_crop_margin(args, tasks_config)
     source_id_signature = source_id_resume_signature(args.csv_path)
     checkpoint_signature = {
         "segmentation": tasks_config,
@@ -1559,6 +1805,7 @@ def main(args: argparse.Namespace) -> None:
                         resolved_config,
                         verbose=args.verbose,
                         force=args.force,
+                        crop_margin_mm=crop_margin_mm,
                     )
                     futures[fut] = idx
                     submit_started_at[fut] = time.monotonic()
@@ -1732,6 +1979,7 @@ def main(args: argparse.Namespace) -> None:
                     resolved_config,
                     verbose=args.verbose,
                     force=args.force,
+                    crop_margin_mm=crop_margin_mm,
                 )
             )
             results_by_idx[idx] = result

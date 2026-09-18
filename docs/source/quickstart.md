@@ -59,12 +59,21 @@ manifest:
 imperandi segment \
   --csv_path ./project/tables/nifti_index.csv \
   --csv_path_out ./project/tables/nifti_index_segmented.csv \
-  --manifest generic
+  --manifest generic \
+  --crop --crop-margin-mm 50
 ```
 
 Mask columns are named `mask_<output>`, such as `mask_liver` and
 `mask_liver_tumor`. The built-in manifest dispatches CT rows to CT tasks and
 MR/MRI rows to the corresponding `_mr` tasks.
+
+With `--crop`, the source NIfTI and every output mask are cropped in place to
+one shared bounding box around all segmented foreground. The padding is 50 mm
+by default; change it with `--crop-margin-mm`. If all masks are empty, the files
+are left unchanged and the row receives a warning. Cropping occurs before mask
+post-processing, so logical and morphological operations run on the cropped
+grid. Crop bounds are clipped to the true image size and never introduce padded
+voxels.
 
 ## 5. Extract phase and radiomics
 

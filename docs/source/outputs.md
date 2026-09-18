@@ -36,6 +36,12 @@ those columns empty. Paths may be absolute depending on the supplied output
 directory, so moving a dataset can invalidate a table. If portability matters,
 move artifacts and rewrite paths as one controlled operation.
 
+When `segment --crop` is enabled, the files referenced by `nifti_path` and the
+row's populated `mask_*` columns are cropped in place to the same voxel bounds.
+Their affines are translated to preserve world coordinates; their CSV paths do
+not change. Cropping occurs before segmentation post-processing. Requested
+margins are clipped to the true image extent; no synthetic padding is added.
+
 ## Error tables
 
 Error CSVs contain the failed source row plus an error message. A command can

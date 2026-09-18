@@ -209,12 +209,21 @@ Run segmentation:
 ```bash
 imperandi segment \
   --csv_path /path/to/output/nifti_index.csv \
-  --csv_path_out /path/to/output/nifti_index_segmented.csv
+  --csv_path_out /path/to/output/nifti_index_segmented.csv \
+  --crop --crop-margin-mm 50
 ```
 
 Use `--manifest /path/to/manifest.yaml` to configure ordered logical and
 morphological mask operations under each modality's `postprocess.operations`.
 See the [mask operation examples](docs/source/manifests.md#sequential-mask-operations).
+`--crop` crops each source NIfTI and all of its output masks in place to their
+shared foreground bounding box. The in-bounds margin defaults to 50 mm and can
+be changed with `--crop-margin-mm`. Cropping runs before configured mask
+post-processing, so morphological operations use the reduced grid. Bounds are
+clipped to the true image size; cropping never pads with synthetic voxels.
+The same behavior can be set persistently with `segmentation.crop` and
+`segmentation.crop_margin_mm` in the manifest; CLI values take precedence, and
+`--no-crop` disables manifest-enabled cropping for one run.
 
 Curate contrast phase:
 

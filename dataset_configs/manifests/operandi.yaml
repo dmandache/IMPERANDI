@@ -213,6 +213,8 @@ cleaning:
 # MR. Backend kwargs under extra are passed through to TotalSegmentator.
 segmentation:
   backend: totalsegmentator
+  crop: false
+  crop_margin_mm: 50.0
   modalities:
     CT:
       tasks:
