@@ -1181,6 +1181,8 @@ def test_filter_step_warns_and_skips_when_required_columns_are_missing(
     df = pd.DataFrame(
         {
             "patient_key": ["p1", "p2"],
+            "study_id": ["s1", "s2"],
+            "series_id": ["sr1", "sr2"],
             "Modality": ["CT", "MR"],
         }
     )
