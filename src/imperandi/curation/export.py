@@ -26,7 +26,7 @@ def add_selected_csv_argument(parser) -> None:
         help=(
             "Save selected_long (best series per exam) to this CSV and "
             "selected_wide QC to <stem>_qc.csv beside it. "
-            "Default: <input_stem>_selected.csv beside the input CSV."
+            "Default: <input_stem>_curated.csv beside the input CSV."
         ),
     )
 
@@ -39,12 +39,12 @@ def selected_qc_path(path: Path) -> Path:
 def selected_output_path(
     configured, output_path, *, input_path=None, protected_paths=()
 ) -> Path | None:
-    """Default to <input_stem>_selected.csv and reject output collisions."""
+    """Default to <input_stem>_curated.csv and reject output collisions."""
     if configured is None:
         if input_path is None:
             return None
         source = Path(input_path).expanduser()
-        path = source.with_name(f"{source.stem}_selected.csv")
+        path = source.with_name(f"{source.stem}_curated.csv")
     else:
         path = Path(configured).expanduser()
     if path.suffix.lower() != ".csv":

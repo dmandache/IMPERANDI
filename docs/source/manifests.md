@@ -191,9 +191,9 @@ The metadata engines also retain their unmodified result in `rule_phase`,
 
 `clean` saves all curated rows and `phase` saves all input rows with resolved
 phases. Both also save the best-series dataframe and its QC table automatically
-beside the input CSV as `<input_stem>_selected.csv` and
-`<input_stem>_selected_qc.csv`. For example, `cohort.csv` produces
-`cohort_selected.csv` and `cohort_selected_qc.csv`, even when the main output
+beside the input CSV as `<input_stem>_curated.csv` and
+`<input_stem>_curated_qc.csv`. For example, `cohort.csv` produces
+`cohort_curated.csv` and `cohort_curated_qc.csv`, even when the main output
 has a different name or directory. For multiple cleaning inputs, the first
 input supplies the default directory and stem. `ingest` uses its intermediate
 `dicom_index.csv` as the cleaning input.

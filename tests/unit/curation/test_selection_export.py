@@ -163,8 +163,8 @@ def test_default_export_paths_follow_input_even_with_different_main_output(tmp_p
     source = tmp_path / "cohort.v2.csv"
     main = tmp_path / "results" / "phase.csv"
     selected = selected_output_path(None, main, input_path=source)
-    assert selected == tmp_path / "cohort.v2_selected.csv"
-    assert selected_qc_path(selected) == tmp_path / "cohort.v2_selected_qc.csv"
+    assert selected == tmp_path / "cohort.v2_curated.csv"
+    assert selected_qc_path(selected) == tmp_path / "cohort.v2_curated_qc.csv"
     custom = tmp_path / "custom.csv"
     assert selected_output_path(custom, main, input_path=source) == custom
     with pytest.raises(ValueError, match="must differ"):
@@ -173,7 +173,7 @@ def test_default_export_paths_follow_input_even_with_different_main_output(tmp_p
 
 def test_clean_cli_exports_selected_and_loads_custom_exam_columns(tmp_path):
     source, main, selected = [
-        tmp_path / name for name in ("in.csv", "out.csv", "in_selected.csv")
+        tmp_path / name for name in ("in.csv", "out.csv", "in_curated.csv")
     ]
     cohort().to_csv(source, index=False)
     manifest = tmp_path / "site.yaml"
@@ -210,8 +210,8 @@ def test_missing_exam_identifiers_produce_empty_default_exports(tmp_path, caplog
         source, index=False
     )
     assert cli.main(["phase", str(source)]) == 0
-    assert pd.read_csv(tmp_path / "volumes_selected.csv").empty
-    assert pd.read_csv(tmp_path / "volumes_selected_qc.csv").empty
+    assert pd.read_csv(tmp_path / "volumes_curated.csv").empty
+    assert pd.read_csv(tmp_path / "volumes_curated_qc.csv").empty
     assert "No exam grouping columns" in caplog.text
 
 
@@ -238,7 +238,7 @@ def test_phase_cli_can_export_on_finished_resume_without_prediction(
     assert calls == [0, 1, 2]
     assert not selected.exists()
     assert not selected_qc_path(selected).exists()
-    default_selected = tmp_path / "in_selected.csv"
+    default_selected = tmp_path / "in_curated.csv"
     assert set(pd.read_csv(default_selected)["volume_id"]) == {"v0", "v2"}
     assert pd.read_csv(selected_qc_path(default_selected))["CT_ARTERIAL"].notna().all()
     assert cli.main([*args, "--selected_csv_path", str(selected)]) == 0

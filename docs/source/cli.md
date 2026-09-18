@@ -99,8 +99,8 @@ TotalSegmentator when prediction is a later fallback. Prediction requires
 `phase` and provenance columns. Failures default to `phase_errors.csv`.
 
 Automatically saves `selected_long`, the best eligible series per exam, to
-`<input_stem>_selected.csv` beside the input CSV, and `selected_wide` to
-`<input_stem>_selected_qc.csv` for QC. Override with
+`<input_stem>_curated.csv` beside the input CSV, and `selected_wide` to
+`<input_stem>_curated_qc.csv` for QC. Override with
 `--selected_csv_path selected.csv` (QC then goes to `selected_qc.csv`).
 The full output remains intact. Exam identification is
 configured by `phase_curation.exam_group_columns` in the manifest. `clean` and
