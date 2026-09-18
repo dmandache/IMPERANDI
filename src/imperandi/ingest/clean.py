@@ -691,7 +691,7 @@ def split_multivolume_series_by_repeated_slices(
 
         if slice_counts.nunique() > 1:
             n_irregular_groups += 1
-            logger.info(
+            logger.debug(
                 "Irregular repeated-slice stack detected: %s estimated volumes, "
                 "%s unique slices, repetition_counts=%s, rows=%s, summary=%s",
                 n_volumes,
@@ -701,7 +701,7 @@ def split_multivolume_series_by_repeated_slices(
                 summary,
             )
         else:
-            logger.info(
+            logger.debug(
                 "Multivolume series detected: %s volumes, %s unique slices, "
                 "%s total files, summary=%s",
                 n_volumes,
@@ -732,7 +732,7 @@ def split_multivolume_series_by_repeated_slices(
         max_repeat_index = int(g["_repeat_index"].max())
         detected_volume_indices = sorted(g["_repeat_index"].dropna().unique().tolist())
         if max_repeat_index + 1 != n_volumes:
-            logger.info(
+            logger.debug(
                 "Repeat index count differs from modal volume count: "
                 "modal_n_volumes=%s, actual_indices=%s, summary=%s",
                 n_volumes,
@@ -759,9 +759,8 @@ def split_multivolume_series_by_repeated_slices(
         )
 
     logger.info(
-        "Repeated-slice multivolume split completed: evaluated_groups=%s, "
-        "split_groups=%s, irregular_groups=%s, skipped_insufficient_slices=%s, "
-        "skipped_no_repetition=%s",
+        "Multivolume split: %s series checked; %s split (%s irregular); "
+        "%s skipped (insufficient slices), %s skipped (no repetition)",
         n_groups,
         n_split_groups,
         n_irregular_groups,
@@ -837,6 +836,10 @@ def correct_volume_ids(
     #     )
 
     updated_ids = {}
+    n_candidate_groups = 0
+    n_merged_groups = 0
+    n_inconsistent_groups = 0
+    n_skipped_positions = 0
 
     grouped = df.groupby(group_cols, dropna=False) if group_cols else [(None, df)]
 
@@ -844,6 +847,7 @@ def correct_volume_ids(
         volume_ids = group_df["volume_id"].dropna().unique()
         if len(volume_ids) <= 1:
             continue
+        n_candidate_groups += 1
 
         debug_cols = [
             c
@@ -917,6 +921,7 @@ def correct_volume_ids(
                     logger.debug("SliceLocation z extraction failed: %s", exc)
 
         if z_positions is None or len(z_positions) < 2:
+            n_skipped_positions += 1
             logger.debug(
                 "Skipping volume ID correction group: insufficient slice positions "
                 "(count=%s)",
@@ -941,7 +946,8 @@ def correct_volume_ids(
         )
 
         if consistent_spacing:
-            logger.info(
+            n_merged_groups += 1
+            logger.debug(
                 "Merging volume fragments with consistent slice spacing: "
                 "volume_count=%s, rows=%s, summary=%s",
                 len(volume_ids),
@@ -960,7 +966,8 @@ def correct_volume_ids(
             for vol_id in volume_ids:
                 updated_ids[vol_id] = canonical_id
         else:
-            logger.info(
+            n_inconsistent_groups += 1
+            logger.debug(
                 "Keeping volumes separate due to inconsistent slice spacing: "
                 "volume_count=%s, rows=%s, summary=%s",
                 len(volume_ids),
@@ -973,6 +980,14 @@ def correct_volume_ids(
             )
 
     df["volume_id"] = df["volume_id"].apply(lambda vid: updated_ids.get(vid, vid))
+    logger.info(
+        "Volume ID correction: %s candidate groups; %s merged, "
+        "%s kept separate (inconsistent spacing), %s skipped (insufficient positions)",
+        n_candidate_groups,
+        n_merged_groups,
+        n_inconsistent_groups,
+        n_skipped_positions,
+    )
     return df
 
 
