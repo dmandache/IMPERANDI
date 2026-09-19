@@ -1465,6 +1465,8 @@ def main(args: argparse.Namespace) -> None:
         requested_workers=args.num_workers,
         start_method_hint=args.start_method,
         target_task_mem_mb=6000,  # tune (TotalSegmentator can be heavy)
+        enable_recycling=True,
+        recycle_every=100,
         need_hard_timeouts=True,
     )
 
