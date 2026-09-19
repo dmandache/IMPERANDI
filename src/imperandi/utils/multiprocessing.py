@@ -162,7 +162,7 @@ def decide_multiprocessing_strategy(
     max_workers_cap: int = 32,
     enable_recycling: bool = True,
     recycle_every: int = 25,
-    max_in_flight_factor: int = 2,
+    max_in_flight_factor: int = 1,
     need_hard_timeouts: bool = True,
 ) -> MPStrategy:
     """
