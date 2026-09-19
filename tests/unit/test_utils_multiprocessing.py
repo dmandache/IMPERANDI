@@ -120,8 +120,28 @@ def test_decide_strategy_multi_gpu_clamps_workers_to_gpu_count(monkeypatch):
 
     assert strategy.mode == "process_pool"
     assert strategy.max_workers == 2
-    assert strategy.max_in_flight == 4
+    assert strategy.max_in_flight == 2
+    assert strategy.reasons["max_in_flight_reason"].startswith("GPU workload")
     assert strategy.start_method == "spawn"
+
+
+def test_decide_strategy_gpu_respects_explicit_max_in_flight(monkeypatch):
+    monkeypatch.setattr(mp_utils, "_slurm_cpus", lambda: 10)
+    monkeypatch.setattr(mp_utils, "_ram_total_mb", lambda: 80000)
+    monkeypatch.setattr(mp_utils, "_visible_cuda_devices_from_env", lambda: 2)
+    monkeypatch.setattr(mp_utils, "_torch_gpu_count", lambda: None)
+    monkeypatch.setattr(mp_utils, "_nvidia_smi_gpu_count", lambda: None)
+
+    strategy = mp_utils.decide_multiprocessing_strategy(
+        prefer_gpu=True,
+        requested_workers=2,
+        requested_max_in_flight=4,
+    )
+
+    assert strategy.max_workers == 2
+    assert strategy.max_in_flight == 4
+    assert strategy.reasons["max_in_flight_reason"] == "explicit user override"
+    assert strategy.recycle_every == 0
 
 
 def test_decide_strategy_cpu_only_respects_hint_and_serial_case(monkeypatch):

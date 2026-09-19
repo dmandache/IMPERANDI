@@ -1573,8 +1573,8 @@ def test_main_enables_gpu_worker_pinning_for_multi_gpu(tmp_path, monkeypatch):
 
     segment_module.main(args)
 
-    assert DummyPool.last_initializer is segment_module._worker_gpu_initializer
-    assert DummyPool.last_initargs == (["4", "5"],)
+    assert DummyPool.last_initializer is segment_module._worker_initializer
+    assert DummyPool.last_initargs[0] == ["4", "5"]
 
 
 def test_main_bounds_in_flight_submissions(tmp_path, monkeypatch):
@@ -1655,7 +1655,9 @@ def test_main_bounds_in_flight_submissions(tmp_path, monkeypatch):
     assert DummyPool.last.max_outstanding <= 2
 
 
-def test_main_enforces_wall_timeout_per_row(tmp_path, monkeypatch):
+def test_main_enforces_execution_timeout_per_running_row(
+    tmp_path, monkeypatch, caplog
+):
     nifti = tmp_path / "vol.nii.gz"
     nifti.write_text("nifti")
     csv_path = tmp_path / "nifti_index.csv"
@@ -1676,6 +1678,11 @@ def test_main_enforces_wall_timeout_per_row(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(segment_module, "tqdm", passthrough_tqdm)
     patch_strategy(monkeypatch, mode="process_pool", max_workers=2, max_in_flight=1)
+    monkeypatch.setattr(
+        segment_module.mp,
+        "get_context",
+        lambda _method: types.SimpleNamespace(Queue=segment_module.Queue),
+    )
 
     class HangingFuture:
         def result(self, timeout=None):
@@ -1687,10 +1694,27 @@ def test_main_enforces_wall_timeout_per_row(tmp_path, monkeypatch):
     class DummyPool:
         shutdown_calls = []
 
-        def __init__(self, max_workers=None, mp_context=None):
+        def __init__(
+            self,
+            max_workers=None,
+            mp_context=None,
+            initializer=None,
+            initargs=(),
+        ):
             self._processes = None
+            self.event_queue = initargs[1]
+            self.generation = initargs[2]
 
         def submit(self, fn, *args, **kwargs):
+            self.event_queue.put(
+                segment_module.WorkerEvent(
+                    row_idx=args[0],
+                    pid=1234,
+                    event="started",
+                    timestamp=segment_module.time.monotonic(),
+                    generation=self.generation,
+                )
+            )
             return HangingFuture()
 
         def shutdown(self, wait=False, cancel_futures=True):
@@ -1724,6 +1748,253 @@ def test_main_enforces_wall_timeout_per_row(tmp_path, monkeypatch):
     err_df = pd.read_csv(args.error_csv_path)
     assert "timeout after 1s" in err_df.loc[0, "error_message"]
     assert (False, True) in DummyPool.shutdown_calls
+    assert "Forced worker-pool restart after execution timeout" in caplog.text
+
+
+def test_queued_future_does_not_consume_execution_timeout(
+    tmp_path, monkeypatch, caplog
+):
+    paths = []
+    for idx in range(3):
+        path = tmp_path / f"vol_{idx}.nii.gz"
+        path.write_text("nifti")
+        paths.append(str(path))
+    csv_path = tmp_path / "nifti_index.csv"
+    pd.DataFrame(
+        [{"nifti_path": path, "Modality": "CT"} for path in paths]
+    ).to_csv(csv_path, index=False)
+    config_path = tmp_path / "manifest.yaml"
+    write_segmentation_manifest(
+        config_path,
+        {
+            "backend": "totalsegmentator",
+            "tasks": [{"task": "total", "output": "liver.nii.gz"}],
+        },
+    )
+
+    monkeypatch.setattr(
+        segment_module, "prefetch_totalsegmentator_models", lambda *a, **k: None
+    )
+    monkeypatch.setattr(segment_module, "tqdm", passthrough_tqdm)
+    patch_strategy(monkeypatch, mode="process_pool", max_workers=2, max_in_flight=3)
+    monkeypatch.setattr(
+        segment_module.mp,
+        "get_context",
+        lambda _method: types.SimpleNamespace(Queue=segment_module.Queue),
+    )
+
+    clock = {"now": 0.0}
+
+    def fake_monotonic():
+        return clock["now"]
+
+    def fake_sleep(seconds):
+        clock["now"] += 1.0
+
+    class ScriptedFuture:
+        def __init__(self, idx, pool):
+            self.idx = idx
+            self.pool = pool
+
+        def result(self, timeout=None):
+            if self.idx < 2:
+                if clock["now"] < 4.0:
+                    raise segment_module.TimeoutError()
+                if self.idx == 0 and not self.pool.row_two_started:
+                    self.pool.row_two_started = True
+                    self.pool.event_queue.put(
+                        segment_module.WorkerEvent(
+                            row_idx=2,
+                            pid=2222,
+                            event="started",
+                            timestamp=clock["now"],
+                            generation=self.pool.generation,
+                        )
+                    )
+            elif not self.pool.row_two_started or clock["now"] < 8.0:
+                raise segment_module.TimeoutError()
+            out_dir = Path(paths[self.idx]).parent
+            (out_dir / "liver.nii.gz").write_text("mask")
+            return self.idx, str(out_dir), None, None
+
+        def cancel(self):
+            return None
+
+    class DummyPool:
+        def __init__(
+            self,
+            max_workers=None,
+            mp_context=None,
+            initializer=None,
+            initargs=(),
+        ):
+            self._processes = None
+            self.event_queue = initargs[1]
+            self.generation = initargs[2]
+            self.row_two_started = False
+
+        def submit(self, fn, *args, **kwargs):
+            idx = args[0]
+            if idx < 2:
+                self.event_queue.put(
+                    segment_module.WorkerEvent(
+                        row_idx=idx,
+                        pid=2000 + idx,
+                        event="started",
+                        timestamp=clock["now"],
+                        generation=self.generation,
+                    )
+                )
+            return ScriptedFuture(idx, self)
+
+        def shutdown(self, wait=False, cancel_futures=True):
+            return None
+
+    monkeypatch.setattr(segment_module, "ProcessPoolExecutor", DummyPool)
+    monkeypatch.setattr(segment_module.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(segment_module.time, "sleep", fake_sleep)
+    caplog.set_level(logging.DEBUG)
+
+    args = argparse.Namespace(
+        csv_path=str(csv_path),
+        csv_path_out=str(tmp_path / "segmented.csv"),
+        error_csv_path=str(tmp_path / "errors.csv"),
+        manifest=str(config_path),
+        num_workers=2,
+        verbose=False,
+        debug=True,
+        force=False,
+        start_method="spawn",
+        timeout_sec=5,
+    )
+
+    segment_module.main(args)
+
+    out = pd.read_csv(args.csv_path_out)
+    assert out["mask_liver"].notna().all()
+    assert not Path(args.error_csv_path).exists()
+    assert "worker_started row=2" in caplog.text
+    assert "queue_wait=4.000s" in caplog.text
+    assert "execution timeout" not in caplog.text
+
+
+def test_interrupted_requeued_row_advances_progress_only_once(
+    tmp_path, monkeypatch, caplog
+):
+    paths = []
+    for idx in range(2):
+        path = tmp_path / f"vol_{idx}.nii.gz"
+        path.write_text("nifti")
+        paths.append(str(path))
+    csv_path = tmp_path / "nifti_index.csv"
+    pd.DataFrame(
+        [{"nifti_path": path, "Modality": "CT"} for path in paths]
+    ).to_csv(csv_path, index=False)
+    config_path = tmp_path / "manifest.yaml"
+    write_segmentation_manifest(
+        config_path,
+        {"tasks": [{"task": "total", "output": "liver.nii.gz"}]},
+    )
+
+    monkeypatch.setattr(
+        segment_module, "prefetch_totalsegmentator_models", lambda *a, **k: None
+    )
+    patch_strategy(monkeypatch, mode="process_pool", max_workers=2, max_in_flight=2)
+    monkeypatch.setattr(
+        segment_module.mp,
+        "get_context",
+        lambda _method: types.SimpleNamespace(Queue=segment_module.Queue),
+    )
+
+    class TrackingBar(DummyTqdmBar):
+        last = None
+
+        def __init__(self, total=None, **kwargs):
+            super().__init__(total=total, **kwargs)
+            self.updates = 0
+            TrackingBar.last = self
+
+        def update(self, n=1):
+            self.updates += n
+
+    monkeypatch.setattr(
+        segment_module,
+        "tqdm",
+        lambda it=None, **kwargs: TrackingBar(**kwargs) if it is None else it,
+    )
+
+    clock = {"now": 0.0}
+    monkeypatch.setattr(segment_module.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(
+        segment_module.time,
+        "sleep",
+        lambda _seconds: clock.update(now=clock["now"] + 1.0),
+    )
+
+    class ScriptedFuture:
+        def __init__(self, idx, generation):
+            self.idx = idx
+            self.generation = generation
+
+        def result(self, timeout=None):
+            if self.generation == 1:
+                raise segment_module.TimeoutError()
+            out_dir = Path(paths[self.idx]).parent
+            (out_dir / "liver.nii.gz").write_text("mask")
+            return self.idx, str(out_dir), None, None
+
+        def cancel(self):
+            return None
+
+    class DummyPool:
+        def __init__(
+            self,
+            max_workers=None,
+            mp_context=None,
+            initializer=None,
+            initargs=(),
+        ):
+            self._processes = None
+            self.event_queue = initargs[1]
+            self.generation = initargs[2]
+
+        def submit(self, fn, *args, **kwargs):
+            idx = args[0]
+            start = clock["now"] + (1.0 if self.generation == 1 and idx == 1 else 0.0)
+            self.event_queue.put(
+                segment_module.WorkerEvent(
+                    row_idx=idx,
+                    pid=3000 + idx,
+                    event="started",
+                    timestamp=start,
+                    generation=self.generation,
+                )
+            )
+            return ScriptedFuture(idx, self.generation)
+
+        def shutdown(self, wait=False, cancel_futures=True):
+            return None
+
+    monkeypatch.setattr(segment_module, "ProcessPoolExecutor", DummyPool)
+    caplog.set_level(logging.WARNING)
+    args = argparse.Namespace(
+        csv_path=str(csv_path),
+        csv_path_out=str(tmp_path / "segmented.csv"),
+        error_csv_path=str(tmp_path / "errors.csv"),
+        manifest=str(config_path),
+        num_workers=2,
+        verbose=False,
+        force=False,
+        start_method="spawn",
+        timeout_sec=2,
+    )
+
+    segment_module.main(args)
+
+    assert TrackingBar.last is not None
+    assert TrackingBar.last.updates == 2
+    assert "interrupted running rows: [1]" in caplog.text
+    assert "Requeued rows after forced restart: [1]" in caplog.text
 
 
 def test_main_force_shutdown_terminates_and_joins_workers(tmp_path, monkeypatch):
@@ -1838,7 +2109,7 @@ def test_main_force_shutdown_terminates_and_joins_workers(tmp_path, monkeypatch)
     assert (True, True) in DummyPool.shutdown_calls
 
 
-def test_main_recycles_executor_by_recycle_every(tmp_path, monkeypatch):
+def test_main_recycles_executor_by_recycle_every(tmp_path, monkeypatch, caplog):
     paths = []
     for i in range(3):
         nifti = tmp_path / f"vol_{i}.nii.gz"
@@ -1913,6 +2184,8 @@ def test_main_recycles_executor_by_recycle_every(tmp_path, monkeypatch):
 
     segment_module.main(args)
     assert DummyPool.init_count == 3
+    assert "Scheduled worker-pool recycle" in caplog.text
+    assert "Forced worker-pool restart" not in caplog.text
 
 
 def test_main_subprocess_mode_currently_degrades_to_serial(tmp_path, monkeypatch):

@@ -160,9 +160,10 @@ def decide_multiprocessing_strategy(
     target_task_mem_mb: int = 2500,
     reserve_mem_frac: float = 0.30,
     max_workers_cap: int = 32,
-    enable_recycling: bool = True,
-    recycle_every: int = 25,
+    enable_recycling: bool = False,
+    recycle_every: int = 0,
     max_in_flight_factor: int = 1,
+    requested_max_in_flight: Optional[int] = None,
     need_hard_timeouts: bool = True,
 ) -> MPStrategy:
     """
@@ -188,11 +189,15 @@ def decide_multiprocessing_strategy(
     reserve_mem_frac:
         Fraction of total RAM to reserve for OS / cache / peak buffers.
     enable_recycling:
-        If True, recommend recycling executor every N tasks to mitigate leaks/fragmentation.
+        If True, recycle the executor every ``recycle_every`` completed tasks.
     recycle_every:
         Suggested recycle period (tasks).
     max_in_flight_factor:
-        Bound pending futures to max_workers * factor.
+        CPU-only prefetch bound, as ``max_workers * factor``.
+    requested_max_in_flight:
+        Explicit pending-future bound. GPU defaults otherwise stay capped to the
+        number of active workers so queued work cannot be confused with running
+        work when enforcing timeouts.
     need_hard_timeouts:
         If True, we consider "subprocess_per_case" for real kill-on-timeout.
 
@@ -265,7 +270,9 @@ def decide_multiprocessing_strategy(
     if requested_workers is None:
         max_workers = cap
         reasons["requested_workers"] = None
-        reasons["workers_reason"] = "auto"
+        reasons["workers_reason"] = (
+            f"{gpu_count} visible GPU(s)" if use_gpu else "automatic CPU/RAM cap"
+        )
     else:
         max_workers = max(1, min(int(requested_workers), cap))
         reasons["requested_workers"] = requested_workers
@@ -299,18 +306,40 @@ def decide_multiprocessing_strategy(
             start_method = "spawn"
         reasons["start_method_reason"] = "non-CUDA -> respect hint if valid"
 
-    # Executor recycling (helps leaks/fragmentation, especially after long runs)
-    if enable_recycling and mode == "process_pool":
+    # Scheduled recycling is an explicit stability control, not a RAM-derived
+    # performance setting. GPU pools stay alive by default to avoid repeatedly
+    # paying CUDA/model startup costs.
+    if enable_recycling and mode == "process_pool" and int(recycle_every) > 0:
         rec = max(1, int(recycle_every))
+        reasons["recycle_reason"] = "explicit scheduled worker-pool recycling"
     else:
         rec = 0
+        reasons["recycle_reason"] = (
+            "disabled by default for GPU segmentation; no observed memory-pressure evidence"
+            if use_gpu
+            else "scheduled recycling disabled"
+        )
 
-    # In-flight futures bound
-    max_in_flight = max(1, int(max_workers) * max(1, int(max_in_flight_factor)))
+    # In-flight futures bound. Long GPU jobs gain little from executor-side
+    # queuing, while CPU pipelines may retain modest prefetching.
+    if requested_max_in_flight is not None:
+        max_in_flight = max(1, int(requested_max_in_flight))
+        reasons["max_in_flight_reason"] = "explicit user override"
+    elif use_gpu:
+        max_in_flight = max_workers
+        reasons["max_in_flight_reason"] = (
+            "GPU workload: capped to active workers to avoid queued timeout budget"
+        )
+    else:
+        max_in_flight = max(
+            1, int(max_workers) * max(1, int(max_in_flight_factor))
+        )
+        reasons["max_in_flight_reason"] = "CPU workload: bounded prefetch enabled"
 
     # If mode is serial/subprocess_per_case, these are mostly irrelevant but keep consistent.
     if mode in {"serial", "subprocess_per_case"}:
         max_in_flight = 1
+        reasons["max_in_flight_reason"] = "single-worker execution"
         if mode == "serial":
             max_workers = 1
 

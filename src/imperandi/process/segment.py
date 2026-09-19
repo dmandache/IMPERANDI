@@ -20,12 +20,16 @@ from ast import literal_eval
 from collections import deque
 import copy
 from collections.abc import Mapping
+from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version as distribution_version
 import logging
 import multiprocessing as mp
 from numbers import Real
 import os
+from queue import Empty, Queue
 import re
+import sys
+import threading
 import time
 import traceback
 from concurrent.futures import ProcessPoolExecutor, TimeoutError
@@ -68,7 +72,7 @@ from imperandi.utils.run_state import (
 # Path where TotalSegmentator models are cached (edit as needed)
 # os.environ.setdefault("TOTALSEG_HOME_DIR", str(Path.home() / ".totalsegmentator_v2"))
 
-DEFAULT_TIMEOUT = 15 * 60  # seconds – hard wall per study inside the pool
+DEFAULT_TIMEOUT = 30 * 60  # seconds - actual worker execution time per study
 DEFAULT_CHECKPOINT_EVERY_ROWS = 50
 DEFAULT_CHECKPOINT_EVERY_SEC = 5 * 60  # seconds
 DEFAULT_CROP_MARGIN_MM = 50.0
@@ -77,6 +81,22 @@ LIVER_LESIONS_MIN_TOTALSEGMENTATOR_VERSION = "2.13.0"
 LIVER_LESIONS_TASKS = frozenset({"liver_lesions", "liver_lesions_mr"})
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class WorkerEvent:
+    """Lifecycle signal emitted by a pool worker for one submitted row."""
+
+    row_idx: int
+    pid: int
+    event: str
+    timestamp: float
+    generation: int
+    gpu: str | None = None
+
+
+_WORKER_EVENT_QUEUE: Any | None = None
+_WORKER_GENERATION = 0
 
 # -----------------------------------------------------------------------------
 # Segmentation of one 3‑D volume
@@ -786,8 +806,15 @@ def segment_volume(
     crop_mask_paths: List[Path] | None = None,
     backend: TotalSegmentatorBackend | None = None,
     resolved_output_to_fetch: Dict[str, str] | None = None,
+    debug: bool = False,
+    row_idx: int | None = None,
+    worker_generation: int = 0,
 ) -> List[str]:
     """Run segmentation tasks and optional post‐processing."""
+    volume_started_at = time.monotonic()
+    backend_total_sec = 0.0
+    postprocess_sec = 0.0
+    io_sec = 0.0
     warnings: List[str] = []
     ran_any_task = False
     tasks = tasks_config.get("tasks", [])
@@ -833,23 +860,50 @@ def segment_volume(
         # Keep a conservative default unless users explicitly override it.
         extra.setdefault("nr_thr_saving", 2)
 
+        io_started_at = time.monotonic()
         before_snapshot = _snapshot_nifti_files(output_dir) if not task_outputs else {}
         expected_paths = [
             output_dir / _output_to_filename(task_fetch_outputs[output_name])
             for output_name in task_outputs
         ]
+        io_sec += time.monotonic() - io_started_at
         if expected_paths and all(dst.exists() for dst in expected_paths) and not force:
             if verbose:
                 logger.info("Skip %s – files exist", task_name)
             continue
 
         try:
+            if debug:
+                logger.debug(
+                    "row=%s task=%s start pid=%d generation=%d options=%s",
+                    row_idx,
+                    task_name,
+                    os.getpid(),
+                    worker_generation,
+                    {
+                        key: extra[key]
+                        for key in ("roi_subset_robust", "nr_thr_resamp")
+                        if key in extra
+                    },
+                )
+            backend_started_at = time.monotonic()
             backend.run(
                 input_path=nifti_path,
                 output_dir=output_dir,
                 task=task_name,
                 **extra,
             )
+            task_duration = time.monotonic() - backend_started_at
+            backend_total_sec += task_duration
+            if debug:
+                logger.debug(
+                    "row=%s task=%s done duration=%.3fs pid=%d generation=%d",
+                    row_idx,
+                    task_name,
+                    task_duration,
+                    os.getpid(),
+                    worker_generation,
+                )
             ran_any_task = True
         except Exception as exc:
             logger.error(
@@ -857,6 +911,7 @@ def segment_volume(
             )
             raise
 
+        io_started_at = time.monotonic()
         if task_outputs:
             missing = [p for p in expected_paths if not p.exists()]
             if missing:
@@ -898,6 +953,7 @@ def segment_volume(
                 )
         if verbose:
             logger.info("Masks saved for %s", task_name)
+        io_sec += time.monotonic() - io_started_at
 
     if postprocess:
         for name in operation_sources(operations):
@@ -906,6 +962,7 @@ def segment_volume(
     # Crop the source image and raw segmentation masks before post-processing,
     # so every logical and morphological operation runs on the reduced grid.
     if crop_margin_mm is not None:
+        crop_started_at = time.monotonic()
         masks_to_crop = [
             output_dir / _output_to_filename(fetch_name)
             for fetch_name in dict.fromkeys(output_to_fetch.values())
@@ -919,9 +976,19 @@ def segment_volume(
             warnings.append(
                 f"Crop skipped for {nifti_path}: all segmentation masks are empty"
             )
+        io_sec += time.monotonic() - crop_started_at
 
     if not postprocess:
         _store_resolved_outputs()
+        if debug:
+            logger.debug(
+                "row=%s timing total=%.3fs backend.total=%.3fs postprocess=%.3fs io=%.3fs",
+                row_idx,
+                time.monotonic() - volume_started_at,
+                backend_total_sec,
+                postprocess_sec,
+                io_sec,
+            )
         return warnings
 
     if (
@@ -930,7 +997,9 @@ def segment_volume(
         or not operations_are_current(output_dir, operations, output_to_fetch)
     ):
         try:
+            postprocess_started_at = time.monotonic()
             apply_operations(output_dir, operations, output_to_fetch)
+            postprocess_sec += time.monotonic() - postprocess_started_at
         except MaskGeometryError as exc:
             if postprocess.get("on_failure", "fail") == "fail":
                 raise
@@ -945,6 +1014,15 @@ def segment_volume(
     elif verbose:
         logger.info("Skip postprocess – completed operations and masks are unchanged")
     _store_resolved_outputs()
+    if debug:
+        logger.debug(
+            "row=%s timing total=%.3fs backend.total=%.3fs postprocess=%.3fs io=%.3fs",
+            row_idx,
+            time.monotonic() - volume_started_at,
+            backend_total_sec,
+            postprocess_sec,
+            io_sec,
+        )
     return warnings
 
 
@@ -1079,6 +1157,76 @@ def crop_to_segmented_organs(
 # -----------------------------------------------------------------------------
 
 
+def _resource_snapshot(*, include_cuda: bool = True) -> Dict[str, float]:
+    """Return lightweight process/system memory diagnostics when available."""
+    snapshot: Dict[str, float] = {}
+    try:
+        import psutil  # type: ignore
+
+        process = psutil.Process(os.getpid())
+        snapshot["rss_mb"] = process.memory_info().rss / (1024 * 1024)
+        snapshot["available_ram_mb"] = psutil.virtual_memory().available / (1024 * 1024)
+    except (ImportError, OSError, RuntimeError):
+        pass
+
+    # Never import torch solely for diagnostics: importing it can initialize
+    # substantial runtime state. Only inspect CUDA if the application already
+    # loaded torch and CUDA is already initialized.
+    torch_module = sys.modules.get("torch")
+    if include_cuda and torch_module is not None:
+        try:
+            cuda = torch_module.cuda
+            if cuda.is_initialized():
+                snapshot["cuda_alloc_mb"] = cuda.memory_allocated() / (1024 * 1024)
+                snapshot["cuda_reserved_mb"] = cuda.memory_reserved() / (1024 * 1024)
+                snapshot["cuda_max_alloc_mb"] = cuda.max_memory_allocated() / (
+                    1024 * 1024
+                )
+        except (AttributeError, RuntimeError):
+            pass
+    return snapshot
+
+
+def _format_resource_snapshot(snapshot: Mapping[str, float]) -> str:
+    return " ".join(f"{key}={value:.1f}MB" for key, value in snapshot.items())
+
+
+def _log_multiprocessing_leftovers() -> None:
+    children = mp.active_children()
+    logger.debug("segmentation complete; active_children=%d", len(children))
+    for child in children:
+        logger.warning(
+            "Child still alive after segmentation: pid=%s name=%s exitcode=%s",
+            child.pid,
+            child.name,
+            child.exitcode,
+        )
+    non_daemon_threads = [
+        thread.name
+        for thread in threading.enumerate()
+        if thread is not threading.current_thread() and not thread.daemon
+    ]
+    logger.debug("active_non_daemon_threads=%s", non_daemon_threads)
+
+
+def _emit_worker_event(event: str, row_idx: int) -> None:
+    if _WORKER_EVENT_QUEUE is None:
+        return
+    worker_event = WorkerEvent(
+        row_idx=row_idx,
+        pid=os.getpid(),
+        event=event,
+        timestamp=time.monotonic(),
+        generation=_WORKER_GENERATION,
+        gpu=os.environ.get("CUDA_VISIBLE_DEVICES"),
+    )
+    try:
+        _WORKER_EVENT_QUEUE.put(worker_event)
+    except (BrokenPipeError, EOFError, OSError):
+        # A forced pool restart can tear down the parent-side queue first.
+        pass
+
+
 def process_single_volume(
     idx: int,
     row: Dict[str, Any],  # must be JSON‑serialisable
@@ -1088,10 +1236,23 @@ def process_single_volume(
     force: bool,
     crop_margin_mm: float | None = None,
     backend: TotalSegmentatorBackend | None = None,
+    debug: bool = False,
+    worker_generation: int = 0,
 ) -> Tuple[int, str | None, str | None, str | None, Dict[str, str] | None]:
     """Return ``(idx, output_dir|None, error_msg|None, warning_msg|None, outputs|None)``."""
 
-    setup_logging(verbose=verbose)
+    setup_logging(verbose=(verbose or debug))
+    total_started_at = time.monotonic()
+    if debug:
+        logger.debug(
+            "row=%s worker.begin pid=%d parent_pid=%d generation=%d gpu=%s %s",
+            idx,
+            os.getpid(),
+            os.getppid(),
+            worker_generation,
+            os.environ.get("CUDA_VISIBLE_DEVICES"),
+            _format_resource_snapshot(_resource_snapshot()),
+        )
 
     resolved_tasks_config = tasks_config
     if "modalities" in tasks_config:
@@ -1132,19 +1293,59 @@ def process_single_volume(
             crop_mask_paths=crop_mask_paths,
             backend=backend,
             resolved_output_to_fetch=resolved_output_to_fetch,
+            debug=debug,
+            row_idx=idx,
+            worker_generation=worker_generation,
         )
         warning_msg = " | ".join(warnings) if warnings else None
-        return (
+        result = (
             idx,
             str(nifti_path.parent),
             None,
             warning_msg,
             resolved_output_to_fetch,
         )
+        if debug:
+            logger.debug(
+                "row=%s worker.end pid=%d generation=%d total_execution=%.3fs %s",
+                idx,
+                os.getpid(),
+                worker_generation,
+                time.monotonic() - total_started_at,
+                _format_resource_snapshot(_resource_snapshot()),
+            )
+        return result
     except Exception as exc:
         # Capture full traceback for later debugging
         logger.debug("Traceback for %s:\n%s", nifti_path.name, traceback.format_exc())
         return idx, None, str(exc), None, None
+
+
+def _process_single_volume_timed(
+    idx: int,
+    row: Dict[str, Any],
+    tasks_config: Dict[str, Any],
+    *,
+    verbose: bool,
+    force: bool,
+    crop_margin_mm: float | None = None,
+    debug: bool = False,
+) -> Tuple[int, str | None, str | None, str | None, Dict[str, str] | None]:
+    """Signal actual worker execution boundaries around one volume."""
+    _emit_worker_event("started", idx)
+    try:
+        return process_single_volume(
+            idx,
+            row,
+            tasks_config,
+            verbose=verbose,
+            force=force,
+            crop_margin_mm=crop_margin_mm,
+            debug=debug,
+            worker_generation=_WORKER_GENERATION,
+        )
+    finally:
+        _emit_worker_event("finished", idx)
 
 
 def _normalize_process_result(
@@ -1211,6 +1412,16 @@ def _worker_gpu_initializer(gpu_tokens: List[str]) -> None:
     os.environ["CUDA_VISIBLE_DEVICES"] = token
 
 
+def _worker_initializer(
+    gpu_tokens: List[str], event_queue: Any, generation: int
+) -> None:
+    """Initialize GPU affinity and the lifecycle event channel in each worker."""
+    global _WORKER_EVENT_QUEUE, _WORKER_GENERATION
+    _WORKER_EVENT_QUEUE = event_queue
+    _WORKER_GENERATION = generation
+    _worker_gpu_initializer(gpu_tokens)
+
+
 # -----------------------------------------------------------------------------
 # Main routine
 # -----------------------------------------------------------------------------
@@ -1257,6 +1468,12 @@ def add_segment_arguments(
     parser.add_argument("--num_workers", type=int, default=4, help="Pool size")
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose logging")
     parser.add_argument(
+        "--debug",
+        action="store_true",
+        default=False,
+        help="Log per-row worker lifecycle, timings, and lightweight resources.",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="Re‑run even if output masks already exist",
@@ -1299,7 +1516,21 @@ def add_segment_arguments(
         "--timeout_sec",
         type=int,
         default=DEFAULT_TIMEOUT,
-        help="Per-volume timeout in seconds",
+        help="Per-volume worker execution timeout in seconds",
+    )
+    parser.add_argument(
+        "--max-in-flight",
+        dest="max_in_flight",
+        type=int,
+        default=None,
+        help="Maximum submitted rows; GPU default is one row per worker.",
+    )
+    parser.add_argument(
+        "--recycle-every",
+        dest="recycle_every",
+        type=int,
+        default=None,
+        help="Scheduled pool recycle interval in terminal rows (0 disables).",
     )
     add_checkpoint_arguments(
         parser,
@@ -1367,6 +1598,15 @@ def normalize_segment_args(args: argparse.Namespace) -> argparse.Namespace:
     if crop_margin_mm is not None:
         args.crop_margin_mm = float(crop_margin_mm)
 
+    if hasattr(args, "timeout_sec") and int(args.timeout_sec) <= 0:
+        raise ValueError("--timeout-sec must be positive")
+    max_in_flight = getattr(args, "max_in_flight", None)
+    if max_in_flight is not None and int(max_in_flight) <= 0:
+        raise ValueError("--max-in-flight must be positive")
+    recycle_every = getattr(args, "recycle_every", None)
+    if recycle_every is not None and int(recycle_every) < 0:
+        raise ValueError("--recycle-every must be non-negative")
+
     del args.csv_path_pos
     del args.csv_path_opt
     if hasattr(args, "csv_path_out_pos"):
@@ -1400,7 +1640,8 @@ def _requested_crop_margin(
 
 def main(args: argparse.Namespace) -> None:
     """Run manifest-configured segmentation over every eligible cohort row."""
-    setup_logging(verbose=getattr(args, "verbose", False))
+    debug_enabled = bool(getattr(args, "debug", False))
+    setup_logging(verbose=(getattr(args, "verbose", False) or debug_enabled))
     output_path = Path(args.csv_path_out)
     error_path = Path(args.error_csv_path)
     manifest_arg = getattr(args, "manifest", None)
@@ -1424,6 +1665,7 @@ def main(args: argparse.Namespace) -> None:
         "csv_path_out",
         "dry_run",
         "verbose",
+        "debug",
         "resume",
         "checkpoint_every_rows",
         "checkpoint_every_sec",
@@ -1460,31 +1702,43 @@ def main(args: argparse.Namespace) -> None:
     )
 
     # Decide
+    requested_recycle_every = getattr(args, "recycle_every", None)
     strategy = decide_multiprocessing_strategy(
         prefer_gpu=True,
         requested_workers=args.num_workers,
         start_method_hint=args.start_method,
         target_task_mem_mb=6000,  # tune (TotalSegmentator can be heavy)
-        enable_recycling=True,
-        recycle_every=100,
+        enable_recycling=(
+            requested_recycle_every is not None and requested_recycle_every > 0
+        ),
+        recycle_every=requested_recycle_every or 0,
+        requested_max_in_flight=getattr(args, "max_in_flight", None),
         need_hard_timeouts=True,
     )
 
-    logger.info("MP strategy: %s", strategy_to_log_dict(strategy))
     effective_workers = strategy.max_workers
     effective_start_method = strategy.start_method
     effective_timeout = args.timeout_sec
     logger.info(
-        "Requested MP settings: workers=%d start_method=%s timeout_sec=%d | Effective: mode=%s workers=%d start_method=%s max_in_flight=%d recycle_every=%d",
-        args.num_workers,
-        args.start_method,
-        args.timeout_sec,
+        "MP strategy: mode=%s start_method=%s workers=%d max_in_flight=%d "
+        "timeout=%ds recycle_every=%d gpu_count=%d threads_per_worker=%s",
         strategy.mode,
-        effective_workers,
         effective_start_method,
+        effective_workers,
         strategy.max_in_flight,
+        effective_timeout,
         strategy.recycle_every,
+        strategy.gpu_count,
+        strategy.reasons.get("threads_per_worker", "unknown"),
     )
+    logger.info(
+        "MP reasons: workers=%s; max_in_flight=%s; start_method=%s; recycle=%s",
+        strategy.reasons.get("workers_reason", "unknown"),
+        strategy.reasons.get("max_in_flight_reason", "unknown"),
+        strategy.reasons.get("start_method_reason", "unknown"),
+        strategy.reasons.get("recycle_reason", "unknown"),
+    )
+    logger.debug("Complete MP strategy: %s", strategy_to_log_dict(strategy))
 
     # Apply env caps BEFORE pool creation
     apply_strategy_env(strategy)
@@ -1675,28 +1929,27 @@ def main(args: argparse.Namespace) -> None:
         return "worker crash" in low or "brokenprocesspool" in low
 
     gpu_tokens: List[str] = []
-    pool_init_kwargs: Dict[str, Any] = {}
     if strategy.use_gpu and strategy.gpu_count > 0:
         gpu_tokens = _resolve_visible_gpu_tokens(strategy.gpu_count)
         if gpu_tokens:
-            pool_init_kwargs = {
-                "initializer": _worker_gpu_initializer,
-                "initargs": (gpu_tokens,),
-            }
             logger.info(
                 "GPU worker pinning enabled: %d worker(s) across %d visible GPU token(s)",
                 effective_workers,
                 len(gpu_tokens),
             )
 
+    pool_generation = 0
+
     def _run_rows(
         row_indices: List[int],
         *,
         progress_bar: tqdm | None = None,
         on_result: Any | None = None,
+        normal_shutdown_reason: str = "completed",
     ) -> Dict[
         int, Tuple[int, str | None, str | None, str | None, Dict[str, str] | None]
     ]:
+        nonlocal pool_generation
         out: Dict[
             int, Tuple[int, str | None, str | None, str | None, Dict[str, str] | None]
         ] = {}
@@ -1706,6 +1959,7 @@ def main(args: argparse.Namespace) -> None:
         max_in_flight = max(1, int(strategy.max_in_flight))
         row_queue = deque(row_indices)
         broken_pool = False
+        event_queue = ctx.Queue() if hasattr(ctx, "Queue") else Queue()
 
         def _record_result(idx: int, result: Tuple[Any, ...]) -> None:
             normalized = _normalize_process_result(result)
@@ -1715,24 +1969,48 @@ def main(args: argparse.Namespace) -> None:
             if progress_bar is not None:
                 progress_bar.update(1)
 
-        def _create_pool() -> ProcessPoolExecutor:
+        def _create_pool(generation: int) -> Tuple[ProcessPoolExecutor, bool]:
+            init_kwargs = {
+                "initializer": _worker_initializer,
+                "initargs": (gpu_tokens, event_queue, generation),
+            }
             try:
-                return ProcessPoolExecutor(
+                pool = ProcessPoolExecutor(
                     max_workers=effective_workers,
                     mp_context=ctx,
-                    **pool_init_kwargs,
+                    **init_kwargs,
                 )
+                logger.debug(
+                    "pool.create generation=%d workers=%d start_method=%s parent_pid=%d %s",
+                    generation,
+                    effective_workers,
+                    effective_start_method,
+                    os.getpid(),
+                    _format_resource_snapshot(
+                        _resource_snapshot(include_cuda=False)
+                    ),
+                )
+                return pool, True
             except TypeError as exc:
-                if pool_init_kwargs:
-                    logger.warning(
-                        "Executor does not support worker initializer; running without GPU pinning (%s)",
-                        exc,
-                    )
-                return ProcessPoolExecutor(
-                    max_workers=effective_workers, mp_context=ctx
+                logger.warning(
+                    "Executor does not support the worker initializer; "
+                    "using submission time only when no executor queue is possible (%s)",
+                    exc,
+                )
+                return (
+                    ProcessPoolExecutor(
+                        max_workers=effective_workers, mp_context=ctx
+                    ),
+                    False,
                 )
 
-        def _shutdown_pool(pool: ProcessPoolExecutor, force: bool) -> None:
+        def _shutdown_pool(
+            pool: ProcessPoolExecutor,
+            force: bool,
+            *,
+            generation: int,
+            reason: str,
+        ) -> None:
             if force:
                 # Capture workers before shutdown mutates executor internals.
                 processes = list((getattr(pool, "_processes", None) or {}).values())
@@ -1777,135 +2055,276 @@ def main(args: argparse.Namespace) -> None:
                     pool.shutdown(wait=True, cancel_futures=True)
                 except Exception:
                     pass
+                logger.debug(
+                    "pool.shutdown generation=%d reason=%s forced=true", generation, reason
+                )
                 return
             # Graceful shutdown prevents collateral damage to interpreter state.
             pool.shutdown(wait=True, cancel_futures=False)
+            logger.debug(
+                "pool.shutdown generation=%d reason=%s forced=false", generation, reason
+            )
 
-        while row_queue and not broken_pool:
-            pool = _create_pool()
+        try:
+            while row_queue and not broken_pool:
+                pool_generation += 1
+                generation = pool_generation
+                pool, worker_events_supported = _create_pool(generation)
 
-            futures: Dict[Any, int] = {}
-            submit_started_at: Dict[Any, float] = {}
-            restart_pool_for_timeout = False
-            broken_pool_msg: str | None = None
+                futures: Dict[Any, int] = {}
+                submitted_at: Dict[Any, float] = {}
+                started_events: Dict[int, WorkerEvent] = {}
+                finished_rows: set[int] = set()
+                restart_pool_for_timeout = False
+                broken_pool_msg: str | None = None
 
-            def _submit_until_limit() -> None:
-                while row_queue and len(futures) < max_in_flight:
-                    idx = row_queue.popleft()
-                    row = df.loc[idx].to_dict()
-                    resolved_config = resolve_segmentation_config_for_modality(
-                        tasks_config, row.get("Modality")
-                    )
-                    if resolved_config is None:
-                        raise RuntimeError(
-                            f"No segmentation model configured for row {idx}."
+                def _drain_worker_events() -> None:
+                    while True:
+                        try:
+                            event = event_queue.get_nowait()
+                        except Empty:
+                            return
+                        if not isinstance(event, WorkerEvent):
+                            continue
+                        if event.generation != generation:
+                            continue
+                        if event.event == "started":
+                            started_events[event.row_idx] = event
+                            future = next(
+                                (
+                                    candidate
+                                    for candidate, candidate_idx in futures.items()
+                                    if candidate_idx == event.row_idx
+                                ),
+                                None,
+                            )
+                            queue_wait = (
+                                event.timestamp - submitted_at[future]
+                                if future in submitted_at
+                                else 0.0
+                            )
+                            logger.debug(
+                                "worker_started row=%d pid=%d gpu=%s generation=%d queue_wait=%.3fs",
+                                event.row_idx,
+                                event.pid,
+                                event.gpu,
+                                event.generation,
+                                max(0.0, queue_wait),
+                            )
+                        elif event.event == "finished":
+                            finished_rows.add(event.row_idx)
+                            started = started_events.get(event.row_idx)
+                            execution_sec = (
+                                event.timestamp - started.timestamp if started else 0.0
+                            )
+                            logger.debug(
+                                "worker_finished row=%d pid=%d generation=%d total_execution=%.3fs",
+                                event.row_idx,
+                                event.pid,
+                                event.generation,
+                                max(0.0, execution_sec),
+                            )
+
+                def _submit_until_limit() -> None:
+                    while row_queue and len(futures) < max_in_flight:
+                        idx = row_queue.popleft()
+                        row = df.loc[idx].to_dict()
+                        resolved_config = resolve_segmentation_config_for_modality(
+                            tasks_config, row.get("Modality")
                         )
-                    fut = pool.submit(
-                        process_single_volume,
-                        idx,
-                        row,
-                        resolved_config,
-                        verbose=args.verbose,
-                        force=args.force,
-                        crop_margin_mm=crop_margin_mm,
-                    )
-                    futures[fut] = idx
-                    submit_started_at[fut] = time.monotonic()
+                        if resolved_config is None:
+                            raise RuntimeError(
+                                f"No segmentation model configured for row {idx}."
+                            )
+                        submitted = time.monotonic()
+                        fut = pool.submit(
+                            _process_single_volume_timed,
+                            idx,
+                            row,
+                            resolved_config,
+                            verbose=args.verbose,
+                            force=args.force,
+                            crop_margin_mm=crop_margin_mm,
+                            debug=debug_enabled,
+                        )
+                        futures[fut] = idx
+                        submitted_at[fut] = submitted
+                        # Compatibility fallback for executor implementations
+                        # without initializers. It is only safe when no executor
+                        # queue can exist; production ProcessPoolExecutor supports
+                        # the event-based path above.
+                        if (
+                            not worker_events_supported
+                            and max_in_flight <= effective_workers
+                        ):
+                            started_events[idx] = WorkerEvent(
+                                row_idx=idx,
+                                pid=-1,
+                                event="started",
+                                timestamp=submitted,
+                                generation=generation,
+                            )
+                        logger.debug(
+                            "submit row=%d future=%s queued=%d running_estimate=%d generation=%d",
+                            idx,
+                            id(fut),
+                            max(0, len(futures) - len(started_events)),
+                            len(started_events),
+                            generation,
+                        )
 
-            def _expire_timed_out_futures() -> bool:
-                now = time.monotonic()
-                timed_out_futures: List[Any] = []
-                for fut, i in list(futures.items()):
-                    started_at = submit_started_at[fut]
-                    if now - started_at < effective_timeout:
-                        continue
-                    timed_out_futures.append(fut)
+                def _expire_timed_out_futures() -> bool:
+                    now = time.monotonic()
+                    timed_out_futures: List[Any] = []
+                    for fut, idx in list(futures.items()):
+                        started = started_events.get(idx)
+                        if started is None or idx in finished_rows:
+                            continue
+                        execution_sec = now - started.timestamp
+                        if execution_sec < effective_timeout:
+                            continue
+                        timed_out_futures.append(fut)
+                        wall_sec = now - submitted_at[fut]
+                        logger.warning(
+                            "Timeout: row=%d execution=%.1fs wall_since_submission=%.1fs "
+                            "worker_pid=%s limit=%ds",
+                            idx,
+                            execution_sec,
+                            wall_sec,
+                            started.pid,
+                            effective_timeout,
+                        )
+                        _record_result(
+                            idx,
+                            (
+                                idx,
+                                None,
+                                f"execution timeout after {effective_timeout}s",
+                                None,
+                                None,
+                            ),
+                        )
+
+                    if not timed_out_futures:
+                        return False
+
+                    timed_out_rows = [futures[fut] for fut in timed_out_futures]
+                    timed_out_set = set(timed_out_rows)
+                    interrupted_rows = [
+                        idx
+                        for idx in futures.values()
+                        if idx not in timed_out_set and idx in started_events
+                    ]
+                    queued_rows = [
+                        idx
+                        for idx in futures.values()
+                        if idx not in timed_out_set and idx not in started_events
+                    ]
                     logger.warning(
-                        "Row %d exceeded %ds wall time (elapsed %.1fs) – recycling worker pool",
-                        i,
-                        effective_timeout,
-                        now - started_at,
-                    )
-                    _record_result(
-                        i,
-                        (i, None, f"timeout after {effective_timeout}s", None, None),
+                        "Forced worker-pool restart after execution timeout: "
+                        "ProcessPoolExecutor cannot safely replace one worker. "
+                        "Timed-out rows: %s; interrupted running rows: %s; queued rows: %s",
+                        timed_out_rows,
+                        interrupted_rows,
+                        queued_rows,
                     )
 
-                if not timed_out_futures:
-                    return False
+                    for timed_out in timed_out_futures:
+                        futures.pop(timed_out, None)
+                        submitted_at.pop(timed_out, None)
+                        timed_out.cancel()
 
-                for timed_out in timed_out_futures:
-                    futures.pop(timed_out)
-                    submit_started_at.pop(timed_out, None)
-                    timed_out.cancel()
-                # Re-queue remaining in-flight rows to retry in a fresh pool.
-                for pending_fut, pending_idx in list(futures.items()):
-                    row_queue.appendleft(pending_idx)
-                    pending_fut.cancel()
-                futures.clear()
-                submit_started_at.clear()
-                return True
+                    requeued_rows = list(futures.values())
+                    for pending_fut in list(futures):
+                        pending_fut.cancel()
+                    for pending_idx in reversed(requeued_rows):
+                        row_queue.appendleft(pending_idx)
+                    logger.warning("Requeued rows after forced restart: %s", requeued_rows)
+                    futures.clear()
+                    submitted_at.clear()
+                    return True
 
-            def _collect_completed_nonblocking() -> bool:
-                nonlocal broken_pool, broken_pool_msg
-                completed_any = False
-                for fut, i in list(futures.items()):
-                    try:
-                        res = fut.result(timeout=0)
-                    except TimeoutError:
-                        continue
-                    except BrokenProcessPool as exc:
-                        broken_pool = True
-                        broken_pool_msg = _broken_pool_message(exc)
-                        logger.error(
-                            "BrokenProcessPool while collecting row %d; aborting fast: %s",
-                            i,
-                            exc,
-                        )
-                        break
-                    except Exception as exc:
-                        res = (
-                            i,
-                            None,
-                            f"worker crash: {type(exc).__name__}: {exc}",
-                            None,
-                            None,
-                        )
+                def _collect_completed_nonblocking() -> bool:
+                    nonlocal broken_pool, broken_pool_msg
+                    completed_any = False
+                    for fut, idx in list(futures.items()):
+                        try:
+                            res = fut.result(timeout=0)
+                        except TimeoutError:
+                            continue
+                        except BrokenProcessPool as exc:
+                            broken_pool = True
+                            broken_pool_msg = _broken_pool_message(exc)
+                            logger.error(
+                                "BrokenProcessPool while collecting row %d; aborting fast: %s",
+                                idx,
+                                exc,
+                            )
+                            break
+                        except Exception as exc:
+                            res = (
+                                idx,
+                                None,
+                                f"worker crash: {type(exc).__name__}: {exc}",
+                                None,
+                                None,
+                            )
 
-                    futures.pop(fut, None)
-                    submit_started_at.pop(fut, None)
-                    _record_result(i, res)
+                        futures.pop(fut, None)
+                        submitted_at.pop(fut, None)
+                        started_events.pop(idx, None)
+                        finished_rows.discard(idx)
+                        _record_result(idx, res)
+                        _submit_until_limit()
+                        completed_any = True
+                    return completed_any
+
+                try:
                     _submit_until_limit()
-                    completed_any = True
-                return completed_any
+                    while futures and not restart_pool_for_timeout and not broken_pool:
+                        _drain_worker_events()
+                        completed_any = _collect_completed_nonblocking()
+                        _drain_worker_events()
+                        if _expire_timed_out_futures():
+                            restart_pool_for_timeout = True
+                            break
+                        if not completed_any:
+                            time.sleep(0.05)
+                except BrokenProcessPool as exc:
+                    broken_pool = True
+                    broken_pool_msg = _broken_pool_message(exc)
+                    logger.error(
+                        "BrokenProcessPool during completion loop; aborting fast: %s",
+                        exc,
+                    )
+                finally:
+                    shutdown_reason = (
+                        "timeout"
+                        if restart_pool_for_timeout
+                        else "crash"
+                        if broken_pool
+                        else normal_shutdown_reason
+                    )
+                    _shutdown_pool(
+                        pool,
+                        force=(broken_pool or restart_pool_for_timeout),
+                        generation=generation,
+                        reason=shutdown_reason,
+                    )
 
+                if broken_pool:
+                    msg = broken_pool_msg or "BrokenProcessPool"
+                    for idx in list(futures.values()):
+                        out[idx] = (idx, None, msg, None, None)
+                    for idx in row_queue:
+                        out[idx] = (idx, None, msg, None, None)
+                    break
+        finally:
             try:
-                _submit_until_limit()
-                while futures and not restart_pool_for_timeout and not broken_pool:
-                    if _expire_timed_out_futures():
-                        restart_pool_for_timeout = True
-                        break
-
-                    if broken_pool:
-                        break
-                    if not _collect_completed_nonblocking():
-                        time.sleep(0.05)
-            except BrokenProcessPool as exc:
-                broken_pool = True
-                broken_pool_msg = _broken_pool_message(exc)
-                logger.error(
-                    "BrokenProcessPool during completion loop; aborting fast: %s", exc
-                )
-            finally:
-                _shutdown_pool(pool, force=(broken_pool or restart_pool_for_timeout))
-
-            if broken_pool:
-                msg = broken_pool_msg or "BrokenProcessPool"
-                for i in list(futures.values()):
-                    out[i] = (i, None, msg, None, None)
-                for i in row_queue:
-                    out[i] = (i, None, msg, None, None)
-                break
+                event_queue.close()
+                event_queue.join_thread()
+            except (AttributeError, OSError, ValueError):
+                pass
 
         return out
 
@@ -1928,7 +2347,20 @@ def main(args: argparse.Namespace) -> None:
         chunk_size = max(1, int(strategy.recycle_every))
         for start in range(0, len(row_indices), chunk_size):
             chunk = row_indices[start : start + chunk_size]
-            out.update(_run_rows(chunk, progress_bar=progress_bar, on_result=on_result))
+            is_last = start + chunk_size >= len(row_indices)
+            out.update(
+                _run_rows(
+                    chunk,
+                    progress_bar=progress_bar,
+                    on_result=on_result,
+                    normal_shutdown_reason=("completed" if is_last else "scheduled"),
+                )
+            )
+            if not is_last:
+                logger.info(
+                    "Scheduled worker-pool recycle after %d terminal row(s)",
+                    len(chunk),
+                )
         return out
 
     row_indices = [
@@ -1982,6 +2414,8 @@ def main(args: argparse.Namespace) -> None:
                     verbose=args.verbose,
                     force=args.force,
                     crop_margin_mm=crop_margin_mm,
+                    debug=debug_enabled,
+                    worker_generation=0,
                 )
             )
             results_by_idx[idx] = result
@@ -2004,8 +2438,6 @@ def main(args: argparse.Namespace) -> None:
                     "Retrying %d row(s) in a fresh executor after worker crash/BrokenProcessPool",
                     len(retry_indices),
                 )
-                progress_bar.total = (progress_bar.total or 0) + len(retry_indices)
-                progress_bar.refresh()
                 retry_results = _run_rows_with_recycling(
                     retry_indices,
                     progress_bar=progress_bar,
@@ -2073,6 +2505,8 @@ def main(args: argparse.Namespace) -> None:
         },
     )
     logger.info("Segmentation done ✔")
+    if debug_enabled:
+        _log_multiprocessing_leftovers()
 
     return
 
