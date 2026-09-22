@@ -252,11 +252,12 @@ them with the CLI option `--selected_csv_path`:
 imperandi phase nifti_index.csv --manifest site.yaml --selected_csv_path selected_phase.csv
 ```
 
-Configure the exam identification columns in the manifest:
+Configure the columns that uniquely identify each best-candidate group in the
+manifest:
 
 ```yaml
 phase_curation:
-  exam_group_columns: [patient_key, study_id, date]
+  best_candidate_group_columns: [patient_key, study_id, date]
   strategies:
     - type: rules
   fallback: OTHER
@@ -287,15 +288,16 @@ when running `phase`. Existing selected and QC exports are replaced, and a
 completed resumed `phase` run regenerates both exports from its saved main output (resume
 is enabled by default).
 
-`exam_group_columns` defines the columns that together identify an exam for
-CT/MR selection and MR phase inference. An explicit list must be nonempty
-and unique. If any configured columns are missing, the command logs a warning
-and falls back to the available `patient_key` and `date` columns. `null` or
-omission preserves the default: use whichever of `patient_key`, `study_id`,
-and `date` are available. If none are available, the command logs a warning
-and writes empty selected and QC tables because it cannot identify exams.
-For example, `[patient_key, visit_id]` groups series by patient and
-visit rather than study. Custom columns are loaded by the cleaning pipeline.
+`best_candidate_group_columns` defines the columns that together identify each
+group for which one best candidate is selected per modality and selection slot;
+the same grouping is also used for MR phase inference. An explicit list must be
+nonempty and unique. If any configured columns are missing, the command logs a
+warning and falls back to the available `patient_key` and `date` columns. `null`
+or omission preserves the default: use whichever of `patient_key`, `study_id`,
+and `date` are available. If none are available, the command logs a warning and
+writes empty selected and QC tables because it cannot identify candidate groups.
+For example, `[patient_key, visit_id]` selects one best candidate per patient
+visit rather than per study. Custom columns are loaded by the cleaning pipeline.
 
 ### Explicit ontology
 

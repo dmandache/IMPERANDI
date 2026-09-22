@@ -44,7 +44,7 @@ def cohort(modality="CT"):
 def config():
     return {
         "strategies": [{"type": "rules"}],
-        "exam_group_columns": ["patient_key", "visit"],
+        "best_candidate_group_columns": ["patient_key", "visit"],
     }
 
 
@@ -60,8 +60,22 @@ def test_exam_columns_control_selection_and_null_exams_are_retained(modality):
 
 @pytest.mark.parametrize("columns", [[], "visit", [""], [1], ["visit", "visit"]])
 def test_invalid_exam_columns_are_rejected(columns):
-    with pytest.raises(ValueError, match="exam_group_columns"):
-        validate_phase_curation({**config(), "exam_group_columns": columns})
+    with pytest.raises(ValueError, match="best_candidate_group_columns"):
+        validate_phase_curation(
+            {**config(), "best_candidate_group_columns": columns}
+        )
+
+
+def test_renamed_exam_group_columns_reports_new_field():
+    phase_config = {**config(), "exam_group_columns": ["patient_key", "visit"]}
+    with pytest.raises(
+        ValueError,
+        match=(
+            "exam_group_columns was renamed to "
+            "phase_curation.best_candidate_group_columns"
+        ),
+    ):
+        validate_phase_curation(phase_config)
 
 
 @pytest.mark.parametrize("modality", ["CT", "MR"])
@@ -217,7 +231,7 @@ def test_missing_exam_identifiers_produce_empty_default_exports(tmp_path, caplog
     assert cli.main(["phase", str(source)]) == 0
     assert pd.read_csv(tmp_path / "volumes_curated.csv").empty
     assert pd.read_csv(tmp_path / "qc_volumes_curated.csv").empty
-    assert "No exam grouping columns" in caplog.text
+    assert "No best-candidate grouping columns" in caplog.text
 
 
 def test_phase_cli_can_export_on_finished_resume_without_prediction(

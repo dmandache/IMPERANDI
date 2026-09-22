@@ -123,7 +123,7 @@ def get_exam_group_cols(
         if missing:
             fallback = [col for col in ("patient_key", "date") if col in df.columns]
             logger.warning(
-                "Exam grouping columns are missing: %s; falling back to "
+                "Best-candidate grouping columns are missing: %s; falling back to "
                 "available patient_key/date columns: %s",
                 missing,
                 fallback,

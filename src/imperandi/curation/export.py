@@ -93,7 +93,7 @@ def selected_output_path(
 def save_selected_candidates(df: pd.DataFrame, path: Path, config) -> int:
     """Save selected_long, selected_wide QC, and all pre-fallback phase cases."""
     normalized = validate_phase_curation(config)
-    exam_columns = normalized["exam_group_columns"]
+    exam_columns = normalized["best_candidate_group_columns"]
     ct, mr, _ = split_by_modality(df)
     long_parts = []
     wide_parts = []
@@ -102,8 +102,8 @@ def save_selected_candidates(df: pd.DataFrame, path: Path, config) -> int:
             continue
         if not get_exam_group_cols(data, exam_group_columns=exam_columns):
             logger.warning(
-                "No exam grouping columns for %s; %d row(s) cannot be selected. "
-                "Writing empty selection and QC tables.",
+                "No best-candidate grouping columns for %s; %d row(s) cannot "
+                "be selected. Writing empty selection and QC tables.",
                 modality,
                 len(data),
             )

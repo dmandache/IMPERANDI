@@ -1786,7 +1786,7 @@ def annotate_mri(
         study_col=study_col,
         date_col=date_col,
         exam_group_columns=validate_phase_curation(phase_curation)[
-            "exam_group_columns"
+            "best_candidate_group_columns"
         ],
     )
     out = add_mri_perfusion_columns(out, exam_group_cols=exam_cols)
@@ -1829,7 +1829,7 @@ def curate_mri(
         date_col=date_col,
         display_text_col_count=display_text_col_count,
         exam_group_columns=validate_phase_curation(phase_curation)[
-            "exam_group_columns"
+            "best_candidate_group_columns"
         ],
     )
 

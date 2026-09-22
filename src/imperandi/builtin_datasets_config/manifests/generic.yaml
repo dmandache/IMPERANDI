@@ -27,10 +27,10 @@ id_extraction:
 # Ordered phase fallback chain: the first resolved label wins. Supported
 # strategy types are ontology, rules, and totalsegmentator (at most one each).
 phase_curation:
-  # null uses available patient_key, study_id, date columns. An explicit list
-  # uses the named columns, e.g. [patient_key, study_id, date]; if any are missing,
-  # warn and fall back to the available patient_key and date columns.
-  exam_group_columns: null
+  # These columns identify each group that gets one best candidate per selection
+  # slot. null uses available patient_key, study_id, and date columns. If an
+  # explicit column is missing, fall back to available patient_key/date columns.
+  best_candidate_group_columns: null
   strategies:
     - type: rules
       name: metadata_rules

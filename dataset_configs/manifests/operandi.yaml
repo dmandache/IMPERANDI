@@ -34,7 +34,8 @@ derived_columns:
 # Ordered resolution precedence. Supported types: ontology, rules, and
 # totalsegmentator, with each type appearing at most once.
 phase_curation:
-  exam_group_columns: [patient_key, study_id, date]
+  # Together these identify each group that gets one best candidate per slot.
+  best_candidate_group_columns: [patient_key, study_id, date]
   strategies:
     - type: ontology
       name: operandi_phase_ontology

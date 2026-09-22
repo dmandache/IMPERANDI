@@ -201,7 +201,7 @@ def curate_ct(
         study_col=study_col,
         date_col=date_col,
         exam_group_columns=validate_phase_curation(phase_curation)[
-            "exam_group_columns"
+            "best_candidate_group_columns"
         ],
     )
     return {
