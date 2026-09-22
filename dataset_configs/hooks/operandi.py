@@ -31,6 +31,15 @@ tumor_type_dict = {
     2: "CHC",  # carcinome hépatocellulaire (cancer primitif du foie)
 }
 
+# fix for TNE Nantes patient keys
+def _collapse_repeated_person_name_components(patient_key):
+    """Collapse DICOM PN values whose non-empty ``^`` components are equal."""
+    patient_key = str(patient_key).strip()
+    components = [part.strip() for part in patient_key.split("^") if part.strip()]
+    if components and all(part == components[0] for part in components):
+        return components[0]
+    return patient_key
+
 
 def check_operandi_patient_key(patient_key):
     # remove prefix if string starts with 3 digits + underscore
@@ -47,6 +56,7 @@ def check_operandi_patient_key(patient_key):
 
 @clean_hook(outputs=["patient_key"])
 def standardize_operandi_patient_key(patient_key):
+    patient_key = _collapse_repeated_person_name_components(patient_key)
     # remove prefix if string starts with 3 digits + underscore
     patient_key = re.sub(r"^\d{3}_", "", patient_key)
     # patient_key = center_id - source_id - patient_id - tumor_type

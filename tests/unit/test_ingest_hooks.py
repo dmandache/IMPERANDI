@@ -180,6 +180,12 @@ def test_apply_derived_columns_handles_empty_input_and_manifest():
 def test_operandi_patient_key_validation_and_standardization():
     assert operandi.check_operandi_patient_key("001_01-02-0007-02")
     assert operandi.standardize_operandi_patient_key("001_01-02-0007-02") == "1-2-7-2"
+    assert (
+        operandi.standardize_operandi_patient_key(
+            "002-01-0001-01^002-01-0001-01"
+        )
+        == "2-1-1-1"
+    )
 
 
 def test_operandi_patient_key_validation_rejects_unknown_codes():
