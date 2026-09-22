@@ -1,5 +1,3 @@
-# **IM**aging **PRE**processing **A**nd **N**ormalization for **D**iagnostic **I**nteroperability
-
 ![image](https://raw.githubusercontent.com/dmandache/IMPERANDI/main/static/imperandi-logo.png)
 
 ![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue)
