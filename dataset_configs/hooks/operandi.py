@@ -1,5 +1,6 @@
 """OPERANDI-specific dataset hook implementations."""
 
+from functools import lru_cache
 import re
 import pandas as pd
 
@@ -68,6 +69,7 @@ def check_operandi_patient_key(patient_key):
 
 
 @clean_hook(outputs=["patient_key"])
+@lru_cache(maxsize=65_536)
 def standardize_operandi_patient_key(patient_key):
     patient_key = _collapse_equivalent_person_name_components(patient_key)
     # remove prefix if string starts with 3 digits + underscore

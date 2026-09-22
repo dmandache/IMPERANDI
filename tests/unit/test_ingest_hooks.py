@@ -194,6 +194,19 @@ def test_operandi_patient_key_validation_and_standardization():
     )
 
 
+def test_operandi_patient_key_standardization_is_cached():
+    standardize = operandi.standardize_operandi_patient_key
+    standardize.cache_clear()
+
+    assert standardize("002-01-0004-01^02-01-0004-01") == "2-1-4-1"
+    first = standardize.cache_info()
+    assert standardize("002-01-0004-01^02-01-0004-01") == "2-1-4-1"
+    second = standardize.cache_info()
+
+    assert second.misses == first.misses
+    assert second.hits == first.hits + 1
+
+
 def test_operandi_patient_key_validation_rejects_unknown_codes():
     for patient_key in ["99-2-7-2", "1-99-7-2", "1-2-7-99"]:
         with pytest.raises(AssertionError):
