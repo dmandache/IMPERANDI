@@ -186,6 +186,12 @@ def test_operandi_patient_key_validation_and_standardization():
         )
         == "2-1-1-1"
     )
+    assert (
+        operandi.standardize_operandi_patient_key(
+            "002-01-0004-01^02-01-0004-01"
+        )
+        == "2-1-4-1"
+    )
 
 
 def test_operandi_patient_key_validation_rejects_unknown_codes():

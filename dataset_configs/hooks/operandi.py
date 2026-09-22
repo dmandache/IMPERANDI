@@ -32,11 +32,24 @@ tumor_type_dict = {
 }
 
 # fix for TNE Nantes patient keys
-def _collapse_repeated_person_name_components(patient_key):
-    """Collapse DICOM PN values whose non-empty ``^`` components are equal."""
+def _collapse_equivalent_person_name_components(patient_key):
+    """Collapse equivalent DICOM PN components, ignoring numeric zero-padding."""
     patient_key = str(patient_key).strip()
     components = [part.strip() for part in patient_key.split("^") if part.strip()]
     if components and all(part == components[0] for part in components):
+        return components[0]
+
+    signatures = []
+    for component in components:
+        component = re.sub(r"^\d{3}_", "", component)
+        tokens = component.split("-")
+        if len(tokens) != 4:
+            return patient_key
+        try:
+            signatures.append(tuple(int(token) for token in tokens))
+        except ValueError:
+            return patient_key
+    if signatures and all(signature == signatures[0] for signature in signatures):
         return components[0]
     return patient_key
 
@@ -56,7 +69,7 @@ def check_operandi_patient_key(patient_key):
 
 @clean_hook(outputs=["patient_key"])
 def standardize_operandi_patient_key(patient_key):
-    patient_key = _collapse_repeated_person_name_components(patient_key)
+    patient_key = _collapse_equivalent_person_name_components(patient_key)
     # remove prefix if string starts with 3 digits + underscore
     patient_key = re.sub(r"^\d{3}_", "", patient_key)
     # patient_key = center_id - source_id - patient_id - tumor_type
