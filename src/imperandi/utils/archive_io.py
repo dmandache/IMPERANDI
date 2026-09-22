@@ -279,6 +279,286 @@ def _validate_record_as_dicom(
         return False
 
 
+def _referenced_file_id_parts(value: Any) -> list[str]:
+    """Normalize a DICOMDIR ReferencedFileID into safe member components."""
+    if isinstance(value, str):
+        normalized = value.replace("\\", "/")
+        if normalized.startswith("/"):
+            return []
+        raw_parts = normalized.split("/")
+    else:
+        try:
+            raw_parts = list(value)
+        except TypeError:
+            raw_parts = [value]
+
+    parts = [str(part).strip() for part in raw_parts if str(part).strip()]
+    if not parts:
+        return []
+    if any(
+        part in {".", ".."}
+        or "/" in part
+        or "\\" in part
+        or ":" in part
+        for part in parts
+    ):
+        return []
+    return parts
+
+
+def _read_open_container_member(kind: str, container, member_name: str) -> bytes:
+    if kind == "zip":
+        return _read_zip_member(container, member_name)
+    return _read_tar_member(container, member_name)
+
+
+def _open_container_members(kind: str, container) -> list[tuple[str, bool]]:
+    if kind == "zip":
+        return [(info.filename, info.is_dir()) for info in container.infolist()]
+    return [(member.name, member.isdir()) for member in container.getmembers()]
+
+
+def _archive_record(
+    outer_archive_path: Path,
+    entry_chain: list[str],
+    scan_root: str,
+) -> dict[str, Any]:
+    return {
+        "source_uri_or_path": encode_archive_uri(outer_archive_path, entry_chain),
+        "scan_root": scan_root,
+        "relative_path": entry_chain[-1],
+        "is_archive_member": True,
+        "_discovery_ready": True,
+    }
+
+
+def _read_dicomdir_references(payload: bytes, source_label: str) -> list[list[str]]:
+    try:
+        dataset = dcmread(io.BytesIO(payload), stop_before_pixels=True)
+    except Exception as exc:
+        logger.warning(
+            "[archive][discover] unable to read DICOMDIR %s: %s",
+            source_label,
+            exc,
+        )
+        return []
+
+    records = getattr(dataset, "DirectoryRecordSequence", None)
+    if not records:
+        logger.warning(
+            "[archive][discover] DICOMDIR contains no directory records: %s",
+            source_label,
+        )
+        return []
+
+    references: list[list[str]] = []
+    for record in records:
+        value = getattr(record, "ReferencedFileID", None)
+        if value is None:
+            continue
+        parts = _referenced_file_id_parts(value)
+        if parts:
+            references.append(parts)
+        else:
+            logger.warning(
+                "[archive][discover] ignoring unsafe ReferencedFileID in %s: %r",
+                source_label,
+                value,
+            )
+    return references
+
+
+def _discover_archive_once(
+    *,
+    source: Path | bytes,
+    source_name: str,
+    outer_archive_path: Path,
+    archive_chain: list[str],
+    scan_root: str,
+    depth: int,
+    max_depth: int,
+    member_limit: int,
+    counter: list[int],
+) -> list[dict[str, Any]]:
+    """Discover one archive container without reopening it.
+
+    All DICOMDIR members in the container are read first. If any of them has
+    usable references, only those referenced members are emitted for this
+    container. Otherwise the normal extension/``dcmread`` fallback is used.
+    Nested archives are independent containers and are each opened once.
+    """
+    kind, container = _open_archive(source, source_name)
+    try:
+        members: set[str] = set()
+        for raw_name, is_dir in _open_container_members(kind, container):
+            counter[0] += 1
+            if counter[0] > member_limit:
+                raise RuntimeError(
+                    f"Archive member limit exceeded ({member_limit}) while reading {source_name}."
+                )
+
+            normalized = _normalize_member_name(raw_name)
+            if not normalized or is_dir:
+                continue
+            if not _is_safe_member_name(normalized):
+                logger.warning(
+                    "[archive][discover] skipping unsafe member name: %s in %s",
+                    raw_name,
+                    source_name,
+                )
+                continue
+            members.add(normalized)
+
+        casefold_lookup: dict[str, str | None] = {}
+        for member_name in members:
+            folded = member_name.casefold()
+            if folded in casefold_lookup:
+                casefold_lookup[folded] = None
+            else:
+                casefold_lookup[folded] = member_name
+
+        indexed_names: set[str] = set()
+        dicomdir_names = [
+            name
+            for name in members
+            if PurePosixPath(name).name.upper() == "DICOMDIR"
+        ]
+        usable_dicomdirs = 0
+        for dicomdir_name in sorted(dicomdir_names):
+            try:
+                payload = _read_open_container_member(
+                    kind, container, dicomdir_name
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[archive][discover] unable to read DICOMDIR member %s: %s",
+                    dicomdir_name,
+                    exc,
+                )
+                continue
+
+            source_label = "!".join([*archive_chain, dicomdir_name])
+            dicomdir_is_usable = False
+            for parts in _read_dicomdir_references(payload, source_label):
+                target = _normalize_member_name(
+                    str(PurePosixPath(dicomdir_name).parent.joinpath(*parts))
+                )
+                actual_name = target if target in members else casefold_lookup.get(
+                    target.casefold()
+                )
+                if (
+                    actual_name is None
+                    or is_archive_filename(actual_name)
+                    or PurePosixPath(actual_name).name.upper() == "DICOMDIR"
+                ):
+                    logger.warning(
+                        "[archive][discover] DICOMDIR referenced member does not exist: %s in %s",
+                        target,
+                        source_name,
+                    )
+                    continue
+                indexed_names.add(actual_name)
+                dicomdir_is_usable = True
+            if dicomdir_is_usable:
+                usable_dicomdirs += 1
+
+        records: list[dict[str, Any]] = []
+        if indexed_names:
+            logger.info(
+                "[archive][discover] using %s path(s) from %s usable DICOMDIR file(s) in %s",
+                len(indexed_names),
+                usable_dicomdirs,
+                source_name,
+            )
+            records.extend(
+                _archive_record(
+                    outer_archive_path,
+                    [*archive_chain, member_name],
+                    scan_root,
+                )
+                for member_name in sorted(indexed_names)
+            )
+        else:
+            candidates = [
+                name
+                for name in members
+                if name not in dicomdir_names and not is_archive_filename(name)
+            ]
+            dcm_candidates = [
+                name for name in candidates if name.lower().endswith(".dcm")
+            ]
+            if dcm_candidates:
+                selected = dcm_candidates
+            else:
+                selected = []
+                if candidates:
+                    logger.info(
+                        "[archive][discover] no usable DICOMDIR or *.dcm members in %s; validating candidates with dcmread.",
+                        source_name,
+                    )
+                for member_name in candidates:
+                    try:
+                        payload = _read_open_container_member(
+                            kind, container, member_name
+                        )
+                        dcmread(
+                            io.BytesIO(payload),
+                            stop_before_pixels=True,
+                            force=True,
+                        )
+                    except Exception:
+                        continue
+                    selected.append(member_name)
+
+            records.extend(
+                _archive_record(
+                    outer_archive_path,
+                    [*archive_chain, member_name],
+                    scan_root,
+                )
+                for member_name in selected
+            )
+
+        nested_names = sorted(
+            name for name in members if is_archive_filename(name)
+        )
+        for nested_name in nested_names:
+            if depth >= max_depth:
+                logger.warning(
+                    "[archive][discover] max depth reached for nested archive member: %s",
+                    nested_name,
+                )
+                continue
+            try:
+                nested_payload = _read_open_container_member(
+                    kind, container, nested_name
+                )
+                records.extend(
+                    _discover_archive_once(
+                        source=nested_payload,
+                        source_name=nested_name,
+                        outer_archive_path=outer_archive_path,
+                        archive_chain=[*archive_chain, nested_name],
+                        scan_root=scan_root,
+                        depth=depth + 1,
+                        max_depth=max_depth,
+                        member_limit=member_limit,
+                        counter=counter,
+                    )
+                )
+            except RuntimeError:
+                raise
+            except Exception as exc:
+                logger.warning(
+                    "[archive][discover] unable to inspect nested archive member %s: %s",
+                    nested_name,
+                    exc,
+                )
+        return records
+    finally:
+        container.close()
+
+
 def discover_dicom_sources(
     root_entries: Iterable[Path],
     max_depth: int = DEFAULT_ARCHIVE_MAX_DEPTH,
@@ -301,25 +581,19 @@ def discover_dicom_sources(
 
                 if is_archive_filename(path.name):
                     try:
-                        members = iter_archive_members(
-                            path,
+                        records = _discover_archive_once(
+                            source=path,
+                            source_name=path.name,
+                            outer_archive_path=path,
+                            archive_chain=[],
+                            scan_root=scan_root,
                             depth=0,
                             max_depth=max_depth,
                             member_limit=member_limit,
+                            counter=[0],
                         )
-                        for member in members:
-                            if member["is_archive"]:
-                                continue
-                            member_chain = member["entry_chain"]
-                            source_uri = encode_archive_uri(path, member_chain)
-                            _add_record(
-                                {
-                                    "source_uri_or_path": source_uri,
-                                    "scan_root": scan_root,
-                                    "relative_path": member_chain[-1],
-                                    "is_archive_member": True,
-                                }
-                            )
+                        for record in records:
+                            _add_record(record)
                     except Exception as exc:
                         logger.warning(
                             "[archive][discover] unable to inspect archive %s: %s",
@@ -341,25 +615,19 @@ def discover_dicom_sources(
         if root.is_file() and is_archive_filename(root.name):
             scan_root = str(root.parent)
             try:
-                members = iter_archive_members(
-                    root,
+                records = _discover_archive_once(
+                    source=root,
+                    source_name=root.name,
+                    outer_archive_path=root,
+                    archive_chain=[],
+                    scan_root=scan_root,
                     depth=0,
                     max_depth=max_depth,
                     member_limit=member_limit,
+                    counter=[0],
                 )
-                for member in members:
-                    if member["is_archive"]:
-                        continue
-                    member_chain = member["entry_chain"]
-                    source_uri = encode_archive_uri(root, member_chain)
-                    _add_record(
-                        {
-                            "source_uri_or_path": source_uri,
-                            "scan_root": scan_root,
-                            "relative_path": member_chain[-1],
-                            "is_archive_member": True,
-                        }
-                    )
+                for record in records:
+                    _add_record(record)
             except Exception as exc:
                 logger.warning(
                     "[archive][discover] unable to inspect archive %s: %s",
@@ -382,19 +650,27 @@ def discover_dicom_sources(
         return []
 
     all_records = sorted(dedup.values(), key=_record_sort_key)
-    dcm_records = [record for record in all_records if _record_is_dcm(record)]
+    ready_records = [
+        record for record in all_records if record.pop("_discovery_ready", False)
+    ]
+    plain_records = [
+        record for record in all_records if not record.get("is_archive_member")
+    ]
+    dcm_records = [record for record in plain_records if _record_is_dcm(record)]
     if dcm_records:
-        return dcm_records
+        return sorted([*ready_records, *dcm_records], key=_record_sort_key)
 
-    logger.info(
-        "[archive][discover] no *.dcm sources found; validating all candidates with dcmread."
-    )
+    if plain_records:
+        logger.info(
+            "[archive][discover] no *.dcm filesystem sources found; validating filesystem candidates with dcmread."
+        )
     validated = [
         record
-        for record in all_records
-        if _validate_record_as_dicom(record, max_depth=max_depth)
+        for record in plain_records
+        if Path(str(record.get("relative_path") or "")).name.upper() != "DICOMDIR"
+        and _validate_record_as_dicom(record, max_depth=max_depth)
     ]
-    return sorted(validated, key=_record_sort_key)
+    return sorted([*ready_records, *validated], key=_record_sort_key)
 
 
 def read_archive_member_bytes(

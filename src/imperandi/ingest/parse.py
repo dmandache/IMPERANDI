@@ -282,6 +282,130 @@ def _iter_root_files_deterministic(root: Path):
             yield Path(dirpath) / filename
 
 
+def _find_dicomdirs(root: Path) -> list[Path]:
+    """Return DICOMDIR files below *root* in deterministic order."""
+    if root.is_file():
+        return [root] if root.name.upper() == "DICOMDIR" else []
+    if not root.is_dir():
+        return []
+    direct_matches = sorted(
+        (
+            path
+            for path in root.iterdir()
+            if path.is_file() and path.name.upper() == "DICOMDIR"
+        ),
+        key=lambda path: str(path),
+    )
+    if direct_matches:
+        return direct_matches
+    return [
+        path
+        for path in _iter_root_files_deterministic(root)
+        if path.name.upper() == "DICOMDIR"
+    ]
+
+
+def _referenced_file_id_parts(value) -> list[str]:
+    """Normalize a DICOMDIR ReferencedFileID into safe path components."""
+    if isinstance(value, str):
+        normalized = value.replace("\\", "/")
+        if normalized.startswith("/"):
+            return []
+        raw_parts = normalized.split("/")
+    else:
+        try:
+            raw_parts = list(value)
+        except TypeError:
+            raw_parts = [value]
+
+    parts = [str(part).strip() for part in raw_parts if str(part).strip()]
+    if not parts:
+        return []
+    if any(
+        part in {".", ".."}
+        or "/" in part
+        or "\\" in part
+        or ":" in part
+        for part in parts
+    ):
+        return []
+    return parts
+
+
+def _entries_from_dicomdir(dicomdir_path: Path, scan_root: Path) -> list[dict]:
+    """Read existing file references from one DICOMDIR.
+
+    References that are unsafe, missing, or point outside the directory that
+    contains DICOMDIR are ignored. An empty result tells the caller to retain
+    the normal recursive-discovery fallback.
+    """
+    try:
+        dataset = dcmread(dicomdir_path, stop_before_pixels=True)
+    except Exception as exc:
+        logger.warning("Unable to read DICOMDIR %s: %s", dicomdir_path, exc)
+        return []
+
+    records = getattr(dataset, "DirectoryRecordSequence", None)
+    if not records:
+        logger.warning("DICOMDIR contains no directory records: %s", dicomdir_path)
+        return []
+
+    base = dicomdir_path.parent.resolve()
+    scan_root = scan_root.resolve()
+    entries: list[dict] = []
+    seen: set[str] = set()
+    for record in records:
+        referenced_file_id = getattr(record, "ReferencedFileID", None)
+        if referenced_file_id is None:
+            continue
+        parts = _referenced_file_id_parts(referenced_file_id)
+        if not parts:
+            logger.warning(
+                "Ignoring unsafe or empty ReferencedFileID in %s: %r",
+                dicomdir_path,
+                referenced_file_id,
+            )
+            continue
+
+        referenced_path = base.joinpath(*parts).resolve()
+        try:
+            referenced_path.relative_to(base)
+        except ValueError:
+            logger.warning(
+                "Ignoring DICOMDIR reference outside %s: %s", base, referenced_path
+            )
+            continue
+        if not referenced_path.is_file():
+            logger.warning(
+                "DICOMDIR referenced file does not exist: %s", referenced_path
+            )
+            continue
+
+        source = str(referenced_path)
+        if source in seen:
+            continue
+        seen.add(source)
+        try:
+            relative_path = str(referenced_path.relative_to(scan_root))
+        except ValueError:
+            relative_path = str(referenced_path.relative_to(base))
+        entries.append(
+            {
+                "source_uri_or_path": source,
+                "scan_root": str(scan_root),
+                "relative_path": relative_path,
+                "is_archive_member": False,
+            }
+        )
+
+    return entries
+
+
+def _entry_is_dicomdir(entry: dict) -> bool:
+    relative_path = str(entry.get("relative_path") or "").replace("\\", "/")
+    return relative_path.rsplit("/", 1)[-1].upper() == "DICOMDIR"
+
+
 def detect_archive_mode_by_subsample(
     resolved_roots: list[Path], sample_size: int = 128
 ) -> bool:
@@ -387,11 +511,52 @@ def get_dicom_path_entries(
     """
     Strategy:
     1) Resolve root_path as directories and/or archive files.
-    2) Recursively discover DICOM sources, including nested archives.
-    3) Prefer *.dcm and fallback to header validation when needed.
+    2) Use referenced paths from an existing DICOMDIR when available.
+    3) Otherwise recursively discover DICOM sources, including nested archives.
+    4) Prefer *.dcm and fallback to header validation when needed.
     """
     resolved_roots = resolve_root_paths(root_path)
-    return discover_dicom_sources(resolved_roots, max_depth=archive_max_depth)
+    entries: list[dict] = []
+    fallback_roots: list[Path] = []
+
+    for root in resolved_roots:
+        scan_root = root if root.is_dir() else root.parent
+        dicomdir_entries: list[dict] = []
+        dicomdirs = _find_dicomdirs(root)
+        for dicomdir_path in dicomdirs:
+            dicomdir_entries.extend(
+                _entries_from_dicomdir(dicomdir_path, scan_root=scan_root)
+            )
+
+        if dicomdir_entries:
+            logger.info(
+                "Using %s path(s) referenced by %s DICOMDIR file(s) under %s",
+                len(dicomdir_entries),
+                len(dicomdirs),
+                root,
+            )
+            entries.extend(dicomdir_entries)
+        else:
+            fallback_roots.append(root)
+
+    fallback_entries = discover_dicom_sources(
+        fallback_roots, max_depth=archive_max_depth
+    )
+    entries.extend(
+        entry
+        for entry in fallback_entries
+        if not _entry_is_dicomdir(entry)
+    )
+    deduplicated = {
+        str(entry["source_uri_or_path"]): entry for entry in entries
+    }
+    return sorted(
+        deduplicated.values(),
+        key=lambda entry: (
+            str(entry["source_uri_or_path"]),
+            str(entry.get("relative_path") or ""),
+        ),
+    )
 
 
 def get_dicom_paths(root_path):

@@ -8,8 +8,40 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 import pytest
+from pydicom.dataset import Dataset, FileDataset, FileMetaDataset
+from pydicom.sequence import Sequence
+from pydicom.uid import ExplicitVRLittleEndian, MediaStorageDirectoryStorage, generate_uid
 
 from imperandi.utils import archive_io
+
+
+def _dicomdir_bytes(referenced_paths: list[tuple[str, ...]]) -> bytes:
+    file_meta = FileMetaDataset()
+    file_meta.MediaStorageSOPClassUID = MediaStorageDirectoryStorage
+    file_meta.MediaStorageSOPInstanceUID = generate_uid()
+    file_meta.TransferSyntaxUID = ExplicitVRLittleEndian
+    dataset = FileDataset(
+        "DICOMDIR", {}, file_meta=file_meta, preamble=b"\0" * 128
+    )
+    dataset.is_little_endian = True
+    dataset.is_implicit_VR = False
+    dataset.FileSetID = "TEST"
+    dataset.OffsetOfTheFirstDirectoryRecordOfTheRootDirectoryEntity = 0
+    dataset.OffsetOfTheLastDirectoryRecordOfTheRootDirectoryEntity = 0
+    dataset.FileSetConsistencyFlag = 0
+    records = []
+    for referenced_path in referenced_paths:
+        record = Dataset()
+        record.OffsetOfTheNextDirectoryRecord = 0
+        record.RecordInUseFlag = 0xFFFF
+        record.OffsetOfReferencedLowerLevelDirectoryEntity = 0
+        record.DirectoryRecordType = "IMAGE"
+        record.ReferencedFileID = list(referenced_path)
+        records.append(record)
+    dataset.DirectoryRecordSequence = Sequence(records)
+    output = io.BytesIO()
+    dataset.save_as(output, write_like_original=False)
+    return output.getvalue()
 
 
 def _make_nested_zip_tar_with_dicom(root: Path) -> tuple[Path, str]:
@@ -55,6 +87,119 @@ def test_discover_dicom_sources_returns_archive_uri(tmp_path):
     assert rec["is_archive_member"]
     assert rec["source_uri_or_path"].startswith("archive://")
     assert rec["relative_path"] == "patientA/study1/series1/img1.dcm"
+
+
+def test_discover_dicom_sources_uses_every_dicomdir_in_one_zip(
+    tmp_path, monkeypatch
+):
+    archive = tmp_path / "multiple.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr(
+            "SET_A/DICOMDIR",
+            _dicomdir_bytes([("IMAGES", "IMAGE1")]),
+        )
+        zf.writestr("SET_A/IMAGES/IMAGE1", b"indexed A")
+        zf.writestr(
+            "SET_B/DICOMDIR",
+            _dicomdir_bytes([("IMAGE2",)]),
+        )
+        zf.writestr("SET_B/IMAGE2", b"indexed B")
+        zf.writestr("unindexed.dcm", b"must not be returned")
+
+    original_open_archive = archive_io._open_archive
+    original_dcmread = archive_io.dcmread
+    opened = []
+    brute_force_reads = 0
+
+    def counted_open_archive(source, source_name):
+        opened.append(source_name)
+        return original_open_archive(source, source_name)
+
+    def counted_dcmread(source, *args, **kwargs):
+        nonlocal brute_force_reads
+        if kwargs.get("force"):
+            brute_force_reads += 1
+        return original_dcmread(source, *args, **kwargs)
+
+    monkeypatch.setattr(archive_io, "_open_archive", counted_open_archive)
+    monkeypatch.setattr(archive_io, "dcmread", counted_dcmread)
+
+    records = archive_io.discover_dicom_sources([archive])
+
+    assert opened == [archive.name]
+    assert brute_force_reads == 0
+    assert {record["relative_path"] for record in records} == {
+        "SET_A/IMAGES/IMAGE1",
+        "SET_B/IMAGE2",
+    }
+    assert all(record["is_archive_member"] for record in records)
+    assert {
+        tuple(archive_io.decode_archive_uri(record["source_uri_or_path"])[1])
+        for record in records
+    } == {
+        ("SET_A/IMAGES/IMAGE1",),
+        ("SET_B/IMAGE2",),
+    }
+
+
+def test_discover_dicom_sources_falls_back_when_zip_dicomdir_is_unusable(
+    tmp_path, monkeypatch
+):
+    archive = tmp_path / "fallback.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("DICOMDIR", _dicomdir_bytes([("MISSING",)]))
+        zf.writestr("IMAGE1", b"extensionless dicom")
+        zf.writestr("NOT_DICOM", b"text")
+
+    real_dcmread = archive_io.dcmread
+    brute_force_reads = []
+
+    def selective_dcmread(source, *args, **kwargs):
+        if kwargs.get("force"):
+            payload = source.getvalue()
+            brute_force_reads.append(payload)
+            if payload != b"extensionless dicom":
+                raise ValueError("not dicom")
+        return real_dcmread(source, *args, **kwargs)
+
+    monkeypatch.setattr(archive_io, "dcmread", selective_dcmread)
+
+    records = archive_io.discover_dicom_sources([archive])
+
+    assert brute_force_reads == [b"extensionless dicom", b"text"]
+    assert [record["relative_path"] for record in records] == ["IMAGE1"]
+
+
+def test_nested_zip_dicomdir_is_resolved_and_each_zip_is_opened_once(
+    tmp_path, monkeypatch
+):
+    inner = io.BytesIO()
+    with zipfile.ZipFile(inner, "w") as zf:
+        zf.writestr("DATA/DICOMDIR", _dicomdir_bytes([("IMAGE1",)]))
+        zf.writestr("DATA/IMAGE1", b"indexed")
+
+    outer = tmp_path / "outer.zip"
+    with zipfile.ZipFile(outer, "w") as zf:
+        zf.writestr("nested/inner.zip", inner.getvalue())
+
+    original_open_archive = archive_io._open_archive
+    opened = []
+
+    def counted_open_archive(source, source_name):
+        opened.append(source_name)
+        return original_open_archive(source, source_name)
+
+    monkeypatch.setattr(archive_io, "_open_archive", counted_open_archive)
+
+    records = archive_io.discover_dicom_sources([outer], max_depth=3)
+
+    assert opened == ["outer.zip", "nested/inner.zip"]
+    assert len(records) == 1
+    decoded_outer, member_chain = archive_io.decode_archive_uri(
+        records[0]["source_uri_or_path"]
+    )
+    assert decoded_outer == outer.resolve()
+    assert member_chain == ["nested/inner.zip", "DATA/IMAGE1"]
 
 
 def test_iter_archive_members_respects_depth_limit(tmp_path):
