@@ -120,7 +120,8 @@ def test_decide_strategy_multi_gpu_clamps_workers_to_gpu_count(monkeypatch):
 
     assert strategy.mode == "process_pool"
     assert strategy.max_workers == 2
-    assert strategy.max_in_flight == 4
+    assert strategy.max_in_flight == 2
+    assert strategy.reasons["max_in_flight_reason"].startswith("GPU workload")
     assert strategy.start_method == "spawn"
 
 
