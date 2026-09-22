@@ -170,6 +170,53 @@ Copy a built-in YAML manifest as the starting point because the full built-in
 cleaning pipeline contains the geometry, modality, volume, and quality-control
 steps omitted from this abbreviated skeleton.
 
+## Cleaning filters
+
+Add `type: filter` steps to `cleaning.steps` to keep or discard records that
+match one or more rules. Set `kind` to `keep` or `discard`, set `scope` to
+`row` or `volume`, and combine multiple rules with `logic: and` or `logic: or`.
+A single rule defaults to `logic: and`. Place row filters before
+`group_volumes` and volume filters after it so that rules run at the declared
+granularity.
+
+Each rule names a `column`, an `op`, and, except for the null checks, a `value`:
+
+| `op` | Expected `value` | Behavior |
+| --- | --- | --- |
+| `eq` | Scalar | Exact equality |
+| `ne` | Scalar | Exact inequality |
+| `in` | List | Value occurs in the list |
+| `not_in` | List | Value does not occur in the list |
+| `contains` | Scalar | Case-sensitive literal substring match |
+| `icontains` | Scalar | Case-insensitive literal substring match |
+| `regex` | Regular-expression string | Case-sensitive regular-expression match; use an inline flag such as `(?i)` for case-insensitive matching |
+| `lt` / `lte` | Number | Numeric value is less than / less than or equal to the threshold |
+| `gt` / `gte` | Number | Numeric value is greater than / greater than or equal to the threshold |
+| `is_null` | Omit | Value is missing |
+| `not_null` | Omit | Value is present |
+
+Missing values do not match operators other than `is_null`. Set
+`keep_null: true` on the filter step to preserve records with a missing value
+in any referenced column, whether the step keeps matches or discards them.
+If a referenced column is absent entirely, the step is skipped with a warning.
+
+For example, retain CT and MR volumes whose reconstructed length is at least
+30 mm, while preserving volumes whose length is unknown:
+
+```yaml
+cleaning:
+  steps:
+    - type: filter
+      name: volume_length_quality
+      kind: keep
+      scope: volume
+      logic: and
+      keep_null: true
+      rules:
+        - {column: Modality, op: in, value: [CT, MR, MRI]}
+        - {column: volume_length, op: gte, value: 30.0}
+```
+
 ## Phase curation and fallback
 
 `phase_curation.strategies` is an ordered fallback chain. Each strategy is
