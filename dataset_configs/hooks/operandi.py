@@ -69,7 +69,7 @@ def check_operandi_patient_key(patient_key):
 
 
 @clean_hook(outputs=["patient_key"])
-@lru_cache(maxsize=65_536)
+@lru_cache(maxsize=4_096)
 def standardize_operandi_patient_key(patient_key):
     patient_key = _collapse_equivalent_person_name_components(patient_key)
     # remove prefix if string starts with 3 digits + underscore
@@ -101,7 +101,7 @@ def transform_operandi_patient_key(patient_key):
         return None
 
 
-@lru_cache(maxsize=65_536)
+@lru_cache(maxsize=4_096)
 def _extract_standardized_patient_fields(patient_key):
     """Return immutable derived fields for a standardized patient key."""
     tokens = [int(item) for item in patient_key.split("-")]
