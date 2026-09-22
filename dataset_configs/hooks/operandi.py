@@ -101,16 +101,25 @@ def transform_operandi_patient_key(patient_key):
         return None
 
 
+@lru_cache(maxsize=65_536)
+def _extract_standardized_patient_fields(patient_key):
+    """Return immutable derived fields for a standardized patient key."""
+    tokens = [int(item) for item in patient_key.split("-")]
+    return (
+        center_id_dict[tokens[0]],
+        source_id_ict[tokens[1]],
+        tumor_type_dict[tokens[3]],
+    )
+
+
 @clean_hook(outputs=["center", "source", "tumor_type"])
 def extract_from_patient_key(patient_key):
     patient_key = standardize_operandi_patient_key(patient_key)
-    tokens = patient_key.split("-")
-    tokens = [int(item) for item in tokens]
-    # return [center_id_dict[tokens[0]], source_id_ict[tokens[1]], tokens[2], tumor_type_dict[tokens[3]]]
+    center, source, tumor_type = _extract_standardized_patient_fields(patient_key)
     return pd.Series(
         {
-            "center": center_id_dict[tokens[0]],
-            "source": source_id_ict[tokens[1]],
-            "tumor_type": tumor_type_dict[tokens[3]],
+            "center": center,
+            "source": source,
+            "tumor_type": tumor_type,
         }
     )

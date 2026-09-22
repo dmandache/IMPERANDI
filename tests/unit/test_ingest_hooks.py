@@ -238,3 +238,17 @@ def test_operandi_derived_columns_use_standardized_key():
         "source",
         "tumor_type",
     ]
+
+
+def test_operandi_patient_field_extraction_is_cached():
+    extract_cached = operandi._extract_standardized_patient_fields
+    extract_cached.cache_clear()
+
+    first_result = operandi.extract_from_patient_key("001_01-02-0007-02")
+    first = extract_cached.cache_info()
+    second_result = operandi.extract_from_patient_key("1-2-7-2")
+    second = extract_cached.cache_info()
+
+    assert first_result.to_dict() == second_result.to_dict()
+    assert second.misses == first.misses
+    assert second.hits == first.hits + 1
