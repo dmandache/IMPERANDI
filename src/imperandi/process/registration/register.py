@@ -12,7 +12,11 @@ from imperandi.utils.checkpoint_cli import add_checkpoint_arguments
 from imperandi.utils.logging import log_script_namespace
 from imperandi.utils.manifest import load_manifest
 from imperandi.utils.run_state import build_checkpoint_paths
-from .config import TUMOR_CONSENSUS_METHODS, RegistrationConfig
+from .config import (
+    ORGAN_CONSENSUS_METHODS,
+    TUMOR_CONSENSUS_METHODS,
+    RegistrationConfig,
+)
 from .cohort import prepare_cohort
 from .reporting import group_label
 
@@ -37,6 +41,7 @@ def add_registration_arguments(parser):
     parser.add_argument(
         "--manifest", help="Built-in manifest name or YAML path (default: generic)."
     )
+    parser.add_argument("--organ_consensus", choices=ORGAN_CONSENSUS_METHODS)
     parser.add_argument("--tumor_consensus", choices=TUMOR_CONSENSUS_METHODS)
     source = parser.add_mutually_exclusive_group()
     source.add_argument(
@@ -178,6 +183,7 @@ def normalize_registration_args(args):
         checkpoint_every_rows=50,
         checkpoint_every_sec=300,
         manifest=None,
+        organ_consensus=None,
         tumor_consensus=None,
         keep_source_segmentation=None,
         affine=None,
@@ -208,6 +214,7 @@ def resolve_config(args):
     RegistrationConfig.from_mapping(raw)
     settings = dict(raw)
     for name in [
+        "organ_consensus",
         "tumor_consensus",
         "keep_source_segmentation",
         "affine",
@@ -231,9 +238,11 @@ def main(args):
     if args.dry_run:
         planned = prepare_cohort(table, config)
         logger.info(
-            "Registration dry run: series=%d, groups=%d, tumor_consensus=%s, affine=%s",
+            "Registration dry run: series=%d, groups=%d, organ_consensus=%s, "
+            "tumor_consensus=%s, affine=%s",
             len(planned),
             planned.registration_group_id.nunique(),
+            config.organ_consensus,
             config.tumor_consensus,
             config.affine,
         )

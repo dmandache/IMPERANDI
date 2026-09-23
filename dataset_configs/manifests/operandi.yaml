@@ -274,6 +274,7 @@ registration:
   group_columns: [patient_key, study_id, Modality]
   organ_column: mask_liver
   tumor_column: mask_liver_tumor
+  organ_consensus: anchor
   tumor_consensus: anchor
   affine: false
   affine_min_dice: 0.9

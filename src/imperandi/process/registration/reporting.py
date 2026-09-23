@@ -218,6 +218,7 @@ def build_qc(table, errors, config):
         )
     )
     result = table.reindex(columns=columns).copy()
+    result["organ_consensus"] = config.organ_consensus
     result["tumor_consensus"] = config.tumor_consensus
     messages = {}
     for row in errors.to_dict("records"):
@@ -263,6 +264,7 @@ def publish_group_log(df, indices, errors, config, directory):
             "group_values": group_values(first, config.group_columns),
             "series_count": len(rows),
             "registration_reference_label": _optional(reference_label),
+            "organ_consensus": first["organ_consensus"],
             "tumor_consensus": first["tumor_consensus"],
         }
     ]

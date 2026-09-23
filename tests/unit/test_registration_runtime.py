@@ -56,25 +56,35 @@ def test_manifest_overrides_defaults_and_cli(tmp_path, cohort):
     manifest = tmp_path / "custom.yaml"
     manifest.write_text(
         yaml.safe_dump(
-            {"registration": {"tumor_consensus": "majority", "affine": True}}
+            {
+                "registration": {
+                    "organ_consensus": "anchor",
+                    "tumor_consensus": "majority",
+                    "affine": True,
+                }
+            }
         )
     )
     args = register.normalize_registration_args(
         args_for(cohort, "--manifest", str(manifest))
     )
     config, _ = register.resolve_config(args)
+    assert config.organ_consensus == "anchor"
     assert config.tumor_consensus == "majority" and config.affine
     override = register.normalize_registration_args(
         args_for(
             cohort,
             "--manifest",
             str(manifest),
+            "--organ_consensus",
+            "majority",
             "--tumor_consensus",
             "union",
             "--no_affine",
         )
     )
     config, _ = register.resolve_config(override)
+    assert config.organ_consensus == "majority"
     assert config.tumor_consensus == "union" and not config.affine
     built_in = register.normalize_registration_args(
         args_for(cohort, "--manifest", "generic")
@@ -151,6 +161,7 @@ def test_startup_log_contains_effective_manifest_settings(
         yaml.safe_dump(
             {
                 "registration": {
+                    "organ_consensus": "anchor",
                     "tumor_consensus": "majority",
                     "affine": True,
                     "iterations": 17,
@@ -160,7 +171,13 @@ def test_startup_log_contains_effective_manifest_settings(
     )
     flags = ["--manifest", str(manifest), "--dry-run"]
     if override:
-        flags += ["--tumor_consensus", "union", "--no_affine"]
+        flags += [
+            "--organ_consensus",
+            "majority",
+            "--tumor_consensus",
+            "union",
+            "--no_affine",
+        ]
     args = args_for(cohort, *flags)
     with caplog.at_level(logging.INFO):
         if entry_point == "cli":
@@ -174,6 +191,7 @@ def test_startup_log_contains_effective_manifest_settings(
     ]
     assert len(records) == 1
     logged = records[0].args[1]
+    assert logged.organ_consensus == ("majority" if override else "anchor")
     assert logged.tumor_consensus == ("union" if override else "majority")
     assert logged.affine is not override
     assert logged.iterations == 17

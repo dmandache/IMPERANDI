@@ -85,3 +85,9 @@ def test_tumor_consensus_replaces_retired_method_setting():
     )
     with pytest.raises(ValueError, match="Unknown registration settings.*method"):
         RegistrationConfig.from_mapping({"method": "union"})
+
+
+@pytest.mark.parametrize("organ_consensus", [None, "union", "staple", True])
+def test_invalid_organ_consensus_is_rejected(organ_consensus):
+    with pytest.raises(ValueError, match="Unknown organ consensus"):
+        RegistrationConfig(organ_consensus=organ_consensus)

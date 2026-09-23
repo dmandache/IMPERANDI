@@ -84,7 +84,8 @@ segmented cohort with curated `phase` and, for MR, `mri_sequence` columns:
 ```bash
 imperandi register --csv_path nifti_index_phased.csv \
   --csv_path_out nifti_index_registered.csv --output_dir registration \
-  --manifest generic --tumor_consensus anchor --num_workers 4
+  --manifest generic --organ_consensus anchor --tumor_consensus anchor \
+  --num_workers 4
 ```
 
 The manifest's ordered `registration.group_columns` list defines group identity.
@@ -96,6 +97,12 @@ organs (geometry initialization instead for partial organs), signed-distance
 mask rigid, boundary-band mutual-information (MI) rigid, and optional
 boundary-band MI affine. Default masks are `mask_liver` and
 `mask_liver_tumor`; masks must match their native image geometry.
+
+Organ consensus choices are `anchor` and `majority`. `anchor` transfers the
+selected reference organ as before. `majority` writes the coverage-aware binary
+strict-majority (`> 0.5`) of the registered candidate masks. Voxels outside
+every registered candidate's observed FOV retain that scan's source organ
+annotation.
 
 Tumor consensus choices are `anchor`, `majority`, `intersection`, `union`, and `staple`.
 Valid complete organs take reference priority over partial organs. Boundary contact
@@ -128,9 +135,10 @@ if all scans are partial, anatomy outside that grid cannot be reconstructed.
 
 The stage loads `generic` by default. Use `--manifest generic` for a built-in
 manifest or `--manifest dataset_configs/manifests/operandi.yaml` for a file.
-CLI `--tumor_consensus` and `--affine`/`--no_affine` override manifest values. An optional
+CLI `--organ_consensus`, `--tumor_consensus`, and `--affine`/`--no_affine`
+override manifest values. An optional
 manifest `registration` mapping accepts `group_columns`, `organ_column`,
-`tumor_column`, `tumor_consensus`, `affine`, `affine_min_dice`,
+`tumor_column`, `organ_consensus`, `tumor_consensus`, `affine`, `affine_min_dice`,
 `early_stop_dice`,
 `iterations`, `min_dice`, `threshold`, and `reference_priority`. Affine
 refinement runs only when enabled, earlier stages have not reached
@@ -217,9 +225,10 @@ consensus. These thresholds are conservative starting points and need validation
 for the dataset and organ; none establish clinical segmentation quality.
 
 `nifti_path` always points to the original scan. Registration writes new NIfTI
-files and never modifies the original masks. In the output CSV, successful
-organ registrations replace `mask_liver` with the reference organ mask transferred
-to that scan's native grid (`reg_organ_native_path`). Successful consensus replaces
+files and never modifies the original masks. In the output CSV, successful organ
+registrations replace `mask_liver` with the configured organ consensus transferred
+to that scan's native grid (`reg_organ_native_path`). `anchor` preserves the
+previous reference-organ transfer behavior. Successful tumor consensus replaces
 `mask_liver_tumor` with the common tumor mask on the same native grid
 (`reg_tumor_native_path`). Original paths are preserved as `source_mask_liver`
 and `source_mask_liver_tumor` (in general, `source_<configured_mask_column>`).
@@ -242,7 +251,8 @@ in-memory intermediates.
 `register_qc.csv` contains one row per scan, including failures, with organ
 `dice_baseline`, `dice_pca`, `dice_geometry`, `dice_mask_rigid`, `dice_mi_rigid`,
 `dice_mi_affine`, and
-`dice_selected`.
+`dice_selected`. It also records the effective `organ_consensus` and
+`tumor_consensus` settings.
 Additional `registration_*` fields include organ completeness/QC, volume ratio,
 `dice_full`, `dice_common_fov`, common-FOV fraction, confidence, consensus
 contributor/exclusion counts and reasons, and support policy. The same fields

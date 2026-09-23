@@ -338,7 +338,9 @@ registration:
   # tumors are omitted from fusion. Originals are retained as source_<column>.
   organ_column: mask_liver
   tumor_column: mask_liver_tumor
-  # Fusion: anchor, majority, intersection, union, or staple.
+  # Organ fusion: anchor or majority.
+  organ_consensus: anchor
+  # Tumor fusion: anchor, majority, intersection, union, or staple.
   tumor_consensus: anchor
   # Run masked MI affine only when earlier stages do not meet the Dice target.
   affine: false
