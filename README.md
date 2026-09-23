@@ -1,11 +1,35 @@
-![image](https://raw.githubusercontent.com/dmandache/IMPERANDI/main/static/imperandi-banner.png)
+<p align="center">
+  <img src="https://raw.githubusercontent.com/dmandache/IMPERANDI/main/static/imperandi-logo-with-name.png"
+       alt="IMPERANDI"
+       width="330">
+</p>
 
+<p align="center">
+  <a href="https://pypi.org/project/imperandi/">
+    <img src="https://img.shields.io/pypi/v/imperandi.svg" alt="PyPI">
+  </a>
+  <img src="https://img.shields.io/pypi/pyversions/imperandi.svg" alt="Python versions">
+  <a href="https://imperandi.readthedocs.io/en/latest/">
+    <img src="https://readthedocs.org/projects/imperandi/badge/?version=latest" alt="Documentation">
+  </a>
+  <a href="https://github.com/dmandache/IMPERANDI/actions/workflows/tests.yml">
+    <img src="https://github.com/dmandache/IMPERANDI/actions/workflows/tests.yml/badge.svg?branch=main" alt="Tests">
+  </a>
+  <a href="https://codecov.io/gh/dmandache/IMPERANDI">
+    <img src="https://codecov.io/gh/dmandache/IMPERANDI/branch/main/graph/badge.svg" alt="Coverage">
+  </a>
+  <img src="https://img.shields.io/badge/lint-ruff-red" alt="Ruff">
+  <img src="https://img.shields.io/badge/code%20style-black-000000.svg" alt="Black">
+</p>
+
+<!-- ![image](https://raw.githubusercontent.com/dmandache/IMPERANDI/main/static/imperandi-logo-with-name.png) -->
+<!-- 
 ![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue)
 [![Documentation](https://readthedocs.org/projects/imperandi/badge/?version=latest)](https://imperandi.readthedocs.io/en/latest/)
 [![Code style](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 ![Linting](https://img.shields.io/badge/lint-ruff-red)
 ![Tests](https://github.com/dmandache/IMPERANDI/actions/workflows/tests.yml/badge.svg?branch=main)
-[![codecov](https://codecov.io/gh/dmandache/IMPERANDI/branch/main/graph/badge.svg)](https://codecov.io/gh/dmandache/IMPERANDI)
+[![codecov](https://codecov.io/gh/dmandache/IMPERANDI/branch/main/graph/badge.svg)](https://codecov.io/gh/dmandache/IMPERANDI) -->
 
 IMPERANDI is a Python framework and CLI for transforming heterogeneous DICOM collections into analysis-ready CT and MR imaging cohorts. It standardizes identifiers, curates imaging series and volume-level metadata, converts selected volumes to NIfTI, and supports downstream segmentation, contrast-phase identification, radiomics extraction, and quality control within a coherent, reproducible pipeline.
 
@@ -29,6 +53,8 @@ This work performed under the RHU OPERANDI project was supported in part by the 
 - Improves reproducibility with explicit CSV outputs at every stage and deterministic ID logic.
 - Improves reliability on real hospital exports with archive support, failure tracking, and resumable workflows.
 - Keeps adoption practical in secure environments with a lightweight Python-first toolchain.
+
+![image](https://raw.githubusercontent.com/dmandache/IMPERANDI/main/static/imperandi-banner.png)
 
 ## Current framework functionalities
 
@@ -121,7 +147,13 @@ imperandi radiomics --help
 
 ## Install
 
-Base install:
+Install from PyPI:
+
+```bash
+python -m pip install imperandi
+```
+
+Editable source install:
 
 ```bash
 python -m pip install -e .

@@ -2,7 +2,7 @@ Welcome to IMPERANDI’s documentation!
 =========
 
 .. figure:: https://raw.githubusercontent.com/dmandache/IMPERANDI/main/static/imperandi-banner.png
-   :alt: Viewer interface example
+   :alt: Imperandi pipeline
    :width: 700px
    :align: center
 

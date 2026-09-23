@@ -3,6 +3,14 @@
 IMPERANDI requires Python 3.10–3.12. A virtual environment keeps its
 scientific dependencies isolated from other projects.
 
+Install from PyPI:
+
+```bash
+python -m pip install imperandi
+```
+
+For an editable source install:
+
 ```bash
 git clone https://github.com/dmandache/IMPERANDI.git
 cd IMPERANDI
