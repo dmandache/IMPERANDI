@@ -8,7 +8,7 @@
   <a href="https://pypi.org/project/imperandi/">
     <img src="https://img.shields.io/pypi/v/imperandi.svg" alt="PyPI">
   </a>
-  <img src="https://img.shields.io/pypi/pyversions/imperandi.svg" alt="Python versions">
+  <img src="https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue" alt="Python versions">
   <a href="https://imperandi.readthedocs.io/en/latest/">
     <img src="https://readthedocs.org/projects/imperandi/badge/?version=latest" alt="Documentation">
   </a>
