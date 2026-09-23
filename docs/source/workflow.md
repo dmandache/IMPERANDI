@@ -91,10 +91,11 @@ The manifest's ordered `registration.group_columns` list defines group identity.
 The default is `[patient_key, study_id, Modality]`; a dataset can instead use,
 for example, `[patient_key, exam_stage]`. `Modality` has no special grouping
 rule: include it for separate modality groups or omit it to register modalities
-together. It applies an ordered liver-first cascade: baseline,
-PCA, geometry fallback, signed-distance mask rigid, boundary-band
-mutual-information (MI) rigid, and optional boundary-band MI affine. Default masks are
-`mask_liver` and `mask_liver_tumor`; masks must match their native image geometry.
+together. It applies an ordered liver-first cascade: baseline, PCA for complete
+organs (geometry initialization instead for partial organs), signed-distance
+mask rigid, boundary-band mutual-information (MI) rigid, and optional
+boundary-band MI affine. Default masks are `mask_liver` and
+`mask_liver_tumor`; masks must match their native image geometry.
 
 Tumor consensus choices are `anchor`, `majority`, `intersection`, `union`, and `staple`.
 Valid complete organs take reference priority over partial organs. Boundary contact
@@ -195,8 +196,8 @@ below `min_largest_component_fraction` (0.8) yield `invalid_organ_mask`.
 
 `allow_partial_organs: true` permits partial masks; false excludes them.
 Every pair evaluates baseline Dice first. Complete masks then try PCA; partial
-pairs skip PCA. Geometry translation is the fallback when the accepted Dice is
-still below the early-stop target. Mask-rigid and MI-rigid refinements follow
+pairs use geometry translation instead of PCA. Geometry initialization is not
+run for complete-organ pairs. Mask-rigid and MI-rigid refinements follow
 only as needed, and MI affine is the final conditional stage.
 MI samples are restricted to a shell extending `distance_band_mm` on both sides
 of each liver boundary; distant anatomy and deep organ interior do not drive the

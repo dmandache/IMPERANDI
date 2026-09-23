@@ -144,7 +144,7 @@ def test_partial_fov_perfect_alignment_uses_common_dice(monkeypatch):
     )
     assert result.confidence == "ok_partial_coverage"
     assert result.overlap["dice_common_fov"] == 1
-    assert result.stages["pca"]["status"] == "skipped_early_stop"
+    assert result.stages["pca"]["status"] == "skipped_partial_coverage"
     assert result.organ_volume_ratio > 2
 
 
