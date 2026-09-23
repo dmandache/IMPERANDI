@@ -45,10 +45,10 @@ def test_registration_manifests_use_ordered_reference_criteria(manifest_name):
         manifest_name, base_path=Path(__file__).resolve().parents[2]
     )
     config = RegistrationConfig.from_mapping(manifest["registration"])
-    assert config.reference_priority["MR"][0] == {"mri_sequence": ["T1", "T2", "DWI"]}
-    assert config.reference_priority["MR"][-1] == {
-        "registration_organ_volume_mm3": "max"
-    }
+    assert config.group_columns == ["patient_key", "study_id", "Modality"]
+    assert config.reference_priority[0] == {"Modality": ["CT", "MR"]}
+    assert config.reference_priority[2] == {"mri_sequence": ["T1", "T2", "DWI"]}
+    assert config.reference_priority[-1] == {"registration_organ_volume_mm3": "max"}
 
 
 def test_load_generic_manifest_and_hook_resolution():

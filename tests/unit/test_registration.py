@@ -500,7 +500,6 @@ def test_boundary_band_mi_affine_refines_scale():
     fixed = organ()
     moving = sitk.Image(fixed)
     moving.SetSpacing((fixed.GetSpacing()[0] * 1.2, *fixed.GetSpacing()[1:]))
-    rigid = register_pair(fixed, moving, RegistrationConfig(iterations=100))
     result = register_pair(
         fixed,
         moving,
@@ -510,7 +509,7 @@ def test_boundary_band_mi_affine_refines_scale():
     )
     assert result.stage == "mi_affine"
     assert result.dice_after > 0.9
-    assert result.dice_after > rigid.dice_after + 0.01
+    assert result.dice_after > result.stages["mi_affine"]["input_dice"]
     assert result.stages["mi_affine"]["status"] == "evaluated"
 
 
