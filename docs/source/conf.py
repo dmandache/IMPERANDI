@@ -58,6 +58,7 @@ exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
 html_theme = "sphinx_rtd_theme"
 html_title = "IMPERANDI documentation"
+html_logo = "../../static/imperandi-logo.png"
 html_theme_options = {
     "collapse_navigation": False,
     "navigation_depth": 3,
