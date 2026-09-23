@@ -5,7 +5,9 @@ import pytest
 from imperandi.process.registration.config import RegistrationConfig
 
 
-@pytest.mark.parametrize("name", ["min_dice", "affine_min_dice", "threshold"])
+@pytest.mark.parametrize(
+    "name", ["min_dice", "affine_min_dice", "early_stop_dice", "threshold"]
+)
 @pytest.mark.parametrize(
     "value", [True, False, None, "0.5", float("nan"), float("inf")]
 )
@@ -18,6 +20,12 @@ def test_thresholds_require_finite_numbers(name, value):
 def test_dice_threshold_endpoints_are_valid(value):
     config = RegistrationConfig(min_dice=value, affine_min_dice=value)
     assert config.min_dice == config.affine_min_dice == value
+
+
+@pytest.mark.parametrize("value", [0, -0.01, 1.01])
+def test_early_stop_dice_requires_positive_probability(value):
+    with pytest.raises(ValueError, match="early_stop_dice"):
+        RegistrationConfig(early_stop_dice=value)
 
 
 @pytest.mark.parametrize(

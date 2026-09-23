@@ -7,11 +7,11 @@ from typing import Mapping
 CONSENSUS_METHODS = ("anchor", "majority", "intersection", "union", "staple")
 REGISTRATION_STAGES = (
     "baseline",
-    "geometry",
     "pca",
-    "rigid",
-    "affine",
-    "elastic",
+    "geometry",
+    "mask_rigid",
+    "mi_rigid",
+    "mi_affine",
 )
 SUPPORTED_MODALITIES = ("CT", "MR")
 
@@ -32,8 +32,7 @@ class RegistrationConfig:
     method: str = "anchor"
     affine: bool = False
     affine_min_dice: float = 0.9
-    elastic: bool = False
-    elastic_min_dice: float = 0.7
+    early_stop_dice: float = 0.95
     boundary_margin_mm: float = 1.0
     allow_partial_organs: bool = True
     min_largest_component_fraction: float = 0.8
@@ -70,13 +69,11 @@ class RegistrationConfig:
             "keep_source_segmentation",
             "allow_partial_organs",
             "affine",
-            "elastic",
             "constrain_tumor_to_organ",
         ):
             if type(getattr(self, name)) is not bool:
                 raise ValueError(f"{name} must be a boolean")
         for name in (
-            "elastic_min_dice",
             "min_largest_component_fraction",
             "min_confidence_dice",
             "min_common_fov_fraction",
@@ -90,9 +87,11 @@ class RegistrationConfig:
             raise ValueError(f"Unknown consensus method: {self.method}")
         if type(self.iterations) is not int or self.iterations < 1:
             raise ValueError("iterations must be a positive integer")
-        for name in ("min_dice", "affine_min_dice", "threshold"):
+        for name in ("min_dice", "affine_min_dice", "early_stop_dice", "threshold"):
             if not _finite_number(getattr(self, name)):
                 raise ValueError(f"{name} must be a finite numeric threshold")
+        if not 0 < self.early_stop_dice <= 1:
+            raise ValueError("early_stop_dice must be in (0, 1]")
         if (
             not 0 <= self.min_dice <= 1
             or not 0 <= self.affine_min_dice <= 1

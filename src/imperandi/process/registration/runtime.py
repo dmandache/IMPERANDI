@@ -27,16 +27,14 @@ from .reporting import ERROR_COLUMNS, build_error_record, build_qc, group_label
 logger = logging.getLogger(__name__)
 
 # Increment when registration behavior changes so old artifacts are not reused.
-REGISTRATION_SCHEMA = 13
+REGISTRATION_SCHEMA = 14
 
 
 def _has_failed_stage(rows, config):
     """Recovered optimizer/validation failures are retryable too."""
-    enabled = {"geometry", "pca", "rigid"}
+    enabled = {"geometry", "pca", "mask_rigid", "mi_rigid"}
     if config.affine:
-        enabled.add("affine")
-    if config.elastic:
-        enabled.add("elastic")
+        enabled.add("mi_affine")
     for value in rows.registration_stage_details.dropna():
         try:
             stages = json.loads(value)

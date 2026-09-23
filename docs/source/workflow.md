@@ -89,9 +89,9 @@ imperandi register --csv_path nifti_index_phased.csv \
 
 The stage groups by `patient_key`, `study_id`, and normalized `Modality`
 (CT or MR/MRI). Use `--visit_column visit_id` when your dataset supplies a
-different visit identifier. It applies physical-space PCA initialization,
-rigid organ alignment, optional `--affine` refinement, and optional `--elastic`
-Diffeomorphic Demons refinement. Default masks are
+different visit identifier. It applies an ordered liver-first cascade: baseline,
+PCA, geometry fallback, signed-distance mask rigid, boundary-band
+mutual-information (MI) rigid, and optional boundary-band MI affine. Default masks are
 `mask_liver` and `mask_liver_tumor`; masks must match their native image geometry.
 
 Consensus methods are `anchor`, `majority`, `intersection`, `union`, and `staple`.
@@ -126,26 +126,19 @@ if all scans are partial, anatomy outside that grid cannot be reconstructed.
 
 The stage loads `generic` by default. Use `--manifest generic` for a built-in
 manifest or `--manifest dataset_configs/manifests/operandi.yaml` for a file.
-CLI `--method`, `--affine`/`--no_affine`, `--elastic`/`--no_elastic`,
-`--demons_smoothing_sigma_mm`, and `--visit_column` override manifest
+CLI `--method`, `--affine`/`--no_affine`, and `--visit_column` override manifest
 values. An optional manifest `registration` mapping accepts `visit_column`,
-`organ_column`, `tumor_column`, `method`, `affine`, `affine_min_dice`, `elastic`,
-`demons_smoothing_sigma_mm`,
+`organ_column`, `tumor_column`, `method`, `affine`, `affine_min_dice`,
+`early_stop_dice`,
 `iterations`, `min_dice`, `threshold`, and `reference_priority`. Affine
-refinement runs only when enabled and the best PCA/rigid organ Dice is at least
+refinement runs only when enabled, earlier stages have not reached
+`early_stop_dice` (default 0.95), and the best rigid organ Dice is at least
 `affine_min_dice` (default 0.9). Otherwise QC records `skipped_low_dice` and
-retains the best preceding transform. Elastic refinement uses SimpleITK's
-`DiffeomorphicDemonsRegistrationFilter` on signed-distance maps aligned
-by the selected linear transform. Displacement-field Gaussian smoothing defaults
-to a 1 mm sigma (`demons_smoothing_sigma_mm`), converted to voxel units per axis.
-This setting replaces `bspline_ctrl_spacing_mm`; existing manifests and commands
-must use the new setting, whose value is a smoothing sigma, not control-point
-spacing. The residual displacement is composed with the linear transform.
-The resulting field must remain fold-free and numerically invertible. Elastic also requires
-best linear Dice >= `elastic_min_dice` (default 0.7), using common-FOV Dice for
-partial masks. Every PCA, rigid,
-affine, and elastic candidate is
-compared with the best preceding Dice; a worse candidate is rejected and QC
+retains the best preceding transform. Each stage is scored with liver Dice
+(common-FOV liver Dice for partial masks). Reaching `early_stop_dice` records an
+explicit early stop for every remaining stage. Every PCA, geometry, mask-rigid,
+MI-rigid, and MI-affine candidate is compared with the best preceding Dice; a
+worse candidate is rejected and QC
 records `rejected_worse_dice` with its fallback stage. Defaults are 100 iterations,
 minimum organ Dice 0.1, and threshold 0.5. These initial QC settings require
 dataset validation.
@@ -198,9 +191,13 @@ Fewer than four voxels, an all-foreground FOV, or largest-component fraction
 below `min_largest_component_fraction` (0.8) yield `invalid_organ_mask`.
 
 `allow_partial_organs: true` permits partial masks; false excludes them.
-Every pair first evaluates geometry translation, aligning the physical image
-centers before refinement and the Dice threshold decisions. PCA is then
-evaluated only when both organ masks are complete; partial pairs skip PCA.
+Every pair evaluates baseline Dice first. Complete masks then try PCA; partial
+pairs skip PCA. Geometry translation is the fallback when the accepted Dice is
+still below the early-stop target. Mask-rigid and MI-rigid refinements follow
+only as needed, and MI affine is the final conditional stage.
+MI samples are restricted to a shell extending `distance_band_mm` on both sides
+of each liver boundary; distant anatomy and deep organ interior do not drive the
+intensity metric.
 Each candidate is retained only when it improves overlap. Both full/reference-grid
 Dice and common-FOV Dice are retained. Partial stage selection and `min_dice`
 rejection use common-FOV Dice; complete pairs retain full Dice. The fixed/moving
@@ -239,13 +236,15 @@ Reference-space images, transforms, coverage, and probability images remain
 in-memory intermediates.
 
 `register_qc.csv` contains one row per scan, including failures, with organ
-`dice_baseline`, `dice_geometry`, `dice_pca`, `dice_rigid`, `dice_affine`, `dice_elastic`, and
+`dice_baseline`, `dice_pca`, `dice_geometry`, `dice_mask_rigid`, `dice_mi_rigid`,
+`dice_mi_affine`, and
 `dice_selected`.
 Additional `registration_*` fields include organ completeness/QC, volume ratio,
 `dice_full`, `dice_common_fov`, common-FOV fraction, confidence, consensus
 contributor/exclusion counts and reasons, and support policy. The same fields
 appear under `anatomical_qc` in structured scan logs. Stage details include both
-Dice metrics and the selection metric; `geometry` records initialization for every pair.
+Dice metrics and the selection metric; skipped stages retain the Dice and reason
+that caused an early stop or conditional skip.
 When both the reference and moving tumor masks are available, corresponding
 `tumor_dice_*` fields provide diagnostic overlap without influencing transform
 selection.

@@ -489,7 +489,13 @@ def register_cohort(
                         },
                     }
                 else:
-                    result = pair_registration(reference_organ, organ, config)
+                    if pair_registration is register_pair:
+                        result = pair_registration(
+                            reference_organ, organ, config, reference, image
+                        )
+                    else:
+                        # Preserve the established three-argument injection API.
+                        result = pair_registration(reference_organ, organ, config)
                     tx = result.reference_to_scan
                     pair_results[i] = result
                     report = _registration_report(result)

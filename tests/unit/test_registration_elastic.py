@@ -1,10 +1,8 @@
 """Elastic validation in physical coordinates, including crop boundaries."""
 
 import numpy as np
-import pandas as pd
 import pytest
 
-from imperandi.process.registration import RegistrationConfig, register_cohort
 from imperandi.process.registration import alignment
 
 sitk = pytest.importorskip("SimpleITK")
@@ -189,39 +187,3 @@ def test_finite_but_wrong_inverse_is_rejected(monkeypatch):
         alignment.invert_elastic(composite(field), fixed, diagnostics)
     assert diagnostics["inverse_round_trip_max_mm"] >= 1.5
     assert diagnostics["validation_phase"] == "round_trip"
-
-
-def test_real_elastic_candidate_is_selected_through_cohort(tmp_path):
-    rows = []
-    for name, radii, phase in [
-        ("fixed", (8, 6, 4), "PORTAL_VENOUS"),
-        ("moving", (9, 7, 4), "ARTERIAL"),
-    ]:
-        path = tmp_path / (name + ".nii.gz")
-        sitk.WriteImage(organ(radii=radii), str(path))
-        rows.append(
-            dict(
-                patient_key="p",
-                study_id="v",
-                Modality="CT",
-                phase=phase,
-                nifti_path=str(path),
-                mask_liver=str(path),
-                mask_liver_tumor=str(path),
-            )
-        )
-    result, errors = register_cohort(
-        pd.DataFrame(rows),
-        tmp_path / "out",
-        RegistrationConfig(elastic=True, iterations=50),
-    )
-    assert errors.empty
-    assert result.loc[1, "registration_selected_stage"] == "elastic"
-    assert result.loc[1, "registration_dice_selected"] > 0.95
-    native = sitk.ReadImage(result.loc[1, "reg_tumor_native_path"])
-    assert native.GetSize() == organ().GetSize()
-    moving = sitk.ReadImage(rows[1]["nifti_path"])
-    assert np.allclose(native.GetDirection(), moving.GetDirection(), atol=1e-6, rtol=0)
-    assert native.GetSpacing() == pytest.approx(moving.GetSpacing())
-    assert native.GetOrigin() == pytest.approx(moving.GetOrigin())
-    assert alignment.dice(moving, native, sitk.Euler3DTransform()) > 0.95
