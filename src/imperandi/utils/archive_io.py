@@ -563,11 +563,22 @@ def discover_dicom_sources(
     root_entries: Iterable[Path],
     max_depth: int = DEFAULT_ARCHIVE_MAX_DEPTH,
     member_limit: int = DEFAULT_ARCHIVE_MEMBER_LIMIT,
+    excluded_roots: Iterable[Path] = (),
 ) -> list[dict[str, Any]]:
     dedup: dict[str, dict[str, Any]] = {}
+    excluded = tuple(
+        sorted({Path(path).resolve() for path in excluded_roots}, key=str)
+    )
 
     def _add_record(record: dict[str, Any]) -> None:
         dedup.setdefault(str(record["source_uri_or_path"]), record)
+
+    def _is_excluded(path: Path) -> bool:
+        resolved = path.resolve()
+        return any(
+            resolved == excluded_root or excluded_root in resolved.parents
+            for excluded_root in excluded
+        )
 
     for root in sorted({Path(p) for p in root_entries}, key=lambda p: str(p)):
         if not root.exists():
@@ -576,6 +587,8 @@ def discover_dicom_sources(
         if root.is_dir():
             scan_root = str(root)
             for path in sorted(root.rglob("*"), key=lambda p: str(p)):
+                if _is_excluded(path):
+                    continue
                 if not path.is_file():
                     continue
 

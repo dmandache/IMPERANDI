@@ -518,29 +518,42 @@ def get_dicom_path_entries(
     resolved_roots = resolve_root_paths(root_path)
     entries: list[dict] = []
     fallback_roots: list[Path] = []
+    indexed_file_set_roots: list[Path] = []
 
     for root in resolved_roots:
         scan_root = root if root.is_dir() else root.parent
-        dicomdir_entries: list[dict] = []
+        root_is_fully_indexed = False
+        usable_dicomdirs = 0
+        root_dicomdir_entry_count = 0
         dicomdirs = _find_dicomdirs(root)
         for dicomdir_path in dicomdirs:
-            dicomdir_entries.extend(
-                _entries_from_dicomdir(dicomdir_path, scan_root=scan_root)
+            dicomdir_entries = _entries_from_dicomdir(
+                dicomdir_path, scan_root=scan_root
             )
+            if not dicomdir_entries:
+                continue
+            usable_dicomdirs += 1
+            root_dicomdir_entry_count += len(dicomdir_entries)
+            entries.extend(dicomdir_entries)
+            file_set_root = dicomdir_path.parent.resolve()
+            indexed_file_set_roots.append(file_set_root)
+            if root.is_file() or file_set_root == root.resolve():
+                root_is_fully_indexed = True
 
-        if dicomdir_entries:
+        if usable_dicomdirs:
             logger.info(
                 "Using %s path(s) referenced by %s DICOMDIR file(s) under %s",
-                len(dicomdir_entries),
-                len(dicomdirs),
+                root_dicomdir_entry_count,
+                usable_dicomdirs,
                 root,
             )
-            entries.extend(dicomdir_entries)
-        else:
+        if not root_is_fully_indexed:
             fallback_roots.append(root)
 
     fallback_entries = discover_dicom_sources(
-        fallback_roots, max_depth=archive_max_depth
+        fallback_roots,
+        max_depth=archive_max_depth,
+        excluded_roots=indexed_file_set_roots,
     )
     entries.extend(
         entry

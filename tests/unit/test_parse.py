@@ -310,6 +310,43 @@ def test_get_dicom_path_entries_handles_dicomdir_per_glob_root(tmp_path):
     }
 
 
+def test_descendant_dicomdir_only_suppresses_its_own_file_set(tmp_path):
+    root = tmp_path / "dataset"
+    indexed_root = root / "site_a"
+    indexed_root.mkdir(parents=True)
+    indexed_image = indexed_root / "IMAGE1"
+    indexed_image.write_bytes(b"indexed")
+    unindexed_image = indexed_root / "unindexed.dcm"
+    unindexed_image.write_bytes(b"not indexed")
+    _make_dicomdir(indexed_root, [("IMAGE1",)])
+
+    sibling_root = root / "site_b"
+    sibling_root.mkdir()
+    sibling_image = sibling_root / "image.dcm"
+    sibling_image.write_bytes(b"scanned")
+    sibling_archive = sibling_root / "images.zip"
+    with zipfile.ZipFile(sibling_archive, "w") as zf:
+        zf.writestr("nested/archive_image.dcm", b"archived")
+
+    entries = parse.get_dicom_path_entries(root)
+
+    plain_sources = {
+        entry["source_uri_or_path"]
+        for entry in entries
+        if not entry["is_archive_member"]
+    }
+    assert plain_sources == {str(indexed_image), str(sibling_image)}
+    assert str(unindexed_image) not in plain_sources
+
+    archive_entries = [entry for entry in entries if entry["is_archive_member"]]
+    assert len(archive_entries) == 1
+    outer, member_chain = parse.decode_archive_uri(
+        archive_entries[0]["source_uri_or_path"]
+    )
+    assert outer == sibling_archive.resolve()
+    assert member_chain == ["nested/archive_image.dcm"]
+
+
 def test_get_dicom_path_entries_are_globally_sorted(tmp_path):
     root = tmp_path / "dicom_root"
     (root / "z_site" / "patientB").mkdir(parents=True)
