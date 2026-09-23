@@ -1,29 +1,20 @@
 <p align="center">
   <img src="https://raw.githubusercontent.com/dmandache/IMPERANDI/main/static/imperandi-logo-with-name.png"
        alt="IMPERANDI"
-       width="330">
+       width="380">
 </p>
 
 <p align="center">
-  <a href="https://pypi.org/project/imperandi/">
-    <img src="https://img.shields.io/pypi/v/imperandi.svg" alt="PyPI">
-  </a>
+  <a href="https://pypi.org/project/imperandi/"><img src="https://img.shields.io/pypi/v/imperandi.svg" alt="PyPI"></a>
   <img src="https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue" alt="Python versions">
-  <a href="https://imperandi.readthedocs.io/en/latest/">
-    <img src="https://readthedocs.org/projects/imperandi/badge/?version=latest" alt="Documentation">
-  </a>
-  <a href="https://github.com/dmandache/IMPERANDI/actions/workflows/tests.yml">
-    <img src="https://github.com/dmandache/IMPERANDI/actions/workflows/tests.yml/badge.svg?branch=main" alt="Tests">
-  </a>
-  <a href="https://codecov.io/gh/dmandache/IMPERANDI">
-    <img src="https://codecov.io/gh/dmandache/IMPERANDI/branch/main/graph/badge.svg" alt="Coverage">
-  </a>
+  <a href="https://imperandi.readthedocs.io/en/latest/"><img src="https://readthedocs.org/projects/imperandi/badge/?version=latest" alt="Documentation"></a>
+  <a href="https://github.com/dmandache/IMPERANDI/actions/workflows/tests.yml"><img src="https://github.com/dmandache/IMPERANDI/actions/workflows/tests.yml/badge.svg?branch=main" alt="Tests"></a>
+  <a href="https://codecov.io/gh/dmandache/IMPERANDI"><img src="https://codecov.io/gh/dmandache/IMPERANDI/branch/main/graph/badge.svg" alt="Coverage"></a>
   <img src="https://img.shields.io/badge/lint-ruff-red" alt="Ruff">
   <img src="https://img.shields.io/badge/code%20style-black-000000.svg" alt="Black">
 </p>
 
-<!-- ![image](https://raw.githubusercontent.com/dmandache/IMPERANDI/main/static/imperandi-logo-with-name.png) -->
-<!-- 
+<!-- ![image](https://raw.githubusercontent.com/dmandache/IMPERANDI/main/static/imperandi-logo-with-name.png) 
 ![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue)
 [![Documentation](https://readthedocs.org/projects/imperandi/badge/?version=latest)](https://imperandi.readthedocs.io/en/latest/)
 [![Code style](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
