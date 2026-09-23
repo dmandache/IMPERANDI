@@ -218,7 +218,7 @@ def build_qc(table, errors, config):
         )
     )
     result = table.reindex(columns=columns).copy()
-    result["consensus_method"] = config.method
+    result["tumor_consensus"] = config.tumor_consensus
     messages = {}
     for row in errors.to_dict("records"):
         messages.setdefault(row["registration_scan_id"], []).append(
@@ -263,7 +263,7 @@ def publish_group_log(df, indices, errors, config, directory):
             "group_values": group_values(first, config.group_columns),
             "series_count": len(rows),
             "registration_reference_label": _optional(reference_label),
-            "consensus_method": first["consensus_method"],
+            "tumor_consensus": first["tumor_consensus"],
         }
     ]
     for row in rows:

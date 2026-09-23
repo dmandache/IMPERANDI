@@ -339,7 +339,7 @@ registration:
   organ_column: mask_liver
   tumor_column: mask_liver_tumor
   # Fusion: anchor, majority, intersection, union, or staple.
-  method: anchor
+  tumor_consensus: anchor
   # Run masked MI affine only when earlier stages do not meet the Dice target.
   affine: false
   # Minimum organ Dice required before the affine optimizer is considered safe.

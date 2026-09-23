@@ -84,7 +84,7 @@ segmented cohort with curated `phase` and, for MR, `mri_sequence` columns:
 ```bash
 imperandi register --csv_path nifti_index_phased.csv \
   --csv_path_out nifti_index_registered.csv --output_dir registration \
-  --manifest generic --method anchor --num_workers 4
+  --manifest generic --tumor_consensus anchor --num_workers 4
 ```
 
 The manifest's ordered `registration.group_columns` list defines group identity.
@@ -127,9 +127,9 @@ if all scans are partial, anatomy outside that grid cannot be reconstructed.
 
 The stage loads `generic` by default. Use `--manifest generic` for a built-in
 manifest or `--manifest dataset_configs/manifests/operandi.yaml` for a file.
-CLI `--method` and `--affine`/`--no_affine` override manifest values. An optional
+CLI `--tumor_consensus` and `--affine`/`--no_affine` override manifest values. An optional
 manifest `registration` mapping accepts `group_columns`, `organ_column`,
-`tumor_column`, `method`, `affine`, `affine_min_dice`,
+`tumor_column`, `tumor_consensus`, `affine`, `affine_min_dice`,
 `early_stop_dice`,
 `iterations`, `min_dice`, `threshold`, and `reference_priority`. Affine
 refinement runs only when enabled, earlier stages have not reached

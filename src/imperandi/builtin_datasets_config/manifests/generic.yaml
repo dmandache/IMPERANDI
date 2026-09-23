@@ -244,12 +244,12 @@ segmentation:
       #       output: liver_all
 
 # Manifest-grouped organ registration and shared tumor segmentation.
-# CLI method and affine options override these settings.
+# CLI tumor-consensus and affine options override these settings.
 registration:
   group_columns: [patient_key, study_id, Modality]
   organ_column: mask_liver
   tumor_column: mask_liver_tumor
-  method: anchor
+  tumor_consensus: anchor
   affine: false
   affine_min_dice: 0.9
   early_stop_dice: 0.95

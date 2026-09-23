@@ -76,3 +76,12 @@ def test_ordered_reference_criteria_preserve_user_order():
 def test_group_columns_require_unique_nonempty_names(columns):
     with pytest.raises(ValueError, match="group_columns"):
         RegistrationConfig.from_mapping({"group_columns": columns})
+
+
+def test_tumor_consensus_replaces_retired_method_setting():
+    assert (
+        RegistrationConfig.from_mapping({"tumor_consensus": "union"}).tumor_consensus
+        == "union"
+    )
+    with pytest.raises(ValueError, match="Unknown registration settings.*method"):
+        RegistrationConfig.from_mapping({"method": "union"})
