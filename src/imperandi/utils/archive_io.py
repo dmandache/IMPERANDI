@@ -479,11 +479,11 @@ def _discover_archive_once(
                 for member_name in sorted(indexed_names)
             )
         else:
-            candidates = [
+            candidates = sorted(
                 name
                 for name in members
                 if name not in dicomdir_names and not is_archive_filename(name)
-            ]
+            )
             dcm_candidates = [
                 name for name in candidates if name.lower().endswith(".dcm")
             ]
