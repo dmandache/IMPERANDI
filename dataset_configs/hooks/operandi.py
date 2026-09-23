@@ -1,5 +1,6 @@
 """OPERANDI-specific dataset hook implementations."""
 
+from functools import lru_cache
 import re
 import pandas as pd
 
@@ -31,6 +32,28 @@ tumor_type_dict = {
     2: "CHC",  # carcinome hépatocellulaire (cancer primitif du foie)
 }
 
+# fix for TNE Nantes patient keys
+def _collapse_equivalent_person_name_components(patient_key):
+    """Collapse equivalent DICOM PN components, ignoring numeric zero-padding."""
+    patient_key = str(patient_key).strip()
+    components = [part.strip() for part in patient_key.split("^") if part.strip()]
+    if components and all(part == components[0] for part in components):
+        return components[0]
+
+    signatures = []
+    for component in components:
+        component = re.sub(r"^\d{3}_", "", component)
+        tokens = component.split("-")
+        if len(tokens) != 4:
+            return patient_key
+        try:
+            signatures.append(tuple(int(token) for token in tokens))
+        except ValueError:
+            return patient_key
+    if signatures and all(signature == signatures[0] for signature in signatures):
+        return components[0]
+    return patient_key
+
 
 def check_operandi_patient_key(patient_key):
     # remove prefix if string starts with 3 digits + underscore
@@ -46,7 +69,9 @@ def check_operandi_patient_key(patient_key):
 
 
 @clean_hook(outputs=["patient_key"])
+@lru_cache(maxsize=4_096)
 def standardize_operandi_patient_key(patient_key):
+    patient_key = _collapse_equivalent_person_name_components(patient_key)
     # remove prefix if string starts with 3 digits + underscore
     patient_key = re.sub(r"^\d{3}_", "", patient_key)
     # patient_key = center_id - source_id - patient_id - tumor_type
@@ -76,16 +101,25 @@ def transform_operandi_patient_key(patient_key):
         return None
 
 
+@lru_cache(maxsize=4_096)
+def _extract_standardized_patient_fields(patient_key):
+    """Return immutable derived fields for a standardized patient key."""
+    tokens = [int(item) for item in patient_key.split("-")]
+    return (
+        center_id_dict[tokens[0]],
+        source_id_ict[tokens[1]],
+        tumor_type_dict[tokens[3]],
+    )
+
+
 @clean_hook(outputs=["center", "source", "tumor_type"])
 def extract_from_patient_key(patient_key):
     patient_key = standardize_operandi_patient_key(patient_key)
-    tokens = patient_key.split("-")
-    tokens = [int(item) for item in tokens]
-    # return [center_id_dict[tokens[0]], source_id_ict[tokens[1]], tokens[2], tumor_type_dict[tokens[3]]]
+    center, source, tumor_type = _extract_standardized_patient_fields(patient_key)
     return pd.Series(
         {
-            "center": center_id_dict[tokens[0]],
-            "source": source_id_ict[tokens[1]],
-            "tumor_type": tumor_type_dict[tokens[3]],
+            "center": center,
+            "source": source,
+            "tumor_type": tumor_type,
         }
     )

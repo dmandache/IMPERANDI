@@ -180,6 +180,31 @@ def test_apply_derived_columns_handles_empty_input_and_manifest():
 def test_operandi_patient_key_validation_and_standardization():
     assert operandi.check_operandi_patient_key("001_01-02-0007-02")
     assert operandi.standardize_operandi_patient_key("001_01-02-0007-02") == "1-2-7-2"
+    assert (
+        operandi.standardize_operandi_patient_key(
+            "002-01-0001-01^002-01-0001-01"
+        )
+        == "2-1-1-1"
+    )
+    assert (
+        operandi.standardize_operandi_patient_key(
+            "002-01-0004-01^02-01-0004-01"
+        )
+        == "2-1-4-1"
+    )
+
+
+def test_operandi_patient_key_standardization_is_cached():
+    standardize = operandi.standardize_operandi_patient_key
+    standardize.cache_clear()
+
+    assert standardize("002-01-0004-01^02-01-0004-01") == "2-1-4-1"
+    first = standardize.cache_info()
+    assert standardize("002-01-0004-01^02-01-0004-01") == "2-1-4-1"
+    second = standardize.cache_info()
+
+    assert second.misses == first.misses
+    assert second.hits == first.hits + 1
 
 
 def test_operandi_patient_key_validation_rejects_unknown_codes():
@@ -213,3 +238,17 @@ def test_operandi_derived_columns_use_standardized_key():
         "source",
         "tumor_type",
     ]
+
+
+def test_operandi_patient_field_extraction_is_cached():
+    extract_cached = operandi._extract_standardized_patient_fields
+    extract_cached.cache_clear()
+
+    first_result = operandi.extract_from_patient_key("001_01-02-0007-02")
+    first = extract_cached.cache_info()
+    second_result = operandi.extract_from_patient_key("1-2-7-2")
+    second = extract_cached.cache_info()
+
+    assert first_result.to_dict() == second_result.to_dict()
+    assert second.misses == first.misses
+    assert second.hits == first.hits + 1

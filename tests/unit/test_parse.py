@@ -10,6 +10,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 import pandas as pd
 import pytest
+from pydicom.dataset import Dataset, FileDataset, FileMetaDataset
+from pydicom.sequence import Sequence
+from pydicom.uid import ExplicitVRLittleEndian, MediaStorageDirectoryStorage, generate_uid
 
 from imperandi.ingest import parse
 from imperandi.ingest import apply_hook_manifests
@@ -27,6 +30,37 @@ def _make_archive_dataset(root: Path) -> Path:
     with zipfile.ZipFile(outer_zip, "w") as zf:
         zf.write(inner_tar, arcname="nested/inner.tar.gz")
     return outer_zip
+
+
+def _make_dicomdir(root: Path, referenced_paths: list[tuple[str, ...]]) -> Path:
+    file_meta = FileMetaDataset()
+    file_meta.MediaStorageSOPClassUID = MediaStorageDirectoryStorage
+    file_meta.MediaStorageSOPInstanceUID = generate_uid()
+    file_meta.TransferSyntaxUID = ExplicitVRLittleEndian
+    dataset = FileDataset(
+        str(root / "DICOMDIR"),
+        {},
+        file_meta=file_meta,
+        preamble=b"\0" * 128,
+    )
+    dataset.is_little_endian = True
+    dataset.is_implicit_VR = False
+    dataset.FileSetID = "TEST"
+    dataset.OffsetOfTheFirstDirectoryRecordOfTheRootDirectoryEntity = 0
+    dataset.OffsetOfTheLastDirectoryRecordOfTheRootDirectoryEntity = 0
+    dataset.FileSetConsistencyFlag = 0
+    records = []
+    for referenced_path in referenced_paths:
+        record = Dataset()
+        record.OffsetOfTheNextDirectoryRecord = 0
+        record.RecordInUseFlag = 0xFFFF
+        record.OffsetOfReferencedLowerLevelDirectoryEntity = 0
+        record.DirectoryRecordType = "IMAGE"
+        record.ReferencedFileID = list(referenced_path)
+        records.append(record)
+    dataset.DirectoryRecordSequence = Sequence(records)
+    dataset.save_as(root / "DICOMDIR", write_like_original=False)
+    return root / "DICOMDIR"
 
 
 def test_normalize_parse_args_prefers_flags(tmp_path):
@@ -225,6 +259,94 @@ def test_get_dicom_paths_supports_glob_root(tmp_path):
     assert set(paths) == {p1, p2}
 
 
+def test_get_dicom_path_entries_prefers_existing_dicomdir(tmp_path):
+    root = tmp_path / "dataset"
+    referenced = root / "PATIENT1" / "SERIES1" / "IMAGE1"
+    referenced.parent.mkdir(parents=True)
+    referenced.write_bytes(b"referenced")
+    unrelated = root / "unrelated.dcm"
+    unrelated.write_bytes(b"not referenced")
+    _make_dicomdir(root, [("PATIENT1", "SERIES1", "IMAGE1")])
+
+    entries = parse.get_dicom_path_entries(root)
+
+    assert [entry["source_uri_or_path"] for entry in entries] == [str(referenced)]
+    assert entries[0]["scan_root"] == str(root.resolve())
+    assert entries[0]["relative_path"] == str(
+        Path("PATIENT1") / "SERIES1" / "IMAGE1"
+    )
+    assert not entries[0]["is_archive_member"]
+
+
+def test_get_dicom_path_entries_falls_back_when_dicomdir_is_unusable(tmp_path):
+    root = tmp_path / "dataset"
+    root.mkdir()
+    (root / "DICOMDIR").write_bytes(b"invalid")
+    image = root / "image.dcm"
+    image.write_bytes(b"dicom")
+
+    entries = parse.get_dicom_path_entries(root)
+
+    assert [entry["source_uri_or_path"] for entry in entries] == [str(image)]
+
+
+def test_get_dicom_path_entries_handles_dicomdir_per_glob_root(tmp_path):
+    indexed_root = tmp_path / "site_a"
+    indexed_root.mkdir()
+    indexed_image = indexed_root / "IMAGE1"
+    indexed_image.write_bytes(b"indexed")
+    _make_dicomdir(indexed_root, [("IMAGE1",)])
+
+    scanned_root = tmp_path / "site_b"
+    scanned_root.mkdir()
+    scanned_image = scanned_root / "image.dcm"
+    scanned_image.write_bytes(b"scanned")
+
+    entries = parse.get_dicom_path_entries(str(tmp_path / "site_*"))
+
+    assert {entry["source_uri_or_path"] for entry in entries} == {
+        str(indexed_image),
+        str(scanned_image),
+    }
+
+
+def test_descendant_dicomdir_only_suppresses_its_own_file_set(tmp_path):
+    root = tmp_path / "dataset"
+    indexed_root = root / "site_a"
+    indexed_root.mkdir(parents=True)
+    indexed_image = indexed_root / "IMAGE1"
+    indexed_image.write_bytes(b"indexed")
+    unindexed_image = indexed_root / "unindexed.dcm"
+    unindexed_image.write_bytes(b"not indexed")
+    _make_dicomdir(indexed_root, [("IMAGE1",)])
+
+    sibling_root = root / "site_b"
+    sibling_root.mkdir()
+    sibling_image = sibling_root / "image.dcm"
+    sibling_image.write_bytes(b"scanned")
+    sibling_archive = sibling_root / "images.zip"
+    with zipfile.ZipFile(sibling_archive, "w") as zf:
+        zf.writestr("nested/archive_image.dcm", b"archived")
+
+    entries = parse.get_dicom_path_entries(root)
+
+    plain_sources = {
+        entry["source_uri_or_path"]
+        for entry in entries
+        if not entry["is_archive_member"]
+    }
+    assert plain_sources == {str(indexed_image), str(sibling_image)}
+    assert str(unindexed_image) not in plain_sources
+
+    archive_entries = [entry for entry in entries if entry["is_archive_member"]]
+    assert len(archive_entries) == 1
+    outer, member_chain = parse.decode_archive_uri(
+        archive_entries[0]["source_uri_or_path"]
+    )
+    assert outer == sibling_archive.resolve()
+    assert member_chain == ["nested/archive_image.dcm"]
+
+
 def test_get_dicom_path_entries_are_globally_sorted(tmp_path):
     root = tmp_path / "dicom_root"
     (root / "z_site" / "patientB").mkdir(parents=True)
@@ -249,6 +371,27 @@ def test_get_dicom_path_entries_supports_archives(tmp_path):
     assert entry["is_archive_member"]
     assert entry["source_uri_or_path"].startswith("archive://")
     assert entry["relative_path"] == "patientA/study1/series1/img1.dcm"
+
+
+def test_get_dicom_path_entries_uses_dicomdir_inside_archive(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    dicomdir = _make_dicomdir(source, [("IMAGES", "IMAGE1")])
+    archive = tmp_path / "indexed.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.write(dicomdir, arcname="DATA/DICOMDIR")
+        zf.writestr("DATA/IMAGES/IMAGE1", b"indexed")
+        zf.writestr("DATA/unindexed.dcm", b"not indexed")
+
+    entries = parse.get_dicom_path_entries(archive, archive_max_depth=3)
+
+    assert len(entries) == 1
+    assert entries[0]["relative_path"] == "DATA/IMAGES/IMAGE1"
+    outer, member_chain = parse.decode_archive_uri(
+        entries[0]["source_uri_or_path"]
+    )
+    assert outer == archive.resolve()
+    assert member_chain == ["DATA/IMAGES/IMAGE1"]
 
 
 def test_choose_ids_uses_relative_path_for_archive_sources(tmp_path):

@@ -51,7 +51,7 @@ This work performed under the RHU OPERANDI project was supported in part by the 
 
 ### 1) Ingest and harmonize imaging metadata (`parse` + `clean` = `ingest`)
 
-- Scans DICOM files from folders, globbed roots, and nested archives (`.zip`, `.tar`, `.tar.gz`, `.tgz`).
+- Uses paths from existing `DICOMDIR` indexes on disk or inside archives, or scans DICOM files from folders, globbed roots, and nested archives (`.zip`, `.tar`, `.tar.gz`, `.tgz`).
 - Extracts selected DICOM header tags into a raw metadata table (`dicom_index.csv`).
 - Builds stable patient/study/series identifiers from tags, folder structure, or hybrid fallback rules.
 - Applies manifest-driven hooks for patient-key standardization and derived columns.
