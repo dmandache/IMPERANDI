@@ -268,10 +268,10 @@ segmentation:
             inputs: [liver_tumor, liver]
             output: liver_tumor
 
-# Intra-visit, intra-modal organ registration and shared tumor segmentation.
-# CLI method, affine toggle, spacing, and visit options override these settings.
+# Manifest-grouped organ registration and shared tumor segmentation.
+# CLI method and affine options override these settings.
 registration:
-  visit_column: study_id
+  group_columns: [patient_key, study_id, Modality]
   organ_column: mask_liver
   tumor_column: mask_liver_tumor
   method: anchor
@@ -294,17 +294,12 @@ registration:
   constrain_tumor_to_organ: true
   threshold: 0.5
   reference_priority:
-    CT:
-      - phase: [PORTAL_VENOUS, ARTERIAL, DELAYED, NATIVE]
-      - PixelSpacingXY: min
-      - SliceThickness: min
-      - registration_organ_volume_mm3: max
-    MR:
-      - mri_sequence: [T1, T2, DWI]
-      - phase: [PORTAL_VENOUS]
-      - PixelSpacingXY: min
-      - SliceThickness: min
-      - registration_organ_volume_mm3: max
+    - Modality: [CT, MR]
+    - phase: [PORTAL_VENOUS, ARTERIAL, DELAYED, NATIVE]
+    - mri_sequence: [T1, T2, DWI]
+    - PixelSpacingXY: min
+    - SliceThickness: min
+    - registration_organ_volume_mm3: max
 
 radiomics:
   # Native PyRadiomics parameter mapping plus cohort filters applied before

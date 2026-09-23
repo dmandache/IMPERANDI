@@ -328,11 +328,12 @@ segmentation:
 # ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
-# Align organs and fuse tumors within each patient + visit + modality group.
+# Align organs and fuse tumors within manifest-defined groups.
 # Matching CLI options override these values.
 registration:
-  # Visit identifier used for grouping.
-  visit_column: study_id
+  # Rows sharing every listed value form one registration group. Include
+  # Modality for separate CT/MR groups; omit it to permit cross-modality groups.
+  group_columns: [patient_key, study_id, Modality]
   # Mask-path columns; missing/empty organs skip the series, while missing/empty
   # tumors are omitted from fusion. Originals are retained as source_<column>.
   organ_column: mask_liver
@@ -371,17 +372,12 @@ registration:
   # Complete organs always precede partial organs. Move the organ-volume max
   # criterion earlier to make size more important than phase or resolution.
   reference_priority:
-    CT:
-      - phase: [PORTAL_VENOUS, ARTERIAL, DELAYED, NATIVE]
-      - PixelSpacingXY: min
-      - SliceThickness: min
-      - registration_organ_volume_mm3: max
-    MR:
-      - mri_sequence: [T1, T2, DWI]
-      - phase: [PORTAL_VENOUS]
-      - PixelSpacingXY: min
-      - SliceThickness: min
-      - registration_organ_volume_mm3: max
+    - Modality: [CT, MR]
+    - phase: [PORTAL_VENOUS, ARTERIAL, DELAYED, NATIVE]
+    - mri_sequence: [T1, T2, DWI]
+    - PixelSpacingXY: min
+    - SliceThickness: min
+    - registration_organ_volume_mm3: max
 
 # ---------------------------------------------------------------------------
 # Radiomics

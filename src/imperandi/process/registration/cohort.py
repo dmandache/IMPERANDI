@@ -13,9 +13,8 @@ import numpy as np
 import pandas as pd
 
 from .config import (
-    CONSENSUS_METHODS,
     REGISTRATION_STAGES,
-    SUPPORTED_MODALITIES,
+    CONSENSUS_METHODS,
     RegistrationConfig,
 )
 from .alignment import (
@@ -68,9 +67,13 @@ def normalize_label(value) -> str:
     return "" if pd.isna(value) else str(value).strip().upper()
 
 
-def normalize_modalities(table: pd.DataFrame) -> pd.Series:
-    """Normalize supported modality labels without changing source columns."""
-    return table.Modality.map(normalize_label).replace({"MRI": "MR"})
+def identity_value(column, value) -> str:
+    """Normalize values used in stable scan and group identities."""
+    label = "" if pd.isna(value) else str(value).strip()
+    if column == "Modality":
+        label = normalize_label(value)
+        return "MR" if label == "MRI" else label
+    return label
 
 
 def reference_rank(row, priorities) -> tuple[tuple, str]:
@@ -86,7 +89,11 @@ def reference_rank(row, priorities) -> tuple[tuple, str]:
         value = row.get(column)
         if isinstance(preference, list):
             labels = [normalize_label(label) for label in preference]
+            if column == "Modality":
+                labels = ["MR" if label == "MRI" else label for label in labels]
             label = normalize_label(value)
+            if column == "Modality" and label == "MRI":
+                label = "MR"
             ranks.append(labels.index(label) if label in labels else len(labels))
         else:
             try:
@@ -115,32 +122,20 @@ def prepare_cohort(table: pd.DataFrame, config) -> pd.DataFrame:
             df[source] = df[column] if column in df else None
         df[column] = df[source].astype(object)
 
-    required = [
-        "patient_key",
-        config.visit_column,
-        "Modality",
-        "nifti_path",
-        config.organ_column,
-    ]
+    required = [*config.group_columns, "nifti_path", config.organ_column]
     missing = set(required) - set(df.columns)
     if missing:
         raise ValueError(f"Missing registration columns: {sorted(missing)}")
-    for column in ["patient_key", config.visit_column, "Modality", "nifti_path"]:
+    for column in [*config.group_columns, "nifti_path"]:
         if df[column].isna().any() or df[column].astype(str).str.strip().eq("").any():
             raise ValueError(f"Missing registration identity: {column}")
 
-    modalities = normalize_modalities(df)
-    if not modalities.isin(SUPPORTED_MODALITIES).all():
-        raise ValueError("Registration supports CT and MR only")
-
     identities = [
         [
-            str(row.patient_key),
-            str(row[config.visit_column]),
-            modalities[index],
+            *(identity_value(column, row[column]) for column in config.group_columns),
             str(Path(row.nifti_path).expanduser().resolve()),
         ]
-        for index, row in df.iterrows()
+        for _, row in df.iterrows()
     ]
     scan_ids = [stable_id(identity) for identity in identities]
     if len(scan_ids) != len(set(scan_ids)):
@@ -149,12 +144,14 @@ def prepare_cohort(table: pd.DataFrame, config) -> pd.DataFrame:
     df["registration_scan_id"] = scan_ids
     df["registration_group_id"] = [
         stable_id(
-            (str(row.patient_key), str(row[config.visit_column]), modalities[index])
+            tuple(
+                identity_value(column, row[column]) for column in config.group_columns
+            )
         )
-        for index, row in df.iterrows()
+        for _, row in df.iterrows()
     ]
     df["registration_group_label"] = [
-        group_label(row, config.visit_column) for _, row in df.iterrows()
+        group_label(row, config.group_columns) for _, row in df.iterrows()
     ]
     # Clear previous-run values before planning, including organ volume used
     # as a priority criterion. Image-derived criteria become available after QC.
@@ -175,11 +172,9 @@ def prepare_cohort(table: pd.DataFrame, config) -> pd.DataFrame:
     df["registration_series_number"] = None
     df["registration_group_size"] = None
     for _, group in df.groupby("registration_group_id", sort=False):
-        modality = modalities.loc[group.index[0]]
-        priorities = config.reference_priority.get(modality, [])
         ordered = sorted(
             group.index,
-            key=lambda index: reference_rank(df.loc[index], priorities),
+            key=lambda index: reference_rank(df.loc[index], config.reference_priority),
         )
         for position, index in enumerate(ordered, start=1):
             df.at[index, "registration_series_number"] = position
@@ -338,7 +333,7 @@ def register_cohort(
     pair_registration=register_pair,
     fusion=fuse_tumors,
 ):
-    """Return (cohort, errors), grouping strictly by patient, visit and modality.
+    """Return (cohort, errors), grouping by configured manifest columns.
 
     This image-processing API performs fresh work. The CLI runner adds group
     scheduling, checkpointing, and resume around this function.
@@ -348,7 +343,6 @@ def register_cohort(
     sitk = backend()
     df = prepare_cohort(table, config)
     ids = df.registration_scan_id.tolist()
-    modalities = normalize_modalities(df)
     root = Path(output_dir).expanduser().resolve() / uuid.uuid4().hex
     root.mkdir(parents=True)
     errors = []
@@ -366,7 +360,7 @@ def register_cohort(
     groups = df.groupby("registration_group_id", sort=True)
     for _, group in groups:
         group_id = group.iloc[0].registration_group_id
-        label = group_label(group.iloc[0], config.visit_column)
+        label = group_label(group.iloc[0], config.group_columns)
         logger.info("Registration group started: %s, series=%d", label, len(group))
         directory = root / group_id
         group_started = time.perf_counter()
@@ -374,8 +368,7 @@ def register_cohort(
             timezone.utc
         ).isoformat()
         df.loc[group.index, "registration_group_id"] = group_id
-        modality = modalities.loc[group.index[0]]
-        priorities = config.reference_priority.get(modality, [])
+        priorities = config.reference_priority
         order = sorted(
             group.index, key=lambda index: reference_rank(df.loc[index], priorities)
         )
@@ -643,7 +636,10 @@ def register_cohort(
                         resample(coverage_image(tumor), reference, transforms[i])
                     )
                 fused = fusion(
-                    masks, coverages, method=config.method, threshold=config.threshold
+                    masks,
+                    coverages,
+                    method=config.method,
+                    threshold=config.threshold,
                 )
                 for i, tx in transforms.items():
                     try:

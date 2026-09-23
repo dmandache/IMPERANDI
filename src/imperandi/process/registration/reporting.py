@@ -34,8 +34,7 @@ ERROR_COLUMNS = [
     "patient_id",
     "date",
     "visit_order",
-    "visit",
-    "modality",
+    "registration_group_values",
     "registration_group_label",
     "registration_scan_label",
     "registration_scan_id",
@@ -73,24 +72,36 @@ def _value(record: Mapping[str, Any], *columns: str) -> str | None:
     return None
 
 
-def group_context(record: Mapping[str, Any], visit_column: str) -> dict[str, str]:
-    """Return the clinical attributes used to describe one registration group."""
-    patient = _value(record, "patient_id", "patient_key") or "unknown"
-    modality = (_value(record, "Modality", "modality") or "unknown").upper()
-    if modality == "MRI":
-        modality = "MR"
+def group_values(record: Mapping[str, Any], group_columns) -> dict[str, str]:
+    """Return normalized configured grouping values in manifest order."""
+    values = {}
+    for column in group_columns:
+        value = _value(record, column) or "unknown"
+        if column == "Modality":
+            value = value.upper()
+            if value == "MRI":
+                value = "MR"
+        values[column] = value
+    return values
+
+
+def group_context(record: Mapping[str, Any], group_columns) -> dict[str, str]:
+    """Return stable error-table context for one configured group."""
     return {
-        "patient_id": patient,
+        "patient_id": _value(record, "patient_id", "patient_key") or "unknown",
         "date": _value(record, "date", "visit_date", "StudyDate") or "unknown",
         "visit_order": _value(record, "visit_order") or "unknown",
-        "visit": _value(record, visit_column) or "unknown",
-        "modality": modality,
+        "registration_group_values": json.dumps(
+            group_values(record, group_columns), sort_keys=False
+        ),
     }
 
 
-def group_label(record: Mapping[str, Any], visit_column: str) -> str:
-    context = group_context(record, visit_column)
-    return ", ".join(f"{key}={value}" for key, value in context.items())
+def group_label(record: Mapping[str, Any], group_columns) -> str:
+    return ", ".join(
+        f"{column}={value}"
+        for column, value in group_values(record, group_columns).items()
+    )
 
 
 def scan_label(record: Mapping[str, Any]) -> str:
@@ -133,7 +144,7 @@ def _stage_summary(stages):
 def build_error_record(row, config, *, stage, error):
     """Build the shared error-table row for any registration failure."""
     return {
-        **group_context(row, config.visit_column),
+        **group_context(row, config.group_columns),
         "registration_group_label": row.get("registration_group_label"),
         "registration_scan_label": row.get("registration_scan_label"),
         "registration_scan_id": row.get("registration_scan_id"),
@@ -177,7 +188,7 @@ def build_qc(table, errors, config):
                 "patient_id",
                 "date",
                 "visit_order",
-                config.visit_column,
+                *config.group_columns,
                 "study_id",
                 "series_id",
                 "Modality",
@@ -248,7 +259,8 @@ def publish_group_log(df, indices, errors, config, directory):
     events = [
         {
             "event": "group_context",
-            **group_context(first, config.visit_column),
+            "group_columns": list(config.group_columns),
+            "group_values": group_values(first, config.group_columns),
             "series_count": len(rows),
             "registration_reference_label": _optional(reference_label),
             "consensus_method": first["consensus_method"],

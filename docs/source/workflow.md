@@ -87,27 +87,28 @@ imperandi register --csv_path nifti_index_phased.csv \
   --manifest generic --method anchor --num_workers 4
 ```
 
-The stage groups by `patient_key`, `study_id`, and normalized `Modality`
-(CT or MR/MRI). Use `--visit_column visit_id` when your dataset supplies a
-different visit identifier. It applies an ordered liver-first cascade: baseline,
+The manifest's ordered `registration.group_columns` list defines group identity.
+The default is `[patient_key, study_id, Modality]`; a dataset can instead use,
+for example, `[patient_key, exam_stage]`. `Modality` has no special grouping
+rule: include it for separate modality groups or omit it to register modalities
+together. It applies an ordered liver-first cascade: baseline,
 PCA, geometry fallback, signed-distance mask rigid, boundary-band
 mutual-information (MI) rigid, and optional boundary-band MI affine. Default masks are
 `mask_liver` and `mask_liver_tumor`; masks must match their native image geometry.
 
-Consensus methods are `anchor`, `majority`, `intersection`, `union`, and `staple`.
+Tumor consensus choices are `anchor`, `majority`, `intersection`, `union`, and `staple`.
 Valid complete organs take reference priority over partial organs. Boundary contact
 or a broad straight cut face marks a segmentation as partial, even when the cut
 lies inside the image. The straight-face heuristic checks both ends of each image
 axis on the largest connected component: the end section must occupy at least
 25% of the largest section and 90% of the adjacent inward section (at least four
 voxels). Small rounded tips are excluded; cuts oblique to the image axes are not
-detected by this heuristic. Within each completeness class, `reference_priority`
-applies criteria in list order: later criteria break ties in earlier criteria.
-The API defaults prefer portal venous, arterial, delayed, then native phases for
-CT; MR prefers T1, T2, then DWI, followed by portal venous phase. Both then prefer
-smaller `PixelSpacingXY`, smaller `SliceThickness`, and larger segmented organ
-volume in mm³. Complete ties use deterministic scan IDs. Dataset manifests can
-change this order.
+detected by this heuristic. Within each configured group and completeness class,
+`reference_priority` applies criteria in list order: later criteria break ties
+in earlier criteria. The default list first prefers CT over MR when both occur
+in one group, then orders phase, MR sequence, pixel spacing, slice thickness,
+and segmented organ volume. Criteria whose columns are absent simply tie.
+Complete ties use deterministic scan IDs. Dataset manifests can change this order.
 Anchor uses the reference tumor mask when available, otherwise the next valid
 mask in the same completeness and criterion order. Missing, nonexistent, and empty
 masks are omitted.
@@ -126,9 +127,9 @@ if all scans are partial, anatomy outside that grid cannot be reconstructed.
 
 The stage loads `generic` by default. Use `--manifest generic` for a built-in
 manifest or `--manifest dataset_configs/manifests/operandi.yaml` for a file.
-CLI `--method`, `--affine`/`--no_affine`, and `--visit_column` override manifest
-values. An optional manifest `registration` mapping accepts `visit_column`,
-`organ_column`, `tumor_column`, `method`, `affine`, `affine_min_dice`,
+CLI `--method` and `--affine`/`--no_affine` override manifest values. An optional
+manifest `registration` mapping accepts `group_columns`, `organ_column`,
+`tumor_column`, `method`, `affine`, `affine_min_dice`,
 `early_stop_dice`,
 `iterations`, `min_dice`, `threshold`, and `reference_priority`. Affine
 refinement runs only when enabled, earlier stages have not reached
@@ -143,18 +144,20 @@ records `rejected_worse_dice` with its fallback stage. Defaults are 100 iteratio
 minimum organ Dice 0.1, and threshold 0.5. These initial QC settings require
 dataset validation.
 
-`reference_priority` maps CT/MR to ordered lists of criteria, with exactly one
-column per item. For example:
+`reference_priority` is one ordered criterion list applied within every group,
+with exactly one column per item. Include `Modality` as an ordinary criterion
+when cross-modality groups need a preferred reference. For example:
 
 ```yaml
 registration:
+  group_columns: [patient_key, exam_stage]
   reference_priority:
-    MR:
-      - mri_sequence: [T1, T2]
-      - phase: [PORTAL_VENOUS]
-      - PixelSpacingXY: min
-      - SliceThickness: min
-      - registration_organ_volume_mm3: max
+    - Modality: [MR, CT]
+    - mri_sequence: [T1, T2]
+    - phase: [PORTAL_VENOUS]
+    - PixelSpacingXY: min
+    - SliceThickness: min
+    - registration_organ_volume_mm3: max
 ```
 
 A categorical list orders its values from most to least preferred; matching
@@ -171,9 +174,9 @@ In the example, T1 outranks T2 even if the T2 scan has smaller pixels. Move
 `registration_organ_volume_mm3: max` to the first criterion to favor the largest
 organ before sequence, phase, or resolution, within the same completeness class.
 Its position controls its influence; there is no separate volume cutoff.
-Each modality's supplied list replaces its defaults; an omitted modality uses
-only completeness and scan ID. To migrate the old selector syntax, combine
-repeated scalar preferences into one list, for example `- mri_sequence: [T1, T2]`,
+The supplied list replaces the default globally. An empty list uses only
+completeness and scan ID. Combine repeated scalar preferences into one list,
+for example `- mri_sequence: [T1, T2]`,
 and split compound selectors into separate criteria in the desired order.
 Scalar categorical selectors such as `- mri_sequence: T1` are rejected.
 
@@ -251,15 +254,15 @@ selection.
 Candidate scores are retained even when a simpler stage wins; unexecuted or
 failed optimizations have blank Dice and explicit stage status. Reference scans
 have baseline/selected Dice 1 and optimization stages marked `not_run`.
-The table links patient/visit/scan/reference IDs, source and output mask paths,
+The table links configured group/scan/reference IDs, source and output mask paths,
 selected stage, optimizer diagnostics, warnings, timing, and errors.
 Use `--qc_csv_path` to choose its location. QC is refreshed at checkpoint
 boundaries and reconstructed on resume if the final table is missing.
 
 Each group has one structured `registration.jsonl` log, linked by
 `registration_log_path`. Output rows link the single task-level QC table through
-`registration_qc_path`. Console and JSONL logs record patient ID, date, visit
-order, configured visit value, and modality once per group. Later events use the
+`registration_qc_path`. Console and JSONL logs record the configured grouping
+columns and their values once per group. Later events use the
 series position and group total (for example `series=1/6`) plus phase/sequence,
 references, and stage scores/statuses. JSONL stores one context event per group
 and one result event per series, with stage results nested under that series.
@@ -273,7 +276,7 @@ Organ distance maps are cropped around their foreground with configurable
 consensus masks are constrained to the registered organ; manifests can disable
 this with `constrain_tumor_to_organ: false`.
 
-The command checkpoints complete visit/modality groups and resumes by default.
+The command checkpoints complete configured groups and resumes by default.
 It tracks changes to the input CSV, referenced images/masks, resolved manifest,
 and algorithm settings. Each reused group must also have unchanged output artifacts.
 Deleting or modifying a group's outputs reruns that group; changed input data or
@@ -293,8 +296,9 @@ waiting for subprocesses; an interrupted group is recomputed on restart.
 
 The library API `register_cohort` remains a fresh-work image-processing interface
 with replaceable registration and fusion callables. The command's runner wraps
-it with scheduling and checkpoints. Registration does not perform deformable,
-cross-modality, or cross-visit alignment.
+it with scheduling and checkpoints. Registration does not perform deformable
+alignment. Cross-modality or longitudinal grouping is controlled explicitly by
+`group_columns` and should only be enabled for anatomically comparable volumes.
 
 ## Checkpoints and resume
 

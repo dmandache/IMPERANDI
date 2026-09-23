@@ -64,7 +64,12 @@ def test_manifest_overrides_defaults_and_cli(tmp_path, cohort):
     assert config.method == "majority" and config.affine
     override = register.normalize_registration_args(
         args_for(
-            cohort, "--manifest", str(manifest), "--method", "union", "--no_affine"
+            cohort,
+            "--manifest",
+            str(manifest),
+            "--method",
+            "union",
+            "--no_affine",
         )
     )
     config, _ = register.resolve_config(override)
@@ -93,7 +98,7 @@ def test_reference_criterion_order_changes_selection_and_invalidates_resume(
                 {
                     "registration": {
                         "iterations": 1,
-                        "reference_priority": {"MR": criteria},
+                        "reference_priority": criteria,
                     }
                 }
             )
@@ -142,7 +147,13 @@ def test_startup_log_contains_effective_manifest_settings(
     manifest = tmp_path / "logging.yaml"
     manifest.write_text(
         yaml.safe_dump(
-            {"registration": {"method": "majority", "affine": True, "iterations": 17}}
+            {
+                "registration": {
+                    "method": "majority",
+                    "affine": True,
+                    "iterations": 17,
+                }
+            }
         )
     )
     flags = ["--manifest", str(manifest), "--dry-run"]
