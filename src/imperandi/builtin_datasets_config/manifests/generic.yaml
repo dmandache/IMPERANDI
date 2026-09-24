@@ -266,6 +266,7 @@ registration:
     geometry: 0.001
     pca: 0.001
     mask_rigid: 0.002
+    mask_affine: 0.002
   minimum_stage_mi_improvement:
     mi_affine: 0.0
     mi_elastic: 0.0

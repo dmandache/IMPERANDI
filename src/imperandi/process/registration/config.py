@@ -11,6 +11,7 @@ REGISTRATION_STAGES = (
     "pca",
     "geometry",
     "mask_rigid",
+    "mask_affine",
     "mi_affine",
     "mi_elastic",
 )
@@ -19,6 +20,7 @@ DEFAULT_MINIMUM_STAGE_DICE_IMPROVEMENT = {
     "geometry": 0.001,
     "pca": 0.001,
     "mask_rigid": 0.002,
+    "mask_affine": 0.002,
 }
 
 DEFAULT_MINIMUM_STAGE_MI_IMPROVEMENT = {

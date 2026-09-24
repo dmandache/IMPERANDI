@@ -610,10 +610,10 @@ def _validate_linear_transform(transform):
     transform.GetInverse()
 
 
-def mask_rigid_refine(fixed_dm, moving_dm, initial, config):
-    """Rigidly align liver signed-distance maps."""
+def _mask_linear_refine(fixed_dm, moving_dm, initial, config, *, affine):
+    """Align liver signed-distance maps with a rigid or affine transform."""
     sitk = backend()
-    transform = _linear_transform(initial, affine=False)
+    transform = _linear_transform(initial, affine=affine)
     registration = sitk.ImageRegistrationMethod()
     registration.SetMetricAsMeanSquares()
     registration.SetInterpolator(sitk.sitkLinear)
@@ -628,6 +628,28 @@ def mask_rigid_refine(fixed_dm, moving_dm, initial, config):
     registration.Execute(fixed_dm, moving_dm)
     _validate_linear_transform(transform)
     return transform, registration
+
+
+def mask_rigid_refine(fixed_dm, moving_dm, initial, config):
+    """Rigidly align liver signed-distance maps."""
+    return _mask_linear_refine(
+        fixed_dm,
+        moving_dm,
+        initial,
+        config,
+        affine=False,
+    )
+
+
+def mask_affine_refine(fixed_dm, moving_dm, initial, config):
+    """Affinely align liver signed-distance maps."""
+    return _mask_linear_refine(
+        fixed_dm,
+        moving_dm,
+        initial,
+        config,
+        affine=True,
+    )
 
 
 def mi_refine(
@@ -827,6 +849,7 @@ def register_pair(
     pipeline = [
         initializer_stage,
         "mask_rigid",
+        "mask_affine",
         "mi_affine",
         "mi_elastic",
     ]
@@ -948,6 +971,48 @@ def register_pair(
         if reached_target():
             stages["mask_rigid"]["early_stop"] = True
             skip_remaining("mask_rigid")
+
+    if not reached_target():
+        started = time.perf_counter()
+        try:
+            if fixed_dm is None:
+                fixed_dm = distance_map(
+                    fixed_organ,
+                    padding_mm=config.distance_map_crop_padding_mm,
+                    band_mm=config.organ_boundary_band_half_width_mm,
+                )
+            if moving_dm is None:
+                moving_dm = distance_map(
+                    moving_organ,
+                    padding_mm=config.distance_map_crop_padding_mm,
+                    band_mm=config.organ_boundary_band_half_width_mm,
+                )
+            tx, reg = mask_affine_refine(fixed_dm, moving_dm, best, config)
+            stages["mask_affine"].update(
+                optimizer_stop=reg.GetOptimizerStopConditionDescription(),
+                optimizer_iteration=int(reg.GetOptimizerIteration()),
+                metric="mean_squares_signed_distance",
+            )
+            candidate = score_transform(tx, "mask_affine")
+            stage_transforms["mask_affine"] = tx
+            best, score, stage = _select_candidate(
+                best,
+                score,
+                stage,
+                tx,
+                candidate,
+                "mask_affine",
+                stages,
+                minimum_stage_improvement("mask_affine"),
+            )
+            peak_dice = max(peak_dice, score)
+        except (RuntimeError, ValueError) as exc:
+            _record_stage_failure(stages, warnings, "mask_affine", exc, score, stage)
+        finally:
+            stages["mask_affine"]["elapsed_seconds"] = time.perf_counter() - started
+        if reached_target():
+            stages["mask_affine"]["early_stop"] = True
+            skip_remaining("mask_affine")
 
     if stages["mi_affine"]["status"] == "not_run" and not config.enable_affine_stage:
         stages["mi_affine"].update(
