@@ -476,18 +476,32 @@ class RegistrationRejected(ValueError):
 
 
 def _select_candidate(
-    best, score, stage, candidate, candidate_score, candidate_stage, stages
+    best,
+    score,
+    stage,
+    candidate,
+    candidate_score,
+    candidate_stage,
+    stages,
+    min_delta,
 ):
-    """Accept improvement; otherwise retain the previous transform and annotate QC."""
+    """Accept a candidate only when it clears its minimum Dice improvement."""
     if not np.isfinite(candidate_score):
         raise ValueError("Nonfinite registration Dice")
     detail = stages[candidate_stage]
-    detail.update(dice=candidate_score, input_dice=score, selected=False)
+    improvement = candidate_score - score
+    detail.update(
+        dice=candidate_score,
+        input_dice=score,
+        dice_delta=improvement,
+        required_delta=min_delta,
+        selected=False,
+    )
     if candidate_score < score - DICE_TOLERANCE:
         detail.update(status="rejected_worse_dice", fallback_stage=stage)
         return best, score, stage
-    if candidate_score <= score + DICE_TOLERANCE:
-        detail.update(status="rejected_no_improvement", fallback_stage=stage)
+    if improvement < min_delta - DICE_TOLERANCE:
+        detail.update(status="rejected_insufficient_improvement", fallback_stage=stage)
         return best, score, stage
     stages[stage]["selected"] = False
     detail.update(status="evaluated", selected=True)
@@ -630,6 +644,10 @@ def register_pair(
     stages["baseline"].update(dice=before, status="evaluated", selected=True)
     initializer_stage = "geometry" if partial else "pca"
     pipeline = [initializer_stage, "mask_rigid", "mi_rigid", "mi_affine"]
+
+    def required_delta(name):
+        return config.min_delta["rigid" if name == "mask_rigid" else name]
+
     if partial:
         stages["pca"].update(status="skipped_partial_coverage", selected=False)
     else:
@@ -686,6 +704,7 @@ def register_pair(
                 initial_score,
                 initializer_stage,
                 stages,
+                required_delta(initializer_stage),
             )
         except (RuntimeError, ValueError) as exc:
             _record_stage_failure(
@@ -720,7 +739,14 @@ def register_pair(
             candidate = score_transform(tx, "mask_rigid")
             stage_transforms["mask_rigid"] = tx
             best, score, stage = _select_candidate(
-                best, score, stage, tx, candidate, "mask_rigid", stages
+                best,
+                score,
+                stage,
+                tx,
+                candidate,
+                "mask_rigid",
+                stages,
+                required_delta("mask_rigid"),
             )
         except (RuntimeError, ValueError) as exc:
             _record_stage_failure(stages, warnings, "mask_rigid", exc, score, stage)
@@ -749,7 +775,14 @@ def register_pair(
             candidate = score_transform(tx, "mi_rigid")
             stage_transforms["mi_rigid"] = tx
             best, score, stage = _select_candidate(
-                best, score, stage, tx, candidate, "mi_rigid", stages
+                best,
+                score,
+                stage,
+                tx,
+                candidate,
+                "mi_rigid",
+                stages,
+                required_delta("mi_rigid"),
             )
         except (RuntimeError, ValueError) as exc:
             _record_stage_failure(stages, warnings, "mi_rigid", exc, score, stage)
@@ -765,18 +798,6 @@ def register_pair(
             input_dice=score,
             selected=False,
             fallback_stage=stage,
-        )
-    elif stages["mi_affine"]["status"] == "not_run" and score < config.affine_min_dice:
-        stages["mi_affine"].update(
-            status="skipped_low_dice",
-            input_dice=score,
-            required_dice=config.affine_min_dice,
-            selected=False,
-            fallback_stage=stage,
-            reason=(
-                f"Best pre-affine Dice {score:.4f} is below the affine "
-                f"threshold {config.affine_min_dice:.4f}"
-            ),
         )
     elif stages["mi_affine"]["status"] == "not_run":
         started = time.perf_counter()
@@ -798,7 +819,14 @@ def register_pair(
             candidate = score_transform(tx, "mi_affine")
             stage_transforms["mi_affine"] = tx
             best, score, stage = _select_candidate(
-                best, score, stage, tx, candidate, "mi_affine", stages
+                best,
+                score,
+                stage,
+                tx,
+                candidate,
+                "mi_affine",
+                stages,
+                required_delta("mi_affine"),
             )
         except (RuntimeError, ValueError) as exc:
             _record_stage_failure(stages, warnings, "mi_affine", exc, score, stage)

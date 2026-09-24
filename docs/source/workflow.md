@@ -138,20 +138,19 @@ manifest or `--manifest dataset_configs/manifests/operandi.yaml` for a file.
 CLI `--organ_consensus`, `--tumor_consensus`, and `--affine`/`--no_affine`
 override manifest values. An optional
 manifest `registration` mapping accepts `group_columns`, `organ_column`,
-`tumor_column`, `organ_consensus`, `tumor_consensus`, `affine`, `affine_min_dice`,
-`early_stop_dice`, `pca_max_rotation_degrees`,
+`tumor_column`, `organ_consensus`, `tumor_consensus`, `affine`, `early_stop_dice`,
+`pca_max_rotation_degrees`, `min_delta`,
 `iterations`, `min_dice`, `threshold`, and `reference_priority`. Affine
-refinement runs only when enabled, earlier stages have not reached
-`early_stop_dice` (default 0.95), and the best rigid organ Dice is at least
-`affine_min_dice` (default 0.9). Otherwise QC records `skipped_low_dice` and
-retains the best preceding transform. Each stage is scored with liver Dice
+refinement runs when enabled and earlier stages have not reached
+`early_stop_dice` (default 0.95). Each stage is scored with liver Dice
 (common-FOV liver Dice for partial masks). Reaching `early_stop_dice` records an
 explicit early stop for every remaining stage. Every PCA, geometry, mask-rigid,
-MI-rigid, and MI-affine candidate is compared with the best preceding Dice; a
-worse candidate is rejected and QC
-records `rejected_worse_dice` with its fallback stage. Defaults are 100 iterations,
-minimum organ Dice 0.1, and threshold 0.5. These initial QC settings require
-dataset validation.
+MI-rigid, and MI-affine candidate must improve on the best preceding Dice by its
+configured `min_delta`. The defaults are 0.001 for geometry/PCA, 0.002 for
+rigid/MI-rigid, and 0.003 for affine/MI-affine. QC records the observed and
+required deltas and retains the preceding transform when improvement is
+insufficient. Defaults are 100 iterations, minimum organ Dice 0.1, and threshold
+0.5. These initial QC settings require dataset validation.
 
 `reference_priority` is one ordered criterion list applied within every group,
 with exactly one column per item. Include `Modality` as an ordinary criterion

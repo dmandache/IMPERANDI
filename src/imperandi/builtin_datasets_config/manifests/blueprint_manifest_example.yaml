@@ -344,8 +344,6 @@ registration:
   tumor_consensus: anchor
   # Run masked MI affine only when earlier stages do not meet the Dice target.
   affine: false
-  # Minimum organ Dice required before the affine optimizer is considered safe.
-  affine_min_dice: 0.9
   # Stop the cascade as soon as a selected transform reaches this liver Dice.
   early_stop_dice: 0.95
   # Completeness heuristics; tune for the dataset and organ, not clinical cutoffs.
@@ -356,6 +354,14 @@ registration:
   min_common_fov_fraction: 0.05
   # Reject PCA orientation candidates requiring a larger rigid rotation.
   pca_max_rotation_degrees: 45.0
+  # Minimum Dice improvement required to select each registration stage.
+  min_delta:
+    geometry: 0.001
+    pca: 0.001
+    rigid: 0.002
+    mi_rigid: 0.002
+    affine: 0.003
+    mi_affine: 0.003
   # Maximum iterations per optimization stage.
   iterations: 100
   # Minimum accepted organ Dice.
