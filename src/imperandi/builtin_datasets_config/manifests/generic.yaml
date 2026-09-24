@@ -244,39 +244,37 @@ segmentation:
       #       output: liver_all
 
 # Manifest-grouped organ registration and shared tumor segmentation.
-# CLI tumor-consensus and affine options override these settings.
+# Explicit CLI consensus-method and affine-stage options override these settings.
 registration:
-  group_columns: [patient_key, study_id, Modality]
-  organ_column: mask_liver
-  tumor_column: mask_liver_tumor
-  organ_consensus: anchor
-  tumor_consensus: anchor
-  affine: false
-  early_stop_dice: 0.95
+  grouping_columns: [patient_key, study_id, Modality]
+  organ_mask_column: mask_liver
+  tumor_mask_column: mask_liver_tumor
+  organ_consensus_method: anchor
+  tumor_consensus_method: anchor
+  enable_affine_stage: false
+  early_stop_organ_dice: 0.95
   # Dataset-dependent QC: edge contact suggests partial coverage.
-  boundary_margin_mm: 1.0
-  allow_partial_organs: true
-  min_largest_component_fraction: 0.8
-  min_confidence_dice: 0.5
-  min_common_fov_fraction: 0.05
-  pca_max_rotation_degrees: 45.0
-  min_delta:
+  partial_mask_boundary_margin_mm: 1.0
+  accept_partial_organ_masks: true
+  minimum_largest_component_fraction: 0.8
+  minimum_accepted_organ_dice: 0.5
+  minimum_common_field_of_view_fraction: 0.05
+  maximum_pca_rotation_degrees: 45.0
+  minimum_stage_dice_improvement:
     geometry: 0.001
     pca: 0.001
-    rigid: 0.002
+    mask_rigid: 0.002
     mi_rigid: 0.002
-    affine: 0.003
     mi_affine: 0.003
-  iterations: 100
-  min_dice: 0.1
-  crop_padding_mm: 25.0
+  maximum_optimizer_iterations: 100
+  distance_map_crop_padding_mm: 25.0
   # Signed-distance clamp and MI boundary-band half-width in mm.
-  distance_band_mm: 15.0
+  organ_boundary_band_half_width_mm: 15.0
   # Keep original organ masks while mapping tumor consensus.
-  keep_source_segmentation: false
-  constrain_tumor_to_organ: true
-  threshold: 0.5
-  reference_priority:
+  preserve_source_organ_mask: false
+  clip_tumor_consensus_to_organ: true
+  consensus_probability_threshold: 0.5
+  reference_selection_priority:
     - Modality: [CT, MR]
     - phase: [PORTAL_VENOUS, DELAYED, ARTERIAL, NATIVE, UNKNOWN]
     - mri_sequence: [T1, T2, DWI]

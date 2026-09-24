@@ -5,7 +5,9 @@ import pytest
 from imperandi.process.registration.config import RegistrationConfig
 
 
-@pytest.mark.parametrize("name", ["min_dice", "early_stop_dice", "threshold"])
+@pytest.mark.parametrize(
+    "name", ["early_stop_organ_dice", "consensus_probability_threshold"]
+)
 @pytest.mark.parametrize(
     "value", [True, False, None, "0.5", float("nan"), float("inf")]
 )
@@ -14,56 +16,54 @@ def test_thresholds_require_finite_numbers(name, value):
         RegistrationConfig(**{name: value})
 
 
-@pytest.mark.parametrize("value", [0, 1])
-def test_dice_threshold_endpoints_are_valid(value):
-    assert RegistrationConfig(min_dice=value).min_dice == value
-
-
 @pytest.mark.parametrize("value", [0, -0.01, 1.01])
 def test_early_stop_dice_requires_positive_probability(value):
-    with pytest.raises(ValueError, match="early_stop_dice"):
-        RegistrationConfig(early_stop_dice=value)
+    with pytest.raises(ValueError, match="early_stop_organ_dice"):
+        RegistrationConfig(early_stop_organ_dice=value)
 
 
 @pytest.mark.parametrize("value", [-0.01, 180.01, True, None, "45", float("nan")])
 def test_pca_rotation_limit_is_bounded(value):
-    with pytest.raises(ValueError, match="pca_max_rotation_degrees"):
-        RegistrationConfig(pca_max_rotation_degrees=value)
+    with pytest.raises(ValueError, match="maximum_pca_rotation_degrees"):
+        RegistrationConfig(maximum_pca_rotation_degrees=value)
 
 
 @pytest.mark.parametrize("value", [0, 45, 180])
 def test_pca_rotation_limit_accepts_valid_angles(value):
-    config = RegistrationConfig(pca_max_rotation_degrees=value)
-    assert config.pca_max_rotation_degrees == value
+    config = RegistrationConfig(maximum_pca_rotation_degrees=value)
+    assert config.maximum_pca_rotation_degrees == value
 
 
-def test_min_delta_partial_override_keeps_stage_defaults():
-    config = RegistrationConfig(min_delta={"pca": 0.01})
-    assert config.min_delta["pca"] == 0.01
-    assert config.min_delta["rigid"] == 0.002
-    assert config.min_delta["mi_affine"] == 0.003
+def test_minimum_stage_improvement_partial_override_keeps_defaults():
+    config = RegistrationConfig(minimum_stage_dice_improvement={"pca": 0.01})
+    assert config.minimum_stage_dice_improvement["pca"] == 0.01
+    assert config.minimum_stage_dice_improvement["mask_rigid"] == 0.002
+    assert config.minimum_stage_dice_improvement["mi_affine"] == 0.003
 
 
 @pytest.mark.parametrize("value", [None, [], "pca"])
-def test_min_delta_requires_mapping(value):
-    with pytest.raises(ValueError, match="min_delta must be a mapping"):
-        RegistrationConfig(min_delta=value)
+def test_minimum_stage_improvement_requires_mapping(value):
+    with pytest.raises(ValueError, match="minimum_stage_dice_improvement"):
+        RegistrationConfig(minimum_stage_dice_improvement=value)
 
 
 @pytest.mark.parametrize("value", [-0.01, 1.01, True, None, "0.1", float("nan")])
-def test_min_delta_values_are_probabilities(value):
-    with pytest.raises(ValueError, match="min_delta pca"):
-        RegistrationConfig(min_delta={"pca": value})
+def test_minimum_stage_improvement_values_are_probabilities(value):
+    with pytest.raises(ValueError, match="minimum_stage_dice_improvement pca"):
+        RegistrationConfig(minimum_stage_dice_improvement={"pca": value})
 
 
-def test_min_delta_rejects_unknown_stages():
-    with pytest.raises(ValueError, match="Unknown min_delta stages"):
-        RegistrationConfig(min_delta={"mask_rigid": 0.002})
+def test_minimum_stage_improvement_rejects_unknown_stages():
+    with pytest.raises(ValueError, match="Unknown minimum_stage_dice_improvement"):
+        RegistrationConfig(minimum_stage_dice_improvement={"rigid": 0.002})
 
 
-def test_affine_min_dice_is_no_longer_a_registration_setting():
-    with pytest.raises(ValueError, match="Unknown registration settings"):
-        RegistrationConfig.from_mapping({"affine_min_dice": 0.9})
+@pytest.mark.parametrize(
+    "name", ["affine_min_dice", "min_dice", "demons_smoothing_sigma_mm"]
+)
+def test_redundant_settings_are_removed(name):
+    with pytest.raises(ValueError, match="Removed registration settings"):
+        RegistrationConfig.from_mapping({name: 0.1})
 
 
 @pytest.mark.parametrize(
@@ -89,8 +89,8 @@ def test_affine_min_dice_is_no_longer_a_registration_setting():
     ],
 )
 def test_invalid_reference_criteria_are_rejected(priorities):
-    with pytest.raises(ValueError, match="reference_priority"):
-        RegistrationConfig.from_mapping({"reference_priority": priorities})
+    with pytest.raises(ValueError, match="reference_selection_priority"):
+        RegistrationConfig.from_mapping({"reference_selection_priority": priorities})
 
 
 def test_ordered_reference_criteria_preserve_user_order():
@@ -102,30 +102,42 @@ def test_ordered_reference_criteria_preserve_user_order():
         {"SliceThickness": "min"},
         {"registration_organ_volume_mm3": "max"},
     ]
-    config = RegistrationConfig.from_mapping({"reference_priority": priorities})
-    assert config.reference_priority == priorities
-    assert RegistrationConfig(reference_priority=[]).reference_priority == []
+    config = RegistrationConfig.from_mapping(
+        {"reference_selection_priority": priorities}
+    )
+    assert config.reference_selection_priority == priorities
+    assert (
+        RegistrationConfig(reference_selection_priority=[]).reference_selection_priority
+        == []
+    )
 
 
 @pytest.mark.parametrize(
     "columns",
     [None, [], {}, "patient_key", [""], [1], ["patient_key", "patient_key"]],
 )
-def test_group_columns_require_unique_nonempty_names(columns):
-    with pytest.raises(ValueError, match="group_columns"):
-        RegistrationConfig.from_mapping({"group_columns": columns})
+def test_grouping_columns_require_unique_nonempty_names(columns):
+    with pytest.raises(ValueError, match="grouping_columns"):
+        RegistrationConfig.from_mapping({"grouping_columns": columns})
 
 
-def test_tumor_consensus_replaces_retired_method_setting():
+def test_tumor_consensus_method_is_explicit():
     assert (
-        RegistrationConfig.from_mapping({"tumor_consensus": "union"}).tumor_consensus
+        RegistrationConfig.from_mapping(
+            {"tumor_consensus_method": "union"}
+        ).tumor_consensus_method
         == "union"
     )
     with pytest.raises(ValueError, match="Unknown registration settings.*method"):
         RegistrationConfig.from_mapping({"method": "union"})
 
 
-@pytest.mark.parametrize("organ_consensus", [None, "union", "staple", True])
-def test_invalid_organ_consensus_is_rejected(organ_consensus):
+@pytest.mark.parametrize("method", [None, "union", "staple", True])
+def test_invalid_organ_consensus_is_rejected(method):
     with pytest.raises(ValueError, match="Unknown organ consensus"):
-        RegistrationConfig(organ_consensus=organ_consensus)
+        RegistrationConfig(organ_consensus_method=method)
+
+
+def test_old_setting_names_report_replacements():
+    with pytest.raises(ValueError, match="group_columns -> grouping_columns"):
+        RegistrationConfig.from_mapping({"group_columns": ["patient_key"]})

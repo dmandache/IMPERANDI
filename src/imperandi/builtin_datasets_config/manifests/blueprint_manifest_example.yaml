@@ -333,55 +333,52 @@ segmentation:
 registration:
   # Rows sharing every listed value form one registration group. Include
   # Modality for separate CT/MR groups; omit it to permit cross-modality groups.
-  group_columns: [patient_key, study_id, Modality]
+  grouping_columns: [patient_key, study_id, Modality]
   # Mask-path columns; missing/empty organs skip the series, while missing/empty
   # tumors are omitted from fusion. Originals are retained as source_<column>.
-  organ_column: mask_liver
-  tumor_column: mask_liver_tumor
+  organ_mask_column: mask_liver
+  tumor_mask_column: mask_liver_tumor
   # Organ fusion: anchor or majority.
-  organ_consensus: anchor
+  organ_consensus_method: anchor
   # Tumor fusion: anchor, majority, intersection, union, or staple.
-  tumor_consensus: anchor
+  tumor_consensus_method: anchor
   # Run masked MI affine only when earlier stages do not meet the Dice target.
-  affine: false
+  enable_affine_stage: false
   # Stop the cascade as soon as a selected transform reaches this liver Dice.
-  early_stop_dice: 0.95
+  early_stop_organ_dice: 0.95
   # Completeness heuristics; tune for the dataset and organ, not clinical cutoffs.
-  boundary_margin_mm: 1.0
-  allow_partial_organs: true
-  min_largest_component_fraction: 0.8
-  min_confidence_dice: 0.5
-  min_common_fov_fraction: 0.05
+  partial_mask_boundary_margin_mm: 1.0
+  accept_partial_organ_masks: true
+  minimum_largest_component_fraction: 0.8
+  minimum_accepted_organ_dice: 0.5
+  minimum_common_field_of_view_fraction: 0.05
   # Reject PCA orientation candidates requiring a larger rigid rotation.
-  pca_max_rotation_degrees: 45.0
+  maximum_pca_rotation_degrees: 45.0
   # Minimum Dice improvement required to select each registration stage.
-  min_delta:
+  minimum_stage_dice_improvement:
     geometry: 0.001
     pca: 0.001
-    rigid: 0.002
+    mask_rigid: 0.002
     mi_rigid: 0.002
-    affine: 0.003
     mi_affine: 0.003
   # Maximum iterations per optimization stage.
-  iterations: 100
-  # Minimum accepted organ Dice.
-  min_dice: 0.1
+  maximum_optimizer_iterations: 100
   # Distance-map crop margin in mm.
-  crop_padding_mm: 25.0
+  distance_map_crop_padding_mm: 25.0
   # Signed-distance clamp and MI boundary-band half-width in mm.
-  distance_band_mm: 15.0
+  organ_boundary_band_half_width_mm: 15.0
   # Clip transferred tumors to the registered organ.
   # Keep original organ masks while mapping tumor consensus.
-  keep_source_segmentation: false
-  constrain_tumor_to_organ: true
+  preserve_source_organ_mask: false
+  clip_tumor_consensus_to_organ: true
   # Majority/STAPLE probability cutoff.
-  threshold: 0.5
+  consensus_probability_threshold: 0.5
   # Criteria are evaluated in list order, one column per item. A category list
   # gives most-to-least preferred values; min/max orders finite numeric values.
   # Later criteria break ties. Missing/unlisted values rank last per criterion.
   # Complete organs always precede partial organs. Move the organ-volume max
   # criterion earlier to make size more important than phase or resolution.
-  reference_priority:
+  reference_selection_priority:
     - Modality: [CT, MR]
     - phase: [PORTAL_VENOUS, ARTERIAL, DELAYED, NATIVE]
     - mri_sequence: [T1, T2, DWI]

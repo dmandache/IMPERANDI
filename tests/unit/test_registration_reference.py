@@ -134,7 +134,7 @@ def test_complete_ties_use_stable_scan_ids(priorities):
 
 def test_planning_discards_stale_organ_volume_without_loading_images():
     config = RegistrationConfig(
-        reference_priority=[
+        reference_selection_priority=[
             {"registration_organ_volume_mm3": "max"},
             {"mri_sequence": ["T1", "T2"]},
         ]
