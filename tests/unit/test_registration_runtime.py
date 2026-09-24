@@ -326,14 +326,14 @@ def test_retry_failed_recomputes_recovered_mi_failure(monkeypatch, cohort):
         raise ValueError("deliberate MI failure")
 
     monkeypatch.setattr(alignment, "mi_refine", fail_mi)
-    register.main(args_for(cohort))
+    register.main(args_for(cohort, "--enable_affine_stage"))
     output, errors, _ = paths_for(cohort)
     saved = pd.read_csv(output)
     assert not saved.registration_status.eq("failed").any()
     assert pd.read_csv(errors).empty
     assert (
         saved.registration_stage_details.map(
-            lambda value: json.loads(value)["mi_rigid"]["status"] == "failed"
+            lambda value: json.loads(value)["mi_affine"]["status"] == "failed"
         ).sum()
         == 1
     )
@@ -350,14 +350,14 @@ def test_retry_failed_recomputes_recovered_mi_failure(monkeypatch, cohort):
         yield from actual_groups(groups, *args, **kwargs)
 
     monkeypatch.setattr(runtime, "iter_group_results", tracking)
-    register.main(args_for(cohort))
+    register.main(args_for(cohort, "--enable_affine_stage"))
     assert observed == []
-    register.main(args_for(cohort, "--retry_failed"))
+    register.main(args_for(cohort, "--enable_affine_stage", "--retry_failed"))
     assert len(observed) == 1
     observed.clear()
     # Identical masks now produce an expected no-improvement rejection, which
     # must not be confused with an optimizer or validation failure on retry.
-    register.main(args_for(cohort, "--retry_failed"))
+    register.main(args_for(cohort, "--enable_affine_stage", "--retry_failed"))
     assert observed == []
 
 

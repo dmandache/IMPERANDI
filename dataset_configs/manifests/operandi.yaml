@@ -292,7 +292,6 @@ registration:
     pca: 0.001
     mask_rigid: 0.002
   minimum_stage_mi_improvement:
-    mi_rigid: 0.0
     mi_affine: 0.0
     mi_elastic: 0.0
   maximum_mi_stage_dice_decrease: 0.002

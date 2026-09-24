@@ -47,9 +47,8 @@ def test_minimum_stage_improvement_partial_override_keeps_defaults():
 
 
 def test_minimum_mi_improvement_partial_override_keeps_defaults():
-    config = RegistrationConfig(minimum_stage_mi_improvement={"mi_rigid": 0.01})
-    assert config.minimum_stage_mi_improvement["mi_rigid"] == 0.01
-    assert config.minimum_stage_mi_improvement["mi_affine"] == 0.0
+    config = RegistrationConfig(minimum_stage_mi_improvement={"mi_affine": 0.01})
+    assert config.minimum_stage_mi_improvement["mi_affine"] == 0.01
     assert config.minimum_stage_mi_improvement["mi_elastic"] == 0.0
 
 
@@ -70,7 +69,7 @@ def test_minimum_stage_improvement_rejects_unknown_stages():
         RegistrationConfig(minimum_stage_dice_improvement={"rigid": 0.002})
 
 
-@pytest.mark.parametrize("value", [None, [], "mi_rigid"])
+@pytest.mark.parametrize("value", [None, [], "mi_affine"])
 def test_minimum_mi_improvement_requires_mapping(value):
     with pytest.raises(ValueError, match="minimum_stage_mi_improvement"):
         RegistrationConfig(minimum_stage_mi_improvement=value)
@@ -78,13 +77,13 @@ def test_minimum_mi_improvement_requires_mapping(value):
 
 @pytest.mark.parametrize("value", [-0.01, True, None, "0.1", float("nan")])
 def test_minimum_mi_improvement_values_are_nonnegative(value):
-    with pytest.raises(ValueError, match="minimum_stage_mi_improvement mi_rigid"):
-        RegistrationConfig(minimum_stage_mi_improvement={"mi_rigid": value})
+    with pytest.raises(ValueError, match="minimum_stage_mi_improvement mi_affine"):
+        RegistrationConfig(minimum_stage_mi_improvement={"mi_affine": value})
 
 
 def test_minimum_mi_improvement_rejects_unknown_stages():
     with pytest.raises(ValueError, match="Unknown minimum_stage_mi_improvement"):
-        RegistrationConfig(minimum_stage_mi_improvement={"rigid": 0.002})
+        RegistrationConfig(minimum_stage_mi_improvement={"mi_rigid": 0.002})
 
 
 @pytest.mark.parametrize("value", [-0.01, 1.01, True, None, "0.1", float("nan")])

@@ -94,8 +94,10 @@ for example, `[patient_key, exam_stage]`. `Modality` has no special grouping
 rule: include it for separate modality groups or omit it to register modalities
 together. It applies an ordered liver-first cascade: baseline, PCA for complete
 organs (geometry initialization instead for partial organs), signed-distance
-mask rigid, boundary-band mutual-information (MI) rigid, and optional
-boundary-band MI affine followed by optional MI B-spline elastic refinement.
+mask rigid, optional boundary-band mutual-information (MI) affine, and optional
+MI B-spline elastic refinement. The low-level rigid MI refinement remains
+available through `mi_refine(..., affine=False)`, but is not part of the active
+cascade.
 Default masks are `mask_liver` and
 `mask_liver_tumor`; masks must match their native image geometry.
 
@@ -156,8 +158,8 @@ refinement runs when enabled and earlier stages have not reached
 records an explicit early stop for every remaining stage. PCA, geometry, and
 mask-rigid candidates must improve on the best preceding Dice by their configured
 `minimum_stage_dice_improvement` (defaults 0.001, 0.001, and 0.002).
-MI-rigid, MI-affine, and MI-elastic instead require deterministic boundary-band
-Mattes MI improvement while remaining within `maximum_mi_stage_dice_decrease`
+MI-affine and MI-elastic instead require deterministic boundary-band Mattes MI
+improvement while remaining within `maximum_mi_stage_dice_decrease`
 of the best anatomical Dice reached by the cascade (default 0.002). Optional
 positive MI deltas can be configured with `minimum_stage_mi_improvement`; zero
 means that any improvement above numerical tolerance is accepted. QC records
@@ -219,9 +221,9 @@ Every pair evaluates baseline Dice first. Complete masks then try PCA; partial
 pairs use geometry translation instead of PCA. Geometry initialization is not
 run for complete-organ pairs. PCA candidates whose principal rotation exceeds
 `maximum_pca_rotation_degrees` (default 45 degrees) are discarded, while centered
-translation remains available as a safe fallback. Mask-rigid and MI-rigid
-refinements follow only as needed. MI affine and fold-checked MI B-spline are the
-final optional stages, and both are disabled by default.
+translation remains available as a safe fallback. Mask-rigid refinement follows
+only as needed. MI affine and fold-checked MI B-spline are the final optional
+stages, and both are disabled by default.
 
 The elastic B-spline control-point spacing defaults to 90 mm; smaller values
 permit more local deformation and require correspondingly careful validation.
@@ -270,7 +272,7 @@ Reference-space images, transforms, coverage, and probability images remain
 in-memory intermediates.
 
 `register_qc.csv` contains one row per scan, including failures, with organ
-`dice_baseline`, `dice_pca`, `dice_geometry`, `dice_mask_rigid`, `dice_mi_rigid`,
+`dice_baseline`, `dice_pca`, `dice_geometry`, `dice_mask_rigid`,
 `dice_mi_affine`, `dice_mi_elastic`, and
 `dice_selected`. It also records the effective `organ_consensus` and
 `tumor_consensus` settings.

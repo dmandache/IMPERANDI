@@ -66,6 +66,21 @@ def test_mutual_information_score_is_deterministic():
     assert second == pytest.approx(first, abs=1e-12)
 
 
+def test_rigid_mi_refinement_remains_available():
+    fixed = organ()
+
+    transform, _ = alignment.mi_refine(
+        fixed,
+        fixed,
+        fixed,
+        fixed,
+        sitk.Euler3DTransform(),
+        RegistrationConfig(maximum_optimizer_iterations=1),
+    )
+
+    assert transform.GetName() == "Euler3DTransform"
+
+
 @pytest.mark.parametrize("affine", [False, True])
 def test_physical_translation_and_inverse(affine):
     fixed = organ()
@@ -181,7 +196,6 @@ def test_geometry_replaces_pca_only_for_partial_organs(monkeypatch, partial):
     assert result.stages[expected_stage]["selected"] is True
     assert result.stages[expected_stage]["early_stop"] is True
     assert result.stages["mask_rigid"]["status"] == "skipped_early_stop"
-    assert result.stages["mi_rigid"]["status"] == "skipped_early_stop"
     assert result.stages["mi_affine"]["status"] == "skipped_early_stop"
     assert result.stages["mi_elastic"]["status"] == "skipped_early_stop"
     assert "center_of_mass" not in result.stages
@@ -629,9 +643,9 @@ def test_boundary_band_mi_affine_refines_scale():
 @pytest.mark.parametrize(
     "scores,affine,selected_stage,rejected_stage,fallback_stage,selected_dice",
     [
-        ([0.5, 0.8, 0.9, 0.7], False, "mask_rigid", "mi_rigid", "mask_rigid", 0.9),
+        ([0.5, 0.8, 0.7], False, "pca", "mask_rigid", "pca", 0.8),
         (
-            [0.5, 0.8, 0.9, 0.7, 0.6],
+            [0.5, 0.8, 0.9, 0.7],
             True,
             "mask_rigid",
             "mi_affine",
@@ -706,8 +720,8 @@ def test_dice_and_mi_stages_use_their_respective_acceptance_criteria(monkeypatch
         def GetOptimizerIteration(self):
             return 1
 
-    scores = iter([0.5, 0.5005, 0.5015, 0.499, 0.4985])
-    mutual_information = iter([0.1, 0.2, 0.2, 0.20001])
+    scores = iter([0.5, 0.5005, 0.5015, 0.499])
+    mutual_information = iter([0.1, 0.2])
     monkeypatch.setattr(alignment, "dice", lambda *args: next(scores))
     monkeypatch.setattr(
         alignment,
@@ -745,17 +759,15 @@ def test_dice_and_mi_stages_use_their_respective_acceptance_criteria(monkeypatch
 
     assert list(scores) == []
     assert list(mutual_information) == []
-    assert result.stage == "mi_rigid"
+    assert result.stage == "mi_affine"
     assert result.dice_after == pytest.approx(0.499)
+    assert "mi_rigid" not in result.stages
     for name, required in (("pca", 0.001), ("mask_rigid", 0.002)):
         assert result.stages[name]["status"] == "rejected_insufficient_improvement"
         assert result.stages[name]["minimum_required_dice_improvement"] == required
-    assert result.stages["mi_rigid"]["status"] == "evaluated"
-    assert result.stages["mi_rigid"]["dice_improvement"] == pytest.approx(-0.001)
-    assert result.stages["mi_rigid"]["mutual_information_improvement"] == 0.1
-    assert result.stages["mi_affine"]["status"] == (
-        "rejected_insufficient_mi_improvement"
-    )
+    assert result.stages["mi_affine"]["status"] == "evaluated"
+    assert result.stages["mi_affine"]["dice_improvement"] == pytest.approx(-0.001)
+    assert result.stages["mi_affine"]["mutual_information_improvement"] == 0.1
     assert result.stages["mi_affine"]["minimum_required_mi_improvement"] == 0.001
     assert result.stages["mi_affine"]["dice_guard_reference"] == 0.5
 
@@ -817,11 +829,7 @@ def test_failed_linear_setup_retains_previous_alignment(monkeypatch):
     assert result.dice_after == 0.5
     assert result.stages["mask_rigid"]["status"] == "failed"
     assert result.stages["mask_rigid"]["fallback_stage"] == "baseline"
-    assert result.stages["mi_rigid"]["status"] == "failed"
-    assert result.warnings == [
-        "mask_rigid: optimizer unavailable",
-        "mi_rigid: optimizer unavailable",
-    ]
+    assert result.warnings == ["mask_rigid: optimizer unavailable"]
 
 
 @pytest.mark.parametrize("score", [float("nan"), float("inf")])
@@ -833,7 +841,7 @@ def test_nonfinite_candidate_retains_previous_alignment(monkeypatch, score):
         def GetOptimizerIteration(self):
             return 1
 
-    scores = iter([0.5, score, score, score])
+    scores = iter([0.5, score, score])
     monkeypatch.setattr(alignment, "dice", lambda *args: next(scores))
     monkeypatch.setattr(
         alignment, "initialize_pca", lambda *args: sitk.Euler3DTransform()
@@ -843,11 +851,6 @@ def test_nonfinite_candidate_retains_previous_alignment(monkeypatch, score):
         "mask_rigid_refine",
         lambda *args: (sitk.Euler3DTransform(), Optimizer()),
     )
-    monkeypatch.setattr(
-        alignment,
-        "mi_refine",
-        lambda *args, **kwargs: (sitk.Euler3DTransform(), Optimizer()),
-    )
     result = register_pair(
         organ(),
         organ(),
@@ -855,7 +858,7 @@ def test_nonfinite_candidate_retains_previous_alignment(monkeypatch, score):
     )
     assert result.stage == "identity"
     assert result.dice_after == 0.5
-    for name in ("pca", "mask_rigid", "mi_rigid"):
+    for name in ("pca", "mask_rigid"):
         assert result.stages[name]["status"] == "failed"
         assert result.stages[name]["fallback_stage"] == "baseline"
     assert result.stages["geometry"]["status"] == "skipped_complete_organ"
@@ -911,8 +914,8 @@ def test_mi_elastic_builds_an_invertible_bspline_residual():
 
 
 def test_mi_elastic_is_the_optional_final_stage_and_retains_inverse(monkeypatch):
-    scores = iter([0.5, 0.6, 0.7, 0.8, 0.9])
-    mutual_information = iter([0.1, 0.2, 0.2, 0.3])
+    scores = iter([0.5, 0.6, 0.7, 0.8])
+    mutual_information = iter([0.1, 0.2])
     forward = sitk.CompositeTransform(3)
     inverse = sitk.TranslationTransform(3)
 
@@ -1098,13 +1101,13 @@ def test_stage_qc_and_trace_logs(tmp_path, caplog):
     ]
     assert 0 <= moving.dice_baseline < moving.dice_pca <= 1
     assert pd.isna(moving.dice_mask_rigid)
-    assert pd.isna(moving.dice_mi_rigid)
     assert pd.isna(moving.dice_mi_affine)
     assert pd.isna(moving.dice_mi_elastic)
+    assert "dice_mi_rigid" not in qc.columns
     assert moving.mask_rigid_status == "skipped_early_stop"
-    assert moving.mi_rigid_status == "skipped_early_stop"
     assert moving.mi_affine_status == "skipped_early_stop"
     assert moving.mi_elastic_status == "skipped_early_stop"
+    assert "mi_rigid_status" not in qc.columns
     assert moving.registration_reference_id == out.loc[0, "registration_scan_id"]
     events = [
         json.loads(line)
@@ -1246,7 +1249,6 @@ def test_rejected_pair_keeps_qc_and_original_canonical_paths(tmp_path):
                 "pca": {"dice": 0.15, "status": "evaluated"},
                 "geometry": {"dice": None, "status": "not_run"},
                 "mask_rigid": {"dice": 0.2, "status": "evaluated"},
-                "mi_rigid": {"dice": None, "status": "not_run"},
                 "mi_affine": {"dice": None, "status": "not_run"},
                 "mi_elastic": {"dice": None, "status": "not_run"},
             },
