@@ -40,17 +40,51 @@ def test_elastic_control_point_spacing_must_be_positive(value):
         RegistrationConfig(elastic_control_point_spacing_mm=value)
 
 
+@pytest.mark.parametrize("value", [0, 101, -1, True, None, 25.0])
+def test_elastic_optimizer_iterations_are_short_positive_integer(value):
+    with pytest.raises(ValueError, match="elastic_optimizer_iterations"):
+        RegistrationConfig(elastic_optimizer_iterations=value)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "maximum_elastic_displacement_p95_mm",
+        "maximum_elastic_displacement_mm",
+        "minimum_elastic_jacobian_determinant",
+        "maximum_elastic_jacobian_determinant",
+    ],
+)
+@pytest.mark.parametrize("value", [0, -1, True, None, "1", float("nan")])
+def test_elastic_qc_limits_must_be_positive(name, value):
+    with pytest.raises(ValueError, match=name):
+        RegistrationConfig(**{name: value})
+
+
+def test_elastic_qc_limit_order_is_validated():
+    with pytest.raises(ValueError, match="p95_mm must not exceed"):
+        RegistrationConfig(
+            maximum_elastic_displacement_p95_mm=13,
+            maximum_elastic_displacement_mm=12,
+        )
+    with pytest.raises(ValueError, match="minimum_elastic_jacobian"):
+        RegistrationConfig(
+            minimum_elastic_jacobian_determinant=2,
+            maximum_elastic_jacobian_determinant=2,
+        )
+
+
 def test_minimum_stage_improvement_partial_override_keeps_defaults():
     config = RegistrationConfig(minimum_stage_dice_improvement={"pca": 0.01})
     assert config.minimum_stage_dice_improvement["pca"] == 0.01
     assert config.minimum_stage_dice_improvement["mask_rigid"] == 0.002
     assert config.minimum_stage_dice_improvement["mask_affine"] == 0.002
+    assert config.minimum_stage_dice_improvement["mask_elastic"] == 0.005
 
 
 def test_minimum_mi_improvement_partial_override_keeps_defaults():
     config = RegistrationConfig(minimum_stage_mi_improvement={"mi_affine": 0.01})
     assert config.minimum_stage_mi_improvement["mi_affine"] == 0.01
-    assert config.minimum_stage_mi_improvement["mi_elastic"] == 0.0
 
 
 @pytest.mark.parametrize("value", [None, [], "pca"])

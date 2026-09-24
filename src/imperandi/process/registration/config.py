@@ -13,7 +13,7 @@ REGISTRATION_STAGES = (
     "mask_rigid",
     "mask_affine",
     "mi_affine",
-    "mi_elastic",
+    "mask_elastic",
 )
 
 DEFAULT_MINIMUM_STAGE_DICE_IMPROVEMENT = {
@@ -21,11 +21,11 @@ DEFAULT_MINIMUM_STAGE_DICE_IMPROVEMENT = {
     "pca": 0.001,
     "mask_rigid": 0.002,
     "mask_affine": 0.002,
+    "mask_elastic": 0.005,
 }
 
 DEFAULT_MINIMUM_STAGE_MI_IMPROVEMENT = {
     "mi_affine": 0.0,
-    "mi_elastic": 0.0,
 }
 
 RENAMED_SETTINGS = {
@@ -56,11 +56,9 @@ RENAMED_SETTINGS = {
 
 REMOVED_SETTINGS = {
     "affine_min_dice": "affine execution is controlled by enable_affine_stage",
-    "elastic_min_dice": (
-        "use minimum_stage_mi_improvement.mi_elastic and maximum_mi_stage_dice_decrease"
-    ),
+    "elastic_min_dice": "use minimum_stage_dice_improvement.mask_elastic",
     "min_dice": "use minimum_accepted_organ_dice",
-    "demons_smoothing_sigma_mm": "mi_elastic uses MI B-spline refinement, not Demons",
+    "demons_smoothing_sigma_mm": "mask_elastic uses B-spline refinement, not Demons",
 }
 
 
@@ -84,6 +82,11 @@ class RegistrationConfig:
     enable_affine_stage: bool = False
     enable_elastic_stage: bool = False
     elastic_control_point_spacing_mm: float = 90.0
+    elastic_optimizer_iterations: int = 25
+    maximum_elastic_displacement_p95_mm: float = 8.0
+    maximum_elastic_displacement_mm: float = 12.0
+    minimum_elastic_jacobian_determinant: float = 0.5
+    maximum_elastic_jacobian_determinant: float = 2.0
     early_stop_organ_dice: float = 0.95
     partial_mask_boundary_margin_mm: float = 1.0
     accept_partial_organ_masks: bool = True
@@ -154,6 +157,11 @@ class RegistrationConfig:
             or self.maximum_optimizer_iterations < 1
         ):
             raise ValueError("maximum_optimizer_iterations must be a positive integer")
+        if (
+            type(self.elastic_optimizer_iterations) is not int
+            or not 1 <= self.elastic_optimizer_iterations <= 100
+        ):
+            raise ValueError("elastic_optimizer_iterations must be in [1, 100]")
         for name in ("early_stop_organ_dice", "consensus_probability_threshold"):
             if not _finite_number(getattr(self, name)):
                 raise ValueError(f"{name} must be a finite numeric threshold")
@@ -219,6 +227,30 @@ class RegistrationConfig:
         ):
             raise ValueError(
                 "elastic_control_point_spacing_mm must be finite and positive"
+            )
+        for name in (
+            "maximum_elastic_displacement_p95_mm",
+            "maximum_elastic_displacement_mm",
+            "minimum_elastic_jacobian_determinant",
+            "maximum_elastic_jacobian_determinant",
+        ):
+            if not _finite_number(getattr(self, name)) or getattr(self, name) <= 0:
+                raise ValueError(f"{name} must be finite and positive")
+        if (
+            self.maximum_elastic_displacement_p95_mm
+            > self.maximum_elastic_displacement_mm
+        ):
+            raise ValueError(
+                "maximum_elastic_displacement_p95_mm must not exceed "
+                "maximum_elastic_displacement_mm"
+            )
+        if (
+            self.minimum_elastic_jacobian_determinant
+            >= self.maximum_elastic_jacobian_determinant
+        ):
+            raise ValueError(
+                "minimum_elastic_jacobian_determinant must be less than "
+                "maximum_elastic_jacobian_determinant"
             )
         for name in (self.organ_mask_column, self.tumor_mask_column):
             if not isinstance(name, str) or not name.strip():

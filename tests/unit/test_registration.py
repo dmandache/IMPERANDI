@@ -198,7 +198,7 @@ def test_geometry_replaces_pca_only_for_partial_organs(monkeypatch, partial):
     assert result.stages["mask_rigid"]["status"] == "skipped_early_stop"
     assert result.stages["mask_affine"]["status"] == "skipped_early_stop"
     assert result.stages["mi_affine"]["status"] == "skipped_early_stop"
-    assert result.stages["mi_elastic"]["status"] == "skipped_early_stop"
+    assert result.stages["mask_elastic"]["status"] == "skipped_early_stop"
     assert "center_of_mass" not in result.stages
     if partial:
         assert result.stages["pca"]["status"] == "skipped_partial_coverage"
@@ -867,38 +867,6 @@ def test_mi_candidate_requires_improvement_and_respects_peak_dice_guard():
     )
 
 
-def test_demons_preserves_initial_transform_on_different_grids(tmp_path):
-    fixed = organ()
-    moving = sitk.Image(fixed)
-    shift = (4.0, -3.0, 2.0)
-    moving.SetOrigin(tuple(np.array(fixed.GetOrigin()) + shift))
-    initial = sitk.AffineTransform(3)
-    initial.SetTranslation(shift)
-    fixed_dm = alignment.distance_map(fixed, padding_mm=5, band_mm=15)
-    moving_dm = alignment.distance_map(moving, padding_mm=10, band_mm=15)
-
-    transform, demons = alignment.elastic_refine(
-        fixed_dm,
-        moving_dm,
-        initial,
-        RegistrationConfig(maximum_optimizer_iterations=5),
-    )
-
-    assert demons.GetName() == "DiffeomorphicDemonsRegistrationFilter"
-    assert np.allclose(demons.GetStandardDeviations(), 1 / np.array(fixed.GetSpacing()))
-    assert alignment.dice(fixed, moving, transform) == 1
-    point = fixed.TransformIndexToPhysicalPoint((15, 13, 11))
-    assert np.allclose(transform.TransformPoint(point), initial.TransformPoint(point))
-    inverse = alignment.invert_elastic(transform, fixed)
-    assert np.allclose(
-        inverse.TransformPoint(transform.TransformPoint(point)), point, atol=0.1
-    )
-    path = tmp_path / "demons.h5"
-    sitk.WriteTransform(transform, str(path))
-    restored = sitk.ReadTransform(str(path))
-    assert np.allclose(restored.TransformPoint(point), transform.TransformPoint(point))
-
-
 def test_failed_linear_setup_retains_previous_alignment(monkeypatch):
     def unavailable():
         raise RuntimeError("optimizer unavailable")
@@ -958,57 +926,37 @@ def test_nonfinite_candidate_retains_previous_alignment(monkeypatch, score):
     assert result.stages["geometry"]["status"] == "skipped_complete_organ"
 
 
-def test_demons_improves_nonrigid_organ_overlap():
-    fixed = organ()
-    z, y, x = np.indices((24, 28, 32))
-    moving = image(((x - 15) / 9) ** 2 + ((y - 13) / 7) ** 2 + ((z - 11) / 4) ** 2 < 1)
-    initial = sitk.Euler3DTransform()
-    fixed_dm = alignment.distance_map(fixed, padding_mm=10, band_mm=15)
-    moving_dm = alignment.distance_map(moving, padding_mm=10, band_mm=15)
-    transform, _ = alignment.elastic_refine(
-        fixed_dm,
-        moving_dm,
-        initial,
-        RegistrationConfig(maximum_optimizer_iterations=50),
-    )
-    assert alignment.dice(fixed, moving, transform) > alignment.dice(
-        fixed, moving, initial
-    )
-    inverse = alignment.invert_elastic(transform, fixed)
-    for index in ((15, 13, 11), (20, 13, 11), (15, 17, 11)):
-        point = fixed.TransformIndexToPhysicalPoint(index)
-        assert np.allclose(
-            inverse.TransformPoint(transform.TransformPoint(point)), point, atol=0.2
-        )
-
-
 @pytest.mark.parametrize("linear", [sitk.Euler3DTransform(), sitk.AffineTransform(3)])
-def test_mi_elastic_builds_an_invertible_bspline_residual(linear):
+def test_mask_elastic_builds_a_coarse_bspline_residual(linear):
     fixed = organ()
     domain = alignment.distance_map(fixed, padding_mm=10, band_mm=15)
 
-    transform, registration = alignment.mi_elastic_refine(
-        fixed,
-        fixed,
-        fixed,
-        fixed,
+    transform, registration = alignment.mask_elastic_refine(
+        domain,
         domain,
         linear,
-        RegistrationConfig(maximum_optimizer_iterations=1),
+        RegistrationConfig(elastic_optimizer_iterations=1),
+    )
+    field, qc = alignment.elastic_deformation_qc(
+        transform, domain, RegistrationConfig()
     )
     diagnostics = {}
-    inverse = alignment.invert_elastic(transform, fixed, diagnostics)
+    inverse = alignment.invert_mask_elastic(transform, domain, diagnostics, field)
     point = fixed.TransformIndexToPhysicalPoint((15, 13, 11))
 
     assert transform.GetNumberOfTransforms() == 2
+    assert transform.GetNthTransform(1).GetName() == "BSplineTransform"
     assert registration.GetOptimizerIteration() == 1
+    assert qc["deformation_qc_passed"] is True
     assert diagnostics["validation_phase"] == "complete"
     assert np.allclose(
         inverse.TransformPoint(transform.TransformPoint(point)), point, atol=0.2
     )
 
 
-def test_mi_elastic_prewarps_instead_of_setting_a_moving_transform(monkeypatch):
+def test_mask_elastic_prewarps_distance_map_instead_of_setting_moving_transform(
+    monkeypatch,
+):
     fixed = organ()
     moving = sitk.Image(fixed)
     shift = (4.0, -3.0, 2.0)
@@ -1022,7 +970,7 @@ def test_mi_elastic_prewarps_instead_of_setting_a_moving_transform(monkeypatch):
             self.registration = registration_factory()
 
         def SetMovingInitialTransform(self, transform):
-            raise AssertionError("MI elastic must prewarp the moving inputs")
+            raise AssertionError("Mask elastic must prewarp the moving distance map")
 
         def __getattr__(self, name):
             return getattr(self.registration, name)
@@ -1033,23 +981,19 @@ def test_mi_elastic_prewarps_instead_of_setting_a_moving_transform(monkeypatch):
         RegistrationWithoutMovingTransform,
     )
 
-    transform, _ = alignment.mi_elastic_refine(
-        fixed,
-        moving,
-        fixed,
-        moving,
+    transform, _ = alignment.mask_elastic_refine(
         alignment.distance_map(fixed, padding_mm=10, band_mm=15),
+        alignment.distance_map(moving, padding_mm=10, band_mm=15),
         initial,
-        RegistrationConfig(maximum_optimizer_iterations=1),
+        RegistrationConfig(elastic_optimizer_iterations=1),
     )
 
     assert transform.GetNthTransform(0).GetName() == "Euler3DTransform"
-    assert transform.GetNthTransform(1).GetName() == "DisplacementFieldTransform"
+    assert transform.GetNthTransform(1).GetName() == "BSplineTransform"
 
 
-def test_mi_elastic_is_the_optional_final_stage_and_retains_inverse(monkeypatch):
+def test_mask_elastic_is_the_optional_final_stage_and_retains_inverse(monkeypatch):
     scores = iter([0.5, 0.6, 0.7, 0.75, 0.8])
-    mutual_information = iter([0.1, 0.2])
     forward = sitk.CompositeTransform(3)
     inverse = sitk.TranslationTransform(3)
 
@@ -1071,11 +1015,6 @@ def test_mi_elastic_is_the_optional_final_stage_and_retains_inverse(monkeypatch)
 
     monkeypatch.setattr(alignment, "dice", lambda *args: next(scores))
     monkeypatch.setattr(
-        alignment,
-        "mutual_information_score",
-        lambda *args: next(mutual_information),
-    )
-    monkeypatch.setattr(
         alignment, "initialize_pca", lambda *args: sitk.Euler3DTransform()
     )
     monkeypatch.setattr(
@@ -1089,14 +1028,25 @@ def test_mi_elastic_is_the_optional_final_stage_and_retains_inverse(monkeypatch)
         lambda *args: (sitk.AffineTransform(3), Optimizer()),
     )
     monkeypatch.setattr(
-        alignment,
-        "mi_refine",
-        lambda *args, **kwargs: (sitk.Euler3DTransform(), Optimizer()),
+        alignment, "mask_elastic_refine", lambda *args: (forward, Optimizer())
     )
     monkeypatch.setattr(
-        alignment, "mi_elastic_refine", lambda *args: (forward, Optimizer())
+        alignment,
+        "elastic_deformation_qc",
+        lambda *args: (
+            None,
+            {
+                "deformation_qc_passed": True,
+                "deformation_qc_reasons": [],
+                "displacement_p95_mm": 2.0,
+                "displacement_max_mm": 3.0,
+                "jacobian_min": 0.9,
+                "jacobian_max": 1.1,
+                "jacobian_nonpositive_voxels": 0,
+            },
+        ),
     )
-    monkeypatch.setattr(alignment, "invert_elastic", lambda *args: inverse)
+    monkeypatch.setattr(alignment, "invert_mask_elastic", lambda *args: inverse)
 
     result = register_pair(
         organ(),
@@ -1104,21 +1054,101 @@ def test_mi_elastic_is_the_optional_final_stage_and_retains_inverse(monkeypatch)
         RegistrationConfig(
             enable_elastic_stage=True,
             early_stop_organ_dice=1,
-            maximum_optimizer_iterations=3,
         ),
     )
 
     assert list(scores) == []
-    assert list(mutual_information) == []
-    assert result.stage == "mi_elastic"
+    assert result.stage == "mask_elastic"
     assert result.reference_to_scan is forward
     assert result.scan_to_reference is inverse
     assert result.stages["mi_affine"]["status"] == "skipped_disabled"
-    assert result.stages["mi_elastic"]["status"] == "evaluated"
-    assert result.stages["mi_elastic"]["algorithm"] == "BSplineTransform"
-    assert result.stages["mi_elastic"]["metric"] == "mattes_mutual_information"
-    assert result.stages["mi_elastic"]["minimum_required_mi_improvement"] == 0.0
-    assert result.stages["mi_elastic"]["maximum_allowed_dice_decrease"] == 0.002
+    detail = result.stages["mask_elastic"]
+    assert detail["status"] == "evaluated"
+    assert detail["algorithm"] == "BSplineTransform"
+    assert detail["metric"] == "mean_squares_signed_distance"
+    assert detail["minimum_required_dice_improvement"] == 0.005
+    assert detail["optimizer_iteration_limit"] == 25
+    assert detail["displacement_p95_mm"] == 2.0
+
+
+@pytest.mark.parametrize(
+    "elastic_dice,qc_passed,inverse_fails,expected_status",
+    [
+        (0.754, True, False, "rejected_insufficient_improvement"),
+        (0.85, False, False, "rejected_deformation_qc"),
+        (0.85, True, True, "failed"),
+    ],
+)
+def test_mask_elastic_rejection_or_failure_falls_back_to_affine(
+    monkeypatch,
+    elastic_dice,
+    qc_passed,
+    inverse_fails,
+    expected_status,
+):
+    scores = iter([0.5, 0.6, 0.7, 0.75, elastic_dice])
+
+    class Optimizer:
+        def GetOptimizerStopConditionDescription(self):
+            return "test"
+
+        def GetOptimizerIteration(self):
+            return 1
+
+    monkeypatch.setattr(alignment, "dice", lambda *args: next(scores))
+    monkeypatch.setattr(
+        alignment, "initialize_pca", lambda *args: sitk.Euler3DTransform()
+    )
+    monkeypatch.setattr(
+        alignment,
+        "mask_rigid_refine",
+        lambda *args: (sitk.Euler3DTransform(), Optimizer()),
+    )
+    affine = sitk.AffineTransform(3)
+    monkeypatch.setattr(
+        alignment,
+        "mask_affine_refine",
+        lambda *args: (affine, Optimizer()),
+    )
+    monkeypatch.setattr(
+        alignment,
+        "mask_elastic_refine",
+        lambda *args: (sitk.CompositeTransform(3), Optimizer()),
+    )
+    reasons = [] if qc_passed else ["maximum_displacement_exceeds_limit"]
+    monkeypatch.setattr(
+        alignment,
+        "elastic_deformation_qc",
+        lambda *args: (
+            None,
+            {
+                "deformation_qc_passed": qc_passed,
+                "deformation_qc_reasons": reasons,
+            },
+        ),
+    )
+
+    def reject_inverse(*args):
+        exception = (
+            ValueError("inverse failed")
+            if inverse_fails
+            else AssertionError("Rejected elastic candidate must not be inverted")
+        )
+        raise exception
+
+    monkeypatch.setattr(alignment, "invert_mask_elastic", reject_inverse)
+
+    result = register_pair(
+        organ(),
+        organ(),
+        RegistrationConfig(enable_elastic_stage=True, early_stop_organ_dice=1),
+    )
+
+    assert list(scores) == []
+    assert result.stage == "mask_affine"
+    assert result.reference_to_scan is affine
+    assert result.stages["mask_elastic"]["status"] == expected_status
+    assert result.stages["mask_elastic"]["fallback_stage"] == "mask_affine"
 
 
 def test_affine_is_not_gated_by_an_absolute_dice_threshold():
@@ -1242,12 +1272,12 @@ def test_stage_qc_and_trace_logs(tmp_path, caplog):
     assert pd.isna(moving.dice_mask_rigid)
     assert pd.isna(moving.dice_mask_affine)
     assert pd.isna(moving.dice_mi_affine)
-    assert pd.isna(moving.dice_mi_elastic)
+    assert pd.isna(moving.dice_mask_elastic)
     assert "dice_mi_rigid" not in qc.columns
     assert moving.mask_rigid_status == "skipped_early_stop"
     assert moving.mask_affine_status == "skipped_early_stop"
     assert moving.mi_affine_status == "skipped_early_stop"
-    assert moving.mi_elastic_status == "skipped_early_stop"
+    assert moving.mask_elastic_status == "skipped_early_stop"
     assert "mi_rigid_status" not in qc.columns
     assert moving.registration_reference_id == out.loc[0, "registration_scan_id"]
     events = [
@@ -1392,7 +1422,7 @@ def test_rejected_pair_keeps_qc_and_original_canonical_paths(tmp_path):
                 "mask_rigid": {"dice": 0.2, "status": "evaluated"},
                 "mask_affine": {"dice": None, "status": "not_run"},
                 "mi_affine": {"dice": None, "status": "not_run"},
-                "mi_elastic": {"dice": None, "status": "not_run"},
+                "mask_elastic": {"dice": None, "status": "not_run"},
             },
         )
         raise RegistrationRejected("Overlap rejected", result)
