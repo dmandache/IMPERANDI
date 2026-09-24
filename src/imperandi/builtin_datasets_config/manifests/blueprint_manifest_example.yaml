@@ -344,6 +344,10 @@ registration:
   tumor_consensus_method: anchor
   # Run masked MI affine only when earlier stages do not meet the Dice target.
   enable_affine_stage: false
+  # Run boundary-band MI B-spline refinement as the optional final stage.
+  enable_elastic_stage: false
+  # Approximate B-spline control-point spacing; smaller values deform more locally.
+  elastic_control_point_spacing_mm: 90.0
   # Stop the cascade as soon as a selected transform reaches this liver Dice.
   early_stop_organ_dice: 0.95
   # Completeness heuristics; tune for the dataset and organ, not clinical cutoffs.
@@ -359,8 +363,12 @@ registration:
     geometry: 0.001
     pca: 0.001
     mask_rigid: 0.002
-    mi_rigid: 0.002
-    mi_affine: 0.003
+  # MI stages require deterministic MI improvement while Dice stays in tolerance.
+  minimum_stage_mi_improvement:
+    mi_rigid: 0.0
+    mi_affine: 0.0
+    mi_elastic: 0.0
+  maximum_mi_stage_dice_decrease: 0.002
   # Maximum iterations per optimization stage.
   maximum_optimizer_iterations: 100
   # Distance-map crop margin in mm.

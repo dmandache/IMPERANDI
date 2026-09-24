@@ -34,11 +34,23 @@ def test_pca_rotation_limit_accepts_valid_angles(value):
     assert config.maximum_pca_rotation_degrees == value
 
 
+@pytest.mark.parametrize("value", [0, -1, True, None, "90", float("nan")])
+def test_elastic_control_point_spacing_must_be_positive(value):
+    with pytest.raises(ValueError, match="elastic_control_point_spacing_mm"):
+        RegistrationConfig(elastic_control_point_spacing_mm=value)
+
+
 def test_minimum_stage_improvement_partial_override_keeps_defaults():
     config = RegistrationConfig(minimum_stage_dice_improvement={"pca": 0.01})
     assert config.minimum_stage_dice_improvement["pca"] == 0.01
     assert config.minimum_stage_dice_improvement["mask_rigid"] == 0.002
-    assert config.minimum_stage_dice_improvement["mi_affine"] == 0.003
+
+
+def test_minimum_mi_improvement_partial_override_keeps_defaults():
+    config = RegistrationConfig(minimum_stage_mi_improvement={"mi_rigid": 0.01})
+    assert config.minimum_stage_mi_improvement["mi_rigid"] == 0.01
+    assert config.minimum_stage_mi_improvement["mi_affine"] == 0.0
+    assert config.minimum_stage_mi_improvement["mi_elastic"] == 0.0
 
 
 @pytest.mark.parametrize("value", [None, [], "pca"])
@@ -58,8 +70,37 @@ def test_minimum_stage_improvement_rejects_unknown_stages():
         RegistrationConfig(minimum_stage_dice_improvement={"rigid": 0.002})
 
 
+@pytest.mark.parametrize("value", [None, [], "mi_rigid"])
+def test_minimum_mi_improvement_requires_mapping(value):
+    with pytest.raises(ValueError, match="minimum_stage_mi_improvement"):
+        RegistrationConfig(minimum_stage_mi_improvement=value)
+
+
+@pytest.mark.parametrize("value", [-0.01, True, None, "0.1", float("nan")])
+def test_minimum_mi_improvement_values_are_nonnegative(value):
+    with pytest.raises(ValueError, match="minimum_stage_mi_improvement mi_rigid"):
+        RegistrationConfig(minimum_stage_mi_improvement={"mi_rigid": value})
+
+
+def test_minimum_mi_improvement_rejects_unknown_stages():
+    with pytest.raises(ValueError, match="Unknown minimum_stage_mi_improvement"):
+        RegistrationConfig(minimum_stage_mi_improvement={"rigid": 0.002})
+
+
+@pytest.mark.parametrize("value", [-0.01, 1.01, True, None, "0.1", float("nan")])
+def test_mi_stage_dice_decrease_is_a_probability(value):
+    with pytest.raises(ValueError, match="maximum_mi_stage_dice_decrease"):
+        RegistrationConfig(maximum_mi_stage_dice_decrease=value)
+
+
 @pytest.mark.parametrize(
-    "name", ["affine_min_dice", "min_dice", "demons_smoothing_sigma_mm"]
+    "name",
+    [
+        "affine_min_dice",
+        "elastic_min_dice",
+        "min_dice",
+        "demons_smoothing_sigma_mm",
+    ],
 )
 def test_redundant_settings_are_removed(name):
     with pytest.raises(ValueError, match="Removed registration settings"):
@@ -141,3 +182,15 @@ def test_invalid_organ_consensus_is_rejected(method):
 def test_old_setting_names_report_replacements():
     with pytest.raises(ValueError, match="group_columns -> grouping_columns"):
         RegistrationConfig.from_mapping({"group_columns": ["patient_key"]})
+
+
+@pytest.mark.parametrize(
+    "old,new",
+    [
+        ("elastic", "enable_elastic_stage"),
+        ("bspline_ctrl_spacing_mm", "elastic_control_point_spacing_mm"),
+    ],
+)
+def test_old_elastic_setting_names_report_replacements(old, new):
+    with pytest.raises(ValueError, match=rf"{old} -> {new}"):
+        RegistrationConfig.from_mapping({old: True})

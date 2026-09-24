@@ -95,7 +95,8 @@ rule: include it for separate modality groups or omit it to register modalities
 together. It applies an ordered liver-first cascade: baseline, PCA for complete
 organs (geometry initialization instead for partial organs), signed-distance
 mask rigid, boundary-band mutual-information (MI) rigid, and optional
-boundary-band MI affine. Default masks are `mask_liver` and
+boundary-band MI affine followed by optional MI B-spline elastic refinement.
+Default masks are `mask_liver` and
 `mask_liver_tumor`; masks must match their native image geometry.
 
 Organ consensus choices are `anchor` and `majority`. `anchor` transfers the
@@ -137,25 +138,31 @@ if all scans are partial, anatomy outside that grid cannot be reconstructed.
 
 The stage loads `generic` by default. Use `--manifest generic` for a built-in
 manifest or `--manifest dataset_configs/manifests/operandi.yaml` for a file.
-CLI `--organ_consensus_method`, `--tumor_consensus_method`, and
-`--enable_affine_stage`/`--disable_affine_stage`
+CLI `--organ_consensus_method`, `--tumor_consensus_method`,
+`--enable_affine_stage`/`--disable_affine_stage`, and
+`--enable_elastic_stage`/`--disable_elastic_stage`
 override manifest values. An optional
 manifest `registration` mapping accepts explicit names including
 `grouping_columns`, `organ_mask_column`, `tumor_mask_column`,
 `organ_consensus_method`, `tumor_consensus_method`, `enable_affine_stage`,
+`enable_elastic_stage`, `elastic_control_point_spacing_mm`,
 `early_stop_organ_dice`, `maximum_pca_rotation_degrees`,
-`minimum_stage_dice_improvement`, `maximum_optimizer_iterations`,
+`minimum_stage_dice_improvement`, `minimum_stage_mi_improvement`,
+`maximum_mi_stage_dice_decrease`, `maximum_optimizer_iterations`,
 `consensus_probability_threshold`, and `reference_selection_priority`. Affine
 refinement runs when enabled and earlier stages have not reached
 `early_stop_organ_dice` (default 0.95). Each stage is scored with liver Dice
 (common-FOV liver Dice for partial masks). Reaching `early_stop_organ_dice`
-records an explicit early stop for every remaining stage. Every PCA, geometry, mask-rigid,
-MI-rigid, and MI-affine candidate must improve on the best preceding Dice by its
-configured `minimum_stage_dice_improvement`. The defaults are 0.001 for
-geometry/PCA, 0.002 for mask-rigid/MI-rigid, and 0.003 for MI-affine. QC records
-the observed and minimum required Dice improvements and retains the preceding
-transform when improvement is insufficient. The default maximum is 100 optimizer
-iterations. These initial QC
+records an explicit early stop for every remaining stage. PCA, geometry, and
+mask-rigid candidates must improve on the best preceding Dice by their configured
+`minimum_stage_dice_improvement` (defaults 0.001, 0.001, and 0.002).
+MI-rigid, MI-affine, and MI-elastic instead require deterministic boundary-band
+Mattes MI improvement while remaining within `maximum_mi_stage_dice_decrease`
+of the best anatomical Dice reached by the cascade (default 0.002). Optional
+positive MI deltas can be configured with `minimum_stage_mi_improvement`; zero
+means that any improvement above numerical tolerance is accepted. QC records
+both metrics, their deltas, the Dice guard, and explicit rejection reasons.
+The default maximum is 100 optimizer iterations. These initial QC
 settings require dataset validation.
 
 `reference_selection_priority` is one ordered criterion list applied within
@@ -213,12 +220,17 @@ pairs use geometry translation instead of PCA. Geometry initialization is not
 run for complete-organ pairs. PCA candidates whose principal rotation exceeds
 `maximum_pca_rotation_degrees` (default 45 degrees) are discarded, while centered
 translation remains available as a safe fallback. Mask-rigid and MI-rigid
-refinements follow only as needed, and MI affine is the final conditional stage.
+refinements follow only as needed. MI affine and fold-checked MI B-spline are the
+final optional stages, and both are disabled by default.
+
+The elastic B-spline control-point spacing defaults to 90 mm; smaller values
+permit more local deformation and require correspondingly careful validation.
 MI samples are restricted to a shell extending
 `organ_boundary_band_half_width_mm` on both sides
 of each liver boundary; distant anatomy and deep organ interior do not drive the
-intensity metric.
-Each candidate is retained only when it improves overlap. Both full/reference-grid
+intensity metric. Optimization uses regular sampling, while acceptance recomputes
+MI deterministically without sampling so optimizer noise cannot select a stage.
+Both full/reference-grid
 Dice and common-FOV Dice are retained. Partial stage selection uses common-FOV
 Dice; complete pairs retain full Dice. The fixed/moving
 volume ratio is diagnostic, never sufficient evidence of successful alignment.
@@ -259,7 +271,7 @@ in-memory intermediates.
 
 `register_qc.csv` contains one row per scan, including failures, with organ
 `dice_baseline`, `dice_pca`, `dice_geometry`, `dice_mask_rigid`, `dice_mi_rigid`,
-`dice_mi_affine`, and
+`dice_mi_affine`, `dice_mi_elastic`, and
 `dice_selected`. It also records the effective `organ_consensus` and
 `tumor_consensus` settings.
 Additional `registration_*` fields include organ completeness/QC, volume ratio,

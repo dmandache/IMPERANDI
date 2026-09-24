@@ -244,7 +244,7 @@ segmentation:
       #       output: liver_all
 
 # Manifest-grouped organ registration and shared tumor segmentation.
-# Explicit CLI consensus-method and affine-stage options override these settings.
+# Explicit CLI consensus-method and optional-stage options override these settings.
 registration:
   grouping_columns: [patient_key, study_id, Modality]
   organ_mask_column: mask_liver
@@ -252,6 +252,8 @@ registration:
   organ_consensus_method: anchor
   tumor_consensus_method: anchor
   enable_affine_stage: false
+  enable_elastic_stage: false
+  elastic_control_point_spacing_mm: 90.0
   early_stop_organ_dice: 0.95
   # Dataset-dependent QC: edge contact suggests partial coverage.
   partial_mask_boundary_margin_mm: 1.0
@@ -264,8 +266,11 @@ registration:
     geometry: 0.001
     pca: 0.001
     mask_rigid: 0.002
-    mi_rigid: 0.002
-    mi_affine: 0.003
+  minimum_stage_mi_improvement:
+    mi_rigid: 0.0
+    mi_affine: 0.0
+    mi_elastic: 0.0
+  maximum_mi_stage_dice_decrease: 0.002
   maximum_optimizer_iterations: 100
   distance_map_crop_padding_mm: 25.0
   # Signed-distance clamp and MI boundary-band half-width in mm.
