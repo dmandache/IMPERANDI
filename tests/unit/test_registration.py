@@ -401,9 +401,35 @@ def test_pca_rotation_with_oblique_geometry():
     )
     result = register_pair(fixed, moving, RegistrationConfig(iterations=20))
     assert result.dice_after > 0.95
-    # PCA's shape symmetry permits equivalent 180-degree solutions; foreground
-    # placement must still be accurate on the fixed validation grid.
+    # Foreground placement remains accurate with the safe-angle PCA candidates.
     assert result.dice_after > result.dice_before
+
+
+def test_pca_excludes_rotation_beyond_configured_limit():
+    fixed = organ()
+    transform = sitk.Euler3DTransform()
+    center = fixed.TransformIndexToPhysicalPoint((15, 13, 11))
+    transform.SetCenter(center)
+    transform.SetRotation(0.0, 0.0, np.pi / 2)
+    moving = sitk.Image(fixed)
+    moving.SetOrigin(transform.TransformPoint(fixed.GetOrigin()))
+    moving.SetDirection(
+        tuple(
+            (
+                np.array(transform.GetMatrix()).reshape(3, 3)
+                @ np.array(fixed.GetDirection()).reshape(3, 3)
+            ).ravel()
+        )
+    )
+
+    limited = alignment.initialize_pca(
+        fixed, moving, max_rotation_degrees=30.0
+    )
+    angle = alignment._rotation_angle_degrees(
+        np.array(limited.GetMatrix()).reshape(3, 3)
+    )
+
+    assert angle <= 30.0 + 1e-6
 
 
 def test_majority_consensus_keeps_only_native_masks(tmp_path):

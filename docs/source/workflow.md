@@ -139,7 +139,7 @@ CLI `--organ_consensus`, `--tumor_consensus`, and `--affine`/`--no_affine`
 override manifest values. An optional
 manifest `registration` mapping accepts `group_columns`, `organ_column`,
 `tumor_column`, `organ_consensus`, `tumor_consensus`, `affine`, `affine_min_dice`,
-`early_stop_dice`,
+`early_stop_dice`, `pca_max_rotation_degrees`,
 `iterations`, `min_dice`, `threshold`, and `reference_priority`. Affine
 refinement runs only when enabled, earlier stages have not reached
 `early_stop_dice` (default 0.95), and the best rigid organ Dice is at least
@@ -205,8 +205,10 @@ below `min_largest_component_fraction` (0.8) yield `invalid_organ_mask`.
 `allow_partial_organs: true` permits partial masks; false excludes them.
 Every pair evaluates baseline Dice first. Complete masks then try PCA; partial
 pairs use geometry translation instead of PCA. Geometry initialization is not
-run for complete-organ pairs. Mask-rigid and MI-rigid refinements follow
-only as needed, and MI affine is the final conditional stage.
+run for complete-organ pairs. PCA candidates whose principal rotation exceeds
+`pca_max_rotation_degrees` (default 45 degrees) are discarded, while centered
+translation remains available as a safe fallback. Mask-rigid and MI-rigid
+refinements follow only as needed, and MI affine is the final conditional stage.
 MI samples are restricted to a shell extending `distance_band_mm` on both sides
 of each liver boundary; distant anatomy and deep organ interior do not drive the
 intensity metric.

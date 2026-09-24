@@ -241,8 +241,14 @@ def _moments(mask):
     return center, values, axes
 
 
-def initialize_pca(fixed, moving):
-    """Return reference-to-moving rigid mapping; score proper PCA rotations."""
+def _rotation_angle_degrees(rotation):
+    """Return the principal angle of a proper 3-D rotation matrix."""
+    cosine = np.clip((np.trace(rotation) - 1.0) / 2.0, -1.0, 1.0)
+    return float(np.degrees(np.arccos(cosine)))
+
+
+def initialize_pca(fixed, moving, max_rotation_degrees=45.0):
+    """Return a PCA mapping, excluding rotations beyond the configured limit."""
     sitk = backend()
     cf, vf, af = _moments(fixed)
     cm, vm, am = _moments(moving)
@@ -252,7 +258,11 @@ def initialize_pca(fixed, moving):
         for perm in permutations(range(3)):
             for signs in product((-1, 1), repeat=3):
                 rotation = (am[:, perm] * signs) @ af.T
-                if np.linalg.det(rotation) > 0:
+                if (
+                    np.linalg.det(rotation) > 0
+                    and _rotation_angle_degrees(rotation)
+                    <= float(max_rotation_degrees) + 1e-6
+                ):
                     rotations.append(rotation)
     candidates = [sitk.Euler3DTransform()]
     for rotation in rotations:
@@ -661,7 +671,11 @@ def register_pair(
                     sitk.CenteredTransformInitializerFilter.GEOMETRY,
                 )
             else:
-                initial = initialize_pca(fixed_organ, moving_organ)
+                initial = initialize_pca(
+                    fixed_organ,
+                    moving_organ,
+                    config.pca_max_rotation_degrees,
+                )
             initial_score = score_transform(initial, initializer_stage)
             stage_transforms[initializer_stage] = initial
             best, score, stage = _select_candidate(
