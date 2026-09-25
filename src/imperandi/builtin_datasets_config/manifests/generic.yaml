@@ -265,6 +265,7 @@ registration:
   accept_partial_organ_masks: true
   minimum_largest_component_fraction: 0.8
   minimum_accepted_organ_dice: 0.5
+  minimum_consensus_dice: 0.8
   minimum_common_field_of_view_fraction: 0.05
   maximum_pca_rotation_degrees: 45.0
   minimum_stage_dice_improvement:

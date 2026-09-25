@@ -360,7 +360,9 @@ registration:
   partial_mask_boundary_margin_mm: 1.0
   accept_partial_organ_masks: true
   minimum_largest_component_fraction: 0.8
+  # Accept lower-overlap registrations as recipients without letting them vote.
   minimum_accepted_organ_dice: 0.5
+  minimum_consensus_dice: 0.8
   minimum_common_field_of_view_fraction: 0.05
   # Reject PCA orientation candidates requiring a larger rigid rotation.
   maximum_pca_rotation_degrees: 45.0

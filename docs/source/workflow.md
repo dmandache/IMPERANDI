@@ -153,7 +153,8 @@ manifest `registration` mapping accepts explicit names including
 `maximum_elastic_displacement_mm`,
 `minimum_elastic_jacobian_determinant`,
 `maximum_elastic_jacobian_determinant`,
-`early_stop_organ_dice`, `maximum_pca_rotation_degrees`,
+`early_stop_organ_dice`, `minimum_accepted_organ_dice`,
+`minimum_consensus_dice`, `maximum_pca_rotation_degrees`,
 `minimum_stage_dice_improvement`, `minimum_stage_mi_improvement`,
 `maximum_mi_stage_dice_decrease`, `maximum_optimizer_iterations`,
 `consensus_probability_threshold`, and `reference_selection_priority`. Affine
@@ -251,15 +252,21 @@ Dice and common-FOV Dice are retained. Partial stage selection uses common-FOV
 Dice; complete pairs retain full Dice. The fixed/moving
 volume ratio is diagnostic, never sufficient evidence of successful alignment.
 
-Accepted overlap below `minimum_accepted_organ_dice` (0.5), common-FOV fraction
+Overlap below `minimum_accepted_organ_dice` (0.5), common-FOV fraction
 below `minimum_common_field_of_view_fraction` (0.05 of reference voxels), or
 fewer than four summed foreground voxels in common support yields
 `low_confidence`. Reliable pairs
 are `ok` or `ok_partial_coverage`; errors/rejected pairs are `failed`.
 References retain the legacy `reference` status and expose confidence separately.
 Low-confidence, invalid, and failed registrations do not contribute to or receive
-consensus. These thresholds are conservative starting points and need validation
-for the dataset and organ; none establish clinical segmentation quality.
+consensus. Accepted registrations with organ Dice below
+`minimum_consensus_dice` (0.8) still receive the registered organ and tumor masks,
+but their organ and tumor annotations do not contribute to either consensus.
+Partial pairs use common-FOV Dice for both thresholds; complete pairs use full
+Dice. `minimum_consensus_dice` must be at least
+`minimum_accepted_organ_dice`. These thresholds are conservative starting points
+and need validation for the dataset and organ; none establish clinical
+segmentation quality.
 
 `nifti_path` always points to the original scan. Registration writes new NIfTI
 files and never modifies the original masks. In the output CSV, successful organ
