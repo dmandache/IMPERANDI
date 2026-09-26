@@ -41,6 +41,7 @@ Issues = "https://github.com/dmandache/IMPERANDI/issues"
 
 [project.optional-dependencies]
 registration = ["SimpleITK"]
+fireants = ["SimpleITK", "fireants"]
 
 segment = [
   "TotalSegmentator",

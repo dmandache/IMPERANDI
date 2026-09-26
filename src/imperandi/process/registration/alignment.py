@@ -1,12 +1,15 @@
 """Physical-space organ registration, independent of tumor masks."""
 
 from dataclasses import dataclass, field
+import logging
 import time
 from itertools import permutations, product
 import numpy as np
 from scipy import ndimage
 
 from .config import REGISTRATION_STAGES
+
+logger = logging.getLogger(__name__)
 
 DICE_TOLERANCE = 1e-6
 MI_TOLERANCE = 1e-8
@@ -828,7 +831,45 @@ def _validate_linear_transform(transform):
     transform.GetInverse()
 
 
-def _mask_linear_refine(fixed_dm, moving_dm, initial, config, *, affine):
+def _linear_transform_diagnostics(transform):
+    matrix = np.asarray(transform.GetMatrix(), dtype=float).reshape(3, 3)
+    center = np.asarray(transform.GetCenter(), dtype=float)
+    translation = np.asarray(transform.GetTranslation(), dtype=float)
+    offset = translation + center - matrix @ center
+    return {
+        "candidate_transform_matrix": matrix.tolist(),
+        "candidate_transform_offset_mm": offset.tolist(),
+        "candidate_transform_center_mm": center.tolist(),
+        "transform_direction": "fixed_physical_to_moving_physical",
+    }
+
+
+def _record_linear_optimizer(detail, registration, transform):
+    detail.update(
+        optimizer_stop=registration.GetOptimizerStopConditionDescription(),
+        optimizer_iteration=int(registration.GetOptimizerIteration()),
+        metric="mean_squares_signed_distance",
+    )
+    detail.update(getattr(registration, "diagnostics", {}))
+    detail.update(_linear_transform_diagnostics(transform))
+
+
+def _log_linear_stage(name, detail):
+    logger.info(
+        "Registration linear stage: stage=%s, backend=%s, "
+        "optimization_seconds=%s, gpu_peak_memory_bytes=%s, "
+        "candidate_dice=%s, selected_transform=%s, fallback_reason=%s",
+        name,
+        detail.get("backend"),
+        detail.get("optimization_elapsed_seconds"),
+        detail.get("gpu_peak_memory_allocated_bytes"),
+        detail.get("dice"),
+        name if detail.get("selected") else detail.get("fallback_stage"),
+        detail.get("fallback_reason"),
+    )
+
+
+def _simpleitk_mask_linear_refine(fixed_dm, moving_dm, initial, config, *, affine):
     """Align liver signed-distance maps with a rigid or affine transform."""
     sitk = backend()
     transform = _linear_transform(initial, affine=affine)
@@ -843,12 +884,64 @@ def _mask_linear_refine(fixed_dm, moving_dm, initial, config, *, affine):
     registration.SetSmoothingSigmasPerLevel([2, 1, 0])
     registration.SmoothingSigmasAreSpecifiedInPhysicalUnitsOn()
     registration.SetInitialTransform(transform, inPlace=True)
+    optimization_started = time.perf_counter()
     registration.Execute(fixed_dm, moving_dm)
+    optimization_elapsed = time.perf_counter() - optimization_started
     _validate_linear_transform(transform)
+    registration.diagnostics = {
+        "backend": "simpleitk",
+        "optimization_elapsed_seconds": optimization_elapsed,
+        "gpu_peak_memory_allocated_bytes": None,
+        "gpu_peak_memory_reserved_bytes": None,
+    }
     return transform, registration
 
 
-def mask_rigid_refine(fixed_dm, moving_dm, initial, config):
+def _mask_linear_refine(
+    fixed_dm, moving_dm, initial, config, *, affine, fireants_state=None
+):
+    requested = config.mask_registration_backend
+    if requested == "simpleitk":
+        return _simpleitk_mask_linear_refine(
+            fixed_dm, moving_dm, initial, config, affine=affine
+        )
+
+    from .fireants_backend import FireANTsUnavailable, prepare_context, refine
+
+    state = {} if fireants_state is None else fireants_state
+    try:
+        if "unavailable" in state:
+            raise FireANTsUnavailable(state["unavailable"])
+        if "context" not in state:
+            state["context"] = prepare_context(
+                fixed_dm,
+                moving_dm,
+                config,
+                reference_cache=state.get("reference_cache"),
+            )
+        transform, report = refine(state["context"], initial, config, affine=affine)
+        _validate_linear_transform(transform)
+        return transform, report
+    except FireANTsUnavailable as exc:
+        state["unavailable"] = str(exc)
+        if not config.fireants_fallback_to_simpleitk:
+            raise RuntimeError(str(exc)) from exc
+        logger.warning(
+            "FireANTs unavailable for mask %s; falling back to SimpleITK: %s",
+            "affine" if affine else "rigid",
+            exc,
+        )
+        transform, report = _simpleitk_mask_linear_refine(
+            fixed_dm, moving_dm, initial, config, affine=affine
+        )
+        report.diagnostics.update(
+            requested_backend="fireants",
+            fallback_reason=str(exc),
+        )
+        return transform, report
+
+
+def mask_rigid_refine(fixed_dm, moving_dm, initial, config, *, fireants_state=None):
     """Rigidly align liver signed-distance maps."""
     return _mask_linear_refine(
         fixed_dm,
@@ -856,10 +949,11 @@ def mask_rigid_refine(fixed_dm, moving_dm, initial, config):
         initial,
         config,
         affine=False,
+        fireants_state=fireants_state,
     )
 
 
-def mask_affine_refine(fixed_dm, moving_dm, initial, config):
+def mask_affine_refine(fixed_dm, moving_dm, initial, config, *, fireants_state=None):
     """Affinely align liver signed-distance maps."""
     return _mask_linear_refine(
         fixed_dm,
@@ -867,6 +961,7 @@ def mask_affine_refine(fixed_dm, moving_dm, initial, config):
         initial,
         config,
         affine=True,
+        fireants_state=fireants_state,
     )
 
 
@@ -1066,6 +1161,7 @@ def register_pair(
     config,
     fixed_image=None,
     moving_image=None,
+    fireants_reference_cache=None,
 ):
     """Run the staged liver-first registration cascade.
 
@@ -1194,8 +1290,13 @@ def register_pair(
             skip_remaining(initializer_stage)
 
     fixed_dm = moving_dm = None
+    fireants_state = {"reference_cache": fireants_reference_cache}
     if not reached_target():
         started = time.perf_counter()
+        stages["mask_rigid"].update(
+            requested_backend=config.mask_registration_backend,
+            backend=config.mask_registration_backend,
+        )
         try:
             fixed_dm = distance_map(
                 fixed_organ,
@@ -1207,12 +1308,17 @@ def register_pair(
                 padding_mm=config.distance_map_crop_padding_mm,
                 band_mm=config.organ_boundary_band_half_width_mm,
             )
-            tx, reg = mask_rigid_refine(fixed_dm, moving_dm, best, config)
-            stages["mask_rigid"].update(
-                optimizer_stop=reg.GetOptimizerStopConditionDescription(),
-                optimizer_iteration=int(reg.GetOptimizerIteration()),
-                metric="mean_squares_signed_distance",
-            )
+            if config.mask_registration_backend == "fireants":
+                tx, reg = mask_rigid_refine(
+                    fixed_dm,
+                    moving_dm,
+                    best,
+                    config,
+                    fireants_state=fireants_state,
+                )
+            else:
+                tx, reg = mask_rigid_refine(fixed_dm, moving_dm, best, config)
+            _record_linear_optimizer(stages["mask_rigid"], reg, tx)
             candidate = score_transform(tx, "mask_rigid")
             stage_transforms["mask_rigid"] = tx
             best, score, stage = _select_candidate(
@@ -1230,12 +1336,17 @@ def register_pair(
             _record_stage_failure(stages, warnings, "mask_rigid", exc, score, stage)
         finally:
             stages["mask_rigid"]["elapsed_seconds"] = time.perf_counter() - started
+            _log_linear_stage("mask_rigid", stages["mask_rigid"])
         if reached_target():
             stages["mask_rigid"]["early_stop"] = True
             skip_remaining("mask_rigid")
 
     if not reached_target():
         started = time.perf_counter()
+        stages["mask_affine"].update(
+            requested_backend=config.mask_registration_backend,
+            backend=config.mask_registration_backend,
+        )
         try:
             if fixed_dm is None:
                 fixed_dm = distance_map(
@@ -1249,12 +1360,17 @@ def register_pair(
                     padding_mm=config.distance_map_crop_padding_mm,
                     band_mm=config.organ_boundary_band_half_width_mm,
                 )
-            tx, reg = mask_affine_refine(fixed_dm, moving_dm, best, config)
-            stages["mask_affine"].update(
-                optimizer_stop=reg.GetOptimizerStopConditionDescription(),
-                optimizer_iteration=int(reg.GetOptimizerIteration()),
-                metric="mean_squares_signed_distance",
-            )
+            if config.mask_registration_backend == "fireants":
+                tx, reg = mask_affine_refine(
+                    fixed_dm,
+                    moving_dm,
+                    best,
+                    config,
+                    fireants_state=fireants_state,
+                )
+            else:
+                tx, reg = mask_affine_refine(fixed_dm, moving_dm, best, config)
+            _record_linear_optimizer(stages["mask_affine"], reg, tx)
             candidate = score_transform(tx, "mask_affine")
             stage_transforms["mask_affine"] = tx
             best, score, stage = _select_candidate(
@@ -1272,6 +1388,7 @@ def register_pair(
             _record_stage_failure(stages, warnings, "mask_affine", exc, score, stage)
         finally:
             stages["mask_affine"]["elapsed_seconds"] = time.perf_counter() - started
+            _log_linear_stage("mask_affine", stages["mask_affine"])
         if reached_target():
             stages["mask_affine"]["early_stop"] = True
             skip_remaining("mask_affine")

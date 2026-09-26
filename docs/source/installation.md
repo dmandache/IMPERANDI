@@ -36,6 +36,12 @@ python -m pip install "pyradiomics @ git+https://github.com/AIM-Harvard/pyradiom
 # Notebook and web quality-control viewers
 python -m pip install -e ".[viewer]"
 
+# SimpleITK registration
+python -m pip install -e ".[registration]"
+
+# Optional FireANTs CUDA backend for the mask rigid/affine stages
+python -m pip install -e ".[fireants]"
+
 # Tests, linting, and formatting
 python -m pip install -e ".[dev]"
 
@@ -51,6 +57,12 @@ python -m pip install "pyradiomics @ git+https://github.com/AIM-Harvard/pyradiom
 TotalSegmentator may download model weights the first time a segmentation task
 runs. Plan for network access and sufficient local storage at installation or
 model-prefetch time; cohort processing can then run in a controlled environment.
+
+The FireANTs extra requires a CUDA-capable PyTorch runtime. It is not needed for
+the default SimpleITK registration backend. If FireANTs is selected without a
+working package/CUDA runtime, registration records the reason and falls back to
+SimpleITK by default; set `registration.fireants_fallback_to_simpleitk: false`
+when a strict GPU-only run is required.
 
 ## Build these docs
 

@@ -109,6 +109,9 @@ and creates shared tumor masks with anchor, majority, intersection, union, or ST
   `--enable_affine_stage`/`--disable_affine_stage`, and
   `--enable_elastic_stage`/`--disable_elastic_stage`
   override manifest settings.
+- `--mask_registration_backend {simpleitk,fireants}` selects the implementation
+  for only the signed-distance rigid and affine mask stages. SimpleITK is the
+  default; FireANTs requires the optional `[fireants]` extra and CUDA.
   Grouping is defined by `registration.grouping_columns` in the manifest.
 - `--num_workers`, `--threads_per_worker`, `--start_method`, and `--timeout_sec`
   control group execution. Timeout defaults to 900 seconds; 0 disables it.

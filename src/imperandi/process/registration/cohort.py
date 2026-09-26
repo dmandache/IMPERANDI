@@ -479,9 +479,7 @@ def _coverage_seam_voxels(output, coverage, source):
     return seams
 
 
-def _fill_unobserved(
-    consensus_distance, coverage, source_distance, *, blend_width_mm
-):
+def _fill_unobserved(consensus_distance, coverage, source_distance, *, blend_width_mm):
     """Blend fields inside coverage, retain source outside, and threshold once."""
     sitk = backend()
     observed = sitk.Cast(coverage > 0, sitk.sitkUInt8)
@@ -730,6 +728,7 @@ def register_cohort(
         )
         native_organ_seams = {}
         consensus_eligible = set()
+        fireants_reference_cache = {}
         for i, (image, organ) in loaded.items():
             started = time.perf_counter()
             logger.info(
@@ -758,7 +757,12 @@ def register_cohort(
                 else:
                     if pair_registration is register_pair:
                         result = pair_registration(
-                            reference_organ, organ, config, reference, image
+                            reference_organ,
+                            organ,
+                            config,
+                            reference,
+                            image,
+                            fireants_reference_cache,
                         )
                     else:
                         # Preserve the established three-argument injection API.

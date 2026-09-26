@@ -346,6 +346,12 @@ registration:
   enable_affine_stage: false
   # Run mask-driven B-spline refinement as the optional final stage.
   enable_elastic_stage: false
+  # Optional CUDA backend for mask_rigid/mask_affine only.
+  mask_registration_backend: simpleitk
+  fireants_fallback_to_simpleitk: true
+  fireants_coarse_spacing_mm: 4.0
+  fireants_rigid_learning_rate: 0.003
+  fireants_affine_learning_rate: 0.01
   # Approximate B-spline control-point spacing; smaller values deform more locally.
   elastic_control_point_spacing_mm: 90.0
   # Keep the elastic optimization deliberately short and deformation conservative.

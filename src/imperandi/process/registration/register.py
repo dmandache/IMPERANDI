@@ -13,6 +13,7 @@ from imperandi.utils.logging import log_script_namespace
 from imperandi.utils.manifest import load_manifest
 from imperandi.utils.run_state import build_checkpoint_paths
 from .config import (
+    MASK_REGISTRATION_BACKENDS,
     ORGAN_CONSENSUS_METHODS,
     TUMOR_CONSENSUS_METHODS,
     RegistrationConfig,
@@ -43,6 +44,11 @@ def add_registration_arguments(parser):
     )
     parser.add_argument("--organ_consensus_method", choices=ORGAN_CONSENSUS_METHODS)
     parser.add_argument("--tumor_consensus_method", choices=TUMOR_CONSENSUS_METHODS)
+    parser.add_argument(
+        "--mask_registration_backend",
+        choices=MASK_REGISTRATION_BACKENDS,
+        help="Backend for mask_rigid and mask_affine (default: simpleitk).",
+    )
     source = parser.add_mutually_exclusive_group()
     source.add_argument(
         "--preserve_source_organ_mask",
@@ -195,6 +201,7 @@ def normalize_registration_args(args):
         preserve_source_organ_mask=None,
         enable_affine_stage=None,
         enable_elastic_stage=None,
+        mask_registration_backend=None,
     )
     for name, default in defaults.items():
         if not hasattr(args, name):
@@ -227,6 +234,7 @@ def resolve_config(args):
         "preserve_source_organ_mask",
         "enable_affine_stage",
         "enable_elastic_stage",
+        "mask_registration_backend",
     ]:
         value = getattr(args, name)
         if value is not None:
@@ -248,11 +256,12 @@ def main(args):
         planned = prepare_cohort(table, config)
         logger.info(
             "Registration dry run: series=%d, groups=%d, organ_consensus=%s, "
-            "tumor_consensus=%s, affine=%s, elastic=%s",
+            "tumor_consensus=%s, mask_backend=%s, affine=%s, elastic=%s",
             len(planned),
             planned.registration_group_id.nunique(),
             config.organ_consensus_method,
             config.tumor_consensus_method,
+            config.mask_registration_backend,
             config.enable_affine_stage,
             config.enable_elastic_stage,
         )

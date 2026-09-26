@@ -102,6 +102,19 @@ cascade.
 Default masks are `mask_liver` and
 `mask_liver_tumor`; masks must match their native image geometry.
 
+`mask_registration_backend: fireants` optionally moves only `mask_rigid` and
+`mask_affine` to CUDA. SimpleITK remains the default. Both backends consume the
+same physical-space cropped signed-distance fields; FireANTs resamples those
+fields to `fireants_coarse_spacing_mm` (default 4 mm), preserves origin,
+direction, and physical end points, and evaluates candidate Dice back on the
+original mask grid. Its physical fixed-to-moving pull matrix is converted to a
+centered SimpleITK transform before inverse checks, native-mask transfer, tumor
+transfer, or consensus. The rigid and affine stages reuse one GPU-resident
+distance-field pair, and later pairs in a group reuse the reference tensor.
+Pairs are not batched because early stopping and candidate
+selection make their stage paths independent. FireANTs never adds an intensity
+MI stage and never enables deformable registration.
+
 Organ consensus choices are `anchor` and `majority`. Organ masks are transferred
 as unclamped signed-distance fields in physical millimetres with linear
 interpolation, then thresholded once on the destination grid. This transfer field
@@ -151,11 +164,15 @@ manifest or `--manifest dataset_configs/manifests/operandi.yaml` for a file.
 CLI `--organ_consensus_method`, `--tumor_consensus_method`,
 `--enable_affine_stage`/`--disable_affine_stage`, and
 `--enable_elastic_stage`/`--disable_elastic_stage`
-override manifest values. An optional
+and `--mask_registration_backend {simpleitk,fireants}` override manifest values.
+An optional
 manifest `registration` mapping accepts explicit names including
 `grouping_columns`, `organ_mask_column`, `tumor_mask_column`,
 `organ_consensus_method`, `tumor_consensus_method`, `enable_affine_stage`,
 `enable_elastic_stage`, `elastic_control_point_spacing_mm`,
+`mask_registration_backend`, `fireants_fallback_to_simpleitk`,
+`fireants_coarse_spacing_mm`, `fireants_rigid_learning_rate`,
+`fireants_affine_learning_rate`,
 `elastic_optimizer_iterations`, `maximum_elastic_displacement_p95_mm`,
 `maximum_elastic_displacement_mm`,
 `minimum_elastic_jacobian_determinant`,
@@ -326,6 +343,10 @@ failed optimizations have blank Dice and explicit stage status. Reference scans
 have baseline/selected Dice 1 and optimization stages marked `not_run`.
 The table links configured group/scan/reference IDs, source and output mask paths,
 selected stage, optimizer diagnostics, warnings, timing, and errors.
+For each mask-linear stage, diagnostics also include the actual backend,
+optimization-only time, candidate physical transform and direction, peak CUDA
+allocated/reserved bytes, coarse-grid geometry, GPU-context reuse, candidate
+Dice, selected/fallback stage, and any fallback reason.
 Use `--qc_csv_path` to choose its location. QC is refreshed at checkpoint
 boundaries and reconstructed on resume if the final table is missing.
 
@@ -367,8 +388,9 @@ waiting for subprocesses; an interrupted group is recomputed on restart.
 
 The library API `register_cohort` remains a fresh-work image-processing interface
 with replaceable registration and fusion callables. The command's runner wraps
-it with scheduling and checkpoints. Registration does not perform deformable
-alignment. Cross-modality or longitudinal grouping is controlled explicitly by
+it with scheduling and checkpoints. FireANTs is restricted to rigid/affine
+mask alignment; the separately configured SimpleITK mask-elastic stage remains
+disabled by default. Cross-modality or longitudinal grouping is controlled explicitly by
 `grouping_columns` and should only be enabled for anatomically comparable volumes.
 
 ## Checkpoints and resume

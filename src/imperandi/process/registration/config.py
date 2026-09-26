@@ -6,6 +6,7 @@ from typing import Mapping
 
 TUMOR_CONSENSUS_METHODS = ("anchor", "majority", "intersection", "union", "staple")
 ORGAN_CONSENSUS_METHODS = ("anchor", "majority")
+MASK_REGISTRATION_BACKENDS = ("simpleitk", "fireants")
 REGISTRATION_STAGES = (
     "baseline",
     "pca",
@@ -81,6 +82,11 @@ class RegistrationConfig:
     tumor_consensus_method: str = "anchor"
     enable_affine_stage: bool = False
     enable_elastic_stage: bool = False
+    mask_registration_backend: str = "simpleitk"
+    fireants_fallback_to_simpleitk: bool = True
+    fireants_coarse_spacing_mm: float = 4.0
+    fireants_rigid_learning_rate: float = 0.003
+    fireants_affine_learning_rate: float = 0.01
     elastic_control_point_spacing_mm: float = 90.0
     elastic_optimizer_iterations: int = 25
     maximum_elastic_displacement_p95_mm: float = 8.0
@@ -128,6 +134,7 @@ class RegistrationConfig:
             "enable_affine_stage",
             "enable_elastic_stage",
             "clip_tumor_consensus_to_organ",
+            "fireants_fallback_to_simpleitk",
         ):
             if type(getattr(self, name)) is not bool:
                 raise ValueError(f"{name} must be a boolean")
@@ -161,6 +168,17 @@ class RegistrationConfig:
             raise ValueError(f"Unknown organ consensus: {self.organ_consensus_method}")
         if self.tumor_consensus_method not in TUMOR_CONSENSUS_METHODS:
             raise ValueError(f"Unknown tumor consensus: {self.tumor_consensus_method}")
+        if self.mask_registration_backend not in MASK_REGISTRATION_BACKENDS:
+            raise ValueError(
+                f"Unknown mask registration backend: {self.mask_registration_backend}"
+            )
+        for name in (
+            "fireants_coarse_spacing_mm",
+            "fireants_rigid_learning_rate",
+            "fireants_affine_learning_rate",
+        ):
+            if not _finite_number(getattr(self, name)) or getattr(self, name) <= 0:
+                raise ValueError(f"{name} must be finite and positive")
         if (
             type(self.maximum_optimizer_iterations) is not int
             or self.maximum_optimizer_iterations < 1

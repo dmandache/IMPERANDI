@@ -5,6 +5,37 @@ import pytest
 from imperandi.process.registration.config import RegistrationConfig
 
 
+def test_simpleitk_is_default_mask_registration_backend():
+    config = RegistrationConfig()
+    assert config.mask_registration_backend == "simpleitk"
+    assert config.fireants_fallback_to_simpleitk is True
+
+
+def test_mask_registration_backend_is_explicit():
+    assert (
+        RegistrationConfig(
+            mask_registration_backend="fireants"
+        ).mask_registration_backend
+        == "fireants"
+    )
+    with pytest.raises(ValueError, match="Unknown mask registration backend"):
+        RegistrationConfig(mask_registration_backend="cuda")
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "fireants_coarse_spacing_mm",
+        "fireants_rigid_learning_rate",
+        "fireants_affine_learning_rate",
+    ],
+)
+@pytest.mark.parametrize("value", [0, -1, float("nan"), float("inf"), True])
+def test_fireants_numeric_settings_are_positive(name, value):
+    with pytest.raises(ValueError, match=name):
+        RegistrationConfig(**{name: value})
+
+
 def test_registration_and_consensus_dice_defaults_are_distinct():
     config = RegistrationConfig()
     assert config.minimum_accepted_organ_dice == 0.5
