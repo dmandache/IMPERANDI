@@ -992,6 +992,51 @@ def test_mask_elastic_prewarps_distance_map_instead_of_setting_moving_transform(
     assert transform.GetNthTransform(1).GetName() == "BSplineTransform"
 
 
+def test_mask_elastic_optimizer_stops_and_restores_valid_checkpoint(monkeypatch):
+    fixed = organ()
+    domain = alignment.distance_map(fixed, padding_mm=10, band_mm=15)
+    diagnostics = {}
+    observed_parameters = []
+    original_displacement = alignment._bspline_displacement
+
+    def record_displacement(transform, reference):
+        observed_parameters.append(tuple(transform.GetParameters()))
+        return original_displacement(transform, reference)
+
+    def reject_second_update(field, config):
+        if len(observed_parameters) == 1:
+            return {
+                "deformation_qc_passed": True,
+                "deformation_qc_reasons": [],
+            }
+        return {
+            "deformation_qc_passed": False,
+            "deformation_qc_reasons": ["maximum_displacement_exceeds_limit"],
+        }
+
+    monkeypatch.setattr(alignment, "_bspline_displacement", record_displacement)
+    monkeypatch.setattr(alignment, "_elastic_field_qc", reject_second_update)
+
+    transform, _ = alignment.mask_elastic_refine(
+        domain,
+        domain,
+        sitk.Euler3DTransform(),
+        RegistrationConfig(elastic_optimizer_iterations=10),
+        diagnostics,
+    )
+
+    residual = transform.GetNthTransform(1)
+    assert len(observed_parameters) == 2
+    assert diagnostics["optimizer_qc_stop_requested"] is True
+    assert diagnostics["optimizer_qc_stop_succeeded"] is True
+    assert diagnostics["optimizer_checkpoint_restored"] is True
+    assert diagnostics["optimizer_qc_stop_reasons"] == [
+        "maximum_displacement_exceeds_limit"
+    ]
+    assert diagnostics["optimizer_valid_checkpoints"] == 1
+    assert residual.GetParameters() == pytest.approx(observed_parameters[0])
+
+
 def test_mask_elastic_is_the_optional_final_stage_and_retains_inverse(monkeypatch):
     scores = iter([0.5, 0.6, 0.7, 0.75, 0.8])
     forward = sitk.CompositeTransform(3)
@@ -1069,6 +1114,10 @@ def test_mask_elastic_is_the_optional_final_stage_and_retains_inverse(monkeypatc
     assert detail["minimum_required_dice_improvement"] == 0.005
     assert detail["optimizer_iteration_limit"] == 25
     assert detail["displacement_p95_mm"] == 2.0
+    assert detail["optimization_elapsed_seconds"] >= 0
+    assert detail["field_qc_elapsed_seconds"] >= 0
+    assert detail["inversion_elapsed_seconds"] == 0
+    assert detail["round_trip_validation_elapsed_seconds"] == 0
 
 
 @pytest.mark.parametrize(
@@ -1105,6 +1154,7 @@ def test_mask_elastic_rejection_or_failure_falls_back_to_affine(
         lambda *args: (sitk.Euler3DTransform(), Optimizer()),
     )
     affine = sitk.AffineTransform(3)
+    affine.SetTranslation((3.0, -2.0, 1.0))
     monkeypatch.setattr(
         alignment,
         "mask_affine_refine",
@@ -1147,6 +1197,10 @@ def test_mask_elastic_rejection_or_failure_falls_back_to_affine(
     assert list(scores) == []
     assert result.stage == "mask_affine"
     assert result.reference_to_scan is affine
+    point = (12.0, -4.0, 8.0)
+    assert result.scan_to_reference.TransformPoint(
+        result.reference_to_scan.TransformPoint(point)
+    ) == pytest.approx(point)
     assert result.stages["mask_elastic"]["status"] == expected_status
     assert result.stages["mask_elastic"]["fallback_stage"] == "mask_affine"
 
