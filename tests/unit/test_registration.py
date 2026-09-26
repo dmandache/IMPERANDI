@@ -1058,6 +1058,7 @@ def test_mask_elastic_optimizer_stops_and_restores_valid_checkpoint(monkeypatch)
 
 def test_mask_elastic_is_the_optional_final_stage_and_retains_inverse(monkeypatch):
     scores = iter([0.5, 0.6, 0.7, 0.75, 0.8])
+    mutual_information = iter([0.2, 0.3])
     forward = sitk.CompositeTransform(3)
     inverse = sitk.TranslationTransform(3)
 
@@ -1078,6 +1079,11 @@ def test_mask_elastic_is_the_optional_final_stage_and_retains_inverse(monkeypatc
             return 0.001
 
     monkeypatch.setattr(alignment, "dice", lambda *args: next(scores))
+    monkeypatch.setattr(
+        alignment,
+        "mutual_information_score",
+        lambda *args: next(mutual_information),
+    )
     monkeypatch.setattr(
         alignment, "initialize_pca", lambda *args: sitk.Euler3DTransform()
     )
@@ -1122,6 +1128,7 @@ def test_mask_elastic_is_the_optional_final_stage_and_retains_inverse(monkeypatc
     )
 
     assert list(scores) == []
+    assert list(mutual_information) == []
     assert result.stage == "mask_elastic"
     assert result.reference_to_scan is forward
     assert result.scan_to_reference is inverse
@@ -1130,6 +1137,9 @@ def test_mask_elastic_is_the_optional_final_stage_and_retains_inverse(monkeypatc
     assert detail["status"] == "evaluated"
     assert detail["algorithm"] == "BSplineTransform"
     assert detail["metric"] == "mean_squares_signed_distance"
+    assert detail["input_mutual_information"] == 0.2
+    assert detail["mutual_information"] == 0.3
+    assert detail["mutual_information_improvement"] == pytest.approx(0.1)
     assert detail["minimum_required_dice_improvement"] == 0.005
     assert detail["optimizer_iteration_limit"] == 25
     assert detail["displacement_p95_mm"] == 2.0
@@ -1155,6 +1165,7 @@ def test_mask_elastic_rejection_or_failure_falls_back_to_affine(
     expected_status,
 ):
     scores = iter([0.5, 0.6, 0.7, 0.75, elastic_dice])
+    mutual_information = iter([0.2, 0.3])
 
     class Optimizer:
         def GetOptimizerStopConditionDescription(self):
@@ -1164,6 +1175,11 @@ def test_mask_elastic_rejection_or_failure_falls_back_to_affine(
             return 1
 
     monkeypatch.setattr(alignment, "dice", lambda *args: next(scores))
+    monkeypatch.setattr(
+        alignment,
+        "mutual_information_score",
+        lambda *args: next(mutual_information),
+    )
     monkeypatch.setattr(
         alignment, "initialize_pca", lambda *args: sitk.Euler3DTransform()
     )
@@ -1214,6 +1230,7 @@ def test_mask_elastic_rejection_or_failure_falls_back_to_affine(
     )
 
     assert list(scores) == []
+    assert list(mutual_information) == []
     assert result.stage == "mask_affine"
     assert result.reference_to_scan is affine
     point = (12.0, -4.0, 8.0)
@@ -1381,6 +1398,34 @@ def test_default_logging_keeps_geometry_when_attempted():
 
     assert "geometry" in _stages_for_log(attempted)
     assert "geometry" not in _stages_for_log(skipped)
+
+
+def test_stage_logging_reports_mi_only_for_attempted_mi_and_elastic_stages():
+    from imperandi.process.registration.reporting import _stage_summary
+
+    summary = _stage_summary(
+        {
+            "mi_affine": {
+                "dice": 0.8,
+                "status": "evaluated",
+                "input_mutual_information": 0.1234564,
+                "mutual_information": 0.2345674,
+            },
+            "mask_elastic": {
+                "dice": None,
+                "status": "skipped_disabled",
+                "input_mutual_information": 99,
+                "mutual_information": 100,
+            },
+        }
+    )
+
+    assert (
+        "mi_affine=0.8000 (evaluated, MI before=0.123456, MI after=0.234567)"
+        in summary
+    )
+    assert "mask_elastic=n/a (skipped_disabled)" in summary
+    assert "99" not in summary
 
 
 def test_logs_identify_groups_with_human_attributes(tmp_path, caplog):
