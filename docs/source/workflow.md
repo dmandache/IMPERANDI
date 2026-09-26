@@ -102,11 +102,18 @@ cascade.
 Default masks are `mask_liver` and
 `mask_liver_tumor`; masks must match their native image geometry.
 
-Organ consensus choices are `anchor` and `majority`. `anchor` transfers the
-selected reference organ as before. `majority` writes the coverage-aware binary
-strict-majority (`> 0.5`) of the registered candidate masks. Voxels outside
-every registered candidate's observed FOV retain that scan's source organ
-annotation.
+Organ consensus choices are `anchor` and `majority`. Organ masks are transferred
+as unclamped signed-distance fields in physical millimetres with linear
+interpolation, then thresholded once on the destination grid. This transfer field
+is separate from the cropped, 15 mm-clamped distance map used by the optimizer.
+Coverage and tumor labels continue to use nearest-neighbour interpolation.
+`anchor` transfers the selected reference organ distance field. `majority` takes
+the upper median of the aligned distance values from contributors that observe a
+voxel, then thresholds the fused field once. The upper median preserves the
+existing strict-majority treatment of even ties while giving a 50% breakdown
+point: when at least three masks observe a voxel, one arbitrary outlier cannot
+move the fused boundary beyond the majority surfaces. Voxels outside every
+registered candidate's observed FOV retain that scan's source organ annotation.
 
 Tumor consensus choices are `anchor`, `majority`, `intersection`, `union`, and `staple`.
 Valid complete organs take reference priority over partial organs. Boundary contact
@@ -153,6 +160,7 @@ manifest `registration` mapping accepts explicit names including
 `maximum_elastic_displacement_mm`,
 `minimum_elastic_jacobian_determinant`,
 `maximum_elastic_jacobian_determinant`,
+`organ_distance_field_padding_mm`, `organ_coverage_blend_width_mm`,
 `early_stop_organ_dice`, `minimum_accepted_organ_dice`,
 `minimum_consensus_dice`, `maximum_pca_rotation_degrees`,
 `minimum_stage_dice_improvement`, `minimum_stage_mi_improvement`,
@@ -271,8 +279,11 @@ segmentation quality.
 `nifti_path` always points to the original scan. Registration writes new NIfTI
 files and never modifies the original masks. In the output CSV, successful organ
 registrations replace `mask_liver` with the configured organ consensus transferred
-to that scan's native grid (`reg_organ_native_path`). `anchor` preserves the
-previous reference-organ transfer behavior. Successful tumor consensus replaces
+to that scan's native grid (`reg_organ_native_path`). Near the observed-coverage
+boundary, consensus and source distance fields are blended over
+`organ_coverage_blend_width_mm` (default 3 mm) and thresholded once. Consensus is
+never inferred outside observed coverage; those voxels retain the source mask.
+Successful tumor consensus replaces
 `mask_liver_tumor` with the common tumor mask on the same native grid
 (`reg_tumor_native_path`). Original paths are preserved as `source_mask_liver`
 and `source_mask_liver_tumor` (in general, `source_<configured_mask_column>`).
@@ -303,6 +314,10 @@ contributor/exclusion counts and reasons, and support policy. The same fields
 appear under `anatomical_qc` in structured scan logs. Stage details include both
 Dice metrics and the selection metric; skipped stages retain the Dice and reason
 that caused an early stop or conditional skip.
+Final-organ QC reports face-connected component count and component sizes in
+mm3, fragment count and sizes, final volume and source-relative volume change,
+and residual coverage-seam voxels. No component is removed or repaired
+automatically; any future repair must be enabled independently of these checks.
 When both the reference and moving tumor masks are available, corresponding
 `tumor_dice_*` fields provide diagnostic overlap without influencing transform
 selection.

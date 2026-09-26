@@ -27,6 +27,17 @@ ANATOMICAL_QC_FIELDS = [
     "registration_consensus_excluded",
     "registration_consensus_exclusion_reasons",
     "registration_consensus_support_policy",
+    "registration_final_organ_qc",
+    "registration_final_organ_component_count",
+    "registration_final_organ_component_sizes_mm3",
+    "registration_final_organ_fragment_count",
+    "registration_final_organ_fragment_sizes_mm3",
+    "registration_final_organ_volume_mm3",
+    "registration_final_organ_source_volume_mm3",
+    "registration_final_organ_volume_change_fraction",
+    "registration_final_organ_residual_seam_voxels",
+    "registration_final_organ_has_residual_seam",
+    "registration_final_organ_has_fragments",
 ]
 
 logger = logging.getLogger(__name__)
@@ -177,6 +188,25 @@ def record_organ_qc(df, index, quality):
     df.at[index, "registration_largest_component_fraction"] = (
         quality.largest_component_fraction
     )
+
+
+def record_final_organ_qc(df, index, quality):
+    """Serialize final transferred/fused organ QC without changing the mask."""
+    values = asdict(quality)
+    df.at[index, "registration_final_organ_qc"] = json.dumps(values)
+    for name in (
+        "component_count",
+        "fragment_count",
+        "volume_mm3",
+        "source_volume_mm3",
+        "volume_change_fraction",
+        "residual_seam_voxels",
+        "has_residual_seam",
+        "has_fragments",
+    ):
+        df.at[index, f"registration_final_organ_{name}"] = values[name]
+    for name in ("component_sizes_mm3", "fragment_sizes_mm3"):
+        df.at[index, f"registration_final_organ_{name}"] = json.dumps(values[name])
 
 
 def build_qc(table, errors, config):

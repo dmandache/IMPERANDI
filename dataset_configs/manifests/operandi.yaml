@@ -306,6 +306,9 @@ registration:
   distance_map_crop_padding_mm: 25.0
   # Signed-distance clamp and MI boundary-band half-width in mm.
   organ_boundary_band_half_width_mm: 15.0
+  # Unclamped transfer-field crop and smooth native coverage transition.
+  organ_distance_field_padding_mm: 10.0
+  organ_coverage_blend_width_mm: 3.0
   # Keep original organ masks while mapping tumor consensus.
   preserve_source_organ_mask: false
   clip_tumor_consensus_to_organ: true

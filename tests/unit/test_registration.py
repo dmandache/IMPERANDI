@@ -31,6 +31,15 @@ def image(values):
     return img
 
 
+def organ_field(values):
+    mask = image(values)
+    field = sitk.GetImageFromArray(
+        np.where(np.asarray(values) > 0, -1.0, 1.0).astype(np.float32)
+    )
+    field.CopyInformation(mask)
+    return field
+
+
 def organ():
     z, y, x = np.indices((24, 28, 32))
     return image(((x - 15) / 8) ** 2 + ((y - 13) / 6) ** 2 + ((z - 11) / 4) ** 2 < 1)
@@ -138,20 +147,23 @@ def test_fusion_votes_and_ties(tumor_consensus, expected):
     ],
 )
 def test_organ_consensus_anchor_and_majority(organ_consensus, expected):
-    masks = [image(np.array(v).reshape(1, 1, 4)) for v in [[1, 0, 1, 0], [1, 1, 0, 0]]]
+    fields = [
+        organ_field(np.array(v).reshape(1, 1, 4))
+        for v in [[1, 0, 1, 0], [1, 1, 0, 0]]
+    ]
     coverage = image(np.ones((1, 1, 4)))
 
-    result = fuse_organs(masks, [coverage, coverage], organ_consensus=organ_consensus)
+    result = fuse_organs(fields, [coverage, coverage], organ_consensus=organ_consensus)
 
     assert sitk.GetArrayFromImage(result.mask).ravel().tolist() == expected
     assert result.mask.GetPixelID() == sitk.sitkUInt8
 
 
 def test_organ_majority_excludes_unobserved_votes():
-    masks = [image([[[1, 1]]]), image([[[0, 0]]])]
+    fields = [organ_field([[[1, 1]]]), organ_field([[[0, 0]]])]
     coverages = [image([[[1, 0]]]), image([[[0, 1]]])]
 
-    result = fuse_organs(masks, coverages, organ_consensus="majority")
+    result = fuse_organs(fields, coverages, organ_consensus="majority")
 
     assert sitk.GetArrayFromImage(result.mask).ravel().tolist() == [1, 0]
     assert sitk.GetArrayFromImage(result.observation_count).ravel().tolist() == [1, 1]
@@ -524,10 +536,17 @@ def test_majority_organ_consensus_is_written_to_native_grids(tmp_path):
 
     assert errors.empty
     assert out.mask_liver.equals(out.reg_organ_native_path)
-    for path in out.reg_organ_native_path:
+    for index, path in enumerate(out.reg_organ_native_path):
         consensus = sitk.ReadImage(path)
         assert consensus.GetPixelID() == sitk.sitkUInt8
         assert sitk.GetArrayFromImage(consensus)[11, 13, 15] == 0
+        assert out.loc[index, "registration_final_organ_component_count"] == 1
+        assert out.loc[index, "registration_final_organ_fragment_count"] == 0
+        assert out.loc[index, "registration_final_organ_residual_seam_voxels"] == 0
+        assert (
+            abs(out.loc[index, "registration_final_organ_volume_change_fraction"])
+            < 0.15
+        )
 
 
 def test_invalid_mask_and_missing_tumor(tmp_path):

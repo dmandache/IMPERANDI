@@ -105,6 +105,8 @@ class RegistrationConfig:
     maximum_optimizer_iterations: int = 100
     distance_map_crop_padding_mm: float = 25.0
     organ_boundary_band_half_width_mm: float = 15.0
+    organ_distance_field_padding_mm: float = 10.0
+    organ_coverage_blend_width_mm: float = 3.0
     preserve_source_organ_mask: bool = False
     clip_tumor_consensus_to_organ: bool = True
     consensus_probability_threshold: float = 0.5
@@ -228,6 +230,12 @@ class RegistrationConfig:
             or self.organ_boundary_band_half_width_mm <= 0
         ):
             raise ValueError("Invalid distance-map crop or organ boundary band width")
+        for name in (
+            "organ_distance_field_padding_mm",
+            "organ_coverage_blend_width_mm",
+        ):
+            if not _finite_number(getattr(self, name)) or getattr(self, name) <= 0:
+                raise ValueError(f"{name} must be finite and positive")
         if (
             not _finite_number(self.elastic_control_point_spacing_mm)
             or self.elastic_control_point_spacing_mm <= 0
