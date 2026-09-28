@@ -122,6 +122,10 @@ IMPERANDI ships a single CLI with these subcommands:
 - `phase`: resolve canonical contrast phase; a TotalSegmentator fallback requires
   `.[segment]`.
 - `radiomics`: extract radiomics features from NIfTI volumes and masks (requires a separate PyRadiomics installation; see below).
+- `export mids`: copy a curated CT/MR cohort into a separate, privacy-bounded
+  MIDS-style volumetric dataset (no full-conformance claim).
+- `export mids-id-map`: generate the protected, deterministically ordered
+  numeric identity map consumed by `export mids --id-map`.
 
 Get help:
 
@@ -134,6 +138,8 @@ imperandi convert --help
 imperandi segment --help
 imperandi phase --help
 imperandi radiomics --help
+imperandi export mids --help
+imperandi export mids-id-map --help
 ```
 
 ## Install

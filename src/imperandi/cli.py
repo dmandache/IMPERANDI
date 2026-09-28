@@ -48,6 +48,18 @@ def _load_segment_module():
     return segment_module
 
 
+def _load_mids_export_module():
+    from imperandi.export import mids as mids_module
+
+    return mids_module
+
+
+def _load_mids_id_map_module():
+    from imperandi.export.mids import id_map as id_map_module
+
+    return id_map_module
+
+
 def _add_parse_subcommand(subparsers: argparse._SubParsersAction) -> None:
     parser = subparsers.add_parser(
         "parse",
@@ -143,6 +155,28 @@ def _add_segment_subcommand(subparsers: argparse._SubParsersAction) -> None:
     parser.set_defaults(_handler=_handle_segment)
 
 
+def _add_export_subcommand(subparsers: argparse._SubParsersAction) -> None:
+    parser = subparsers.add_parser(
+        "export",
+        help="Export a curated cohort into a separate dataset.",
+    )
+    export_subparsers = parser.add_subparsers(dest="export_format", required=True)
+    mids_parser = export_subparsers.add_parser(
+        "mids",
+        help="Export the strict CT/MR volumetric MIDS-style profile.",
+    )
+    mids_module = _load_mids_export_module()
+    mids_module.add_mids_arguments(mids_parser)
+    mids_parser.set_defaults(_handler=_handle_export_mids)
+    id_map_parser = export_subparsers.add_parser(
+        "mids-id-map",
+        help="Generate a protected external ID map for MIDS-style export.",
+    )
+    id_map_module = _load_mids_id_map_module()
+    id_map_module.add_id_map_arguments(id_map_parser)
+    id_map_parser.set_defaults(_handler=_handle_export_mids_id_map)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the top-level IMPERANDI command-line parser.
 
@@ -181,6 +215,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_phase_subcommand(subparsers)
     _add_radiomics_subcommand(subparsers)
     _add_segment_subcommand(subparsers)
+    _add_export_subcommand(subparsers)
 
     return parser
 
@@ -315,6 +350,22 @@ def _handle_segment_unavailable(args: argparse.Namespace) -> int:
         "%s", getattr(args, "_segment_unavailable_msg", "Segment command unavailable.")
     )
     return 2
+
+
+def _handle_export_mids(args: argparse.Namespace) -> int:
+    mids_module = _load_mids_export_module()
+    args = mids_module.normalize_mids_args(args)
+    _log_script_namespace(mids_module.__file__, args)
+    exit_code, _ = mids_module.run_export(args)
+    return exit_code
+
+
+def _handle_export_mids_id_map(args: argparse.Namespace) -> int:
+    id_map_module = _load_mids_id_map_module()
+    args = id_map_module.normalize_id_map_args(args)
+    _log_script_namespace(id_map_module.__file__, args)
+    exit_code, _ = id_map_module.run_id_map(args)
+    return exit_code
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

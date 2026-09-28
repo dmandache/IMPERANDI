@@ -1,0 +1,125 @@
+# Strict, intentionally narrow IMPERANDI MIDS-style export profile.
+mids_export:
+  profile: strict-ct-mr-volumetric-v1
+  dataset:
+    name: IMPERANDI curated CT/MR cohort
+
+  identity:
+    subject_column: patient_key
+    # study_id is an examination identifier in IMPERANDI. Sites with a different
+    # exam contract must override this list. exam_stage may be included but can
+    # never be the only column because stages may contain repeated examinations.
+    session:
+      source_columns: [study_id]
+    image_source_columns: [volume_id]
+    digest_length: 12
+    key_env: IMPERANDI_MIDS_KEY
+
+  modality:
+    aliases: {MRI: MR}
+    mapping:
+      CT: {directory: mim-ct, suffix: ct}
+      MR: {directory: mim-mr, suffix: mr}
+
+  filename:
+    body_part:
+      columns: [curated_body_part, body_part, BodyPartExamined]
+      mapping:
+        abdomen: abdomen
+        liver: liver
+        chest: chest
+        thorax: chest
+        pelvis: pelvis
+        brain: brain
+    acquisition:
+      # MIDS has no separate sequence entity in this profile, so a validated
+      # MR sequence is represented by acq-<label>.
+      columns: [mri_sequence, mri_sequence_classification, sequence_classification, sequence_type]
+      mapping:
+        T1: t1
+        T1W: t1w
+        T2: t2
+        T2W: t2w
+        DWI: dwi
+        ADC: adc
+    phase:
+      # Contrast phase is independent of MR sequence and uses pc-<label>.
+      columns: [phase]
+      mapping:
+        NATIVE: native
+        ARTERIAL: arterial
+        PORTAL: portal
+        PORTAL_VENOUS: portal
+        VENOUS: venous
+        DELAYED: delayed
+    reconstruction:
+      columns: [curated_reconstruction, reconstruction]
+      mapping:
+        standard: standard
+        soft: soft
+        sharp: sharp
+    repeat:
+      columns: [repeat, volume_ordinal_in_series]
+
+  # Only these fields may cross the privacy boundary. Unknown values stay in
+  # tables; only explicit mappings above can enter filenames.
+  metadata:
+    participants:
+      sex: [PatientSex]
+    sessions:
+      clinical_stage: [exam_stage]
+    scans:
+      body_part: [curated_body_part, body_part, BodyPartExamined]
+      phase: [phase]
+      phase_source: [phase_source]
+      phase_confidence: [phase_confidence, totalseg_probability, totalseg_confidence]
+      mri_sequence_classification: [mri_sequence, mri_sequence_classification, sequence_classification, sequence_type]
+      mri_sequence_confidence: [mri_sequence_confidence]
+      mri_sequence_reason: [mri_sequence_reason]
+      reconstruction: [curated_reconstruction, reconstruction]
+
+  derivatives:
+    masks:
+      source:
+        enabled: true
+        pipeline: imperandi-segmentation
+        name: IMPERANDI source segmentations
+        column_patterns: ["mask_*"]
+        exclude_patterns: ["mask_consensus_*", "consensus_mask_*"]
+        qc_status_columns: [segmentation_qc_status, mask_qc_status, qc_status]
+        accepted_statuses: [pass, passed, approved, success, successful]
+        rejected_statuses: [fail, failed, rejected, low_confidence, low-confidence]
+        confidence_columns: [segmentation_confidence, mask_confidence]
+        minimum_confidence: 0.5
+        generated_by:
+          name: IMPERANDI segmentation
+          settings: {source: cohort mask columns}
+      consensus:
+        enabled: true
+        pipeline: imperandi-registration-consensus
+        name: IMPERANDI registration consensus masks
+        column_patterns: ["consensus_mask_*", "mask_consensus_*"]
+        exclude_patterns: []
+        qc_status_columns: [registration_qc_status, consensus_qc_status, qc_status]
+        accepted_statuses: [pass, passed, approved, success, successful]
+        rejected_statuses: [fail, failed, rejected, low_confidence, low-confidence]
+        confidence_columns: [registration_confidence, consensus_confidence]
+        minimum_confidence: 0.5
+        generated_by:
+          name: IMPERANDI registration consensus
+          settings: {source: explicitly declared consensus mask columns}
+    radiomics:
+      enabled: true
+      pipeline: imperandi-radiomics
+      column_patterns:
+        - "*_original_*"
+        - "*_wavelet_*"
+        - "*_log-sigma-*"
+      qc_status_columns: [radiomics_qc_status, qc_status]
+      accepted_statuses: [pass, passed, approved, success, successful]
+      rejected_statuses: [fail, failed, rejected, low_confidence, low-confidence]
+      confidence_columns: [radiomics_confidence]
+      minimum_confidence: 0.5
+      generated_by:
+        name: IMPERANDI radiomics
+        settings: {source: allowlisted numeric cohort columns}

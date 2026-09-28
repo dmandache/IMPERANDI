@@ -130,6 +130,41 @@ Requires a separate PyRadiomics installation (see
 When a manifest contains PyRadiomics settings, they take precedence over an
 explicit YAML path and a warning is emitted.
 
+## `export mids`
+
+```bash
+imperandi export mids --csv_path COHORT.csv --output_dir DATASET [OPTIONS]
+```
+
+Copies successful curated CT/MR NIfTI volumes into a separate MIDS-style
+dataset, with privacy-safe subject/session/image identities, allowlisted TSV
+metadata, and separate segmentation, registration-consensus, and radiomics
+derivatives. Use `--dry-run` first; it writes nothing and reports planned
+files, missing fields, collisions, and exclusions. The default identity mode
+requires `IMPERANDI_MIDS_KEY`; alternatives are `--key-file` and `--id-map`.
+`--id-map auto` runs the deterministic generator in memory and saves its
+protected CSV outside the dataset only when a real export is executed.
+Existing output is rejected unless `--overwrite replace` is explicit.
+
+See [MIDS-style CT/MR export](mids_export.md) for the manifest schema, privacy
+boundary, output tree, and compatibility limits.
+
+## `export mids-id-map`
+
+```bash
+imperandi export mids-id-map --csv_path COHORT.csv \
+  [--output_path PROTECTED_MAP.csv]
+```
+
+Generates the protected external map accepted by `export mids --id-map`.
+Study, series, and volume identities become globally unique numeric labels,
+zero-padded to at least four digits and ordered using available date, time,
+visit, acquisition, series, and volume-order fields. In the default
+`--patient-key-mode map`, patient labels follow the same padding rule.
+`--patient-key-mode keep` preserves already-pseudonymized alphanumeric keys
+without padding. Use `--dry-run` to inspect entity counts, selected ordering
+columns, and calculated widths without writing.
+
 ## Shared long-running options
 
 `parse`, `convert`, `segment`, `phase`, and `radiomics` accept checkpoint and
