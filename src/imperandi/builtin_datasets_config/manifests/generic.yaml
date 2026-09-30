@@ -251,6 +251,8 @@ registration:
   tumor_mask_column: mask_liver_tumor
   organ_consensus_method: anchor
   tumor_consensus_method: anchor
+  # Publish results on each source scan grid or on the selected reference grid.
+  output_space: moving
   enable_affine_stage: false
   enable_elastic_stage: false
   elastic_control_point_spacing_mm: 90.0

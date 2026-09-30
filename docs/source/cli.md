@@ -106,6 +106,7 @@ and creates shared tumor masks with anchor, majority, intersection, union, or ST
 - `--qc_csv_path` defaults to `register_qc.csv` and records stage Dice and provenance.
 - `--manifest` accepts a built-in name or YAML file; default is `generic`.
 - `--organ_consensus_method`, `--tumor_consensus_method`,
+  `--output_space` (`moving` or `reference`),
   `--enable_affine_stage`/`--disable_affine_stage`, and
   `--enable_elastic_stage`/`--disable_elastic_stage`
   override manifest settings.

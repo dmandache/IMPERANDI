@@ -276,10 +276,11 @@ Dice. `minimum_consensus_dice` must be at least
 and need validation for the dataset and organ; none establish clinical
 segmentation quality.
 
-`nifti_path` always points to the original scan. Registration writes new NIfTI
-files and never modifies the original masks. In the output CSV, successful organ
-registrations replace `mask_liver` with the configured organ consensus transferred
-to that scan's native grid (`reg_organ_native_path`). Near the observed-coverage
+Registration writes new NIfTI files and never modifies the source images or masks.
+By default, `registration.output_space: moving` (or `--output_space moving`) keeps
+`nifti_path` on the original scan and replaces `mask_liver` with the configured
+organ consensus transferred to that scan's native grid
+(`reg_organ_native_path`). Near the observed-coverage
 boundary, consensus and source distance fields are blended over
 `organ_coverage_blend_width_mm` (default 3 mm) and thresholded once. Consensus is
 never inferred outside observed coverage; those voxels retain the source mask.
@@ -292,16 +293,28 @@ consensus back into fusion. Failed stages retain their original canonical paths,
 so inspect `registration_status` and `consensus_status` before downstream analysis.
 Existing radiomics now consumes the native-space registered masks automatically.
 
+Set `registration.output_space: reference` (or `--output_space reference`) to
+publish every successful scan on its group's selected common reference grid.
+In this mode `nifti_path`, `mask_liver`, and `mask_liver_tumor` point to
+`reg_nifti_path`, `reg_organ_path`, and `reg_tumor_common_path`, respectively,
+and therefore always have matching geometry. The original image is retained in
+`source_nifti_path`; the original mask columns continue to use the `source_`
+prefix described above. Reference-space mode writes one registered image and
+the selected organ/tumor result per successful row, while moving-space mode
+does not write registered images.
+
 To keep each source organ segmentation, pass `--preserve_source_organ_mask` or set
 `registration.preserve_source_organ_mask: true` in the manifest. Registration still
-aligns organs and maps tumor consensus, but the canonical organ path remains the
-source path and no `reg_organ_native_path` artifact is written. Tumor consensus is
-constrained to that scan's source organ when `clip_tumor_consensus_to_organ` is enabled.
-Use `--replace_source_organ_mask` to override the manifest and restore organ transfer.
+aligns organs and maps tumor consensus. With moving-space output, the canonical
+organ path remains the source path and no `reg_organ_native_path` artifact is
+written. With reference-space output, the scan's own organ segmentation is
+resampled to the common grid instead of being replaced with the organ consensus.
+Tumor consensus is constrained to that organ when
+`clip_tumor_consensus_to_organ` is enabled. Use `--replace_source_organ_mask` to
+override the manifest and restore organ transfer.
 
-The native organ and tumor masks are the only persisted image artifacts.
-Reference-space images, transforms, coverage, and probability images remain
-in-memory intermediates.
+Only artifacts for the selected output space are persisted. Transforms, coverage,
+and probability images remain in-memory intermediates.
 
 `register_qc.csv` contains one row per scan, including failures, with organ
 `dice_baseline`, `dice_pca`, `dice_geometry`, `dice_mask_rigid`,

@@ -6,6 +6,7 @@ from typing import Mapping
 
 TUMOR_CONSENSUS_METHODS = ("anchor", "majority", "intersection", "union", "staple")
 ORGAN_CONSENSUS_METHODS = ("anchor", "majority")
+OUTPUT_SPACES = ("moving", "reference")
 REGISTRATION_STAGES = (
     "baseline",
     "pca",
@@ -79,6 +80,7 @@ class RegistrationConfig:
     tumor_mask_column: str = "mask_liver_tumor"
     organ_consensus_method: str = "anchor"
     tumor_consensus_method: str = "anchor"
+    output_space: str = "moving"
     enable_affine_stage: bool = False
     enable_elastic_stage: bool = False
     elastic_control_point_spacing_mm: float = 90.0
@@ -161,6 +163,11 @@ class RegistrationConfig:
             raise ValueError(f"Unknown organ consensus: {self.organ_consensus_method}")
         if self.tumor_consensus_method not in TUMOR_CONSENSUS_METHODS:
             raise ValueError(f"Unknown tumor consensus: {self.tumor_consensus_method}")
+        if self.output_space not in OUTPUT_SPACES:
+            raise ValueError(
+                f"Unknown registration output space: {self.output_space}; "
+                f"expected one of {OUTPUT_SPACES}"
+            )
         if (
             type(self.maximum_optimizer_iterations) is not int
             or self.maximum_optimizer_iterations < 1

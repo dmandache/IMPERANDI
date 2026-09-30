@@ -14,6 +14,7 @@ from imperandi.utils.manifest import load_manifest
 from imperandi.utils.run_state import build_checkpoint_paths
 from .config import (
     ORGAN_CONSENSUS_METHODS,
+    OUTPUT_SPACES,
     TUMOR_CONSENSUS_METHODS,
     RegistrationConfig,
 )
@@ -43,6 +44,14 @@ def add_registration_arguments(parser):
     )
     parser.add_argument("--organ_consensus_method", choices=ORGAN_CONSENSUS_METHODS)
     parser.add_argument("--tumor_consensus_method", choices=TUMOR_CONSENSUS_METHODS)
+    parser.add_argument(
+        "--output_space",
+        choices=OUTPUT_SPACES,
+        help=(
+            "Publish registered data on each moving scan grid (default) or on "
+            "the group's common reference grid."
+        ),
+    )
     source = parser.add_mutually_exclusive_group()
     source.add_argument(
         "--preserve_source_organ_mask",
@@ -192,6 +201,7 @@ def normalize_registration_args(args):
         manifest=None,
         organ_consensus_method=None,
         tumor_consensus_method=None,
+        output_space=None,
         preserve_source_organ_mask=None,
         enable_affine_stage=None,
         enable_elastic_stage=None,
@@ -224,6 +234,7 @@ def resolve_config(args):
     for name in [
         "organ_consensus_method",
         "tumor_consensus_method",
+        "output_space",
         "preserve_source_organ_mask",
         "enable_affine_stage",
         "enable_elastic_stage",
@@ -248,11 +259,12 @@ def main(args):
         planned = prepare_cohort(table, config)
         logger.info(
             "Registration dry run: series=%d, groups=%d, organ_consensus=%s, "
-            "tumor_consensus=%s, affine=%s, elastic=%s",
+            "tumor_consensus=%s, output_space=%s, affine=%s, elastic=%s",
             len(planned),
             planned.registration_group_id.nunique(),
             config.organ_consensus_method,
             config.tumor_consensus_method,
+            config.output_space,
             config.enable_affine_stage,
             config.enable_elastic_stage,
         )
