@@ -9,7 +9,7 @@
   <img src="https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue" alt="Python versions">
   <a href="https://imperandi.readthedocs.io/en/latest/"><img src="https://readthedocs.org/projects/imperandi/badge/?version=latest" alt="Documentation"></a>
   <a href="https://github.com/dmandache/IMPERANDI/actions/workflows/tests.yml"><img src="https://github.com/dmandache/IMPERANDI/actions/workflows/tests.yml/badge.svg?branch=main" alt="Tests"></a>
-  <a href="https://codecov.io/gh/dmandache/IMPERANDI"><img src="https://codecov.io/gh/dmandache/IMPERANDI/branch/main/graph/badge.svg" alt="Coverage"></a>
+  <a href="https://app.codecov.io/github/dmandache/IMPERANDI"><img src="https://codecov.io/github/dmandache/IMPERANDI/graph/badge.svg" alt="Coverage"></a>
   <img src="https://img.shields.io/badge/lint-ruff-red" alt="Ruff">
   <img src="https://img.shields.io/badge/code%20style-black-000000.svg" alt="Black">
 </p>
