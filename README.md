@@ -4,16 +4,14 @@
        width="380">
 </p>
 
-<p align="center">
-  <a href="https://pypi.org/project/imperandi/"><img src="https://img.shields.io/pypi/v/imperandi.svg" alt="PyPI"></a>
-  <a href="https://pypistats.com/packages/imperandi"><img src="https://pypistats.com/api/badges/imperandi?period=month" alt="PyPI Stats"></a>
-  <img src="https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue" alt="Python versions">
-  <a href="https://imperandi.readthedocs.io/en/latest/"><img src="https://app.readthedocs.org/projects/imperandi/badge/?version=latest" alt="Documentation"></a>
-  <a href="https://github.com/dmandache/IMPERANDI/actions/workflows/tests.yml"><img src="https://github.com/dmandache/IMPERANDI/actions/workflows/tests.yml/badge.svg?branch=main" alt="Tests"></a>
-  <a href="https://app.codecov.io/github/dmandache/IMPERANDI"><img src="https://codecov.io/github/dmandache/IMPERANDI/graph/badge.svg" alt="Coverage"></a>
-  <img src="https://img.shields.io/badge/lint-ruff-red" alt="Ruff">
-  <img src="https://img.shields.io/badge/code%20style-black-000000.svg" alt="Black">
-</p>
+[![PyPI](https://img.shields.io/pypi/v/imperandi.svg)](https://pypi.org/project/imperandi/)
+[![PyPI Downloads](https://img.shields.io/pypi/dm/imperandi)](https://pypistats.com/packages/imperandi)
+![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue)
+[![Documentation](https://app.readthedocs.org/projects/imperandi/badge/?version=latest)](https://imperandi.readthedocs.io/en/latest/)
+[![Tests](https://github.com/dmandache/IMPERANDI/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/dmandache/IMPERANDI/actions/workflows/tests.yml)
+[![Coverage](https://codecov.io/github/dmandache/IMPERANDI/graph/badge.svg)](https://app.codecov.io/github/dmandache/IMPERANDI)
+![Ruff](https://img.shields.io/badge/lint-ruff-red)
+![Black](https://img.shields.io/badge/code%20style-black-000000.svg)
 
 <!-- ![image](https://raw.githubusercontent.com/dmandache/IMPERANDI/main/static/imperandi-logo-with-name.png) 
 ![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue)
