@@ -8,7 +8,7 @@
   <a href="https://pypi.org/project/imperandi/"><img src="https://img.shields.io/pypi/v/imperandi.svg" alt="PyPI"></a>
   <a href="https://pypistats.com/packages/imperandi"><img src="https://pypistats.com/api/badges/imperandi?period=month" alt="PyPI Stats"></a>
   <img src="https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue" alt="Python versions">
-  <a href="https://imperandi.readthedocs.io/en/latest/"><img src="https://readthedocs.org/projects/imperandi/badge/?version=latest" alt="Documentation"></a>
+  <a href="https://imperandi.readthedocs.io/en/latest/"><img src="https://app.readthedocs.org/projects/imperandi/badge/?version=latest" alt="Documentation"></a>
   <a href="https://github.com/dmandache/IMPERANDI/actions/workflows/tests.yml"><img src="https://github.com/dmandache/IMPERANDI/actions/workflows/tests.yml/badge.svg?branch=main" alt="Tests"></a>
   <a href="https://app.codecov.io/github/dmandache/IMPERANDI"><img src="https://codecov.io/github/dmandache/IMPERANDI/graph/badge.svg" alt="Coverage"></a>
   <img src="https://img.shields.io/badge/lint-ruff-red" alt="Ruff">
