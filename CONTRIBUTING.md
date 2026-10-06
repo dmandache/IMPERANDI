@@ -17,8 +17,23 @@ For a bug report, include:
 - The pipeline stage and exact command or Python call that fails.
 - Relevant manifest settings and optional dependency versions.
 - The expected behavior, actual behavior, and error traceback.
+- The produced logs and any relevant stage-specific warning or error CSVs.
 - A minimal reproducible example, preferably using synthetic data or a public
   dataset that others can access.
+
+Try rerunning the failing command with `--log-level DEBUG` and save the logs
+with `--log-file`. Both options go before the subcommand, for example:
+
+```bash
+imperandi --log-level DEBUG --log-file imperandi-debug.log ingest \
+  --root_path /path/to/dicom \
+  --output_dir /path/to/output \
+  --manifest generic
+```
+
+Replace `ingest` and its arguments with the command that reproduces your issue.
+Include the resulting log file in your report after removing sensitive
+information (see the guidance below).
 
 For feature requests, describe the research need, proposed behavior, and an
 example of how it would be used. Discuss substantial changes in an issue before
@@ -51,23 +66,24 @@ git switch -c fix/short-description upstream/main
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install -e ".[dev]"
+python -m pip install -e ".[all-dev]"
+python -m pip install "pyradiomics @ git+https://github.com/AIM-Harvard/pyradiomics.git@master"
 ```
 
 On Windows PowerShell, activate the environment with
 `.venv\Scripts\Activate.ps1`.
 
-The `dev` extra provides pytest, coverage, Ruff, and Black. Install the optional
-features needed by your change; see the
-[installation guide](docs/source/installation.md). To reproduce the full CI
-environment:
+The `all-dev` extra installs all runtime features together with pytest, coverage,
+Ruff, Black, and dataset-backed test dependencies, matching the CI environment.
+For all runtime features without development tools, use `all` instead:
 
 ```bash
-python -m pip install -e ".[all-dev]"
+python -m pip install -e ".[all]"
 python -m pip install "pyradiomics @ git+https://github.com/AIM-Harvard/pyradiomics.git@master"
 ```
 
-PyRadiomics is installed separately, including when using `all-dev`.
+PyRadiomics must be installed separately with either `all` or `all-dev`.
+See the [installation guide](docs/source/installation.md) for details.
 Dataset-backed tests and segmentation may require downloads and model weights.
 
 Enable the repository's notebook cleanup hook (recommended):
