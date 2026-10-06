@@ -5,6 +5,10 @@ and software developers. You can help by reporting bugs, improving documentation
 sharing reproducible use cases, refining CT/MR curation rules, or adding features
 and tests.
 
+We particularly welcome contributions extending cohort curation and processing 
+to other thoracoabdominal anatomies, supported by explicit imaging rationale 
+and reproducible validation examples.
+
 ## Questions, bug reports, and feature requests
 
 Check the [documentation](https://imperandi.readthedocs.io/en/latest/) and
