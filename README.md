@@ -380,6 +380,12 @@ Full IMPERANDI configuration guide: [Documentation](https://imperandi.readthedoc
 - Archive workflows are bounded by depth and include path-safety protections.
 - Most commands support `--dry-run` for pipeline planning and CI smoke checks.
 
+## Contributing
+
+Bug reports, feature requests, documentation improvements, and code contributions
+are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, testing,
+and pull request guidance.
+
 ## Testing
 
 Fast tests are organized under `tests/unit` and run in normal CI:
