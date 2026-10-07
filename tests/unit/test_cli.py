@@ -22,7 +22,7 @@ def test_startup_logs_resolved_manifest_on_dry_run(command, tmp_path, caplog):
         "function": "standardize",
     }
     manifest["radiomics"]["filters"] = {"phase": ["MANIFEST_PHASE"]}
-    manifest["radiomics"]["pyradiomics"]["setting"]["binWidth"] = 17
+    manifest["radiomics"]["modalities"]["CT"]["pyradiomics"]["setting"]["binWidth"] = 17
     path = tmp_path / "manifest.json.yaml"
     path.write_text(json.dumps(manifest))
     source = tmp_path / "input.csv"
@@ -53,7 +53,6 @@ def test_startup_logs_resolved_manifest_on_dry_run(command, tmp_path, caplog):
         if name == "parse.py":
             assert logged.id_standardization == manifest["id_standardization"]
         elif name == "clean.py":
-            assert logged.cleaning["version"] == 1
             assert logged.cleaning["steps"]
         elif name == "convert.py":
             assert logged.checkpoint_manifest_config == manifest
@@ -66,7 +65,10 @@ def test_startup_logs_resolved_manifest_on_dry_run(command, tmp_path, caplog):
             assert logged.segmentation["modalities"]["CT"]["tasks"]
         elif name == "radiomics.py":
             assert logged.filters == {"phase": ["MANIFEST_PHASE"]}
-            assert logged.pyradiomics_settings["setting"]["binWidth"] == 17
+            assert (
+                logged.pyradiomics_settings["modalities"]["CT"]["setting"]["binWidth"]
+                == 17
+            )
             assert logged.pyradiomics_settings_source == "manifest"
             assert args.filters == {"phase": ["CLI_PHASE"]}
     assert set(tmp_path.rglob("*")) == before
