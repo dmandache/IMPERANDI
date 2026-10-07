@@ -888,7 +888,8 @@ def test_demons_improves_nonrigid_organ_overlap():
         )
 
 
-def test_mi_elastic_builds_an_invertible_bspline_residual():
+@pytest.mark.parametrize("linear", [sitk.Euler3DTransform(), sitk.AffineTransform(3)])
+def test_mi_elastic_builds_an_invertible_bspline_residual(linear):
     fixed = organ()
     domain = alignment.distance_map(fixed, padding_mm=10, band_mm=15)
 
@@ -898,7 +899,7 @@ def test_mi_elastic_builds_an_invertible_bspline_residual():
         fixed,
         fixed,
         domain,
-        sitk.Euler3DTransform(),
+        linear,
         RegistrationConfig(maximum_optimizer_iterations=1),
     )
     diagnostics = {}
@@ -911,6 +912,45 @@ def test_mi_elastic_builds_an_invertible_bspline_residual():
     assert np.allclose(
         inverse.TransformPoint(transform.TransformPoint(point)), point, atol=0.2
     )
+
+
+def test_mi_elastic_prewarps_instead_of_setting_a_moving_transform(monkeypatch):
+    fixed = organ()
+    moving = sitk.Image(fixed)
+    shift = (4.0, -3.0, 2.0)
+    moving.SetOrigin(tuple(np.asarray(fixed.GetOrigin()) + shift))
+    initial = sitk.Euler3DTransform()
+    initial.SetTranslation(shift)
+    registration_factory = sitk.ImageRegistrationMethod
+
+    class RegistrationWithoutMovingTransform:
+        def __init__(self):
+            self.registration = registration_factory()
+
+        def SetMovingInitialTransform(self, transform):
+            raise AssertionError("MI elastic must prewarp the moving inputs")
+
+        def __getattr__(self, name):
+            return getattr(self.registration, name)
+
+    monkeypatch.setattr(
+        sitk,
+        "ImageRegistrationMethod",
+        RegistrationWithoutMovingTransform,
+    )
+
+    transform, _ = alignment.mi_elastic_refine(
+        fixed,
+        moving,
+        fixed,
+        moving,
+        alignment.distance_map(fixed, padding_mm=10, band_mm=15),
+        initial,
+        RegistrationConfig(maximum_optimizer_iterations=1),
+    )
+
+    assert transform.GetNthTransform(0).GetName() == "Euler3DTransform"
+    assert transform.GetNthTransform(1).GetName() == "DisplacementFieldTransform"
 
 
 def test_mi_elastic_is_the_optional_final_stage_and_retains_inverse(monkeypatch):
