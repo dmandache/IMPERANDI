@@ -762,13 +762,15 @@ def main(args):
                 errors_by_idx[source_idx] = err_dict
             _checkpoint_write(force=False)
 
+        convert_kwargs = {"on_result": _on_result}
+        if semantic_reprocess_ids:
+            convert_kwargs["force_source_ids"] = semantic_reprocess_ids
         _, _ = convert_dicom_to_nifti_parallel(
             work_df,
             args.output_dir,
             True,
             args.num_workers,
-            on_result=_on_result,
-            force_source_ids=semantic_reprocess_ids,
+            **convert_kwargs,
         )
         _checkpoint_write(force=True)
 
