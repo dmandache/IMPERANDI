@@ -55,25 +55,27 @@ def paths_for(source):
 def test_manifest_overrides_defaults_and_cli(tmp_path, cohort):
     manifest = tmp_path / "custom.yaml"
     manifest.write_text(
-        yaml.safe_dump({"registration": {"method": "majority", "affine": True}})
+        yaml.safe_dump(
+            {"registration": {"tumor_consensus": "majority", "affine": True}}
+        )
     )
     args = register.normalize_registration_args(
         args_for(cohort, "--manifest", str(manifest))
     )
     config, _ = register.resolve_config(args)
-    assert config.method == "majority" and config.affine
+    assert config.tumor_consensus == "majority" and config.affine
     override = register.normalize_registration_args(
         args_for(
             cohort,
             "--manifest",
             str(manifest),
-            "--method",
+            "--tumor_consensus",
             "union",
             "--no_affine",
         )
     )
     config, _ = register.resolve_config(override)
-    assert config.method == "union" and not config.affine
+    assert config.tumor_consensus == "union" and not config.affine
     built_in = register.normalize_registration_args(
         args_for(cohort, "--manifest", "generic")
     )
@@ -149,7 +151,7 @@ def test_startup_log_contains_effective_manifest_settings(
         yaml.safe_dump(
             {
                 "registration": {
-                    "method": "majority",
+                    "tumor_consensus": "majority",
                     "affine": True,
                     "iterations": 17,
                 }
@@ -158,7 +160,7 @@ def test_startup_log_contains_effective_manifest_settings(
     )
     flags = ["--manifest", str(manifest), "--dry-run"]
     if override:
-        flags += ["--method", "union", "--no_affine"]
+        flags += ["--tumor_consensus", "union", "--no_affine"]
     args = args_for(cohort, *flags)
     with caplog.at_level(logging.INFO):
         if entry_point == "cli":
@@ -172,7 +174,7 @@ def test_startup_log_contains_effective_manifest_settings(
     ]
     assert len(records) == 1
     logged = records[0].args[1]
-    assert logged.method == ("union" if override else "majority")
+    assert logged.tumor_consensus == ("union" if override else "majority")
     assert logged.affine is not override
     assert logged.iterations == 17
     assert logged.min_dice == RegistrationConfig().min_dice
@@ -432,7 +434,7 @@ def test_changed_inputs_and_forced_runs_recompute(
     monkeypatch, cohort, tmp_path, change
 ):
     manifest = tmp_path / "settings.yaml"
-    manifest.write_text("registration:\n  method: anchor\n")
+    manifest.write_text("registration:\n  tumor_consensus: anchor\n")
     flags = ["--manifest", str(manifest)]
     register.main(args_for(cohort, *flags))
     if change == "mask":
@@ -441,7 +443,7 @@ def test_changed_inputs_and_forced_runs_recompute(
         image[0, 0, 0] = 1
         sitk.WriteImage(image, row.mask_liver)
     elif change == "manifest":
-        manifest.write_text("registration:\n  method: union\n")
+        manifest.write_text("registration:\n  tumor_consensus: union\n")
     else:
         flags += ["--" + change]
     actual = runtime.iter_group_results
