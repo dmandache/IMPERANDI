@@ -16,6 +16,14 @@ REGISTRATION_STAGES = (
 SUPPORTED_MODALITIES = ("CT", "MR")
 
 
+def _finite_number(value):
+    return (
+        not isinstance(value, bool)
+        and isinstance(value, (int, float))
+        and isfinite(value)
+    )
+
+
 @dataclass(frozen=True)
 class RegistrationConfig:
     visit_column: str = "study_id"
@@ -49,10 +57,15 @@ class RegistrationConfig:
     )
 
     def __post_init__(self):
-        if type(self.keep_source_segmentation) is not bool:
-            raise ValueError("keep_source_segmentation must be a boolean")
-        if type(self.allow_partial_organs) is not bool:
-            raise ValueError("allow_partial_organs must be a boolean")
+        for name in (
+            "keep_source_segmentation",
+            "allow_partial_organs",
+            "affine",
+            "elastic",
+            "constrain_tumor_to_organ",
+        ):
+            if type(getattr(self, name)) is not bool:
+                raise ValueError(f"{name} must be a boolean")
         for name in (
             "elastic_min_dice",
             "min_largest_component_fraction",
@@ -60,31 +73,17 @@ class RegistrationConfig:
             "min_common_fov_fraction",
         ):
             value = getattr(self, name)
-            if (
-                isinstance(value, bool)
-                or not isinstance(value, (int, float))
-                or not 0 < value <= 1
-            ):
+            if not _finite_number(value) or not 0 < value <= 1:
                 raise ValueError(f"{name} must be in (0, 1]")
-        if (
-            isinstance(self.boundary_margin_mm, bool)
-            or not isinstance(self.boundary_margin_mm, (int, float))
-            or not isfinite(self.boundary_margin_mm)
-            or self.boundary_margin_mm < 0
-        ):
+        if not _finite_number(self.boundary_margin_mm) or self.boundary_margin_mm < 0:
             raise ValueError("boundary_margin_mm must be finite and nonnegative")
         if self.method not in CONSENSUS_METHODS:
             raise ValueError(f"Unknown consensus method: {self.method}")
-        if (
-            type(self.affine) is not bool
-            or type(self.elastic) is not bool
-            or type(self.constrain_tumor_to_organ) is not bool
-        ):
-            raise ValueError(
-                "affine, elastic and constrain_tumor_to_organ must be booleans"
-            )
         if type(self.iterations) is not int or self.iterations < 1:
             raise ValueError("iterations must be a positive integer")
+        for name in ("min_dice", "affine_min_dice", "threshold"):
+            if not _finite_number(getattr(self, name)):
+                raise ValueError(f"{name} must be a finite numeric threshold")
         if (
             not 0 <= self.min_dice <= 1
             or not 0 <= self.affine_min_dice <= 1
@@ -92,17 +91,11 @@ class RegistrationConfig:
         ):
             raise ValueError("Invalid Dice or probability threshold")
         if (
-            isinstance(self.crop_padding_mm, bool)
-            or not isinstance(self.crop_padding_mm, (int, float))
-            or not isfinite(self.crop_padding_mm)
+            not _finite_number(self.crop_padding_mm)
             or self.crop_padding_mm < 0
-            or isinstance(self.distance_band_mm, bool)
-            or not isinstance(self.distance_band_mm, (int, float))
-            or not isfinite(self.distance_band_mm)
+            or not _finite_number(self.distance_band_mm)
             or self.distance_band_mm <= 0
-            or isinstance(self.demons_smoothing_sigma_mm, bool)
-            or not isinstance(self.demons_smoothing_sigma_mm, (int, float))
-            or not isfinite(self.demons_smoothing_sigma_mm)
+            or not _finite_number(self.demons_smoothing_sigma_mm)
             or self.demons_smoothing_sigma_mm <= 0
         ):
             raise ValueError(
