@@ -357,16 +357,14 @@ def test_registration_uses_shared_task_summary(caplog, cohort):
     caplog.set_level(logging.INFO)
     register.main(args_for(cohort))
     assert (
-        "Registration summary: 2 total row(s), 2 processed, 2 registered, "
-        "0 reused, 0 failed, 2 groups processed"
+        "Registration summary: 2 total, 2 registered, 0 reused, 0 failed"
     ) in caplog.text
     assert "Registration done ✔" in caplog.text
 
     caplog.clear()
     register.main(args_for(cohort))
     assert (
-        "Registration summary: 2 total row(s), 0 processed, 0 registered, "
-        "2 reused, 0 failed, 2 groups reused"
+        "Registration summary: 2 total, 0 registered, 2 reused, 0 failed"
     ) in caplog.text
 
 
