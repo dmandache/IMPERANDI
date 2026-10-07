@@ -120,11 +120,13 @@ def test_internal_straight_side_uses_partial_registration(monkeypatch):
         "initialize_pca",
         Mock(side_effect=AssertionError("PCA must be skipped")),
     )
-    result = alignment.register_pair(fixed, moving, RegistrationConfig(iterations=5))
+    result = alignment.register_pair(
+        fixed, moving, RegistrationConfig(maximum_optimizer_iterations=5)
+    )
     assert result.stages["pca"]["status"] == "skipped_partial_coverage"
     with pytest.raises(ValueError, match="Partial organ masks are disabled"):
         alignment.register_pair(
-            fixed, moving, RegistrationConfig(allow_partial_organs=False)
+            fixed, moving, RegistrationConfig(accept_partial_organ_masks=False)
         )
 
 
@@ -140,7 +142,9 @@ def test_partial_fov_perfect_alignment_uses_common_dice(monkeypatch):
         Mock(side_effect=AssertionError("PCA must be skipped")),
     )
     result = alignment.register_pair(
-        fixed, moving, RegistrationConfig(iterations=5, min_dice=0.8)
+        fixed,
+        moving,
+        RegistrationConfig(maximum_optimizer_iterations=5),
     )
     assert result.confidence == "ok_partial_coverage"
     assert result.overlap["dice_common_fov"] == 1
@@ -162,7 +166,7 @@ def test_equal_volume_does_not_establish_registration_confidence(monkeypatch):
     monkeypatch.setattr(
         alignment, "initialize_pca", lambda *args: sitk.Euler3DTransform()
     )
-    result = alignment.register_pair(fixed, moving, RegistrationConfig(min_dice=0))
+    result = alignment.register_pair(fixed, moving, RegistrationConfig())
     assert result.organ_volume_ratio == 1
     assert result.confidence == "low_confidence"
     assert result.stages["mi_affine"]["status"] == "skipped_disabled"
@@ -174,7 +178,9 @@ def test_partial_reference_priority_and_qc(tmp_path):
         save_row(tmp_path, "partial", partial_mask(complete), "PORTAL_VENOUS"),
         save_row(tmp_path, "complete", complete, "ARTERIAL"),
     ]
-    config = RegistrationConfig(iterations=5, tumor_consensus="majority")
+    config = RegistrationConfig(
+        maximum_optimizer_iterations=5, tumor_consensus_method="majority"
+    )
     out, errors = register_cohort(pd.DataFrame(rows), tmp_path / "out", config)
     assert errors.empty
     assert out.loc[0, "registration_reference_id"] == out.loc[1, "registration_scan_id"]
@@ -220,7 +226,7 @@ def test_volume_criterion_uses_native_physical_volume_for_reference_and_anchor(
         reference["mask_liver_tumor"] = None
         rows.append(reference)
         config = RegistrationConfig(
-            reference_priority=[
+            reference_selection_priority=[
                 {"registration_organ_volume_mm3": "max"},
                 {"phase": ["PORTAL_VENOUS", "ARTERIAL", "NATIVE"]},
             ]
@@ -261,7 +267,9 @@ def test_fallback_anchor_keeps_complete_organs_ahead_of_partial_organs(tmp_path)
     ]
     rows[0]["mask_liver_tumor"] = None
     out, errors = register_cohort(
-        pd.DataFrame(rows), tmp_path / "out", RegistrationConfig(iterations=5)
+        pd.DataFrame(rows),
+        tmp_path / "out",
+        RegistrationConfig(maximum_optimizer_iterations=5),
     )
     assert errors.empty
     assert out.loc[0, "registration_status"] == "reference"
@@ -289,7 +297,7 @@ def test_low_confidence_scan_excluded_from_consensus(tmp_path):
     out, errors = register_cohort(
         pd.DataFrame(rows),
         tmp_path / "out",
-        RegistrationConfig(tumor_consensus="majority"),
+        RegistrationConfig(tumor_consensus_method="majority"),
         pair_registration=uncertain,
     )
     assert errors.empty
@@ -354,10 +362,10 @@ def test_nonfinite_overlap_is_low_confidence(partial, value):
 @pytest.mark.parametrize(
     "name",
     [
-        "early_stop_dice",
-        "min_confidence_dice",
-        "min_common_fov_fraction",
-        "min_largest_component_fraction",
+        "early_stop_organ_dice",
+        "minimum_accepted_organ_dice",
+        "minimum_common_field_of_view_fraction",
+        "minimum_largest_component_fraction",
     ],
 )
 @pytest.mark.parametrize("value", [-1, 0, 1.1, float("nan"), float("inf"), True])
@@ -375,7 +383,7 @@ def test_partial_masks_can_be_disabled(tmp_path):
     out, errors = register_cohort(
         pd.DataFrame(rows),
         tmp_path / "out",
-        RegistrationConfig(allow_partial_organs=False),
+        RegistrationConfig(accept_partial_organ_masks=False),
     )
     assert out.loc[0, "registration_status"] == "invalid_organ_mask"
     assert out.loc[0, "registration_skip_reason"] == "partial_organs_disabled"

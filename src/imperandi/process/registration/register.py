@@ -41,24 +41,26 @@ def add_registration_arguments(parser):
     parser.add_argument(
         "--manifest", help="Built-in manifest name or YAML path (default: generic)."
     )
-    parser.add_argument("--organ_consensus", choices=ORGAN_CONSENSUS_METHODS)
-    parser.add_argument("--tumor_consensus", choices=TUMOR_CONSENSUS_METHODS)
+    parser.add_argument("--organ_consensus_method", choices=ORGAN_CONSENSUS_METHODS)
+    parser.add_argument("--tumor_consensus_method", choices=TUMOR_CONSENSUS_METHODS)
     source = parser.add_mutually_exclusive_group()
     source.add_argument(
-        "--keep_source_segmentation",
+        "--preserve_source_organ_mask",
         action="store_true",
         default=None,
         help="Keep source organ masks and use registration to map tumor consensus.",
     )
     source.add_argument(
-        "--no_keep_source_segmentation",
+        "--replace_source_organ_mask",
         action="store_false",
-        dest="keep_source_segmentation",
+        dest="preserve_source_organ_mask",
         help="Replace organ masks with the mapped reference organ (default).",
     )
     affine = parser.add_mutually_exclusive_group()
-    affine.add_argument("--affine", action="store_true", default=None)
-    affine.add_argument("--no_affine", action="store_false", dest="affine")
+    affine.add_argument("--enable_affine_stage", action="store_true", default=None)
+    affine.add_argument(
+        "--disable_affine_stage", action="store_false", dest="enable_affine_stage"
+    )
     parser.add_argument(
         "--num_workers",
         type=int,
@@ -183,10 +185,10 @@ def normalize_registration_args(args):
         checkpoint_every_rows=50,
         checkpoint_every_sec=300,
         manifest=None,
-        organ_consensus=None,
-        tumor_consensus=None,
-        keep_source_segmentation=None,
-        affine=None,
+        organ_consensus_method=None,
+        tumor_consensus_method=None,
+        preserve_source_organ_mask=None,
+        enable_affine_stage=None,
     )
     for name, default in defaults.items():
         if not hasattr(args, name):
@@ -214,10 +216,10 @@ def resolve_config(args):
     RegistrationConfig.from_mapping(raw)
     settings = dict(raw)
     for name in [
-        "organ_consensus",
-        "tumor_consensus",
-        "keep_source_segmentation",
-        "affine",
+        "organ_consensus_method",
+        "tumor_consensus_method",
+        "preserve_source_organ_mask",
+        "enable_affine_stage",
     ]:
         value = getattr(args, name)
         if value is not None:
@@ -233,7 +235,7 @@ def main(args):
     )
     log_script_namespace(logger, __file__, effective_args)
     table = pd.read_csv(
-        args.csv_path, dtype={column: str for column in config.group_columns}
+        args.csv_path, dtype={column: str for column in config.grouping_columns}
     )
     if args.dry_run:
         planned = prepare_cohort(table, config)
@@ -242,14 +244,14 @@ def main(args):
             "tumor_consensus=%s, affine=%s",
             len(planned),
             planned.registration_group_id.nunique(),
-            config.organ_consensus,
-            config.tumor_consensus,
-            config.affine,
+            config.organ_consensus_method,
+            config.tumor_consensus_method,
+            config.enable_affine_stage,
         )
         for _, group in planned.groupby("registration_group_id", sort=True):
             logger.info(
                 "Registration group planned: %s, series=%d",
-                group_label(group.iloc[0], config.group_columns),
+                group_label(group.iloc[0], config.grouping_columns),
                 len(group),
             )
         return None

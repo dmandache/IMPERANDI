@@ -115,8 +115,10 @@ def assess_organ_mask(mask, config) -> OrganMaskQC:
     start = indices.min(axis=0)[::-1]
     stop = indices.max(axis=0)[::-1] + 1
     spacing = np.asarray(mask.GetSpacing())
-    low = start * spacing <= config.boundary_margin_mm
-    high = (np.asarray(mask.GetSize()) - stop) * spacing <= config.boundary_margin_mm
+    low = start * spacing <= config.partial_mask_boundary_margin_mm
+    high = (
+        np.asarray(mask.GetSize()) - stop
+    ) * spacing <= config.partial_mask_boundary_margin_mm
     contact = tuple((bool(a), bool(b)) for a, b in zip(low, high))
     labels, _ = ndimage.label(values)  # Conservative face-connected components.
     sizes = np.bincount(labels.ravel())[1:]
@@ -124,7 +126,7 @@ def assess_organ_mask(mask, config) -> OrganMaskQC:
     reasons = []
     if count < 4:
         reasons.append("insufficient_foreground")
-    if fraction < config.min_largest_component_fraction:
+    if fraction < config.minimum_largest_component_fraction:
         reasons.append("fragmented")
     if values.all():
         reasons.append("fills_entire_fov")
@@ -175,8 +177,8 @@ def registration_confidence(metrics, partial: bool, config) -> str:
         not np.isfinite(
             [score, metrics["common_fov_fraction"], metrics["common_foreground_voxels"]]
         ).all()
-        or score < config.min_confidence_dice
-        or metrics["common_fov_fraction"] < config.min_common_fov_fraction
+        or score < config.minimum_accepted_organ_dice
+        or metrics["common_fov_fraction"] < config.minimum_common_field_of_view_fraction
         or metrics["common_foreground_voxels"] < 4
     ):
         return "low_confidence"
@@ -276,7 +278,7 @@ def initialize_pca(fixed, moving, max_rotation_degrees=45.0):
     return max(candidates, key=lambda tx: dice(coarse, moving, tx))
 
 
-def elastic_refine(fixed_dm, moving_dm, initial, config):
+def elastic_refine(fixed_dm, moving_dm, initial, config, *, smoothing_sigma_mm=1.0):
     """Refine a fixed-to-moving mapping with Diffeomorphic Demons.
 
     SimpleITK resampling transforms map output points to input points. The
@@ -292,17 +294,14 @@ def elastic_refine(fixed_dm, moving_dm, initial, config):
         fixed_dm,
         initial,
         sitk.sitkLinear,
-        float(config.distance_band_mm),
+        float(config.organ_boundary_band_half_width_mm),
         sitk.sitkFloat32,
     )
     registration = sitk.DiffeomorphicDemonsRegistrationFilter()
-    registration.SetNumberOfIterations(config.iterations)
+    registration.SetNumberOfIterations(config.maximum_optimizer_iterations)
     registration.SetSmoothDisplacementField(True)
     registration.SetStandardDeviations(
-        [
-            config.demons_smoothing_sigma_mm / spacing
-            for spacing in fixed_dm.GetSpacing()
-        ]
+        [smoothing_sigma_mm / spacing for spacing in fixed_dm.GetSpacing()]
     )
     field = registration.Execute(sitk.Cast(fixed_dm, sitk.sitkFloat32), aligned_dm)
     if not np.isfinite(sitk.GetArrayViewFromImage(field)).all():
@@ -483,7 +482,7 @@ def _select_candidate(
     candidate_score,
     candidate_stage,
     stages,
-    min_delta,
+    minimum_improvement,
 ):
     """Accept a candidate only when it clears its minimum Dice improvement."""
     if not np.isfinite(candidate_score):
@@ -493,14 +492,14 @@ def _select_candidate(
     detail.update(
         dice=candidate_score,
         input_dice=score,
-        dice_delta=improvement,
-        required_delta=min_delta,
+        dice_improvement=improvement,
+        minimum_required_dice_improvement=minimum_improvement,
         selected=False,
     )
     if candidate_score < score - DICE_TOLERANCE:
         detail.update(status="rejected_worse_dice", fallback_stage=stage)
         return best, score, stage
-    if improvement < min_delta - DICE_TOLERANCE:
+    if improvement < minimum_improvement - DICE_TOLERANCE:
         detail.update(status="rejected_insufficient_improvement", fallback_stage=stage)
         return best, score, stage
     stages[stage]["selected"] = False
@@ -548,7 +547,9 @@ def mask_rigid_refine(fixed_dm, moving_dm, initial, config):
     registration = sitk.ImageRegistrationMethod()
     registration.SetMetricAsMeanSquares()
     registration.SetInterpolator(sitk.sitkLinear)
-    registration.SetOptimizerAsRegularStepGradientDescent(1.0, 0.001, config.iterations)
+    registration.SetOptimizerAsRegularStepGradientDescent(
+        1.0, 0.001, config.maximum_optimizer_iterations
+    )
     registration.SetOptimizerScalesFromPhysicalShift()
     registration.SetShrinkFactorsPerLevel([2, 1])
     registration.SetSmoothingSigmasPerLevel([1, 0])
@@ -575,15 +576,17 @@ def mi_refine(
     registration = sitk.ImageRegistrationMethod()
     registration.SetMetricAsMattesMutualInformation(numberOfHistogramBins=50)
     registration.SetMetricFixedMask(
-        boundary_band(fixed_organ, band_mm=config.distance_band_mm)
+        boundary_band(fixed_organ, band_mm=config.organ_boundary_band_half_width_mm)
     )
     registration.SetMetricMovingMask(
-        boundary_band(moving_organ, band_mm=config.distance_band_mm)
+        boundary_band(moving_organ, band_mm=config.organ_boundary_band_half_width_mm)
     )
     registration.SetMetricSamplingStrategy(registration.REGULAR)
     registration.SetMetricSamplingPercentage(0.2)
     registration.SetInterpolator(sitk.sitkLinear)
-    registration.SetOptimizerAsRegularStepGradientDescent(1.0, 0.001, config.iterations)
+    registration.SetOptimizerAsRegularStepGradientDescent(
+        1.0, 0.001, config.maximum_optimizer_iterations
+    )
     registration.SetOptimizerScalesFromPhysicalShift()
     registration.SetShrinkFactorsPerLevel([2, 1])
     registration.SetSmoothingSigmasPerLevel([1, 0])
@@ -607,7 +610,7 @@ def register_pair(
     """Run the staged liver-first registration cascade.
 
     Every candidate is accepted only when liver Dice improves. Once the selected
-    Dice reaches ``early_stop_dice``, later stages are explicitly skipped.
+    Dice reaches ``early_stop_organ_dice``, later stages are explicitly skipped.
     Images default to the masks for callers using the low-level mask-only API.
     """
     sitk = backend()
@@ -618,7 +621,7 @@ def register_pair(
     if "invalid" in (fixed_qc.status, moving_qc.status):
         raise ValueError("Invalid organ mask for registration")
     partial = fixed_qc.partial or moving_qc.partial
-    if partial and not config.allow_partial_organs:
+    if partial and not config.accept_partial_organ_masks:
         raise ValueError("Partial organ masks are disabled")
 
     overlaps = {}
@@ -629,7 +632,8 @@ def register_pair(
         metrics = overlap_qc(fixed_organ, moving_organ, tx)
         overlaps[name] = metrics
         if (
-            metrics["common_fov_fraction"] < config.min_common_fov_fraction
+            metrics["common_fov_fraction"]
+            < config.minimum_common_field_of_view_fraction
             or metrics["common_foreground_voxels"] < 4
         ):
             return 0.0
@@ -645,8 +649,8 @@ def register_pair(
     initializer_stage = "geometry" if partial else "pca"
     pipeline = [initializer_stage, "mask_rigid", "mi_rigid", "mi_affine"]
 
-    def required_delta(name):
-        return config.min_delta["rigid" if name == "mask_rigid" else name]
+    def minimum_stage_improvement(name):
+        return config.minimum_stage_dice_improvement[name]
 
     if partial:
         stages["pca"].update(status="skipped_partial_coverage", selected=False)
@@ -654,7 +658,7 @@ def register_pair(
         stages["geometry"].update(status="skipped_complete_organ", selected=False)
 
     def reached_target():
-        return score >= config.early_stop_dice
+        return score >= config.early_stop_organ_dice
 
     def skip_remaining(after):
         for name in pipeline[pipeline.index(after) + 1 :]:
@@ -662,7 +666,7 @@ def register_pair(
                 stages[name].update(
                     status="skipped_early_stop",
                     input_dice=score,
-                    required_dice=config.early_stop_dice,
+                    required_dice=config.early_stop_organ_dice,
                     selected=False,
                     fallback_stage=stage,
                 )
@@ -673,7 +677,7 @@ def register_pair(
             stages[name].update(
                 status="skipped_early_stop",
                 input_dice=score,
-                required_dice=config.early_stop_dice,
+                required_dice=config.early_stop_organ_dice,
                 selected=False,
                 fallback_stage=stage,
             )
@@ -692,7 +696,7 @@ def register_pair(
                 initial = initialize_pca(
                     fixed_organ,
                     moving_organ,
-                    config.pca_max_rotation_degrees,
+                    config.maximum_pca_rotation_degrees,
                 )
             initial_score = score_transform(initial, initializer_stage)
             stage_transforms[initializer_stage] = initial
@@ -704,7 +708,7 @@ def register_pair(
                 initial_score,
                 initializer_stage,
                 stages,
-                required_delta(initializer_stage),
+                minimum_stage_improvement(initializer_stage),
             )
         except (RuntimeError, ValueError) as exc:
             _record_stage_failure(
@@ -722,13 +726,13 @@ def register_pair(
         try:
             fixed_dm = distance_map(
                 fixed_organ,
-                padding_mm=config.crop_padding_mm,
-                band_mm=config.distance_band_mm,
+                padding_mm=config.distance_map_crop_padding_mm,
+                band_mm=config.organ_boundary_band_half_width_mm,
             )
             moving_dm = distance_map(
                 moving_organ,
-                padding_mm=config.crop_padding_mm,
-                band_mm=config.distance_band_mm,
+                padding_mm=config.distance_map_crop_padding_mm,
+                band_mm=config.organ_boundary_band_half_width_mm,
             )
             tx, reg = mask_rigid_refine(fixed_dm, moving_dm, best, config)
             stages["mask_rigid"].update(
@@ -746,7 +750,7 @@ def register_pair(
                 candidate,
                 "mask_rigid",
                 stages,
-                required_delta("mask_rigid"),
+                minimum_stage_improvement("mask_rigid"),
             )
         except (RuntimeError, ValueError) as exc:
             _record_stage_failure(stages, warnings, "mask_rigid", exc, score, stage)
@@ -782,7 +786,7 @@ def register_pair(
                 candidate,
                 "mi_rigid",
                 stages,
-                required_delta("mi_rigid"),
+                minimum_stage_improvement("mi_rigid"),
             )
         except (RuntimeError, ValueError) as exc:
             _record_stage_failure(stages, warnings, "mi_rigid", exc, score, stage)
@@ -792,7 +796,7 @@ def register_pair(
             stages["mi_rigid"]["early_stop"] = True
             skip_remaining("mi_rigid")
 
-    if stages["mi_affine"]["status"] == "not_run" and not config.affine:
+    if stages["mi_affine"]["status"] == "not_run" and not config.enable_affine_stage:
         stages["mi_affine"].update(
             status="skipped_disabled",
             input_dice=score,
@@ -826,7 +830,7 @@ def register_pair(
                 candidate,
                 "mi_affine",
                 stages,
-                required_delta("mi_affine"),
+                minimum_stage_improvement("mi_affine"),
             )
         except (RuntimeError, ValueError) as exc:
             _record_stage_failure(stages, warnings, "mi_affine", exc, score, stage)
@@ -851,7 +855,4 @@ def register_pair(
     result.overlap = overlaps[stage]
     result.organ_volume_ratio = fixed_qc.volume_mm3 / moving_qc.volume_mm3
     result.confidence = registration_confidence(result.overlap, partial, config)
-    if score < config.min_dice:
-        result.confidence = "failed"
-        raise RegistrationRejected(f"Organ overlap rejected: Dice={score:.4f}", result)
     return result

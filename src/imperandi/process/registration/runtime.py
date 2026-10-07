@@ -27,13 +27,13 @@ from .reporting import ERROR_COLUMNS, build_error_record, build_qc, group_label
 logger = logging.getLogger(__name__)
 
 # Increment when registration behavior changes so old artifacts are not reused.
-REGISTRATION_SCHEMA = 18
+REGISTRATION_SCHEMA = 19
 
 
 def _has_failed_stage(rows, config):
     """Recovered optimizer/validation failures are retryable too."""
     enabled = {"geometry", "pca", "mask_rigid", "mi_rigid"}
-    if config.affine:
+    if config.enable_affine_stage:
         enabled.add("mi_affine")
     for value in rows.registration_stage_details.dropna():
         try:
@@ -215,8 +215,8 @@ def run_registration(args, table, config, manifest):
     inputs = {args.csv_path}
     for col in [
         "nifti_path",
-        f"source_{config.organ_column}",
-        f"source_{config.tumor_column}",
+        f"source_{config.organ_mask_column}",
+        f"source_{config.tumor_mask_column}",
     ]:
         if col in df:
             inputs.update(str(p) for p in df[col].dropna() if str(p).strip())
@@ -243,8 +243,8 @@ def run_registration(args, table, config, manifest):
             in {
                 "consensus_status",
                 "tumor_consensus_input_status",
-                config.organ_column,
-                config.tumor_column,
+                config.organ_mask_column,
+                config.tumor_mask_column,
             }
         )
     ]
@@ -293,7 +293,7 @@ def run_registration(args, table, config, manifest):
                     artifacts[group_id] = expected
                     logger.info(
                         "Registration group reused: %s, series=%d",
-                        group_label(groups[group_id].iloc[0], config.group_columns),
+                        group_label(groups[group_id].iloc[0], config.grouping_columns),
                         len(groups[group_id]),
                     )
         if saved_errors is not None and set(ERROR_COLUMNS).issubset(saved_errors):
@@ -381,7 +381,7 @@ def run_registration(args, table, config, manifest):
         ) as progress:
             for group_id, result, worker_error in results:
                 group = groups[group_id]
-                label = group_label(group.iloc[0], config.group_columns)
+                label = group_label(group.iloc[0], config.grouping_columns)
                 if worker_error is not None:
                     logger.error(
                         "Registration group failed: %s, series=%d; "
