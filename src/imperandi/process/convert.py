@@ -349,7 +349,9 @@ def materialize_archive_dicom_paths(
 
 
 # Function to convert a single DICOM volume to NIfTI (parallel task)
-def process_single_volume(k, row, output_dir, verbose, return_status=False):
+def process_single_volume(
+    k, row, output_dir, verbose, return_status=False, force=False
+):
     """
     Convert a single DICOM series to a NIfTI file, saving the result to the
     specified output directory.
@@ -395,7 +397,8 @@ def process_single_volume(k, row, output_dir, verbose, return_status=False):
 
         # Reuse existing valid outputs silently to avoid per-file success logs.
         if (
-            export_path.exists()
+            not force
+            and export_path.exists()
             and export_path.is_file()
             and is_valid_nifti(export_path)
             and export_path.stat().st_size > 0
@@ -455,6 +458,7 @@ def convert_dicom_to_nifti_parallel(
     num_workers,
     *,
     on_result=None,
+    force_source_ids=None,
 ):
     """
     Convert multiple DICOM volumes to NIfTI in parallel using multiprocessing.
@@ -486,6 +490,7 @@ def convert_dicom_to_nifti_parallel(
 
     # Use ProcessPoolExecutor to parallelize the task.
     with ProcessPoolExecutor(max_workers=num_workers) as executor:
+        force_source_ids = set(force_source_ids or ())
         futures = [
             executor.submit(
                 process_single_volume,
@@ -494,6 +499,10 @@ def convert_dicom_to_nifti_parallel(
                 output_dir,
                 False,
                 True,
+                force=(
+                    normalize_source_id(df.iloc[k].get("_source_idx"))
+                    in force_source_ids
+                ),
             )
             for k in range(n_samples)
         ]
@@ -690,6 +699,12 @@ def main(args):
                 except Exception:
                     continue
 
+    semantic_reprocess_ids = (
+        set(semantic_fp.row_fingerprints) - completed_indices
+        if can_partial_resume
+        else set()
+    )
+
     resumed_ids = set(df_all["_source_idx"]) & completed_indices
     resume_failed_count = len(resumed_ids & set(errors_by_idx))
     run_counts = {"converted": 0, "skipped": 0, "failed": 0}
@@ -753,6 +768,7 @@ def main(args):
             True,
             args.num_workers,
             on_result=_on_result,
+            force_source_ids=semantic_reprocess_ids,
         )
         _checkpoint_write(force=True)
 
