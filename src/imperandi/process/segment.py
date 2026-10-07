@@ -56,7 +56,8 @@ from imperandi.utils.run_state import (
     atomic_write_csv,
     CheckpointManager,
     ensure_source_id_column,
-    fingerprint_inputs,
+    fingerprint_csv_semantic,
+    matching_completed_indices,
     merge_with_existing_output,
     normalize_source_id,
     normalize_source_ids,
@@ -1490,6 +1491,16 @@ def main(args: argparse.Namespace) -> None:
         **vars(args),
         checkpoint_signature=checkpoint_signature,
     )
+    semantic_columns = ["volume_id", "nifti_path", "Modality"]
+    semantic_dynamic_prefixes = ["mask_"] if crop_margin_mm is not None else []
+    semantic_fp = fingerprint_csv_semantic(
+        args.csv_path,
+        columns=semantic_columns,
+        dynamic_prefixes=semantic_dynamic_prefixes,
+        artifact_columns=["nifti_path"],
+        artifact_prefixes=semantic_dynamic_prefixes,
+        strict=bool(getattr(args, "strict_resume", False)),
+    )
 
     exclude_hash_args = {
         "csv_path_out",
@@ -1508,10 +1519,13 @@ def main(args: argparse.Namespace) -> None:
         output_path=output_path,
         error_path=error_path,
         exclude_hash_args=exclude_hash_args,
+        input_fingerprint=semantic_fp.input_fingerprint,
+        row_fingerprints=semantic_fp.row_fingerprints,
     )
     paths = resume_ctx["paths"]
     state = resume_ctx["state"]
     can_resume = resume_ctx["can_resume"]
+    can_partial_resume = resume_ctx["can_partial_resume"]
     already_finished = resume_ctx["already_finished"]
     ckpt = CheckpointManager(paths=paths, config=resume_ctx["config"])
 
@@ -1561,6 +1575,16 @@ def main(args: argparse.Namespace) -> None:
         df = pd.read_csv(paths.main_checkpoint_path).copy()
     else:
         df = pd.read_csv(args.csv_path).copy()
+        if can_partial_resume:
+            df = merge_with_existing_output(
+                df,
+                output_path,
+                preferred_keys=["volume_id", "nifti_path"],
+                strict=False,
+            )
+            logger.info(
+                "Segmentation inputs changed semantically; reusing unchanged completed rows."
+            )
     df = ensure_source_id_column(df)
     if "nifti_path" not in df.columns:
         unnamed = [c for c in df.columns if c.startswith("Unnamed:")]
@@ -1604,16 +1628,32 @@ def main(args: argparse.Namespace) -> None:
             "Resume enabled: %d completed rows restored from state",
             len(completed_indices),
         )
+    elif can_partial_resume:
+        completed_indices = matching_completed_indices(
+            state, semantic_fp.row_fingerprints
+        )
+        resume_skipped_count = len(completed_indices)
+        logger.info(
+            "Semantic resume: %d unchanged completed row(s) restored; %d row(s) require segmentation.",
+            len(completed_indices),
+            max(0, len(df) - len(completed_indices)),
+        )
+
+    semantic_reprocess_ids = (
+        set(semantic_fp.row_fingerprints) - completed_indices
+        if can_partial_resume
+        else set()
+    )
 
     errors_by_idx: Dict[str, str] = {}
-    if can_resume and paths.error_checkpoint_path.exists():
+    if (can_resume or can_partial_resume) and paths.error_checkpoint_path.exists():
         err_ckpt = pd.read_csv(paths.error_checkpoint_path)
         err_key = "_source_idx" if "_source_idx" in err_ckpt.columns else "idx"
         if err_key in err_ckpt.columns and "error_message" in err_ckpt.columns:
             for _, row in err_ckpt.iterrows():
                 try:
                     source_idx = normalize_source_id(row[err_key])
-                    if source_idx:
+                    if source_idx in completed_indices:
                         errors_by_idx[source_idx] = str(row["error_message"])
                 except Exception:
                     continue
@@ -1903,7 +1943,11 @@ def main(args: argparse.Namespace) -> None:
                             row,
                             resolved_config,
                             verbose=args.verbose,
-                            force=args.force,
+                            force=(
+                                args.force
+                                or normalize_source_id(df.at[idx, "_source_idx"])
+                                in semantic_reprocess_ids
+                            ),
                             crop_margin_mm=crop_margin_mm,
                         )
                         futures[fut] = idx
@@ -2111,10 +2155,13 @@ def main(args: argparse.Namespace) -> None:
             resolved_config = resolve_segmentation_config_for_modality(
                 tasks_config, row.get("Modality")
             )
+            source_idx = normalize_source_id(df.at[i, "_source_idx"])
+            if source_idx in semantic_reprocess_ids:
+                continue
             if resolved_config and _has_existing_task_outputs(
                 Path(nifti_path).parent, resolved_config
             ):
-                existing_output_ids.add(normalize_source_id(df.at[i, "_source_idx"]))
+                existing_output_ids.add(source_idx)
     run_serial = strategy.mode == "serial" or effective_workers <= 1
 
     if run_serial:
@@ -2135,7 +2182,11 @@ def main(args: argparse.Namespace) -> None:
                     row,
                     resolved_config,
                     verbose=args.verbose,
-                    force=args.force,
+                    force=(
+                        args.force
+                        or normalize_source_id(df.at[idx, "_source_idx"])
+                        in semantic_reprocess_ids
+                    ),
                     crop_margin_mm=crop_margin_mm,
                 )
             )
@@ -2197,11 +2248,34 @@ def main(args: argparse.Namespace) -> None:
         except Exception:
             logger.debug("report_volumes() failed – continuing")
 
+    # Segmentation may crop source NIfTI/mask artifacts in place. Refresh the
+    # semantic baseline after a successful run so strict content hashing does
+    # not invalidate the task because of its own intentional writes.
+    final_semantic_fp = fingerprint_csv_semantic(
+        args.csv_path,
+        columns=semantic_columns,
+        dynamic_prefixes=semantic_dynamic_prefixes,
+        artifact_columns=["nifti_path"],
+        artifact_prefixes=semantic_dynamic_prefixes,
+        strict=bool(getattr(args, "strict_resume", False)),
+    )
+    try:
+        same_csv = Path(args.csv_path).resolve() == output_path.resolve()
+    except Exception:
+        same_csv = False
+    if same_csv:
+        final_semantic_fp = fingerprint_csv_semantic(
+            output_path,
+            columns=semantic_columns,
+            dynamic_prefixes=semantic_dynamic_prefixes,
+            artifact_columns=["nifti_path"],
+            artifact_prefixes=semantic_dynamic_prefixes,
+            strict=bool(getattr(args, "strict_resume", False)),
+        )
     ckpt.finalize_state(
         completed_indices=completed_indices,
-        input_fingerprint=fingerprint_inputs(
-            args.csv_path, strict=bool(getattr(args, "strict_resume", False))
-        ),
+        input_fingerprint=final_semantic_fp.input_fingerprint,
+        row_fingerprints=final_semantic_fp.row_fingerprints,
     )
     run_failed_count = len(processed_source_ids & set(errors_by_idx))
     existing_output_count = len(existing_output_ids - set(errors_by_idx))

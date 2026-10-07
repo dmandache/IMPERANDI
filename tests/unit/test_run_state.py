@@ -12,8 +12,10 @@ from imperandi.utils.run_state import (
     CheckpointManager,
     build_checkpoint_paths,
     ensure_source_id_column,
+    fingerprint_csv_semantic,
     load_state,
     log_finished_resume_summary,
+    matching_completed_indices,
     merge_with_existing_output,
     prepare_resume_context,
     source_id_resume_signature,
@@ -457,3 +459,162 @@ def test_merge_with_existing_output_unhashable_key_uses_index_fallback(tmp_path)
         preferred_keys=["dicom_path"],
     )
     assert out["foreign_col"].tolist() == ["keep-a", "keep-b"]
+
+
+
+def test_semantic_csv_fingerprint_ignores_unrelated_enrichment(tmp_path):
+    csv_path = tmp_path / "cohort.csv"
+    pd.DataFrame(
+        {
+            "volume_id": ["v1", "v2"],
+            "nifti_path": ["a.nii.gz", "b.nii.gz"],
+            "Modality": ["CT", "MR"],
+        }
+    ).to_csv(csv_path, index=False)
+
+    before = fingerprint_csv_semantic(
+        csv_path,
+        columns=["volume_id", "nifti_path", "Modality"],
+    )
+
+    pd.DataFrame(
+        {
+            "volume_id": ["v1", "v2"],
+            "nifti_path": ["a.nii.gz", "b.nii.gz"],
+            "Modality": ["CT", "MR"],
+            "phase": ["PORTAL", "ARTERIAL"],
+            "radiomics_liver_firstorder_Mean": [1.0, 2.0],
+        }
+    ).to_csv(csv_path, index=False)
+
+    after = fingerprint_csv_semantic(
+        csv_path,
+        columns=["volume_id", "nifti_path", "Modality"],
+    )
+    assert after.input_fingerprint == before.input_fingerprint
+    assert after.row_fingerprints == before.row_fingerprints
+
+
+def test_semantic_resume_detects_only_changed_relevant_row(tmp_path):
+    csv_path = tmp_path / "cohort.csv"
+    output = tmp_path / "cohort.csv"
+    err = tmp_path / "errors.csv"
+    pd.DataFrame(
+        {
+            "volume_id": ["v1", "v2"],
+            "nifti_path": ["a.nii.gz", "b.nii.gz"],
+            "Modality": ["CT", "CT"],
+        }
+    ).to_csv(csv_path, index=False)
+    args = argparse.Namespace(
+        checkpoint_every_rows=1,
+        checkpoint_every_sec=1,
+        resume=True,
+        strict_resume=False,
+        checkpoint_signature={"segmentation": {"task": "total"}},
+    )
+
+    first = fingerprint_csv_semantic(
+        csv_path,
+        columns=["volume_id", "nifti_path", "Modality"],
+    )
+    ctx = prepare_resume_context(
+        args=args,
+        command="segment",
+        inputs=csv_path,
+        output_path=output,
+        error_path=err,
+        input_fingerprint=first.input_fingerprint,
+        row_fingerprints=first.row_fingerprints,
+    )
+    manager = CheckpointManager(paths=ctx["paths"], config=ctx["config"])
+    manager.finalize_state(completed_indices=["v1", "v2"])
+    assert prepare_resume_context(
+        args=args,
+        command="segment",
+        inputs=csv_path,
+        output_path=output,
+        error_path=err,
+        input_fingerprint=first.input_fingerprint,
+        row_fingerprints=first.row_fingerprints,
+    )["already_finished"]
+
+    changed = pd.read_csv(csv_path)
+    changed.loc[changed["volume_id"] == "v2", "nifti_path"] = "b-new.nii.gz"
+    changed["phase"] = ["PORTAL", "PORTAL"]
+    changed.to_csv(csv_path, index=False)
+
+    second = fingerprint_csv_semantic(
+        csv_path,
+        columns=["volume_id", "nifti_path", "Modality"],
+    )
+    resumed = prepare_resume_context(
+        args=args,
+        command="segment",
+        inputs=csv_path,
+        output_path=output,
+        error_path=err,
+        input_fingerprint=second.input_fingerprint,
+        row_fingerprints=second.row_fingerprints,
+    )
+    assert not resumed["already_finished"]
+    assert resumed["can_partial_resume"]
+    assert matching_completed_indices(
+        resumed["state"], second.row_fingerprints
+    ) == {"v1"}
+
+
+def test_semantic_strict_artifact_fingerprint_ignores_mtime_only_change(tmp_path):
+    image = tmp_path / "scan.nii.gz"
+    image.write_bytes(b"same bytes")
+    csv_path = tmp_path / "cohort.csv"
+    pd.DataFrame(
+        {"volume_id": ["v1"], "nifti_path": [str(image)], "Modality": ["CT"]}
+    ).to_csv(csv_path, index=False)
+
+    before = fingerprint_csv_semantic(
+        csv_path,
+        columns=["volume_id", "nifti_path", "Modality"],
+        artifact_columns=["nifti_path"],
+        strict=True,
+    )
+    image.touch()
+    after = fingerprint_csv_semantic(
+        csv_path,
+        columns=["volume_id", "nifti_path", "Modality"],
+        artifact_columns=["nifti_path"],
+        strict=True,
+    )
+    assert after.input_fingerprint == before.input_fingerprint
+    assert after.row_fingerprints == before.row_fingerprints
+
+
+
+def test_semantic_new_optional_column_invalidates_only_populated_rows(tmp_path):
+    csv_path = tmp_path / "cohort.csv"
+    base = pd.DataFrame(
+        {
+            "volume_id": ["v1", "v2"],
+            "nifti_path": ["a.nii.gz", "b.nii.gz"],
+            "Modality": ["CT", "CT"],
+        }
+    )
+    base.to_csv(csv_path, index=False)
+    before = fingerprint_csv_semantic(
+        csv_path,
+        columns=["volume_id", "nifti_path", "Modality"],
+        dynamic_prefixes=["mask_"],
+    )
+
+    enriched = base.copy()
+    enriched["mask_liver"] = [pd.NA, "liver-v2.nii.gz"]
+    enriched.to_csv(csv_path, index=False)
+    after = fingerprint_csv_semantic(
+        csv_path,
+        columns=["volume_id", "nifti_path", "Modality"],
+        dynamic_prefixes=["mask_"],
+    )
+
+    assert before.input_fingerprint != after.input_fingerprint
+    assert before.row_fingerprints["v1"] == after.row_fingerprints["v1"]
+    assert before.row_fingerprints["v2"] != after.row_fingerprints["v2"]

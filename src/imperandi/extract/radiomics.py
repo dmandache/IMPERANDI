@@ -18,6 +18,8 @@ from imperandi.utils.run_state import (
     CheckpointManager,
     ensure_source_id_column,
     fingerprint_inputs,
+    fingerprint_csv_semantic,
+    matching_completed_indices,
     merge_with_existing_output,
     normalize_source_id,
     normalize_source_ids,
@@ -933,6 +935,20 @@ def main(args: argparse.Namespace) -> None:
         **vars(args),
         checkpoint_signature=checkpoint_signature,
     )
+    semantic_columns = [
+        "volume_id",
+        "nifti_path",
+        "Modality",
+        *sorted(effective_filters),
+    ]
+    semantic_fp = fingerprint_csv_semantic(
+        args.csv_path,
+        columns=semantic_columns,
+        dynamic_prefixes=["mask_"],
+        artifact_columns=["nifti_path"],
+        artifact_prefixes=["mask_"],
+        strict=bool(getattr(args, "strict_resume", False)),
+    )
     exclude_hash_args = {
         "csv_path_out",
         "dry_run",
@@ -950,10 +966,13 @@ def main(args: argparse.Namespace) -> None:
         output_path=output_path,
         error_path=error_path,
         exclude_hash_args=exclude_hash_args,
+        input_fingerprint=semantic_fp.input_fingerprint,
+        row_fingerprints=semantic_fp.row_fingerprints,
     )
     paths = resume_ctx["paths"]
     state = resume_ctx["state"]
     can_resume = resume_ctx["can_resume"]
+    can_partial_resume = resume_ctx["can_partial_resume"]
     already_finished = resume_ctx["already_finished"]
     ckpt = CheckpointManager(paths=paths, config=resume_ctx["config"])
 
@@ -978,6 +997,16 @@ def main(args: argparse.Namespace) -> None:
         df = pd.read_csv(paths.main_checkpoint_path).copy()
     else:
         df = pd.read_csv(args.csv_path).copy()
+        if can_partial_resume:
+            df = merge_with_existing_output(
+                df,
+                output_path,
+                preferred_keys=["volume_id", "nifti_path"],
+                strict=False,
+            )
+            logger.info(
+                "Radiomics inputs changed semantically; reusing unchanged completed rows."
+            )
     df = ensure_source_id_column(df)
 
     if "nifti_path" not in df.columns:
@@ -1003,14 +1032,24 @@ def main(args: argparse.Namespace) -> None:
             (state or {}).get("completed_indices", [])
         )
         resume_skipped_count = len(completed_indices)
+    elif can_partial_resume:
+        completed_indices = matching_completed_indices(
+            state, semantic_fp.row_fingerprints
+        )
+        resume_skipped_count = len(completed_indices)
+        logger.info(
+            "Semantic resume: %d unchanged completed row(s) restored; %d row(s) require radiomics.",
+            len(completed_indices),
+            max(0, len(df) - len(completed_indices)),
+        )
     errors_by_idx: dict[str, dict[str, Any]] = {}
-    if can_resume and paths.error_checkpoint_path.exists():
+    if (can_resume or can_partial_resume) and paths.error_checkpoint_path.exists():
         err_ckpt = pd.read_csv(paths.error_checkpoint_path)
         for _, row in err_ckpt.iterrows():
             if "_source_idx" in row:
                 try:
                     source_idx = normalize_source_id(row["_source_idx"])
-                    if source_idx:
+                    if source_idx in completed_indices:
                         errors_by_idx[source_idx] = row.to_dict()
                 except Exception:
                     pass
@@ -1095,9 +1134,8 @@ def main(args: argparse.Namespace) -> None:
         logger.warning("%d rows failed -> %s", len(df_err), args.error_csv_path)
     ckpt.finalize_state(
         completed_indices=completed_indices,
-        input_fingerprint=fingerprint_inputs(
-            args.csv_path, strict=bool(getattr(args, "strict_resume", False))
-        ),
+        input_fingerprint=semantic_fp.input_fingerprint,
+        row_fingerprints=semantic_fp.row_fingerprints,
     )
 
     run_failed_count = len(processed_source_ids & set(errors_by_idx))
