@@ -10,6 +10,9 @@ from .config import REGISTRATION_STAGES
 
 DICE_TOLERANCE = 1e-6
 MI_TOLERANCE = 1e-8
+# Keep the implementation testable while the production MI-affine stage is
+# temporarily disabled. Remove this gate when the stage is ready to return.
+MI_AFFINE_STAGE_ENABLED = False
 
 
 def backend():
@@ -1276,8 +1279,9 @@ def register_pair(
             stages["mask_affine"]["early_stop"] = True
             skip_remaining("mask_affine")
 
-    # Temporarily disable MI-affine while retaining its implementation below.
-    if stages["mi_affine"]["status"] == "not_run":
+    if stages["mi_affine"]["status"] == "not_run" and (
+        not config.enable_affine_stage or not MI_AFFINE_STAGE_ENABLED
+    ):
         stages["mi_affine"].update(
             status="skipped_disabled",
             input_dice=score,

@@ -187,10 +187,11 @@ def test_geometry_replaces_pca_only_for_partial_organs(monkeypatch, partial):
         assert args[-1] == sitk.CenteredTransformInitializerFilter.GEOMETRY
         return initializer(*args)
 
-    def pca(*args):
+    def pca(fixed_organ, moving_organ, *_):
         calls.append("pca")
         return initializer(
-            *args,
+            fixed_organ,
+            moving_organ,
             sitk.Euler3DTransform(),
             sitk.CenteredTransformInitializerFilter.GEOMETRY,
         )
@@ -708,6 +709,7 @@ def test_signed_distance_mask_affine_refines_scale():
 
 
 def test_mask_affine_runs_between_mask_rigid_and_mi_affine(monkeypatch):
+    monkeypatch.setattr(alignment, "MI_AFFINE_STAGE_ENABLED", True)
     calls = []
     scores = iter([0.1, 0.2, 0.3, 0.4, 0.4])
     mutual_information = iter([0.1, 0.2])
@@ -757,7 +759,8 @@ def test_mask_affine_runs_between_mask_rigid_and_mi_affine(monkeypatch):
     assert result.stage == "mi_affine"
 
 
-def test_boundary_band_mi_affine_refines_scale():
+def test_boundary_band_mi_affine_refines_scale(monkeypatch):
+    monkeypatch.setattr(alignment, "MI_AFFINE_STAGE_ENABLED", True)
     fixed = organ()
     moving = sitk.Image(fixed)
     moving.SetSpacing((fixed.GetSpacing()[0] * 1.2, *fixed.GetSpacing()[1:]))
@@ -799,6 +802,7 @@ def test_worse_stage_falls_back_to_previous_best(
     fallback_stage,
     selected_dice,
 ):
+    monkeypatch.setattr(alignment, "MI_AFFINE_STAGE_ENABLED", True)
     class Optimizer:
         def GetOptimizerStopConditionDescription(self):
             return "test"
@@ -854,6 +858,7 @@ def test_worse_stage_falls_back_to_previous_best(
 
 
 def test_dice_and_mi_stages_use_their_respective_acceptance_criteria(monkeypatch):
+    monkeypatch.setattr(alignment, "MI_AFFINE_STAGE_ENABLED", True)
     class Optimizer:
         def GetOptimizerStopConditionDescription(self):
             return "test"
@@ -1288,7 +1293,8 @@ def test_mask_elastic_rejection_or_failure_falls_back_to_affine(
     assert result.stages["mask_elastic"]["fallback_stage"] == "mask_affine"
 
 
-def test_affine_is_not_gated_by_an_absolute_dice_threshold():
+def test_affine_is_not_gated_by_an_absolute_dice_threshold(monkeypatch):
+    monkeypatch.setattr(alignment, "MI_AFFINE_STAGE_ENABLED", True)
     fixed = organ()
     moving = sitk.Image(fixed)
     moving.SetSpacing((fixed.GetSpacing()[0] * 1.2, *fixed.GetSpacing()[1:]))
