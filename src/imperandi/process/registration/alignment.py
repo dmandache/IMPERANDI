@@ -279,71 +279,17 @@ def initialize_pca(fixed, moving, max_rotation_degrees=45.0):
     return max(candidates, key=lambda tx: dice(coarse, moving, tx))
 
 
-def elastic_refine(fixed_dm, moving_dm, initial, config, *, smoothing_sigma_mm=1.0):
-    """Refine a fixed-to-moving mapping with Diffeomorphic Demons.
-
-    SimpleITK resampling transforms map output points to input points. The
-    returned composite therefore maps the reference (``fixed``) space into the
-    scan (``moving``) space.
-    """
+def _bspline_displacement(transform, domain):
+    """Sample a B-spline residual on its fixed-space optimization domain."""
     sitk = backend()
-    # Demons requires a shared grid. Prewarp by the selected linear transform
-    # and estimate a residual deformation in reference space. Outside the
-    # moving crop, use the positive distance band (background), not zero.
-    aligned_dm = sitk.Resample(
-        moving_dm,
-        fixed_dm,
-        initial,
-        sitk.sitkLinear,
-        float(config.organ_boundary_band_half_width_mm),
-        sitk.sitkFloat32,
+    return sitk.TransformToDisplacementField(
+        transform,
+        sitk.sitkVectorFloat64,
+        domain.GetSize(),
+        domain.GetOrigin(),
+        domain.GetSpacing(),
+        domain.GetDirection(),
     )
-    registration = sitk.DiffeomorphicDemonsRegistrationFilter()
-    registration.SetNumberOfIterations(config.maximum_optimizer_iterations)
-    registration.SetSmoothDisplacementField(True)
-    registration.SetStandardDeviations(
-        [smoothing_sigma_mm / spacing for spacing in fixed_dm.GetSpacing()]
-    )
-    field = registration.Execute(sitk.Cast(fixed_dm, sitk.sitkFloat32), aligned_dm)
-    if not np.isfinite(sitk.GetArrayViewFromImage(field)).all():
-        raise ValueError("Nonfinite elastic displacement field")
-    if not np.isfinite(initial.GetParameters()).all():
-        raise ValueError("Nonfinite linear transform")
-    field = _extend_residual(field)
-
-    composite = sitk.CompositeTransform(3)
-    composite.AddTransform(initial)
-    # Composite transforms apply the last transform first: initial(residual(p)).
-    composite.AddTransform(sitk.DisplacementFieldTransform(field))
-    return composite, registration
-
-
-def _extend_residual(field):
-    """Keep the crop unchanged and add a smooth transition to zero outside it.
-
-    Displacement transforms are identity outside their domain. Extending the
-    edge values into a tapered collar avoids a jump at a cropped field's edge.
-    The resulting field must still pass the Jacobian and inverse checks.
-    """
-    sitk = backend()
-    values = sitk.GetArrayViewFromImage(field)
-    displacement = float(np.linalg.norm(values, axis=-1).max())
-    spacing = np.asarray(field.GetSpacing())
-    width_mm = max(3 * displacement, 2 * max(spacing))
-    padding = np.ceil(width_mm / spacing).astype(int)
-    padded = np.pad(values, [(p, p) for p in padding[::-1]] + [(0, 0)], mode="edge")
-    for axis, width in enumerate(padding[::-1]):
-        ramp = 0.5 - 0.5 * np.cos(np.pi * np.arange(width) / width)
-        weights = np.ones(padded.shape[axis])
-        weights[:width], weights[-width:] = ramp, ramp[::-1]
-        shape = [1] * 4
-        shape[axis] = len(weights)
-        padded *= weights.reshape(shape)
-    extended = sitk.GetImageFromArray(padded, isVector=True)
-    extended.SetSpacing(field.GetSpacing())
-    extended.SetDirection(field.GetDirection())
-    extended.SetOrigin(field.TransformIndexToPhysicalPoint([-int(p) for p in padding]))
-    return extended
 
 
 def _residual_jacobian(field):
@@ -364,6 +310,52 @@ def _residual_jacobian(field):
     return sitk.GetArrayFromImage(sitk.DisplacementFieldJacobianDeterminant(local))
 
 
+def elastic_deformation_qc(transform, domain, config):
+    """Measure and validate the B-spline residual deformation."""
+    residual = transform.GetNthTransform(transform.GetNumberOfTransforms() - 1)
+    if residual.GetName() != "BSplineTransform":
+        raise ValueError("Elastic residual must be a BSplineTransform")
+    field = _bspline_displacement(residual, domain)
+    vectors = backend().GetArrayViewFromImage(field)
+    if not np.isfinite(vectors).all():
+        raise ValueError("Nonfinite elastic displacement field")
+    displacement = np.linalg.norm(vectors, axis=-1)
+    jacobian = _residual_jacobian(field)
+    if not np.isfinite(jacobian).all():
+        raise ValueError("Nonfinite elastic Jacobian determinant")
+    p95 = float(np.percentile(displacement, 95))
+    maximum = float(displacement.max())
+    jacobian_min = float(jacobian.min())
+    jacobian_max = float(jacobian.max())
+    nonpositive = int(np.count_nonzero(jacobian <= 0))
+    reasons = []
+    if p95 > config.maximum_elastic_displacement_p95_mm:
+        reasons.append("p95_displacement_exceeds_limit")
+    if maximum > config.maximum_elastic_displacement_mm:
+        reasons.append("maximum_displacement_exceeds_limit")
+    if nonpositive:
+        reasons.append("folding")
+    if jacobian_min < config.minimum_elastic_jacobian_determinant:
+        reasons.append("jacobian_below_plausible_range")
+    if jacobian_max > config.maximum_elastic_jacobian_determinant:
+        reasons.append("jacobian_above_plausible_range")
+    return field, {
+        "displacement_p95_mm": p95,
+        "displacement_max_mm": maximum,
+        "maximum_allowed_displacement_p95_mm": (
+            config.maximum_elastic_displacement_p95_mm
+        ),
+        "maximum_allowed_displacement_mm": config.maximum_elastic_displacement_mm,
+        "jacobian_min": jacobian_min,
+        "jacobian_max": jacobian_max,
+        "jacobian_nonpositive_voxels": nonpositive,
+        "minimum_allowed_jacobian": config.minimum_elastic_jacobian_determinant,
+        "maximum_allowed_jacobian": config.maximum_elastic_jacobian_determinant,
+        "deformation_qc_passed": not reasons,
+        "deformation_qc_reasons": reasons,
+    }
+
+
 def _round_trip_error(field, inverse_field):
     """Maximum residual composition error in mm at field voxel centers."""
     sitk = backend()
@@ -376,50 +368,19 @@ def _round_trip_error(field, inverse_field):
     return float(np.linalg.norm(error, axis=-1).max())
 
 
-def invert_elastic(transform, fixed, diagnostics=None):
-    """Validate and invert the linear-plus-Demons reference-to-scan mapping."""
+def invert_mask_elastic(transform, domain, diagnostics=None, field=None):
+    """Numerically invert the residual and exactly invert the linear stage."""
     sitk = backend()
-
     diagnostics = {} if diagnostics is None else diagnostics
-    diagnostics["validation_phase"] = "jacobian"
     linear = transform.GetNthTransform(0)
-    residual = sitk.DisplacementFieldTransform(transform.GetNthTransform(1))
-    field = residual.GetDisplacementField()
-    matrix = np.asarray(linear.GetMatrix()).reshape(3, 3)
-    determinant = float(np.linalg.det(matrix))
-    if (
-        not np.isfinite(linear.GetParameters()).all()
-        or not np.isfinite(determinant)
-        or determinant <= 0
-    ):
-        raise ValueError("Invalid elastic linear component")
-    values = sitk.GetArrayViewFromImage(field)
-    if not np.isfinite(values).all():
-        raise ValueError("Nonfinite elastic displacement field")
-    for axis in range(3):
-        if np.any(np.take(values, [0, -1], axis=axis) != 0):
-            raise ValueError(
-                "Elastic field does not transition to identity at its boundary"
-            )
-    # det(J(linear o residual)) = det(linear) * det(J(residual)). Avoid
-    # differentiating a sampled rigid rotation at image borders.
-    jacobian = determinant * _residual_jacobian(field)
-    diagnostics.update(
-        jacobian_min=float(jacobian.min()),
-        jacobian_nonpositive_voxels=int(np.count_nonzero(jacobian <= 0)),
-    )
-    if not np.isfinite(jacobian).all() or diagnostics["jacobian_nonpositive_voxels"]:
-        raise ValueError("Elastic transform contains a fold")
-    del jacobian, values
-    # Invert the residual on its own grid, preserving its direction cosines,
-    # and invert the linear part exactly. For T = linear(residual(p)),
-    # T^-1 = residual^-1(linear^-1(p)).
+    residual = transform.GetNthTransform(1)
+    field = _bspline_displacement(residual, domain) if field is None else field
     diagnostics["validation_phase"] = "inversion"
     inverter = sitk.InvertDisplacementFieldImageFilter()
-    inverter.SetMaximumNumberOfIterations(100)
+    inverter.SetMaximumNumberOfIterations(50)
     inverter.SetMeanErrorToleranceThreshold(0.0)
     inverter.SetMaxErrorToleranceThreshold(0.01)
-    inverter.SetEnforceBoundaryCondition(True)
+    inverter.SetEnforceBoundaryCondition(False)
     inverse_field = inverter.Execute(field)
     if not np.isfinite(sitk.GetArrayViewFromImage(inverse_field)).all():
         raise ValueError("Nonfinite inverse elastic displacement field")
@@ -428,13 +389,11 @@ def invert_elastic(transform, fixed, diagnostics=None):
         inverse_mean_error_norm=float(inverter.GetMeanErrorNorm()),
         validation_phase="round_trip",
     )
-    # Check both compositions rather than accepting a finite but inaccurate
-    # inverse. Limit error to half the smallest reference voxel, accounting
-    # conservatively for amplification by the linear transform in scan space.
-    tolerance = 0.5 * min(fixed.GetSpacing())
+    # Check both residual compositions rather than accepting a finite but
+    # inaccurate inverse. Limit error to half the smallest reference voxel.
+    tolerance = 0.5 * min(domain.GetSpacing())
     forward_error = _round_trip_error(field, inverse_field)
     reverse_error = _round_trip_error(inverse_field, field)
-    reverse_error *= float(np.linalg.svd(matrix, compute_uv=False).max())
     diagnostics.update(
         inverse_round_trip_max_mm=forward_error,
         forward_round_trip_max_mm=reverse_error,
@@ -725,76 +684,53 @@ def mutual_information_score(
     return value
 
 
-def mi_elastic_refine(
-    fixed_image,
-    moving_image,
-    fixed_organ,
-    moving_organ,
-    fixed_domain,
-    initial,
-    config,
-):
-    """Refine a fixed-to-moving mapping with boundary-band MI and a B-spline.
-
-    The optimized B-spline is sampled as a residual displacement field so the
-    same boundary taper, topology validation, and numerical inversion used by
-    the elastic transform contract apply before the candidate can be selected.
-    """
+def mask_elastic_refine(fixed_dm, moving_dm, initial, config):
+    """Refine an affine mapping with a coarse signed-distance B-spline."""
     sitk = backend()
-    lengths = (np.asarray(fixed_domain.GetSize()) - 1) * np.asarray(
-        fixed_domain.GetSpacing()
-    )
+    lengths = (np.asarray(fixed_dm.GetSize()) - 1) * np.asarray(fixed_dm.GetSpacing())
     control_spacing = config.elastic_control_point_spacing_mm
     mesh_size = [max(1, int(round(length / control_spacing))) for length in lengths]
-    bspline = sitk.BSplineTransformInitializer(fixed_domain, mesh_size, order=3)
-    # Optimize the residual in fixed space. Prewarping avoids exposing the
-    # preceding linear stage as the registration metric's moving transform,
-    # which some ITK builds reject when optimizing a local-support transform.
-    aligned_moving_image = resample(moving_image, fixed_image, initial, label=False)
-    aligned_moving_organ = resample(moving_organ, fixed_organ, initial)
+    bspline = sitk.BSplineTransformInitializer(fixed_dm, mesh_size, order=3)
+    band = float(config.organ_boundary_band_half_width_mm)
+    aligned_moving_dm = sitk.Resample(
+        moving_dm,
+        fixed_dm,
+        initial,
+        sitk.sitkLinear,
+        band,
+        sitk.sitkFloat32,
+    )
     registration = sitk.ImageRegistrationMethod()
-    registration.SetMetricAsMattesMutualInformation(numberOfHistogramBins=50)
+    registration.SetMetricAsMeanSquares()
     registration.SetMetricFixedMask(
-        boundary_band(fixed_organ, band_mm=config.organ_boundary_band_half_width_mm)
+        sitk.Cast(sitk.Abs(fixed_dm) < band, sitk.sitkUInt8)
     )
     registration.SetMetricMovingMask(
-        boundary_band(
-            aligned_moving_organ,
-            band_mm=config.organ_boundary_band_half_width_mm,
-        )
+        sitk.Cast(sitk.Abs(aligned_moving_dm) < band, sitk.sitkUInt8)
     )
     registration.SetMetricSamplingStrategy(registration.REGULAR)
-    registration.SetMetricSamplingPercentage(0.2)
+    registration.SetMetricSamplingPercentage(0.25)
     registration.SetInterpolator(sitk.sitkLinear)
     registration.SetOptimizerAsGradientDescentLineSearch(
-        learningRate=1.0,
-        numberOfIterations=config.maximum_optimizer_iterations,
-        convergenceMinimumValue=1e-3,
+        learningRate=0.25,
+        numberOfIterations=config.elastic_optimizer_iterations,
+        convergenceMinimumValue=1e-4,
         convergenceWindowSize=5,
     )
     registration.SetOptimizerScalesFromPhysicalShift()
-    registration.SetShrinkFactorsPerLevel([2, 1])
-    registration.SetSmoothingSigmasPerLevel([1, 0])
+    registration.SetShrinkFactorsPerLevel([1])
+    registration.SetSmoothingSigmasPerLevel([0])
     registration.SmoothingSigmasAreSpecifiedInPhysicalUnitsOn()
     registration.SetInitialTransform(bspline, inPlace=True)
     registration.Execute(
-        sitk.Cast(fixed_image, sitk.sitkFloat32),
-        aligned_moving_image,
+        sitk.Cast(fixed_dm, sitk.sitkFloat32),
+        aligned_moving_dm,
     )
     if not np.isfinite(bspline.GetParameters()).all():
         raise ValueError("Nonfinite elastic transform")
-    field = sitk.TransformToDisplacementField(
-        bspline,
-        sitk.sitkVectorFloat64,
-        fixed_domain.GetSize(),
-        fixed_domain.GetOrigin(),
-        fixed_domain.GetSpacing(),
-        fixed_domain.GetDirection(),
-    )
-    field = _extend_residual(field)
     composite = sitk.CompositeTransform(3)
     composite.AddTransform(initial)
-    composite.AddTransform(sitk.DisplacementFieldTransform(field))
+    composite.AddTransform(bspline)
     return composite, registration
 
 
@@ -851,7 +787,7 @@ def register_pair(
         "mask_rigid",
         "mask_affine",
         "mi_affine",
-        "mi_elastic",
+        "mask_elastic",
     ]
 
     def minimum_stage_improvement(name):
@@ -1081,14 +1017,17 @@ def register_pair(
             skip_remaining("mi_affine")
 
     selected_inverse = None
-    if stages["mi_elastic"]["status"] == "not_run" and not config.enable_elastic_stage:
-        stages["mi_elastic"].update(
+    if (
+        stages["mask_elastic"]["status"] == "not_run"
+        and not config.enable_elastic_stage
+    ):
+        stages["mask_elastic"].update(
             status="skipped_disabled",
             input_dice=score,
             selected=False,
             fallback_stage=stage,
         )
-    elif stages["mi_elastic"]["status"] == "not_run":
+    elif stages["mask_elastic"]["status"] == "not_run":
         started = time.perf_counter()
         try:
             if fixed_dm is None:
@@ -1097,72 +1036,82 @@ def register_pair(
                     padding_mm=config.distance_map_crop_padding_mm,
                     band_mm=config.organ_boundary_band_half_width_mm,
                 )
-            input_mi = mutual_information_score(
-                fixed_image,
-                moving_image,
-                fixed_organ,
-                moving_organ,
-                best,
-                config,
-            )
-            tx, reg = mi_elastic_refine(
-                fixed_image,
-                moving_image,
-                fixed_organ,
-                moving_organ,
+            if moving_dm is None:
+                moving_dm = distance_map(
+                    moving_organ,
+                    padding_mm=config.distance_map_crop_padding_mm,
+                    band_mm=config.organ_boundary_band_half_width_mm,
+                )
+            tx, reg = mask_elastic_refine(
                 fixed_dm,
+                moving_dm,
                 best,
                 config,
             )
-            candidate = score_transform(tx, "mi_elastic")
-            candidate_mi = mutual_information_score(
-                fixed_image,
-                moving_image,
-                fixed_organ,
-                moving_organ,
-                tx,
-                config,
-            )
-            stage_transforms["mi_elastic"] = tx
-            stages["mi_elastic"].update(
+            candidate = score_transform(tx, "mask_elastic")
+            stage_transforms["mask_elastic"] = tx
+            detail = stages["mask_elastic"]
+            detail.update(
                 optimizer_stop=reg.GetOptimizerStopConditionDescription(),
                 optimizer_iteration=int(reg.GetOptimizerIteration()),
-                metric="mattes_mutual_information",
+                optimizer_iteration_limit=config.elastic_optimizer_iterations,
+                metric="mean_squares_signed_distance",
                 algorithm="BSplineTransform",
+                control_point_spacing_mm=config.elastic_control_point_spacing_mm,
+                boundary_band_half_width_mm=(config.organ_boundary_band_half_width_mm),
             )
-            if (
-                _mi_candidate_rejection(
+            field, deformation_qc = elastic_deformation_qc(tx, fixed_dm, config)
+            detail.update(deformation_qc)
+            minimum_improvement = minimum_stage_improvement("mask_elastic")
+            if deformation_qc["deformation_qc_passed"]:
+                improvement = candidate - score
+                if (
+                    np.isfinite(candidate)
+                    and candidate >= score - DICE_TOLERANCE
+                    and improvement >= minimum_improvement - DICE_TOLERANCE
+                ):
+                    selected_inverse = invert_mask_elastic(
+                        tx,
+                        fixed_dm,
+                        detail,
+                        field,
+                    )
+                best, score, stage = _select_candidate(
+                    best,
+                    score,
+                    stage,
+                    tx,
                     candidate,
-                    peak_dice,
-                    input_mi,
-                    candidate_mi,
-                    minimum_mi_improvement("mi_elastic"),
-                    config.maximum_mi_stage_dice_decrease,
+                    "mask_elastic",
+                    stages,
+                    minimum_improvement,
                 )
-                is None
-            ):
-                selected_inverse = invert_elastic(tx, fixed_organ, stages["mi_elastic"])
-            best, score, stage = _select_mi_candidate(
-                best,
-                score,
-                stage,
-                tx,
-                candidate,
-                "mi_elastic",
-                stages,
-                dice_guard_reference=peak_dice,
-                input_mi=input_mi,
-                candidate_mi=candidate_mi,
-                minimum_mi_improvement=minimum_mi_improvement("mi_elastic"),
-                maximum_dice_decrease=config.maximum_mi_stage_dice_decrease,
-                dice_guard_metric=dice_metric,
-            )
+            else:
+                if not np.isfinite(candidate):
+                    raise ValueError("Nonfinite registration Dice")
+                detail.update(
+                    dice=candidate,
+                    input_dice=score,
+                    dice_improvement=candidate - score,
+                    minimum_required_dice_improvement=minimum_improvement,
+                    selection_metric=dice_metric,
+                    status="rejected_deformation_qc",
+                    selected=False,
+                    fallback_stage=stage,
+                )
             peak_dice = max(peak_dice, score)
         except (RuntimeError, ValueError) as exc:
             selected_inverse = None
-            _record_stage_failure(stages, warnings, "mi_elastic", exc, score, stage)
+            _record_stage_failure(
+                stages,
+                warnings,
+                "mask_elastic",
+                exc,
+                score,
+                stage,
+            )
         finally:
-            stages["mi_elastic"]["elapsed_seconds"] = time.perf_counter() - started
+            stages["mask_elastic"]["elapsed_seconds"] = time.perf_counter() - started
     selected_stage = "identity" if stage == "baseline" else stage
     result = TransformResult(
         best,
