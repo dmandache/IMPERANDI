@@ -16,7 +16,13 @@ def ordered_ids(rows, priorities):
 
 
 def test_reference_criteria_apply_in_order_and_normalize_categories():
-    priorities = RegistrationConfig().reference_priority["MR"]
+    priorities = [
+        {"mri_sequence": ["T1", "T2", "DWI"]},
+        {"phase": ["PORTAL_VENOUS"]},
+        {"PixelSpacingXY": "min"},
+        {"SliceThickness": "min"},
+        {"registration_organ_volume_mm3": "max"},
+    ]
     rows = [
         dict(registration_scan_id=str(i), **row)
         for i, row in enumerate(
@@ -128,12 +134,10 @@ def test_complete_ties_use_stable_scan_ids(priorities):
 
 def test_planning_discards_stale_organ_volume_without_loading_images():
     config = RegistrationConfig(
-        reference_priority={
-            "MR": [
-                {"registration_organ_volume_mm3": "max"},
-                {"mri_sequence": ["T1", "T2"]},
-            ]
-        }
+        reference_priority=[
+            {"registration_organ_volume_mm3": "max"},
+            {"mri_sequence": ["T1", "T2"]},
+        ]
     )
     rows = [
         dict(
