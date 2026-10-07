@@ -1412,8 +1412,18 @@ def test_stage_logging_reports_mi_only_for_attempted_mi_and_elastic_stages():
                 "mutual_information": 0.2345674,
             },
             "mask_elastic": {
+                "dice": 0.85,
+                "status": "evaluated",
+                "input_mutual_information": 0.2345674,
+                "mutual_information": 0.3456784,
+            },
+        }
+    )
+    skipped_summary = _stage_summary(
+        {
+            "mask_elastic": {
                 "dice": None,
-                "status": "skipped_disabled",
+                "status": "skipped_early_stop",
                 "input_mutual_information": 99,
                 "mutual_information": 100,
             },
@@ -1424,8 +1434,12 @@ def test_stage_logging_reports_mi_only_for_attempted_mi_and_elastic_stages():
         "mi_affine=0.8000 (evaluated, MI before=0.123456, MI after=0.234567)"
         in summary
     )
-    assert "mask_elastic=n/a (skipped_disabled)" in summary
-    assert "99" not in summary
+    assert (
+        "mask_elastic=0.8500 (evaluated, MI before=0.234567, MI after=0.345678)"
+        in summary
+    )
+    assert "mask_elastic=n/a (skipped_early_stop)" in skipped_summary
+    assert "99" not in skipped_summary
 
 
 def test_logs_identify_groups_with_human_attributes(tmp_path, caplog):
