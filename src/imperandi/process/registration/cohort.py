@@ -120,6 +120,13 @@ def prepare_cohort(table: pd.DataFrame, config) -> pd.DataFrame:
     )
 
     # Source columns remain authoritative across repeated registration runs.
+    # Reference-space publication changes the canonical image path, so retain
+    # and restore the original image just as we do for segmentation paths.
+    source_image_column = "source_nifti_path"
+    if source_image_column in df:
+        df["nifti_path"] = df[source_image_column].astype(object)
+    elif config.output_space == "reference" and "nifti_path" in df:
+        df[source_image_column] = df["nifti_path"]
     for column in (config.organ_mask_column, config.tumor_mask_column):
         source = f"source_{column}"
         if source not in df:
@@ -176,6 +183,10 @@ def prepare_cohort(table: pd.DataFrame, config) -> pd.DataFrame:
         "reg_tumor_native_path",
         "reg_organ_native_path",
     ]
+    if config.output_space == "reference":
+        derived_columns.extend(
+            ["reg_nifti_path", "reg_organ_path", "reg_tumor_common_path"]
+        )
     for column in derived_columns:
         df[column] = pd.Series([None] * len(df), dtype=object)
 
@@ -791,29 +802,51 @@ def register_cohort(
                 if inverse is None:
                     inverse = tx.GetInverse()
                 pair_dir = directory / ids[i]
-                if config.preserve_source_organ_mask:
-                    native_organ = organ
-                elif config.organ_consensus_method == "anchor":
-                    native_consensus = resample_organ_distance(
-                        get_organ_field(ref), image, inverse
+                if config.output_space == "reference":
+                    df.at[i, "reg_nifti_path"] = write_artifact(
+                        resample(image, reference, tx, label=False),
+                        pair_dir / "image_registered.nii.gz",
                     )
-                    known = resample(coverage_image(reference), image, inverse)
-                    source_distance = expand_organ_distance(get_organ_field(i), image)
-                    transfer = _fill_unobserved(
-                        native_consensus,
-                        known,
-                        source_distance,
-                        blend_width_mm=config.organ_coverage_blend_width_mm,
-                    )
-                    native_organ = transfer.mask
-                    native_organ_seams[i] = transfer.residual_seam_voxels
-                    df.at[i, "reg_organ_native_path"] = write_artifact(
-                        native_organ,
-                        pair_dir / "organ_native.nii.gz",
-                    )
-                    df.at[i, config.organ_mask_column] = df.at[
-                        i, "reg_organ_native_path"
-                    ]
+                    df.at[i, "nifti_path"] = df.at[i, "reg_nifti_path"]
+                    if config.preserve_source_organ_mask:
+                        native_organ = resample(organ, reference, tx)
+                    elif config.organ_consensus_method == "anchor":
+                        native_organ = reference_organ
+                    if (
+                        config.preserve_source_organ_mask
+                        or config.organ_consensus_method == "anchor"
+                    ):
+                        df.at[i, "reg_organ_path"] = write_artifact(
+                            native_organ,
+                            pair_dir / "organ_registered.nii.gz",
+                        )
+                        df.at[i, config.organ_mask_column] = df.at[i, "reg_organ_path"]
+                else:
+                    if config.preserve_source_organ_mask:
+                        native_organ = organ
+                    elif config.organ_consensus_method == "anchor":
+                        native_consensus = resample_organ_distance(
+                            get_organ_field(ref), image, inverse
+                        )
+                        known = resample(coverage_image(reference), image, inverse)
+                        source_distance = expand_organ_distance(
+                            get_organ_field(i), image
+                        )
+                        transfer = _fill_unobserved(
+                            native_consensus,
+                            known,
+                            source_distance,
+                            blend_width_mm=config.organ_coverage_blend_width_mm,
+                        )
+                        native_organ = transfer.mask
+                        native_organ_seams[i] = transfer.residual_seam_voxels
+                        df.at[i, "reg_organ_native_path"] = write_artifact(
+                            native_organ,
+                            pair_dir / "organ_native.nii.gz",
+                        )
+                        df.at[i, config.organ_mask_column] = df.at[
+                            i, "reg_organ_native_path"
+                        ]
                 transforms[i] = tx
                 inverse_transforms[i] = inverse
                 if _consensus_eligible(
@@ -910,12 +943,28 @@ def register_cohort(
             for i in list(transforms):
                 try:
                     image, source_organ = loaded[i]
-                    inverse = inverse_transforms[i]
+                    if config.output_space == "reference":
+                        target = reference
+                        transfer_transform = sitk.Transform(3, sitk.sitkIdentity)
+                        source_distance = expand_organ_distance(
+                            get_organ_field(ref), reference
+                        )
+                        artifact_column = "reg_organ_path"
+                        artifact_name = "organ_registered.nii.gz"
+                    else:
+                        target = image
+                        transfer_transform = inverse_transforms[i]
+                        source_distance = expand_organ_distance(
+                            get_organ_field(i), image
+                        )
+                        artifact_column = "reg_organ_native_path"
+                        artifact_name = "organ_native.nii.gz"
                     native_consensus = resample_organ_distance(
-                        fused_organ.distance_field, image, inverse
+                        fused_organ.distance_field, target, transfer_transform
                     )
-                    native_coverage = resample(fused_organ.coverage, image, inverse)
-                    source_distance = expand_organ_distance(get_organ_field(i), image)
+                    native_coverage = resample(
+                        fused_organ.coverage, target, transfer_transform
+                    )
                     transfer = _fill_unobserved(
                         native_consensus,
                         native_coverage,
@@ -925,12 +974,10 @@ def register_cohort(
                     native_organ = transfer.mask
                     native_organ_seams[i] = transfer.residual_seam_voxels
                     pair_dir = directory / ids[i]
-                    df.at[i, "reg_organ_native_path"] = write_artifact(
-                        native_organ, pair_dir / "organ_native.nii.gz"
+                    df.at[i, artifact_column] = write_artifact(
+                        native_organ, pair_dir / artifact_name
                     )
-                    df.at[i, config.organ_mask_column] = df.at[
-                        i, "reg_organ_native_path"
-                    ]
+                    df.at[i, config.organ_mask_column] = df.at[i, artifact_column]
                     native_organs[i] = native_organ
                 except (RuntimeError, ValueError, TypeError) as exc:
                     failed_transfers.append(i)
@@ -950,9 +997,12 @@ def register_cohort(
                 publish_group_log(df, group.index, errors, config, directory)
                 continue
         for i, native_organ in native_organs.items():
+            source_organ = loaded[i][1]
+            if config.output_space == "reference":
+                source_organ = resample(source_organ, reference, transforms[i])
             quality = final_organ_qc(
                 native_organ,
-                loaded[i][1],
+                source_organ,
                 residual_seam_voxels=native_organ_seams.get(i, 0),
             )
             record_final_organ_qc(df, i, quality)
@@ -1054,26 +1104,33 @@ def register_cohort(
                 )
                 for i, tx in transforms.items():
                     try:
-                        inverse = inverse_transforms[i]
-                        image = loaded[i][0]
                         pair_dir = directory / ids[i]
-                        if config.tumor_consensus_method == "anchor":
-                            composed = sitk.CompositeTransform(3)
-                            composed.AddTransform(transforms[contributors[0]])
-                            composed.AddTransform(inverse)
-                            native = resample(tumors[contributors[0]], image, composed)
+                        if config.output_space == "reference":
+                            native = sitk.And(fused.mask, fused.coverage)
+                            artifact_column = "reg_tumor_common_path"
+                            artifact_name = "tumor_common.nii.gz"
                         else:
-                            native = resample(fused.mask, image, inverse)
-                        native_coverage = resample(fused.coverage, image, inverse)
-                        native = sitk.And(native, native_coverage)
+                            inverse = inverse_transforms[i]
+                            image = loaded[i][0]
+                            if config.tumor_consensus_method == "anchor":
+                                composed = sitk.CompositeTransform(3)
+                                composed.AddTransform(transforms[contributors[0]])
+                                composed.AddTransform(inverse)
+                                native = resample(
+                                    tumors[contributors[0]], image, composed
+                                )
+                            else:
+                                native = resample(fused.mask, image, inverse)
+                            native_coverage = resample(fused.coverage, image, inverse)
+                            native = sitk.And(native, native_coverage)
+                            artifact_column = "reg_tumor_native_path"
+                            artifact_name = "tumor_native.nii.gz"
                         if config.clip_tumor_consensus_to_organ:
                             native = sitk.And(native, native_organs[i])
-                        df.at[i, "reg_tumor_native_path"] = write_artifact(
-                            native, pair_dir / "tumor_native.nii.gz"
+                        df.at[i, artifact_column] = write_artifact(
+                            native, pair_dir / artifact_name
                         )
-                        df.at[i, config.tumor_mask_column] = df.at[
-                            i, "reg_tumor_native_path"
-                        ]
+                        df.at[i, config.tumor_mask_column] = df.at[i, artifact_column]
                         df.at[i, "consensus_status"] = (
                             "single_contributor" if len(masks) == 1 else "ok"
                         )

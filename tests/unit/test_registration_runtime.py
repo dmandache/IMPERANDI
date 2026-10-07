@@ -60,6 +60,7 @@ def test_manifest_overrides_defaults_and_cli(tmp_path, cohort):
                 "registration": {
                     "organ_consensus_method": "anchor",
                     "tumor_consensus_method": "majority",
+                    "output_space": "moving",
                     "enable_affine_stage": True,
                 }
             }
@@ -71,6 +72,7 @@ def test_manifest_overrides_defaults_and_cli(tmp_path, cohort):
     config, _ = register.resolve_config(args)
     assert config.organ_consensus_method == "anchor"
     assert config.tumor_consensus_method == "majority"
+    assert config.output_space == "moving"
     assert config.enable_affine_stage
     override = register.normalize_registration_args(
         args_for(
@@ -81,17 +83,41 @@ def test_manifest_overrides_defaults_and_cli(tmp_path, cohort):
             "majority",
             "--tumor_consensus_method",
             "union",
+            "--output_space",
+            "reference",
             "--disable_affine_stage",
         )
     )
     config, _ = register.resolve_config(override)
     assert config.organ_consensus_method == "majority"
     assert config.tumor_consensus_method == "union"
+    assert config.output_space == "reference"
     assert not config.enable_affine_stage
     built_in = register.normalize_registration_args(
         args_for(cohort, "--manifest", "generic")
     )
     assert isinstance(register.resolve_config(built_in)[0], RegistrationConfig)
+
+
+def test_reference_output_space_is_published_by_runtime(cohort):
+    source = pd.read_csv(cohort)
+    register.main(args_for(cohort, "--output_space", "reference"))
+
+    output, errors, _ = paths_for(cohort)
+    saved = pd.read_csv(output)
+    assert pd.read_csv(errors).empty
+    assert saved.source_nifti_path.tolist() == source.nifti_path.tolist()
+    assert saved.nifti_path.equals(saved.reg_nifti_path)
+    assert saved.mask_liver.equals(saved.reg_organ_path)
+    assert saved.mask_liver_tumor.equals(saved.reg_tumor_common_path)
+    assert saved.reg_organ_native_path.isna().all()
+    assert saved.reg_tumor_native_path.isna().all()
+
+    register.main(args_for(cohort, "--output_space", "reference"))
+    resumed = pd.read_csv(output)
+    assert resumed.nifti_path.equals(saved.nifti_path)
+    assert resumed.mask_liver.equals(saved.mask_liver)
+    assert resumed.mask_liver_tumor.equals(saved.mask_liver_tumor)
 
 
 def test_reference_criterion_order_changes_selection_and_invalidates_resume(

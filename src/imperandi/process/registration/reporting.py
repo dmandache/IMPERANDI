@@ -256,6 +256,7 @@ def build_qc(table, errors, config):
                 "phase",
                 "mri_sequence",
                 "nifti_path",
+                "source_nifti_path",
                 f"source_{config.organ_mask_column}",
                 f"source_{config.tumor_mask_column}",
                 config.organ_mask_column,
@@ -273,6 +274,9 @@ def build_qc(table, errors, config):
                 *QC_FIELDS,
                 "reg_organ_native_path",
                 "reg_tumor_native_path",
+                "reg_nifti_path",
+                "reg_organ_path",
+                "reg_tumor_common_path",
                 "registration_qc_path",
                 "registration_log_path",
             ]
@@ -281,6 +285,7 @@ def build_qc(table, errors, config):
     result = table.reindex(columns=columns).copy()
     result["organ_consensus"] = config.organ_consensus_method
     result["tumor_consensus"] = config.tumor_consensus_method
+    result["output_space"] = config.output_space
     messages = {}
     for row in errors.to_dict("records"):
         messages.setdefault(row["registration_scan_id"], []).append(
@@ -327,6 +332,7 @@ def publish_group_log(df, indices, errors, config, directory):
             "registration_reference_label": _optional(reference_label),
             "organ_consensus": first["organ_consensus"],
             "tumor_consensus": first["tumor_consensus"],
+            "output_space": first["output_space"],
         }
     ]
     for row in rows:

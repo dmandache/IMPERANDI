@@ -27,7 +27,7 @@ from .reporting import ERROR_COLUMNS, build_error_record, build_qc, group_label
 logger = logging.getLogger(__name__)
 
 # Increment when registration behavior changes so old artifacts are not reused.
-REGISTRATION_SCHEMA = 26
+REGISTRATION_SCHEMA = 27
 
 
 def _has_failed_stage(rows, config):
@@ -216,7 +216,7 @@ def run_registration(args, table, config, manifest):
     )
     inputs = {args.csv_path}
     for col in [
-        "nifti_path",
+        "source_nifti_path" if "source_nifti_path" in df else "nifti_path",
         f"source_{config.organ_mask_column}",
         f"source_{config.tumor_mask_column}",
     ]:
@@ -245,6 +245,7 @@ def run_registration(args, table, config, manifest):
             in {
                 "consensus_status",
                 "tumor_consensus_input_status",
+                "nifti_path",
                 config.organ_mask_column,
                 config.tumor_mask_column,
             }
