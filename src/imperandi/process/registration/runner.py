@@ -29,8 +29,7 @@ def _artifact_paths(rows):
     columns = [
         c
         for c in rows
-        if c
-        in {"registration_report_path", "registration_qc_path", "registration_log_path"}
+        if c == "registration_log_path"
         or (c.startswith("reg_") and c.endswith("_path"))
     ]
     return sorted(
@@ -54,7 +53,7 @@ def run_registration(args, table, config, manifest):
     signature = argparse.Namespace(
         settings=asdict(config),
         manifest_config=manifest,
-        registration_schema=5,
+        registration_schema=6,
         backend_version=sitk.Version_VersionString(),
         output_dir=args.output_dir,
         threads_per_worker=args.threads_per_worker,
@@ -82,13 +81,17 @@ def run_registration(args, table, config, manifest):
     manager = CheckpointManager(paths=context["paths"], config=context["config"])
     state = context["state"] or {}
     completed, artifacts, errors = set(), {}, pd.DataFrame(columns=ERROR_COLUMNS)
+    df["registration_qc_path"] = args.qc_csv_path
     groups = dict(tuple(df.groupby("registration_group_id", sort=True)))
     derived = [
         c
         for c in df
-        if c.startswith("reg_")
-        or c.startswith("registration_")
-        or c in {"consensus_status", config.organ_column, config.tumor_column}
+        if c != "registration_qc_path"
+        and (
+            c.startswith("reg_")
+            or c.startswith("registration_")
+            or c in {"consensus_status", config.organ_column, config.tumor_column}
+        )
     ]
     if context["can_resume"]:
         saved = _read_checkpoint(context["paths"].main_checkpoint_path)
