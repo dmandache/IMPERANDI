@@ -25,7 +25,7 @@ class RegistrationConfig:
     min_largest_component_fraction: float = 0.8
     min_confidence_dice: float = 0.5
     min_common_fov_fraction: float = 0.05
-    bspline_ctrl_spacing_mm: float = 90.0
+    demons_smoothing_sigma_mm: float = 1.0
     iterations: int = 100
     min_dice: float = 0.1
     crop_padding_mm: float = 25.0
@@ -92,13 +92,13 @@ class RegistrationConfig:
             or not isinstance(self.distance_band_mm, (int, float))
             or not isfinite(self.distance_band_mm)
             or self.distance_band_mm <= 0
-            or isinstance(self.bspline_ctrl_spacing_mm, bool)
-            or not isinstance(self.bspline_ctrl_spacing_mm, (int, float))
-            or not isfinite(self.bspline_ctrl_spacing_mm)
-            or self.bspline_ctrl_spacing_mm <= 0
+            or isinstance(self.demons_smoothing_sigma_mm, bool)
+            or not isinstance(self.demons_smoothing_sigma_mm, (int, float))
+            or not isfinite(self.demons_smoothing_sigma_mm)
+            or self.demons_smoothing_sigma_mm <= 0
         ):
             raise ValueError(
-                "Invalid registration crop, distance band or B-spline spacing"
+                "Invalid registration crop, distance band or Demons smoothing sigma"
             )
         for name in (self.visit_column, self.organ_column, self.tumor_column):
             if not isinstance(name, str) or not name.strip():

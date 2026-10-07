@@ -161,7 +161,9 @@ def register_cohort(
                     df.at[i, "registration_status"] = "invalid_organ_mask"
                     df.at[i, "registration_confidence"] = "invalid_organ_mask"
                     df.at[i, "registration_skip_reason"] = (
-                        ",".join(quality.reasons) or "partial_organs_disabled"
+                        ",".join(quality.reasons)
+                        if quality.status == "invalid"
+                        else "partial_organs_disabled"
                     )
                     error(
                         i, "organ_qc", ValueError(df.at[i, "registration_skip_reason"])
