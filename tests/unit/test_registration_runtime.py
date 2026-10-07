@@ -184,6 +184,65 @@ def test_finished_run_skips_and_restores_missing_final_csv(monkeypatch, cohort):
     assert json.loads(paths.state_path.read_text())["finished"]
 
 
+def test_registration_behavior_change_invalidates_resume(monkeypatch, cohort):
+    current_schema = runtime.REGISTRATION_SCHEMA
+    monkeypatch.setattr(runtime, "REGISTRATION_SCHEMA", current_schema - 1)
+    register.main(args_for(cohort))
+    monkeypatch.setattr(runtime, "REGISTRATION_SCHEMA", current_schema)
+    actual = runtime.iter_group_results
+    observed = []
+
+    def tracking(groups, *args, **kwargs):
+        observed.extend(key for key, _ in groups)
+        yield from actual(groups, *args, **kwargs)
+
+    monkeypatch.setattr(runtime, "iter_group_results", tracking)
+    register.main(args_for(cohort))
+    assert len(observed) == 2
+
+
+def test_in_process_group_failure_is_recorded_and_other_groups_continue(
+    monkeypatch, cohort
+):
+    actual = runtime.register_cohort
+    previous_threads = sitk.ProcessObject.GetGlobalDefaultNumberOfThreads()
+
+    def fail_one(table, *args, **kwargs):
+        if table.iloc[0].study_id == "visit0":
+            raise ValueError("deliberate group failure")
+        return actual(table, *args, **kwargs)
+
+    monkeypatch.setattr(runtime, "register_cohort", fail_one)
+    register.main(args_for(cohort))
+    output, error_path, _ = paths_for(cohort)
+    result = pd.read_csv(output).set_index("study_id")
+    assert result.loc["visit0", "registration_status"] == "failed"
+    assert result.loc["visit1", "registration_status"] == "reference"
+    assert pd.read_csv(error_path).error.tolist() == [
+        "ValueError: deliberate group failure"
+    ]
+    assert sitk.ProcessObject.GetGlobalDefaultNumberOfThreads() == previous_threads
+
+
+def test_in_process_interrupt_propagates_and_restores_threads(monkeypatch, tmp_path):
+    previous = sitk.ProcessObject.GetGlobalDefaultNumberOfThreads()
+
+    def interrupt(*args):
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(runtime, "register_cohort", interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        list(
+            runtime.iter_group_results(
+                [("group", pd.DataFrame())],
+                tmp_path,
+                RegistrationConfig(),
+                timeout_sec=0,
+            )
+        )
+    assert sitk.ProcessObject.GetGlobalDefaultNumberOfThreads() == previous
+
+
 def test_registration_uses_shared_task_summary(caplog, cohort):
     caplog.set_level(logging.INFO)
     register.main(args_for(cohort))
