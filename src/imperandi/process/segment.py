@@ -2231,7 +2231,17 @@ def main(args: argparse.Namespace) -> None:
         except Exception:
             logger.debug("report_volumes() failed – continuing")
 
-    final_semantic_fp = semantic_fp
+    # Segmentation may crop source NIfTI/mask artifacts in place. Refresh the
+    # semantic baseline after a successful run so strict content hashing does
+    # not invalidate the task because of its own intentional writes.
+    final_semantic_fp = fingerprint_csv_semantic(
+        args.csv_path,
+        columns=semantic_columns,
+        dynamic_prefixes=semantic_dynamic_prefixes,
+        artifact_columns=["nifti_path"],
+        artifact_prefixes=semantic_dynamic_prefixes,
+        strict=bool(getattr(args, "strict_resume", False)),
+    )
     try:
         same_csv = Path(args.csv_path).resolve() == output_path.resolve()
     except Exception:
