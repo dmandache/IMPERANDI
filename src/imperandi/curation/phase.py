@@ -186,6 +186,10 @@ def phase_curation_input_columns(config: Mapping[str, Any] | None) -> set[str]:
     for strategy in normalized["strategies"]:
         if strategy["type"] == "ontology":
             columns.update(strategy["columns"])
+        elif strategy["type"] == "rules":
+            columns.update(
+                {"rule_phase", "rule_phase_confidence", "rule_phase_reason"}
+            )
         elif strategy["type"] == "totalsegmentator":
             columns.add(strategy["column"])
             columns.update(strategy["confidence_columns"])
