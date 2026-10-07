@@ -580,8 +580,8 @@ def _mask_linear_refine(fixed_dm, moving_dm, initial, config, *, affine):
         1.0, 0.001, config.maximum_optimizer_iterations
     )
     registration.SetOptimizerScalesFromPhysicalShift()
-    registration.SetShrinkFactorsPerLevel([2, 1])
-    registration.SetSmoothingSigmasPerLevel([1, 0])
+    registration.SetShrinkFactorsPerLevel([4, 2, 1])
+    registration.SetSmoothingSigmasPerLevel([2, 1, 0])
     registration.SmoothingSigmasAreSpecifiedInPhysicalUnitsOn()
     registration.SetInitialTransform(transform, inPlace=True)
     registration.Execute(fixed_dm, moving_dm)
@@ -639,8 +639,8 @@ def mi_refine(
         1.0, 0.001, config.maximum_optimizer_iterations
     )
     registration.SetOptimizerScalesFromPhysicalShift()
-    registration.SetShrinkFactorsPerLevel([2, 1])
-    registration.SetSmoothingSigmasPerLevel([1, 0])
+    registration.SetShrinkFactorsPerLevel([4, 2, 1])
+    registration.SetSmoothingSigmasPerLevel([2, 1, 0])
     registration.SmoothingSigmasAreSpecifiedInPhysicalUnitsOn()
     registration.SetInitialTransform(transform, inPlace=True)
     registration.Execute(
@@ -718,8 +718,8 @@ def mask_elastic_refine(fixed_dm, moving_dm, initial, config):
         convergenceWindowSize=5,
     )
     registration.SetOptimizerScalesFromPhysicalShift()
-    registration.SetShrinkFactorsPerLevel([1])
-    registration.SetSmoothingSigmasPerLevel([0])
+    registration.SetShrinkFactorsPerLevel([4, 2, 1])
+    registration.SetSmoothingSigmasPerLevel([2, 1, 0])
     registration.SmoothingSigmasAreSpecifiedInPhysicalUnitsOn()
     registration.SetInitialTransform(bspline, inPlace=True)
     registration.Execute(
