@@ -395,46 +395,35 @@ def register_pair(fixed_organ, moving_organ, config):
     stage_transforms = {"baseline": identity}
     stages = {name: {"dice": None, "status": "not_run"} for name in REGISTRATION_STAGES}
     stages["baseline"].update(dice=before, status="evaluated", selected=True)
-    initial_stage = "geometry" if partial and not config.partial_mask_pca else "pca"
-    if initial_stage == "geometry":
+    if partial:
         stages["pca"].update(status="skipped_partial_coverage", selected=False)
-    started_pca = time.perf_counter()
-    try:
-        if partial and not config.partial_mask_pca:
-            # Physical identity is safe for cropped acquisitions sharing patient
-            # coordinates. Geometry translation is an alternative, not a forced
-            # centroid shift that would align the cropped and complete organs.
-            initial = sitk.CenteredTransformInitializer(
-                fixed_organ,
-                moving_organ,
-                sitk.Euler3DTransform(),
-                sitk.CenteredTransformInitializerFilter.GEOMETRY,
+    for initial_stage in ["geometry"] if partial else ["geometry", "pca"]:
+        started = time.perf_counter()
+        try:
+            if initial_stage == "geometry":
+                initial = sitk.CenteredTransformInitializer(
+                    fixed_organ,
+                    moving_organ,
+                    sitk.Euler3DTransform(),
+                    sitk.CenteredTransformInitializerFilter.GEOMETRY,
+                )
+            else:
+                initial = initialize_pca(fixed_organ, moving_organ)
+            initial_score = score_transform(initial)
+            stage_transforms[initial_stage] = initial
+            best, score, stage = _select_candidate(
+                best, score, stage, initial, initial_score, initial_stage, stages
             )
-            if score_transform(initial) <= before:
-                initial = identity
-        else:
-            initial = initialize_pca(fixed_organ, moving_organ)
-    except (RuntimeError, ValueError) as exc:
-        warnings.append(f"{initial_stage}: {exc}")
-        stages[initial_stage].update(
-            status="failed",
-            selected=False,
-            fallback_stage="baseline",
-            error=str(exc),
-            elapsed_seconds=time.perf_counter() - started_pca,
-        )
-    else:
-        pca_score = score_transform(initial)
-        stages[initial_stage].update(
-            dice=pca_score,
-            status="evaluated",
-            selected=False,
-            elapsed_seconds=time.perf_counter() - started_pca,
-        )
-        stage_transforms[initial_stage] = initial
-        best, score, stage = _select_candidate(
-            identity, before, "baseline", initial, pca_score, initial_stage, stages
-        )
+        except (RuntimeError, ValueError) as exc:
+            warnings.append(f"{initial_stage}: {exc}")
+            stages[initial_stage].update(
+                status="failed",
+                selected=False,
+                fallback_stage=stage,
+                error=str(exc),
+            )
+        finally:
+            stages[initial_stage]["elapsed_seconds"] = time.perf_counter() - started
     fixed_dm = distance_map(
         fixed_organ,
         padding_mm=config.crop_padding_mm,
