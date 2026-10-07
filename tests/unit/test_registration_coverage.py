@@ -174,7 +174,7 @@ def test_partial_reference_priority_and_qc(tmp_path):
         save_row(tmp_path, "partial", partial_mask(complete), "PORTAL_VENOUS"),
         save_row(tmp_path, "complete", complete, "ARTERIAL"),
     ]
-    config = RegistrationConfig(iterations=5, method="majority")
+    config = RegistrationConfig(iterations=5, tumor_consensus="majority")
     out, errors = register_cohort(pd.DataFrame(rows), tmp_path / "out", config)
     assert errors.empty
     assert out.loc[0, "registration_reference_id"] == out.loc[1, "registration_scan_id"]
@@ -289,7 +289,7 @@ def test_low_confidence_scan_excluded_from_consensus(tmp_path):
     out, errors = register_cohort(
         pd.DataFrame(rows),
         tmp_path / "out",
-        RegistrationConfig(method="majority"),
+        RegistrationConfig(tumor_consensus="majority"),
         pair_registration=uncertain,
     )
     assert errors.empty
@@ -300,14 +300,14 @@ def test_low_confidence_scan_excluded_from_consensus(tmp_path):
     assert pd.isna(out.loc[1, "reg_tumor_native_path"])
 
 
-@pytest.mark.parametrize("method", ["majority", "union", "intersection"])
-def test_unobserved_voxels_are_unknown(method):
+@pytest.mark.parametrize("tumor_consensus", ["majority", "union", "intersection"])
+def test_unobserved_voxels_are_unknown(tumor_consensus):
     def image(values):
         return sitk.GetImageFromArray(np.array(values, np.uint8).reshape(1, 1, -1))
 
     masks = [image([1, 1, 1, 0]), image([0, 0, 1, 1])]
     coverage = [image([1, 1, 1, 0]), image([0, 1, 1, 0])]
-    result = fuse_tumors(masks, coverage, method=method)
+    result = fuse_tumors(masks, coverage, tumor_consensus=tumor_consensus)
     assert sitk.GetArrayFromImage(result.probability).ravel().tolist() == [1, 0.5, 1, 0]
     assert sitk.GetArrayFromImage(result.observation_count).ravel().tolist() == [
         1,
@@ -318,7 +318,7 @@ def test_unobserved_voxels_are_unknown(method):
     assert sitk.GetArrayFromImage(result.coverage).ravel().tolist() == [1, 1, 1, 0]
     assert sitk.GetArrayFromImage(result.mask).ravel().tolist() == [
         1,
-        int(method == "union"),
+        int(tumor_consensus == "union"),
         1,
         0,
     ]
@@ -388,12 +388,12 @@ def test_staple_missing_observations_are_explicitly_restricted():
 
     masks = [image([1, 1, 0, 0]), image([1, 1, 0, 1])]
     coverages = [image([1, 1, 1, 0]), image([0, 1, 1, 1])]
-    result = fuse_tumors(masks, coverages, method="staple")
+    result = fuse_tumors(masks, coverages, tumor_consensus="staple")
     assert result.support_policy == "common_fov_only"
     assert sitk.GetArrayFromImage(result.coverage).ravel().tolist() == [0, 1, 1, 0]
     with pytest.raises(ValueError, match="support"):
         fuse_tumors(
             masks,
             [image([1, 0, 0, 0]), image([0, 0, 0, 1])],
-            method="staple",
+            tumor_consensus="staple",
         )
