@@ -88,7 +88,18 @@ match. Common controls are:
 - `--strict_resume`: hash input contents instead of relying on the lightweight
   fingerprint; this is safer but slower on large inputs.
 
-Changing material arguments or inputs invalidates an incompatible checkpoint.
+Changing material arguments or task-relevant inputs invalidates an incompatible
+checkpoint. For cohort CSVs that are enriched in place, resume fingerprints are
+semantic rather than based on the CSV file timestamp: each stage fingerprints only
+the columns and referenced artifacts it consumes. Columns written by unrelated
+downstream stages therefore do not invalidate an earlier completed stage.
+
+Completed rows also retain row-level fingerprints. If only some relevant rows change,
+a compatible completed run reuses unchanged rows and recomputes only the affected
+rows. With `--strict_resume`, referenced image and mask files are content-hashed;
+the default mode tracks their path and existence without coupling resume to file
+modification timestamps.
+
 Do not manually edit checkpoint/state files while a command is running.
 
 ## Example Slurm batch script
