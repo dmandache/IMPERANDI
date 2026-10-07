@@ -587,3 +587,34 @@ def test_semantic_strict_artifact_fingerprint_ignores_mtime_only_change(tmp_path
     )
     assert after.input_fingerprint == before.input_fingerprint
     assert after.row_fingerprints == before.row_fingerprints
+
+
+
+def test_semantic_new_optional_column_invalidates_only_populated_rows(tmp_path):
+    csv_path = tmp_path / "cohort.csv"
+    base = pd.DataFrame(
+        {
+            "volume_id": ["v1", "v2"],
+            "nifti_path": ["a.nii.gz", "b.nii.gz"],
+            "Modality": ["CT", "CT"],
+        }
+    )
+    base.to_csv(csv_path, index=False)
+    before = fingerprint_csv_semantic(
+        csv_path,
+        columns=["volume_id", "nifti_path", "Modality"],
+        dynamic_prefixes=["mask_"],
+    )
+
+    enriched = base.copy()
+    enriched["mask_liver"] = [pd.NA, "liver-v2.nii.gz"]
+    enriched.to_csv(csv_path, index=False)
+    after = fingerprint_csv_semantic(
+        csv_path,
+        columns=["volume_id", "nifti_path", "Modality"],
+        dynamic_prefixes=["mask_"],
+    )
+
+    assert before.input_fingerprint != after.input_fingerprint
+    assert before.row_fingerprints["v1"] == after.row_fingerprints["v1"]
+    assert before.row_fingerprints["v2"] != after.row_fingerprints["v2"]
