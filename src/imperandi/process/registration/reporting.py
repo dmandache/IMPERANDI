@@ -145,11 +145,26 @@ def _optional(value):
 def _stage_summary(stages):
     parts = []
     for stage in REGISTRATION_STAGES:
+        if stage not in stages:
+            continue
         detail = stages.get(stage, {})
         dice = _optional(detail.get("dice"))
         dice_text = "n/a" if dice is None else f"{float(dice):.4f}"
         parts.append(f"{stage}={dice_text} ({detail.get('status', 'not_run')})")
     return ", ".join(parts)
+
+
+def _stages_for_log(stages):
+    """Hide the conditional geometry initializer unless it was attempted."""
+    logged = dict(stages)
+    geometry = logged.get("geometry", {})
+    if geometry.get("status", "not_run") in {
+        "not_run",
+        "skipped_complete_organ",
+        "skipped_early_stop",
+    }:
+        logged.pop("geometry", None)
+    return logged
 
 
 def build_error_record(row, config, *, stage, error):
@@ -310,16 +325,17 @@ def publish_group_log(df, indices, errors, config, directory):
         }
         context = {key: _optional(value) for key, value in context.items()}
         stages = _decode_stages(row["registration_stage_details"])
+        logged_stages = _stages_for_log(stages)
         logger.info(
             "Registration stages: %s; %s",
             context["registration_scan_label"],
-            _stage_summary(stages),
+            _stage_summary(logged_stages),
         )
         events.append(
             {
                 **context,
                 "event": "scan_result",
-                "stages": stages,
+                "stages": logged_stages,
                 "registration_status": row["registration_status"],
                 "consensus_status": row["consensus_status"],
                 "has_errors": bool(row["errors"]),
