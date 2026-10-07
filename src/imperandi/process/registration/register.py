@@ -1,4 +1,4 @@
-"""Manifest, CLI normalization, and shared-runtime adapter for registration."""
+"""Command-line entry point for the ``imperandi register`` stage."""
 
 import argparse
 from dataclasses import asdict
@@ -12,7 +12,8 @@ from imperandi.utils.checkpoint_cli import add_checkpoint_arguments
 from imperandi.utils.manifest import load_manifest
 from imperandi.utils.run_state import build_checkpoint_paths
 from .config import RegistrationConfig
-from .pipeline import prepare_cohort
+from .grouping import prepare_cohort
+from .labels import group_label
 
 logger = logging.getLogger(__name__)
 
@@ -24,10 +25,10 @@ def add_registration_arguments(parser):
     parser.add_argument("csv_path_out_pos", nargs="?", help="Optional output CSV.")
     parser.add_argument("--csv_path", dest="csv_path_opt")
     parser.add_argument("--csv_path_out", help="Default: <input_stem>_registered.csv.")
-    parser.add_argument("--error_csv_path", help="Default: <output_stem>_errors.csv.")
+    parser.add_argument("--error_csv_path", help="Default: registration_errors.csv.")
     parser.add_argument(
         "--qc_csv_path",
-        help="Stage Dice and provenance table (default: <output_stem>_qc.csv).",
+        help="Stage Dice and provenance table (default: registration_qc.csv).",
     )
     parser.add_argument(
         "--output_dir", help="Artifact root (default: registration beside input CSV)."
@@ -214,12 +215,18 @@ def main(args):
     if args.dry_run:
         planned = prepare_cohort(table, config)
         logger.info(
-            "Registration dry run: %d scans, %d visit/modality groups; settings=%s; output=%s",
+            "Registration dry run: scans=%d, visit/modality_groups=%d, settings=%s, output=%s",
             len(planned),
             planned.registration_group_id.nunique(),
             asdict(config),
             args.csv_path_out,
         )
+        for _, group in planned.groupby("registration_group_id", sort=True):
+            logger.info(
+                "Planned registration: %s, scans=%d",
+                group_label(group.iloc[0], config.visit_column),
+                len(group),
+            )
         return None
     from .runner import run_registration
 

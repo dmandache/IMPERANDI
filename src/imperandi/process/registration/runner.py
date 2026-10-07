@@ -17,12 +17,24 @@ from imperandi.utils.run_state import (
     prepare_resume_context,
 )
 from .execution import iter_group_results
+from .grouping import prepare_cohort
+from .labels import group_context, group_label
 from .organ import backend
-from .pipeline import prepare_cohort
 from .qc import build_qc
 
 logger = logging.getLogger(__name__)
-ERROR_COLUMNS = ["registration_scan_id", "stage", "error"]
+ERROR_COLUMNS = [
+    "patient_id",
+    "date",
+    "visit_order",
+    "visit",
+    "modality",
+    "registration_group_label",
+    "registration_scan_label",
+    "registration_scan_id",
+    "stage",
+    "error",
+]
 
 
 def _artifact_paths(rows):
@@ -130,6 +142,11 @@ def run_registration(args, table, config, manifest):
                     ].to_numpy()
                     completed.add(group_id)
                     artifacts[group_id] = expected
+                    logger.info(
+                        "Reusing completed registration: %s, scans=%d",
+                        group_label(groups[group_id].iloc[0], config.visit_column),
+                        len(groups[group_id]),
+                    )
         if saved_errors is not None and set(ERROR_COLUMNS).issubset(saved_errors):
             reused_ids = set(
                 df.loc[df.registration_group_id.isin(completed), "registration_scan_id"]
@@ -141,10 +158,17 @@ def run_registration(args, table, config, manifest):
     skipped_rows = int(df.registration_group_id.isin(completed).sum())
     pending = [(key, group) for key, group in groups.items() if key not in completed]
     logger.info(
-        "Registration: %d groups to process, %d completed groups reused",
+        "Registration plan: groups_to_process=%d, completed_groups_reused=%d, scans=%d",
         len(pending),
         len(completed),
+        len(df),
     )
+    for _, group in pending:
+        logger.info(
+            "Queued registration: %s, scans=%d",
+            group_label(group.iloc[0], config.visit_column),
+            len(group),
+        )
 
     def checkpoint(force=False):
         if not manager.should_flush(force=force):
@@ -172,7 +196,11 @@ def run_registration(args, table, config, manifest):
             == state.get("final_outputs")
         )
     ):
-        logger.info("Matching registration run already finished; skipping execution.")
+        logger.info(
+            "Registration output is already complete: groups=%d, scans=%d",
+            len(completed),
+            len(df),
+        )
         return df.drop(columns="_source_idx"), errors
 
     # Replace incompatible state before any new work. Also covers empty cohorts.
@@ -197,11 +225,13 @@ def run_registration(args, table, config, manifest):
         ) as progress:
             for group_id, result, worker_error in results:
                 group = groups[group_id]
+                label = group_label(group.iloc[0], config.visit_column)
                 if worker_error is not None:
+                    context = group_context(group.iloc[0], config.visit_column)
                     logger.error(
-                        "group=%s scans=%s worker_error=%s",
-                        group_id,
-                        group.registration_scan_id.tolist(),
+                        "Registration worker failed: %s, scans=%d, error=%s",
+                        label,
+                        len(group),
                         worker_error,
                     )
                     rows = group.copy()
@@ -210,11 +240,16 @@ def run_registration(args, table, config, manifest):
                     group_errors = pd.DataFrame(
                         [
                             {
+                                **context,
+                                "registration_group_label": label,
+                                "registration_scan_label": row.registration_scan_label,
                                 "registration_scan_id": scan_id,
                                 "stage": "worker",
                                 "error": worker_error,
                             }
-                            for scan_id in group.registration_scan_id
+                            for scan_id, (_, row) in zip(
+                                group.registration_scan_id, group.iterrows()
+                            )
                         ],
                         columns=ERROR_COLUMNS,
                     )
@@ -229,9 +264,10 @@ def run_registration(args, table, config, manifest):
                         [errors, group_errors[ERROR_COLUMNS]], ignore_index=True
                     )
                 logger.info(
-                    "group=%s completed scans=%s registration_status=%s consensus_status=%s errors=%d",
-                    group_id,
-                    rows.registration_scan_id.tolist(),
+                    "Completed registration: %s, scans=%d, registration_status=%s, "
+                    "consensus_status=%s, errors=%d",
+                    label,
+                    len(rows),
                     rows.registration_status.tolist(),
                     rows.consensus_status.tolist(),
                     len(group_errors),

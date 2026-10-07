@@ -1,6 +1,10 @@
 """Intra-visit, intra-modal organ registration and tumor consensus.
 
-SimpleITK is loaded only when processing images. Original mask paths are retained in source_mask_* columns.
+The public library API consists of :class:`RegistrationConfig` and
+:func:`register_cohort`. The ``register`` module implements the CLI, while
+``runner`` adds checkpoints and workers around the core ``pipeline``.
+SimpleITK is loaded only when image processing starts. Original mask paths are
+retained in ``source_mask_*`` columns.
 """
 
 from .config import RegistrationConfig
