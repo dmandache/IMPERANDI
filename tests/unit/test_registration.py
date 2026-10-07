@@ -1361,14 +1361,26 @@ def test_stage_qc_and_trace_logs(tmp_path, caplog):
         event.get("event") == "scan_result"
         and event["registration_scan_label"] == moving.registration_scan_label
         and event["stages"]["pca"]["dice"] == pytest.approx(moving.dice_pca)
+        and "geometry" not in event["stages"]
         for event in events
     )
     assert any(
         "series=2/2" in record.message
         and "phase=ARTERIAL" in record.message
         and "pca=" in record.message
+        and "geometry=" not in record.message
         for record in caplog.records
     )
+
+
+def test_default_logging_keeps_geometry_when_attempted():
+    from imperandi.process.registration.reporting import _stages_for_log
+
+    attempted = {"geometry": {"dice": None, "status": "failed"}}
+    skipped = {"geometry": {"dice": None, "status": "skipped_complete_organ"}}
+
+    assert "geometry" in _stages_for_log(attempted)
+    assert "geometry" not in _stages_for_log(skipped)
 
 
 def test_logs_identify_groups_with_human_attributes(tmp_path, caplog):
