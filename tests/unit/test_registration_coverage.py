@@ -220,12 +220,10 @@ def test_volume_criterion_uses_native_physical_volume_for_reference_and_anchor(
         reference["mask_liver_tumor"] = None
         rows.append(reference)
         config = RegistrationConfig(
-            reference_priority={
-                "CT": [
-                    {"registration_organ_volume_mm3": "max"},
-                    {"phase": ["PORTAL_VENOUS", "ARTERIAL", "NATIVE"]},
-                ]
-            }
+            reference_priority=[
+                {"registration_organ_volume_mm3": "max"},
+                {"phase": ["PORTAL_VENOUS", "ARTERIAL", "NATIVE"]},
+            ]
         )
     source = pd.DataFrame(rows)
     # Previous results cannot supply the organ-volume criterion on a fresh run.
@@ -394,4 +392,8 @@ def test_staple_missing_observations_are_explicitly_restricted():
     assert result.support_policy == "common_fov_only"
     assert sitk.GetArrayFromImage(result.coverage).ravel().tolist() == [0, 1, 1, 0]
     with pytest.raises(ValueError, match="support"):
-        fuse_tumors(masks, [image([1, 0, 0, 0]), image([0, 0, 0, 1])], method="staple")
+        fuse_tumors(
+            masks,
+            [image([1, 0, 0, 0]), image([0, 0, 0, 1])],
+            method="staple",
+        )

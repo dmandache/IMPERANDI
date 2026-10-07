@@ -27,7 +27,7 @@ from .reporting import ERROR_COLUMNS, build_error_record, build_qc, group_label
 logger = logging.getLogger(__name__)
 
 # Increment when registration behavior changes so old artifacts are not reused.
-REGISTRATION_SCHEMA = 14
+REGISTRATION_SCHEMA = 15
 
 
 def _has_failed_stage(rows, config):
@@ -293,7 +293,7 @@ def run_registration(args, table, config, manifest):
                     artifacts[group_id] = expected
                     logger.info(
                         "Registration group reused: %s, series=%d",
-                        group_label(groups[group_id].iloc[0], config.visit_column),
+                        group_label(groups[group_id].iloc[0], config.group_columns),
                         len(groups[group_id]),
                     )
         if saved_errors is not None and set(ERROR_COLUMNS).issubset(saved_errors):
@@ -381,7 +381,7 @@ def run_registration(args, table, config, manifest):
         ) as progress:
             for group_id, result, worker_error in results:
                 group = groups[group_id]
-                label = group_label(group.iloc[0], config.visit_column)
+                label = group_label(group.iloc[0], config.group_columns)
                 if worker_error is not None:
                     logger.error(
                         "Registration group failed: %s, series=%d; "
