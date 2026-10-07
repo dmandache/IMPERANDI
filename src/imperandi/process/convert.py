@@ -26,7 +26,8 @@ from imperandi.utils.run_state import (
     atomic_write_csv,
     CheckpointManager,
     ensure_source_id_column,
-    fingerprint_inputs,
+    fingerprint_csv_semantic,
+    matching_completed_indices,
     merge_with_existing_output,
     normalize_source_id,
     normalize_source_ids,
@@ -581,6 +582,18 @@ def main(args):
     if source_id_signature:
         resume_values["checkpoint_source_id"] = source_id_signature
     resume_args = argparse.Namespace(**resume_values)
+    semantic_fp = fingerprint_csv_semantic(
+        args.csv_path,
+        columns=[
+            "volume_id",
+            "patient_key",
+            "study_id",
+            "series_id",
+            "dicom_path",
+            "series_dir",
+        ],
+        strict=bool(getattr(args, "strict_resume", False)),
+    )
     resume_ctx = prepare_resume_context(
         args=resume_args,
         command="convert",
@@ -588,10 +601,13 @@ def main(args):
         output_path=output_path,
         error_path=error_path,
         exclude_hash_args=exclude_hash_args,
+        input_fingerprint=semantic_fp.input_fingerprint,
+        row_fingerprints=semantic_fp.row_fingerprints,
     )
     paths = resume_ctx["paths"]
     state = resume_ctx["state"]
     can_resume = resume_ctx["can_resume"]
+    can_partial_resume = resume_ctx["can_partial_resume"]
     already_finished = resume_ctx["already_finished"]
     ckpt = CheckpointManager(paths=paths, config=resume_ctx["config"])
 
@@ -614,6 +630,16 @@ def main(args):
     else:
         df_list = [pd.read_csv(p) for p in args.csv_path]
         df_all = pd.concat(df_list, ignore_index=True)
+        if can_partial_resume:
+            df_all = merge_with_existing_output(
+                df_all,
+                output_path,
+                preferred_keys=["volume_id", "series_id"],
+                strict=False,
+            )
+            logger.info(
+                "Convert inputs changed semantically; reusing unchanged completed rows."
+            )
 
     if "nifti_path" not in df_all.columns:
         df_all["nifti_path"] = None
@@ -642,6 +668,15 @@ def main(args):
         logger.info(
             "Resume enabled: %d completed rows restored from state",
             len(completed_indices),
+        )
+    elif can_partial_resume:
+        completed_indices = matching_completed_indices(
+            state, semantic_fp.row_fingerprints
+        )
+        logger.info(
+            "Semantic resume: %d unchanged completed row(s) restored; %d row(s) require conversion.",
+            len(completed_indices),
+            max(0, len(df_all) - len(completed_indices)),
         )
         if paths.error_checkpoint_path.exists():
             err_ckpt = pd.read_csv(paths.error_checkpoint_path)
@@ -771,12 +806,7 @@ def main(args):
         },
     )
     logger.info("Conversion done ✔")
-    ckpt.finalize_state(
-        completed_indices=completed_indices,
-        input_fingerprint=fingerprint_inputs(
-            args.csv_path, strict=bool(getattr(args, "strict_resume", False))
-        ),
-    )
+    ckpt.finalize_state(completed_indices=completed_indices)
 
 
 if __name__ == "__main__":
