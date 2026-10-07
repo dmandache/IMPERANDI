@@ -9,14 +9,14 @@ import pandas as pd
 import pytest
 
 from imperandi.process.registration import RegistrationConfig, register_cohort
-from imperandi.process.registration import organ
-from imperandi.process.registration.completeness import (
+from imperandi.process.registration import alignment
+from imperandi.process.registration.alignment import (
     assess_organ_mask,
     overlap_qc,
     registration_confidence,
 )
-from imperandi.process.registration.consensus import fuse_tumors
-from imperandi.process.registration.qc import build_qc
+from imperandi.process.registration.cohort import fuse_tumors
+from imperandi.process.registration.reporting import build_qc
 
 sitk = pytest.importorskip("SimpleITK")
 
@@ -116,12 +116,16 @@ def test_internal_straight_side_uses_partial_registration(monkeypatch):
     moving = sitk.GetImageFromArray(values)
     moving.CopyInformation(fixed)
     monkeypatch.setattr(
-        organ, "initialize_pca", Mock(side_effect=AssertionError("PCA must be skipped"))
+        alignment,
+        "initialize_pca",
+        Mock(side_effect=AssertionError("PCA must be skipped")),
     )
-    result = organ.register_pair(fixed, moving, RegistrationConfig(iterations=5))
+    result = alignment.register_pair(fixed, moving, RegistrationConfig(iterations=5))
     assert result.stages["pca"]["status"] == "skipped_partial_coverage"
     with pytest.raises(ValueError, match="Partial organ masks are disabled"):
-        organ.register_pair(fixed, moving, RegistrationConfig(allow_partial_organs=False))
+        alignment.register_pair(
+            fixed, moving, RegistrationConfig(allow_partial_organs=False)
+        )
 
 
 def test_partial_fov_perfect_alignment_uses_common_dice(monkeypatch):
@@ -131,9 +135,11 @@ def test_partial_fov_perfect_alignment_uses_common_dice(monkeypatch):
     assert metrics["dice_full"] < 0.5
     assert metrics["dice_common_fov"] == 1
     monkeypatch.setattr(
-        organ, "initialize_pca", Mock(side_effect=AssertionError("PCA must be skipped"))
+        alignment,
+        "initialize_pca",
+        Mock(side_effect=AssertionError("PCA must be skipped")),
     )
-    result = organ.register_pair(
+    result = alignment.register_pair(
         fixed, moving, RegistrationConfig(iterations=5, min_dice=0.8)
     )
     assert result.confidence == "ok_partial_coverage"
@@ -150,10 +156,12 @@ def test_equal_volume_does_not_establish_confidence_or_allow_elastic(monkeypatch
     optimizer.GetOptimizerStopConditionDescription.return_value = "frozen for test"
     optimizer.GetOptimizerIteration.return_value = 0
     monkeypatch.setattr(sitk, "ImageRegistrationMethod", lambda: optimizer)
-    monkeypatch.setattr(organ, "initialize_pca", lambda *args: sitk.Euler3DTransform())
+    monkeypatch.setattr(
+        alignment, "initialize_pca", lambda *args: sitk.Euler3DTransform()
+    )
     elastic = Mock(side_effect=AssertionError("Poor overlap must block elastic"))
-    monkeypatch.setattr(organ, "elastic_refine", elastic)
-    result = organ.register_pair(
+    monkeypatch.setattr(alignment, "elastic_refine", elastic)
+    result = alignment.register_pair(
         fixed, moving, RegistrationConfig(min_dice=0, elastic=True)
     )
     assert result.organ_volume_ratio == 1
@@ -192,7 +200,7 @@ def test_low_confidence_scan_excluded_from_consensus(tmp_path):
     ]
 
     def uncertain(*args):
-        return organ.TransformResult(
+        return alignment.TransformResult(
             sitk.Euler3DTransform(), "rigid", 1, 1, [], confidence="low_confidence"
         )
 
