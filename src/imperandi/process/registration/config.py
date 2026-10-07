@@ -5,7 +5,7 @@ from math import isfinite
 from typing import Mapping
 
 CONSENSUS_METHODS = ("anchor", "majority", "intersection", "union", "staple")
-REGISTRATION_STAGES = ("baseline", "pca", "rigid", "affine")
+REGISTRATION_STAGES = ("baseline", "pca", "rigid", "affine", "elastic")
 SUPPORTED_MODALITIES = ("CT", "MR")
 
 
@@ -17,6 +17,8 @@ class RegistrationConfig:
     method: str = "anchor"
     affine: bool = False
     affine_min_dice: float = 0.9
+    elastic: bool = False
+    bspline_ctrl_spacing_mm: float = 90.0
     iterations: int = 100
     min_dice: float = 0.1
     crop_padding_mm: float = 25.0
@@ -35,8 +37,14 @@ class RegistrationConfig:
     def __post_init__(self):
         if self.method not in CONSENSUS_METHODS:
             raise ValueError(f"Unknown consensus method: {self.method}")
-        if type(self.affine) is not bool or type(self.constrain_tumor_to_organ) is not bool:
-            raise ValueError("affine and constrain_tumor_to_organ must be booleans")
+        if (
+            type(self.affine) is not bool
+            or type(self.elastic) is not bool
+            or type(self.constrain_tumor_to_organ) is not bool
+        ):
+            raise ValueError(
+                "affine, elastic and constrain_tumor_to_organ must be booleans"
+            )
         if type(self.iterations) is not int or self.iterations < 1:
             raise ValueError("iterations must be a positive integer")
         if (
@@ -54,8 +62,14 @@ class RegistrationConfig:
             or not isinstance(self.distance_band_mm, (int, float))
             or not isfinite(self.distance_band_mm)
             or self.distance_band_mm <= 0
+            or isinstance(self.bspline_ctrl_spacing_mm, bool)
+            or not isinstance(self.bspline_ctrl_spacing_mm, (int, float))
+            or not isfinite(self.bspline_ctrl_spacing_mm)
+            or self.bspline_ctrl_spacing_mm <= 0
         ):
-            raise ValueError("Invalid registration crop or distance band")
+            raise ValueError(
+                "Invalid registration crop, distance band or B-spline spacing"
+            )
         for name in (self.visit_column, self.organ_column, self.tumor_column):
             if not isinstance(name, str) or not name.strip():
                 raise ValueError("Column names must be nonempty strings")

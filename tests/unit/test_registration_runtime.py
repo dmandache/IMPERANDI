@@ -75,6 +75,23 @@ def test_manifest_overrides_defaults_and_cli(tmp_path, cohort):
     assert isinstance(register.resolve_config(built_in)[0], RegistrationConfig)
 
 
+def test_cli_overrides_manifest_elastic_setting(tmp_path, cohort):
+    manifest = tmp_path / "elastic.yaml"
+    manifest.write_text(yaml.safe_dump({"registration": {"elastic": True}}))
+    enabled, _ = register.resolve_config(
+        register.normalize_registration_args(
+            args_for(cohort, "--manifest", str(manifest))
+        )
+    )
+    disabled, _ = register.resolve_config(
+        register.normalize_registration_args(
+            args_for(cohort, "--manifest", str(manifest), "--no_elastic")
+        )
+    )
+    assert enabled.elastic is True
+    assert disabled.elastic is False
+
+
 def test_default_error_and_qc_filenames_follow_output_directory(cohort, tmp_path):
     output = tmp_path / "custom_result.csv"
     args = register.normalize_registration_args(
