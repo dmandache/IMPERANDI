@@ -1043,13 +1043,13 @@ def main(args: argparse.Namespace) -> None:
             max(0, len(df) - len(completed_indices)),
         )
     errors_by_idx: dict[str, dict[str, Any]] = {}
-    if can_resume and paths.error_checkpoint_path.exists():
+    if (can_resume or can_partial_resume) and paths.error_checkpoint_path.exists():
         err_ckpt = pd.read_csv(paths.error_checkpoint_path)
         for _, row in err_ckpt.iterrows():
             if "_source_idx" in row:
                 try:
                     source_idx = normalize_source_id(row["_source_idx"])
-                    if source_idx:
+                    if source_idx in completed_indices:
                         errors_by_idx[source_idx] = row.to_dict()
                 except Exception:
                     pass
