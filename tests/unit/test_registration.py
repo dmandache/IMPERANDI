@@ -189,6 +189,12 @@ def test_config_rejects_unknown():
         RegistrationConfig.from_mapping({"afine": True})
 
 
+@pytest.mark.parametrize("value", [0, -1, float("inf"), True])
+def test_bspline_spacing_is_positive_and_finite(value):
+    with pytest.raises(ValueError, match="B-spline spacing"):
+        RegistrationConfig(bspline_ctrl_spacing_mm=value)
+
+
 def test_cli(tmp_path):
     from imperandi.cli import main
 
@@ -366,6 +372,44 @@ def test_worse_stage_falls_back_to_previous_best(
     assert result.stages[rejected_stage]["fallback_stage"] == fallback_stage
     assert result.stages[rejected_stage]["selected"] is False
     assert result.stages[selected_stage]["selected"] is True
+
+
+def test_elastic_stage_can_be_selected_and_retains_inverse(monkeypatch):
+    values = iter([0.5, 0.6, 0.7, 0.8])
+    forward = sitk.CompositeTransform(3)
+    inverse = sitk.TranslationTransform(3)
+
+    class Optimizer:
+        def GetOptimizerStopConditionDescription(self):
+            return "done"
+
+        def GetOptimizerIteration(self):
+            return 3
+
+    monkeypatch.setattr(
+        organ_registration,
+        "initialize_pca",
+        lambda fixed, moving: sitk.Euler3DTransform(),
+    )
+    monkeypatch.setattr(organ_registration, "dice", lambda *args: next(values))
+    monkeypatch.setattr(
+        organ_registration,
+        "elastic_refine",
+        lambda *args: (forward, Optimizer()),
+    )
+    monkeypatch.setattr(
+        organ_registration, "invert_elastic", lambda *args: inverse
+    )
+    result = register_pair(
+        organ(),
+        organ(),
+        RegistrationConfig(elastic=True, iterations=1, min_dice=0),
+    )
+    assert result.stage == "elastic"
+    assert result.reference_to_scan is forward
+    assert result.scan_to_reference is inverse
+    assert result.stages["elastic"]["dice"] == 0.8
+    assert result.stages["elastic"]["optimizer_iteration"] == 3
 
 
 def test_affine_is_skipped_until_overlap_is_sufficient():

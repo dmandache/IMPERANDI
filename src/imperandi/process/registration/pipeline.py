@@ -29,7 +29,7 @@ def _registration_report(result):
     return {
         key: value
         for key, value in vars(result).items()
-        if key not in {"reference_to_scan", "stage_transforms"}
+        if key not in {"reference_to_scan", "scan_to_reference", "stage_transforms"}
     }
 
 
@@ -113,7 +113,12 @@ def register_cohort(
             "Registration reference selected: %s",
             df.at[ref, "registration_scan_label"],
         )
-        transforms, pair_results, native_organs = {}, {}, {}
+        transforms, inverse_transforms, pair_results, native_organs = (
+            {},
+            {},
+            {},
+            {},
+        )
         for i, (image, organ) in loaded.items():
             started = time.perf_counter()
             logger.info(
@@ -144,7 +149,10 @@ def register_cohort(
                     pair_results[i] = result
                     report = _registration_report(result)
                 record_stages(df, i, report)
-                inverse = tx.GetInverse()
+                inverse = (
+                    getattr(result, "scan_to_reference", None) if i != ref else None
+                )
+                inverse = inverse or tx.GetInverse()
                 pair_dir = directory / ids[i]
                 native_organ = resample(reference_organ, image, inverse)
                 df.at[i, "reg_organ_native_path"] = write_artifact(
@@ -153,6 +161,7 @@ def register_cohort(
                 )
                 df.at[i, config.organ_column] = df.at[i, "reg_organ_native_path"]
                 transforms[i] = tx
+                inverse_transforms[i] = inverse
                 native_organs[i] = native_organ
                 df.at[i, "registration_status"] = "reference" if i == ref else "ok"
             except (RuntimeError, ValueError) as exc:
@@ -235,7 +244,7 @@ def register_cohort(
                 )
                 for i, tx in transforms.items():
                     try:
-                        inverse = tx.GetInverse()
+                        inverse = inverse_transforms[i]
                         image = loaded[i][0]
                         pair_dir = directory / ids[i]
                         if config.method == "anchor":
