@@ -366,6 +366,11 @@ def main(args: argparse.Namespace) -> None:
                     if source_idx in completed_indices:
                         errors_by_idx[source_idx] = row.to_dict()
 
+    semantic_reprocess_ids = (
+        set(semantic_fp.row_fingerprints) - completed_indices
+        if can_partial_resume
+        else set()
+    )
     resume_failed_count = len(completed_indices & set(errors_by_idx))
 
     needs_prediction = phase_needs_strategy(
@@ -405,6 +410,8 @@ def main(args: argparse.Namespace) -> None:
             normalize_source_id(df.at[idx, "_source_idx"])
             for idx in df.index
             if bool(needs_prediction.at[idx])
+            and normalize_source_id(df.at[idx, "_source_idx"])
+            not in semantic_reprocess_ids
             and _has_populated_value(df.at[idx, "totalseg_phase"])
         }
         newly_completed = prefilled_indices - completed_indices
