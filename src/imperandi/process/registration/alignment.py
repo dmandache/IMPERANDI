@@ -820,7 +820,6 @@ def register_pair(
     pipeline = [
         initializer_stage,
         "mask_rigid",
-        "mi_rigid",
         "mi_affine",
         "mi_elastic",
     ]
@@ -942,64 +941,6 @@ def register_pair(
         if reached_target():
             stages["mask_rigid"]["early_stop"] = True
             skip_remaining("mask_rigid")
-
-    if not reached_target():
-        started = time.perf_counter()
-        try:
-            input_mi = mutual_information_score(
-                fixed_image,
-                moving_image,
-                fixed_organ,
-                moving_organ,
-                best,
-                config,
-            )
-            tx, reg = mi_refine(
-                fixed_image,
-                moving_image,
-                fixed_organ,
-                moving_organ,
-                best,
-                config,
-            )
-            stages["mi_rigid"].update(
-                optimizer_stop=reg.GetOptimizerStopConditionDescription(),
-                optimizer_iteration=int(reg.GetOptimizerIteration()),
-                metric="mattes_mutual_information",
-            )
-            candidate = score_transform(tx, "mi_rigid")
-            candidate_mi = mutual_information_score(
-                fixed_image,
-                moving_image,
-                fixed_organ,
-                moving_organ,
-                tx,
-                config,
-            )
-            stage_transforms["mi_rigid"] = tx
-            best, score, stage = _select_mi_candidate(
-                best,
-                score,
-                stage,
-                tx,
-                candidate,
-                "mi_rigid",
-                stages,
-                dice_guard_reference=peak_dice,
-                input_mi=input_mi,
-                candidate_mi=candidate_mi,
-                minimum_mi_improvement=minimum_mi_improvement("mi_rigid"),
-                maximum_dice_decrease=config.maximum_mi_stage_dice_decrease,
-                dice_guard_metric=dice_metric,
-            )
-            peak_dice = max(peak_dice, score)
-        except (RuntimeError, ValueError) as exc:
-            _record_stage_failure(stages, warnings, "mi_rigid", exc, score, stage)
-        finally:
-            stages["mi_rigid"]["elapsed_seconds"] = time.perf_counter() - started
-        if reached_target():
-            stages["mi_rigid"]["early_stop"] = True
-            skip_remaining("mi_rigid")
 
     if stages["mi_affine"]["status"] == "not_run" and not config.enable_affine_stage:
         stages["mi_affine"].update(
