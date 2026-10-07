@@ -28,6 +28,18 @@ def test_early_stop_dice_requires_positive_probability(value):
         RegistrationConfig(early_stop_dice=value)
 
 
+@pytest.mark.parametrize("value", [-0.01, 180.01, True, None, "45", float("nan")])
+def test_pca_rotation_limit_is_bounded(value):
+    with pytest.raises(ValueError, match="pca_max_rotation_degrees"):
+        RegistrationConfig(pca_max_rotation_degrees=value)
+
+
+@pytest.mark.parametrize("value", [0, 45, 180])
+def test_pca_rotation_limit_accepts_valid_angles(value):
+    config = RegistrationConfig(pca_max_rotation_degrees=value)
+    assert config.pca_max_rotation_degrees == value
+
+
 @pytest.mark.parametrize(
     "priorities",
     [

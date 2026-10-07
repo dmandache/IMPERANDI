@@ -41,6 +41,7 @@ class RegistrationConfig:
     min_largest_component_fraction: float = 0.8
     min_confidence_dice: float = 0.5
     min_common_fov_fraction: float = 0.05
+    pca_max_rotation_degrees: float = 45.0
     demons_smoothing_sigma_mm: float = 1.0
     iterations: int = 100
     min_dice: float = 0.1
@@ -79,6 +80,11 @@ class RegistrationConfig:
                 raise ValueError(f"{name} must be in (0, 1]")
         if not _finite_number(self.boundary_margin_mm) or self.boundary_margin_mm < 0:
             raise ValueError("boundary_margin_mm must be finite and nonnegative")
+        if (
+            not _finite_number(self.pca_max_rotation_degrees)
+            or not 0 <= self.pca_max_rotation_degrees <= 180
+        ):
+            raise ValueError("pca_max_rotation_degrees must be in [0, 180]")
         if self.organ_consensus not in ORGAN_CONSENSUS_METHODS:
             raise ValueError(f"Unknown organ consensus: {self.organ_consensus}")
         if self.tumor_consensus not in TUMOR_CONSENSUS_METHODS:
