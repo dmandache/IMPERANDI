@@ -36,6 +36,7 @@ class RegistrationConfig:
     min_dice: float = 0.1
     crop_padding_mm: float = 25.0
     distance_band_mm: float = 15.0
+    keep_source_segmentation: bool = False
     constrain_tumor_to_organ: bool = True
     threshold: float = 0.5
     reference_priority: dict = field(
@@ -48,6 +49,8 @@ class RegistrationConfig:
     )
 
     def __post_init__(self):
+        if type(self.keep_source_segmentation) is not bool:
+            raise ValueError("keep_source_segmentation must be a boolean")
         if type(self.allow_partial_organs) is not bool:
             raise ValueError("allow_partial_organs must be a boolean")
         for name in (

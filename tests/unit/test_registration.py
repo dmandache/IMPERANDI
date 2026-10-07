@@ -839,3 +839,49 @@ def test_rejected_pair_keeps_qc_and_original_canonical_paths(tmp_path):
     assert moving.dice_rigid == 0.2
     assert moving.registration_status == "failed"
     assert "Overlap rejected" in moving.errors
+
+
+@pytest.mark.parametrize("keep", [False, True])
+def test_keep_source_segmentation_maps_tumor_to_source_organ(tmp_path, keep):
+    rows = [
+        save_scan(tmp_path, "portal", phase="PORTAL_VENOUS"),
+        save_scan(tmp_path, "arterial", tumor=False, offset=4),
+    ]
+    source_organ = sitk.ReadImage(rows[1]["mask_liver"])
+    values = sitk.GetArrayFromImage(source_organ)
+    values[11, 13, 15] = 0
+    altered = sitk.GetImageFromArray(values)
+    altered.CopyInformation(source_organ)
+    sitk.WriteImage(altered, rows[1]["mask_liver"])
+    original_bytes = Path(rows[1]["mask_liver"]).read_bytes()
+    out, errors = register_cohort(
+        pd.DataFrame(rows),
+        tmp_path / "out",
+        RegistrationConfig(iterations=10, keep_source_segmentation=keep),
+    )
+    assert errors.empty
+    assert out.consensus_status.eq("single_contributor").all()
+    assert Path(rows[1]["mask_liver"]).read_bytes() == original_bytes
+    if keep:
+        assert out.mask_liver.tolist() == [r["mask_liver"] for r in rows]
+        assert out.reg_organ_native_path.isna().all()
+        assert not list((tmp_path / "out").rglob("organ_native.nii.gz"))
+    else:
+        assert out.mask_liver.equals(out.reg_organ_native_path)
+    native = sitk.ReadImage(out.loc[1, "reg_tumor_native_path"])
+    assert native.GetOrigin() == source_organ.GetOrigin()
+    assert sitk.GetArrayFromImage(native)[11, 13, 15] == (0 if keep else 1)
+    assert sitk.GetArrayFromImage(native).any()
+    if keep:
+        rerun, errors = register_cohort(
+            out,
+            tmp_path / "rerun",
+            RegistrationConfig(iterations=10, keep_source_segmentation=True),
+        )
+        assert errors.empty
+        assert rerun.mask_liver.equals(out.source_mask_liver)
+
+
+def test_keep_source_segmentation_requires_boolean():
+    with pytest.raises(ValueError, match="keep_source_segmentation"):
+        RegistrationConfig.from_mapping({"keep_source_segmentation": "true"})
