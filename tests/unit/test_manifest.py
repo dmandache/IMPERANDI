@@ -48,6 +48,7 @@ def test_registration_manifests_use_ordered_reference_criteria(manifest_name):
     )
     config = RegistrationConfig.from_mapping(manifest["registration"])
     assert config.grouping_columns == ["patient_key", "study_id", "Modality"]
+    assert config.output_space == "moving"
     assert config.reference_selection_priority[0] == {"Modality": ["CT", "MR"]}
     assert config.reference_selection_priority[2] == {
         "mri_sequence": ["T1", "T2", "DWI"]

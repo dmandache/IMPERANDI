@@ -11,6 +11,13 @@ def test_registration_and_consensus_dice_defaults_are_distinct():
     assert config.minimum_consensus_dice == 0.8
 
 
+def test_output_space_defaults_to_moving_and_rejects_unknown_values():
+    assert RegistrationConfig().output_space == "moving"
+    assert RegistrationConfig(output_space="reference").output_space == "reference"
+    with pytest.raises(ValueError, match="output space"):
+        RegistrationConfig(output_space="fixed")
+
+
 @pytest.mark.parametrize(
     "name", ["early_stop_organ_dice", "consensus_probability_threshold"]
 )

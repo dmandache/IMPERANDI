@@ -348,6 +348,8 @@ registration:
   organ_consensus_method: anchor
   # Tumor fusion: anchor, majority, intersection, union, or staple.
   tumor_consensus_method: anchor
+  # Publish results on each source scan grid or on the selected reference grid.
+  output_space: moving
   # Run masked MI affine only when earlier stages do not meet the Dice target.
   enable_affine_stage: false
   # Run mask-driven B-spline refinement as the optional final stage.

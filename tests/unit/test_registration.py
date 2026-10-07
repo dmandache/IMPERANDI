@@ -303,6 +303,53 @@ def test_cohort_grouping_anchor_transfer_and_native_preservation(tmp_path):
     assert not any(c.startswith("mask_") for c in set(out) - set(source))
 
 
+@pytest.mark.parametrize("organ_consensus", ["anchor", "majority"])
+@pytest.mark.parametrize("preserve_source_organ", [False, True])
+def test_reference_output_space_publishes_images_and_masks_on_common_grid(
+    tmp_path, organ_consensus, preserve_source_organ
+):
+    rows = [
+        save_scan(tmp_path, "portal", phase="PORTAL_VENOUS"),
+        save_scan(tmp_path, "arterial", offset=4),
+    ]
+    out, errors = register_cohort(
+        pd.DataFrame(rows),
+        tmp_path / "out",
+        RegistrationConfig(
+            output_space="reference",
+            organ_consensus_method=organ_consensus,
+            preserve_source_organ_mask=preserve_source_organ,
+            tumor_consensus_method="majority",
+            maximum_optimizer_iterations=10,
+        ),
+    )
+
+    assert errors.empty
+    assert out.source_nifti_path.tolist() == [row["nifti_path"] for row in rows]
+    assert out.nifti_path.equals(out.reg_nifti_path)
+    assert out.mask_liver.equals(out.reg_organ_path)
+    assert out.mask_liver_tumor.equals(out.reg_tumor_common_path)
+    assert out.reg_organ_native_path.isna().all()
+    assert out.reg_tumor_native_path.isna().all()
+
+    reference = sitk.ReadImage(rows[0]["nifti_path"])
+    expected_geometry = (
+        reference.GetSize(),
+        reference.GetSpacing(),
+        reference.GetOrigin(),
+        reference.GetDirection(),
+    )
+    for _, row in out.iterrows():
+        for column in ("nifti_path", "mask_liver", "mask_liver_tumor"):
+            result = sitk.ReadImage(row[column])
+            assert (
+                result.GetSize(),
+                result.GetSpacing(),
+                result.GetOrigin(),
+                result.GetDirection(),
+            ) == expected_geometry
+
+
 def test_manifest_grouping_columns_control_cross_modality_registration(tmp_path):
     rows = [
         {**save_scan(tmp_path, "ct", modality="CT"), "exam_stage": "baseline"},
@@ -1494,6 +1541,7 @@ def test_logs_identify_groups_with_human_attributes(tmp_path, caplog):
             ),
             "organ_consensus": "anchor",
             "tumor_consensus": "anchor",
+                "output_space": "moving",
         }
     ]
     assert len(scan_events) == 1
