@@ -5,6 +5,8 @@ import time
 from itertools import permutations, product
 import numpy as np
 
+from .config import REGISTRATION_STAGES
+
 
 def backend():
     try:
@@ -134,8 +136,7 @@ def register_pair(fixed_organ, moving_organ, config):
         initial = initialize_pca(fixed_organ, moving_organ)
     except (RuntimeError, ValueError) as exc:
         stages = {
-            name: {"dice": None, "status": "not_run"}
-            for name in ("baseline", "pca", "rigid", "affine")
+            name: {"dice": None, "status": "not_run"} for name in REGISTRATION_STAGES
         }
         stages["baseline"] = {"dice": before, "status": "evaluated"}
         stages["pca"] = {"dice": None, "status": "failed", "error": str(exc)}
@@ -168,7 +169,7 @@ def register_pair(fixed_organ, moving_organ, config):
         squaredDistance=False,
         useImageSpacing=True,
     )
-    for name in (["rigid", "affine"] if config.affine else ["rigid"]):
+    for name in ["rigid", "affine"] if config.affine else ["rigid"]:
         if name == "affine" and score < config.affine_min_dice:
             stages[name].update(
                 status="skipped_low_dice",
