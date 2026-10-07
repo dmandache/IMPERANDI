@@ -321,6 +321,11 @@ def test_retry_failed_recomputes_recovered_mi_failure(monkeypatch, cohort):
         "mask_rigid_refine",
         lambda *args: (sitk.Euler3DTransform(), Optimizer()),
     )
+    monkeypatch.setattr(
+        alignment,
+        "mask_affine_refine",
+        lambda *args: (sitk.AffineTransform(3), Optimizer()),
+    )
 
     def fail_mi(*args, **kwargs):
         raise ValueError("deliberate MI failure")
@@ -662,6 +667,7 @@ def test_worker_failures_appear_in_qc(cohort):
     assert qc.registration_status.eq("failed").all()
     assert qc.errors.str.contains("timeout").all()
     assert qc.dice_mask_rigid.isna().all()
+    assert qc.dice_mask_affine.isna().all()
 
 
 def test_custom_qc_output_and_path_collision(cohort, tmp_path):
