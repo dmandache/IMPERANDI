@@ -13,7 +13,6 @@ REGISTRATION_STAGES = (
     "mi_rigid",
     "mi_affine",
 )
-SUPPORTED_MODALITIES = ("CT", "MR")
 
 
 def _finite_number(value):
@@ -26,7 +25,9 @@ def _finite_number(value):
 
 @dataclass(frozen=True)
 class RegistrationConfig:
-    visit_column: str = "study_id"
+    group_columns: list[str] = field(
+        default_factory=lambda: ["patient_key", "study_id", "Modality"]
+    )
     organ_column: str = "mask_liver"
     tumor_column: str = "mask_liver_tumor"
     method: str = "anchor"
@@ -46,22 +47,15 @@ class RegistrationConfig:
     keep_source_segmentation: bool = False
     constrain_tumor_to_organ: bool = True
     threshold: float = 0.5
-    reference_priority: dict = field(
-        default_factory=lambda: {
-            "CT": [
-                {"phase": ["PORTAL_VENOUS", "ARTERIAL", "DELAYED", "NATIVE"]},
-                {"PixelSpacingXY": "min"},
-                {"SliceThickness": "min"},
-                {"registration_organ_volume_mm3": "max"},
-            ],
-            "MR": [
-                {"mri_sequence": ["T1", "T2", "DWI"]},
-                {"phase": ["PORTAL_VENOUS"]},
-                {"PixelSpacingXY": "min"},
-                {"SliceThickness": "min"},
-                {"registration_organ_volume_mm3": "max"},
-            ],
-        }
+    reference_priority: list[dict] = field(
+        default_factory=lambda: [
+            {"Modality": ["CT", "MR"]},
+            {"phase": ["PORTAL_VENOUS", "ARTERIAL", "DELAYED", "NATIVE"]},
+            {"mri_sequence": ["T1", "T2", "DWI"]},
+            {"PixelSpacingXY": "min"},
+            {"SliceThickness": "min"},
+            {"registration_organ_volume_mm3": "max"},
+        ]
     )
 
     def __post_init__(self):
@@ -109,53 +103,53 @@ class RegistrationConfig:
             raise ValueError(
                 "Invalid registration crop, distance band or Demons smoothing sigma"
             )
-        for name in (self.visit_column, self.organ_column, self.tumor_column):
+        for name in (self.organ_column, self.tumor_column):
             if not isinstance(name, str) or not name.strip():
                 raise ValueError("Column names must be nonempty strings")
-        if not isinstance(self.reference_priority, Mapping):
-            raise ValueError("reference_priority must be a modality mapping")
-        for modality, criteria in self.reference_priority.items():
-            if (
-                modality not in SUPPORTED_MODALITIES
-                or not isinstance(criteria, list)
-                or not criteria
-            ):
-                raise ValueError("reference_priority requires CT/MR criterion lists")
-            columns = set()
-            for criterion in criteria:
-                if not isinstance(criterion, Mapping) or len(criterion) != 1:
+        if (
+            not isinstance(self.group_columns, list)
+            or not self.group_columns
+            or any(
+                not isinstance(column, str) or not column.strip()
+                for column in self.group_columns
+            )
+            or len(set(self.group_columns)) != len(self.group_columns)
+        ):
+            raise ValueError("group_columns must be a nonempty list of unique columns")
+        if not isinstance(self.reference_priority, list):
+            raise ValueError("reference_priority must be an ordered criterion list")
+        columns = set()
+        for criterion in self.reference_priority:
+            if not isinstance(criterion, Mapping) or len(criterion) != 1:
+                raise ValueError(
+                    "Each reference_priority criterion must contain exactly one column"
+                )
+            column, preference = next(iter(criterion.items()))
+            if not isinstance(column, str) or not column.strip():
+                raise ValueError("reference_priority columns must be nonempty strings")
+            if column in columns:
+                raise ValueError(f"Duplicate reference_priority column: {column}")
+            columns.add(column)
+            if isinstance(preference, list):
+                if not preference or any(
+                    not isinstance(value, str) or not value.strip()
+                    for value in preference
+                ):
                     raise ValueError(
-                        "Each reference_priority criterion must contain exactly one column"
+                        f"reference_priority {column} requires a nonempty string list"
                     )
-                column, preference = next(iter(criterion.items()))
-                if not isinstance(column, str) or not column.strip():
+                labels = [value.strip().upper() for value in preference]
+                if column == "Modality":
+                    labels = ["MR" if label == "MRI" else label for label in labels]
+                if len(set(labels)) != len(labels):
                     raise ValueError(
-                        "reference_priority columns must be nonempty strings"
+                        f"Duplicate reference_priority categories for {column}"
                     )
-                if column in columns:
-                    raise ValueError(f"Duplicate reference_priority column: {column}")
-                columns.add(column)
-                if isinstance(preference, list):
-                    if not preference or any(
-                        not isinstance(value, str) or not value.strip()
-                        for value in preference
-                    ):
-                        raise ValueError(
-                            f"reference_priority {column} requires a nonempty string list"
-                        )
-                    labels = [value.strip().upper() for value in preference]
-                    if len(set(labels)) != len(labels):
-                        raise ValueError(
-                            f"Duplicate reference_priority categories for {column}"
-                        )
-                elif not isinstance(preference, str) or preference not in {
-                    "min",
-                    "max",
-                }:
-                    raise ValueError(
-                        f"reference_priority {column} must be a categorical list "
-                        "(e.g. [T1, T2]), 'min', or 'max'"
-                    )
+            elif not isinstance(preference, str) or preference not in {"min", "max"}:
+                raise ValueError(
+                    f"reference_priority {column} must be a categorical list "
+                    "(e.g. [T1, T2]), 'min', or 'max'"
+                )
 
     @classmethod
     def from_mapping(cls, value):
