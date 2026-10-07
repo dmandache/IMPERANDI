@@ -618,7 +618,12 @@ def register_pair(
     stage_transforms = {"baseline": identity}
     stages = {name: {"dice": None, "status": "not_run"} for name in REGISTRATION_STAGES}
     stages["baseline"].update(dice=before, status="evaluated", selected=True)
-    pipeline = ["pca", "geometry", "mask_rigid", "mi_rigid", "mi_affine"]
+    initializer_stage = "geometry" if partial else "pca"
+    pipeline = [initializer_stage, "mask_rigid", "mi_rigid", "mi_affine"]
+    if partial:
+        stages["pca"].update(status="skipped_partial_coverage", selected=False)
+    else:
+        stages["geometry"].update(status="skipped_complete_organ", selected=False)
 
     def reached_target():
         return score >= config.early_stop_dice
@@ -645,46 +650,38 @@ def register_pair(
                 fallback_stage=stage,
             )
 
-    if partial and not reached_target():
-        stages["pca"].update(status="skipped_partial_coverage", selected=False)
-    if not partial and not reached_target():
-        started = time.perf_counter()
-        try:
-            initial = initialize_pca(fixed_organ, moving_organ)
-            initial_score = score_transform(initial, "pca")
-            stage_transforms["pca"] = initial
-            best, score, stage = _select_candidate(
-                best, score, stage, initial, initial_score, "pca", stages
-            )
-        except (RuntimeError, ValueError) as exc:
-            _record_stage_failure(stages, warnings, "pca", exc, score, stage)
-        finally:
-            stages["pca"]["elapsed_seconds"] = time.perf_counter() - started
-        if reached_target():
-            stages["pca"]["early_stop"] = True
-            skip_remaining("pca")
-
     if not reached_target():
         started = time.perf_counter()
         try:
-            initial = sitk.CenteredTransformInitializer(
-                fixed_organ,
-                moving_organ,
-                sitk.Euler3DTransform(),
-                sitk.CenteredTransformInitializerFilter.GEOMETRY,
-            )
-            initial_score = score_transform(initial, "geometry")
-            stage_transforms["geometry"] = initial
+            if partial:
+                initial = sitk.CenteredTransformInitializer(
+                    fixed_organ,
+                    moving_organ,
+                    sitk.Euler3DTransform(),
+                    sitk.CenteredTransformInitializerFilter.GEOMETRY,
+                )
+            else:
+                initial = initialize_pca(fixed_organ, moving_organ)
+            initial_score = score_transform(initial, initializer_stage)
+            stage_transforms[initializer_stage] = initial
             best, score, stage = _select_candidate(
-                best, score, stage, initial, initial_score, "geometry", stages
+                best,
+                score,
+                stage,
+                initial,
+                initial_score,
+                initializer_stage,
+                stages,
             )
         except (RuntimeError, ValueError) as exc:
-            _record_stage_failure(stages, warnings, "geometry", exc, score, stage)
+            _record_stage_failure(
+                stages, warnings, initializer_stage, exc, score, stage
+            )
         finally:
-            stages["geometry"]["elapsed_seconds"] = time.perf_counter() - started
+            stages[initializer_stage]["elapsed_seconds"] = time.perf_counter() - started
         if reached_target():
-            stages["geometry"]["early_stop"] = True
-            skip_remaining("geometry")
+            stages[initializer_stage]["early_stop"] = True
+            skip_remaining(initializer_stage)
 
     fixed_dm = moving_dm = None
     if not reached_target():
