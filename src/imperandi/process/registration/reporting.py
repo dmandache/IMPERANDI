@@ -150,7 +150,23 @@ def _stage_summary(stages):
         detail = stages.get(stage, {})
         dice = _optional(detail.get("dice"))
         dice_text = "n/a" if dice is None else f"{float(dice):.4f}"
-        parts.append(f"{stage}={dice_text} ({detail.get('status', 'not_run')})")
+        status = detail.get("status", "not_run")
+        diagnostics = [status]
+        if (
+            stage in {"mi_affine", "mask_elastic"}
+            and status != "not_run"
+            and not status.startswith("skipped_")
+        ):
+            mi_before = _optional(detail.get("input_mutual_information"))
+            mi_after = _optional(detail.get("mutual_information"))
+            if mi_before is not None and mi_after is not None:
+                diagnostics.extend(
+                    [
+                        f"MI before={float(mi_before):.6f}",
+                        f"MI after={float(mi_after):.6f}",
+                    ]
+                )
+        parts.append(f"{stage}={dice_text} ({', '.join(diagnostics)})")
     return ", ".join(parts)
 
 
