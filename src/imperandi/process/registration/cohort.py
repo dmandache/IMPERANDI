@@ -350,9 +350,7 @@ def register_cohort(
         )
         errors.append(build_error_record(df.loc[index], config, stage=stage, error=exc))
 
-    groups = df.groupby(
-        [df.patient_key, df[config.visit_column], modalities], sort=True
-    )
+    groups = df.groupby("registration_group_id", sort=True)
     for _, group in groups:
         group_id = group.iloc[0].registration_group_id
         label = group_label(group.iloc[0], config.visit_column)
@@ -386,8 +384,7 @@ def register_cohort(
                 quality = assess_organ_mask(organ, config)
                 mask_qc[i] = quality
                 record_organ_qc(df, i, quality)
-                foreground = np.count_nonzero(sitk.GetArrayViewFromImage(organ))
-                if foreground == 0:
+                if "empty" in quality.reasons:
                     df.at[i, "registration_status"] = "skipped"
                     df.at[i, "registration_skip_reason"] = "empty_organ_mask"
                     df.at[i, "consensus_status"] = "skipped"
@@ -460,6 +457,7 @@ def register_cohort(
                 df.at[i, "registration_scan_label"],
             )
             try:
+                result = None
                 if i == ref:
                     tx = sitk.Euler3DTransform()
                     report = {
@@ -483,7 +481,9 @@ def register_cohort(
                     pair_results[i] = result
                     report = _registration_report(result)
                 record_stages(df, i, report)
-                metrics = overlap_qc(reference_organ, organ, tx)
+                metrics = getattr(result, "overlap", None) or overlap_qc(
+                    reference_organ, organ, tx
+                )
                 confidence = registration_confidence(
                     metrics, mask_qc[ref].partial or mask_qc[i].partial, config
                 )
@@ -501,10 +501,9 @@ def register_cohort(
                 if confidence in {"failed", "low_confidence"}:
                     df.at[i, "registration_status"] = confidence
                     continue
-                inverse = (
-                    getattr(result, "scan_to_reference", None) if i != ref else None
-                )
-                inverse = inverse or tx.GetInverse()
+                inverse = getattr(result, "scan_to_reference", None)
+                if inverse is None:
+                    inverse = tx.GetInverse()
                 pair_dir = directory / ids[i]
                 if config.keep_source_segmentation:
                     native_organ = organ
@@ -599,18 +598,12 @@ def register_cohort(
             if i not in contributors:
                 df.at[i, "tumor_consensus_input_status"] = "excluded_anchor_policy"
         _record_consensus_inputs(df, group.index, contributors, config)
-        masks, coverages = [], []
-        for i in contributors:
-            tumor = tumors[i]
-            coverage = coverage_image(tumor)
-            masks.append(resample(tumor, reference, transforms[i]))
-            coverages.append(resample(coverage, reference, transforms[i]))
         failed = df.loc[group.index, "registration_status"].isin(
             ["failed", "low_confidence", "invalid_organ_mask"]
         )
         df.loc[failed.index[failed], "consensus_status"] = "registration_failed"
         df.loc[list(transforms), "consensus_status"] = "no_tumor_input"
-        if masks:
+        if contributors:
             contributor_labels = [
                 df.at[i, "registration_scan_label"] for i in contributors
             ]
@@ -621,6 +614,13 @@ def register_cohort(
                 " | ".join(contributor_labels),
             )
             try:
+                masks, coverages = [], []
+                for i in contributors:
+                    tumor = tumors[i]
+                    masks.append(resample(tumor, reference, transforms[i]))
+                    coverages.append(
+                        resample(coverage_image(tumor), reference, transforms[i])
+                    )
                 fused = fusion(
                     masks, coverages, method=config.method, threshold=config.threshold
                 )

@@ -215,6 +215,27 @@ def test_failure_is_not_identity_success(tmp_path):
     assert errors.stage.tolist() == ["organ"]
 
 
+def test_tumor_resampling_failure_preserves_organ_registration(monkeypatch, tmp_path):
+    from imperandi.process.registration import cohort
+
+    row = save_scan(tmp_path, "scan")
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("tumor resampling failed")
+
+    monkeypatch.setattr(cohort, "resample", fail)
+    out, errors = register_cohort(
+        pd.DataFrame([row]),
+        tmp_path / "out",
+        RegistrationConfig(keep_source_segmentation=True),
+    )
+    assert out.loc[0, "registration_status"] == "reference"
+    assert out.loc[0, "consensus_status"] == "failed"
+    assert out.loc[0, "mask_liver_tumor"] == row["mask_liver_tumor"]
+    assert errors.stage.tolist() == ["consensus"]
+    assert errors.error.tolist() == ["tumor resampling failed"]
+
+
 def test_missing_identity_and_duplicate_rejected(tmp_path):
     row = save_scan(tmp_path, "a")
     with pytest.raises(ValueError, match="Duplicate"):
@@ -488,7 +509,7 @@ def test_demons_preserves_initial_transform_on_different_grids(tmp_path):
         fixed_dm, moving_dm, initial, RegistrationConfig(iterations=5)
     )
 
-    assert demons.GetName() == "FastSymmetricForcesDemonsRegistrationFilter"
+    assert demons.GetName() == "DiffeomorphicDemonsRegistrationFilter"
     assert np.allclose(demons.GetStandardDeviations(), 1 / np.array(fixed.GetSpacing()))
     assert alignment.dice(fixed, moving, transform) == 1
     point = fixed.TransformIndexToPhysicalPoint((15, 13, 11))
@@ -501,6 +522,33 @@ def test_demons_preserves_initial_transform_on_different_grids(tmp_path):
     sitk.WriteTransform(transform, str(path))
     restored = sitk.ReadTransform(str(path))
     assert np.allclose(restored.TransformPoint(point), transform.TransformPoint(point))
+
+
+def test_failed_linear_setup_retains_previous_alignment(monkeypatch):
+    def unavailable():
+        raise RuntimeError("optimizer unavailable")
+
+    monkeypatch.setattr(sitk, "ImageRegistrationMethod", unavailable)
+    result = register_pair(organ(), organ(), RegistrationConfig())
+    assert result.dice_after == 1
+    assert result.stages["rigid"]["status"] == "failed"
+    assert result.stages["rigid"]["fallback_stage"] == "baseline"
+    assert result.warnings == ["rigid: optimizer unavailable"]
+
+
+@pytest.mark.parametrize("score", [float("nan"), float("inf")])
+def test_nonfinite_candidate_retains_previous_alignment(monkeypatch, score):
+    scores = iter([1, score, score, score])
+    monkeypatch.setattr(alignment, "dice", lambda *args: next(scores))
+    monkeypatch.setattr(
+        alignment, "initialize_pca", lambda *args: sitk.Euler3DTransform()
+    )
+    result = register_pair(organ(), organ(), RegistrationConfig(iterations=1))
+    assert result.stage == "identity"
+    assert result.dice_after == 1
+    for name in ("geometry", "pca", "rigid"):
+        assert result.stages[name]["status"] == "failed"
+        assert result.stages[name]["fallback_stage"] == "baseline"
 
 
 def test_demons_improves_nonrigid_organ_overlap():
