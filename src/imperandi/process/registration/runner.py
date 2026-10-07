@@ -53,7 +53,7 @@ def run_registration(args, table, config, manifest):
     signature = argparse.Namespace(
         settings=asdict(config),
         manifest_config=manifest,
-        registration_schema=7,
+        registration_schema=8,
         backend_version=sitk.Version_VersionString(),
         output_dir=args.output_dir,
         threads_per_worker=args.threads_per_worker,
