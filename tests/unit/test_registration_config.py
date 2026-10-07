@@ -5,9 +5,7 @@ import pytest
 from imperandi.process.registration.config import RegistrationConfig
 
 
-@pytest.mark.parametrize(
-    "name", ["min_dice", "affine_min_dice", "early_stop_dice", "threshold"]
-)
+@pytest.mark.parametrize("name", ["min_dice", "early_stop_dice", "threshold"])
 @pytest.mark.parametrize(
     "value", [True, False, None, "0.5", float("nan"), float("inf")]
 )
@@ -18,8 +16,7 @@ def test_thresholds_require_finite_numbers(name, value):
 
 @pytest.mark.parametrize("value", [0, 1])
 def test_dice_threshold_endpoints_are_valid(value):
-    config = RegistrationConfig(min_dice=value, affine_min_dice=value)
-    assert config.min_dice == config.affine_min_dice == value
+    assert RegistrationConfig(min_dice=value).min_dice == value
 
 
 @pytest.mark.parametrize("value", [0, -0.01, 1.01])
@@ -38,6 +35,35 @@ def test_pca_rotation_limit_is_bounded(value):
 def test_pca_rotation_limit_accepts_valid_angles(value):
     config = RegistrationConfig(pca_max_rotation_degrees=value)
     assert config.pca_max_rotation_degrees == value
+
+
+def test_min_delta_partial_override_keeps_stage_defaults():
+    config = RegistrationConfig(min_delta={"pca": 0.01})
+    assert config.min_delta["pca"] == 0.01
+    assert config.min_delta["rigid"] == 0.002
+    assert config.min_delta["mi_affine"] == 0.003
+
+
+@pytest.mark.parametrize("value", [None, [], "pca"])
+def test_min_delta_requires_mapping(value):
+    with pytest.raises(ValueError, match="min_delta must be a mapping"):
+        RegistrationConfig(min_delta=value)
+
+
+@pytest.mark.parametrize("value", [-0.01, 1.01, True, None, "0.1", float("nan")])
+def test_min_delta_values_are_probabilities(value):
+    with pytest.raises(ValueError, match="min_delta pca"):
+        RegistrationConfig(min_delta={"pca": value})
+
+
+def test_min_delta_rejects_unknown_stages():
+    with pytest.raises(ValueError, match="Unknown min_delta stages"):
+        RegistrationConfig(min_delta={"mask_rigid": 0.002})
+
+
+def test_affine_min_dice_is_no_longer_a_registration_setting():
+    with pytest.raises(ValueError, match="Unknown registration settings"):
+        RegistrationConfig.from_mapping({"affine_min_dice": 0.9})
 
 
 @pytest.mark.parametrize(
