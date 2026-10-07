@@ -23,12 +23,16 @@ from .alignment import (
     backend,
     coverage_image,
     dice,
+    expand_organ_distance,
+    organ_distance_field,
     overlap_qc,
     read_image,
     read_mask,
     register_pair,
     registration_confidence,
     resample,
+    resample_organ_distance,
+    threshold_organ_distance,
 )
 from .reporting import (
     ERROR_COLUMNS,
@@ -37,6 +41,7 @@ from .reporting import (
     group_label,
     scan_label,
     publish_group_log,
+    record_final_organ_qc,
     record_stages,
     record_organ_qc,
 )
@@ -198,17 +203,74 @@ class ConsensusResult:
     probability: object | None
     observation_count: object | None = None
     support_policy: str = "per_voxel"
+    distance_field: object | None = None
 
 
-def fuse_organs(masks, coverages, *, organ_consensus):
-    """Fuse aligned organ masks, treating unobserved FOV as missing data."""
+def _organ_consensus_domain(
+    reference,
+    contributors,
+    loaded,
+    inverse_transforms,
+    mask_qc,
+    *,
+    padding_mm,
+):
+    """Return a reference-lattice ROI covering every transformed organ bound."""
+    sitk = backend()
+    points = []
+    for index in contributors:
+        organ = loaded[index][1]
+        bounds = mask_qc[index].bbox_index
+        start = np.asarray(bounds[:3], dtype=float)
+        stop = start + np.asarray(bounds[3:], dtype=float) - 1.0
+        inverse = inverse_transforms[index]
+        for x in (start[0], stop[0]):
+            for y in (start[1], stop[1]):
+                for z in (start[2], stop[2]):
+                    native_point = organ.TransformContinuousIndexToPhysicalPoint(
+                        (float(x), float(y), float(z))
+                    )
+                    reference_point = inverse.TransformPoint(native_point)
+                    points.append(
+                        reference.TransformPhysicalPointToContinuousIndex(
+                            reference_point
+                        )
+                    )
+    points = np.asarray(points)
+    padding = np.ceil(float(padding_mm) / np.asarray(reference.GetSpacing())).astype(
+        int
+    )
+    start = np.floor(points.min(axis=0)).astype(int) - padding
+    stop = np.ceil(points.max(axis=0)).astype(int) + 1 + padding
+    start = np.maximum(0, start)
+    stop = np.minimum(np.asarray(reference.GetSize()), stop)
+    if np.any(stop <= start):
+        raise ValueError("Transformed organ bounds have no reference-grid support")
+    domain = sitk.Image([int(value) for value in stop - start], sitk.sitkFloat32)
+    domain.SetOrigin(
+        reference.TransformIndexToPhysicalPoint([int(value) for value in start])
+    )
+    domain.SetSpacing(reference.GetSpacing())
+    domain.SetDirection(reference.GetDirection())
+    return domain
+
+
+def fuse_organs(distance_fields, coverages, *, organ_consensus):
+    """Fuse organ surfaces with a coverage-aware upper distance median.
+
+    The upper median reproduces strict binary majority at ties and has a 50%
+    breakdown point: with at least three observations, one arbitrarily distant
+    outlier cannot move the fused boundary outside the majority surfaces.
+    Processing in axial slabs bounds temporary memory instead of stacking every
+    full-volume contributor.
+    """
     sitk = backend()
     if organ_consensus not in ORGAN_CONSENSUS_METHODS:
         raise ValueError(f"Unknown organ consensus: {organ_consensus}")
-    if not masks or len(masks) != len(coverages):
-        raise ValueError("Organ consensus requires masks and matching coverage")
-    reference = masks[0]
-    for image in [*masks, *coverages]:
+    if not distance_fields or len(distance_fields) != len(coverages):
+        raise ValueError("Organ consensus requires fields and matching coverage")
+    reference = distance_fields[0]
+    for image in [*distance_fields, *coverages]:
         if (
             image.GetSize(),
             image.GetOrigin(),
@@ -222,31 +284,66 @@ def fuse_organs(masks, coverages, *, organ_consensus):
         ):
             raise ValueError("Organ consensus inputs must share one grid")
     if organ_consensus == "anchor":
-        masks, coverages = masks[:1], coverages[:1]
-    values = np.stack([sitk.GetArrayFromImage(mask) > 0 for mask in masks])
-    observations = np.stack(
-        [sitk.GetArrayFromImage(coverage) > 0 for coverage in coverages]
-    )
-    counts = observations.sum(axis=0)
-    votes = (values & observations).sum(axis=0)
+        distance_fields, coverages = distance_fields[:1], coverages[:1]
+    field_views = [sitk.GetArrayViewFromImage(field) for field in distance_fields]
+    coverage_views = [sitk.GetArrayViewFromImage(image) for image in coverages]
+    shape = field_views[0].shape
+    outside = float(max(reference.GetSpacing()))
+    fused = np.full(shape, outside, dtype=np.float32)
+    probability = np.zeros(shape, dtype=np.float32)
+    counts = np.zeros(shape, dtype=np.uint32)
+    contributor_count = len(distance_fields)
+    slice_bytes = max(1, contributor_count * shape[1] * shape[2] * 5)
+    slab_depth = max(1, min(shape[0], (32 * 2**20) // slice_bytes))
+    for start in range(0, shape[0], slab_depth):
+        slab = slice(start, min(shape[0], start + slab_depth))
+        values = np.empty(
+            (contributor_count, slab.stop - slab.start, shape[1], shape[2]),
+            dtype=np.float32,
+        )
+        slab_counts = np.zeros(values.shape[1:], dtype=np.uint32)
+        votes = np.zeros(values.shape[1:], dtype=np.uint32)
+        for index, (field_values, coverage_values) in enumerate(
+            zip(field_views, coverage_views)
+        ):
+            observed = coverage_values[slab] > 0
+            values[index] = field_values[slab]
+            values[index][~observed] = np.inf
+            slab_counts += observed
+            votes += observed & (field_values[slab] <= 0.0)
+        values.sort(axis=0)
+        positions = slab_counts // 2
+        selected = np.take_along_axis(values, positions[None, ...], axis=0)[0]
+        slab_support = slab_counts > 0
+        fused_slab = fused[slab]
+        fused_slab[slab_support] = selected[slab_support]
+        probability[slab] = np.divide(
+            votes,
+            slab_counts,
+            out=np.zeros(votes.shape, dtype=np.float32),
+            where=slab_support,
+        )
+        counts[slab] = slab_counts
     support = counts > 0
     if not support.any():
         raise ValueError("Organ inputs have no observed support for this consensus")
-    probability = np.divide(
-        votes, counts, out=np.zeros(counts.shape, np.float32), where=support
-    )
-    output = probability > 0.5
+    output = (fused <= 0.0) & support
 
     def consensus_image(array, dtype):
-        image = sitk.GetImageFromArray(array.astype(dtype))
+        # Avoid an extra full-volume copy when the accumulator already has the
+        # requested dtype. GetImageFromArray necessarily owns its output copy.
+        image = sitk.GetImageFromArray(np.asarray(array, dtype=dtype))
         image.CopyInformation(reference)
         return image
 
+    fused_field = consensus_image(fused, np.float32)
+    fused_field.SetMetaData("imperandi_outside_distance_mm", repr(outside))
     return ConsensusResult(
-        consensus_image(output * support, np.uint8),
+        consensus_image(output, np.uint8),
         consensus_image(support, np.uint8),
-        consensus_image(probability * support, np.float32),
+        consensus_image(probability, np.float32),
         consensus_image(counts, np.uint32),
+        distance_field=fused_field,
     )
 
 
@@ -343,16 +440,107 @@ def write_artifact(image, path) -> str:
     return str(destination.resolve())
 
 
-def _fill_unobserved(consensus, coverage, source):
-    """Retain the native annotation where no consensus contributor was observed."""
+@dataclass(frozen=True)
+class OrganTransferResult:
+    mask: object
+    distance_field: object
+    residual_seam_voxels: int
+
+
+@dataclass(frozen=True)
+class FinalOrganQC:
+    component_count: int
+    component_sizes_mm3: tuple[float, ...]
+    fragment_count: int
+    fragment_sizes_mm3: tuple[float, ...]
+    volume_mm3: float
+    source_volume_mm3: float
+    volume_change_fraction: float
+    residual_seam_voxels: int
+    has_residual_seam: bool
+    has_fragments: bool
+
+
+def _coverage_seam_voxels(output, coverage, source):
+    """Count new binary jumps exactly across the observed/unobserved boundary."""
+    out = backend().GetArrayViewFromImage(output) > 0
+    observed = backend().GetArrayViewFromImage(coverage) > 0
+    original = backend().GetArrayViewFromImage(source) > 0
+    seams = 0
+    for axis in range(out.ndim):
+        low = [slice(None)] * out.ndim
+        high = [slice(None)] * out.ndim
+        low[axis] = slice(None, -1)
+        high[axis] = slice(1, None)
+        low, high = tuple(low), tuple(high)
+        coverage_edge = observed[low] != observed[high]
+        introduced_edge = (out[low] != out[high]) & (original[low] == original[high])
+        seams += int(np.count_nonzero(coverage_edge & introduced_edge))
+    return seams
+
+
+def _fill_unobserved(
+    consensus_distance, coverage, source_distance, *, blend_width_mm
+):
+    """Blend fields inside coverage, retain source outside, and threshold once."""
     sitk = backend()
-    values = sitk.GetArrayFromImage(consensus)
-    observed = sitk.GetArrayViewFromImage(coverage) > 0
-    source_values = sitk.GetArrayViewFromImage(source) > 0
-    values[~observed] = source_values[~observed]
-    output = sitk.GetImageFromArray(values.astype(np.uint8))
-    output.CopyInformation(consensus)
-    return output
+    observed = sitk.Cast(coverage > 0, sitk.sitkUInt8)
+    observed_values = sitk.GetArrayViewFromImage(observed) > 0
+    source_mask = threshold_organ_distance(source_distance)
+    if not observed_values.any():
+        blended = sitk.Image(source_distance)
+    elif observed_values.all():
+        blended = sitk.Image(consensus_distance)
+    else:
+        inside_distance = sitk.SignedMaurerDistanceMap(
+            observed,
+            insideIsPositive=True,
+            squaredDistance=False,
+            useImageSpacing=True,
+        )
+        alpha = sitk.Clamp(
+            sitk.Cast(inside_distance / float(blend_width_mm), sitk.sitkFloat32),
+            lowerBound=0.0,
+            upperBound=1.0,
+        )
+        alpha *= sitk.Cast(observed, sitk.sitkFloat32)
+        blended = source_distance + alpha * (consensus_distance - source_distance)
+    output = threshold_organ_distance(blended)
+    seam_voxels = _coverage_seam_voxels(output, observed, source_mask)
+    return OrganTransferResult(output, blended, seam_voxels)
+
+
+def final_organ_qc(mask, source, *, residual_seam_voxels=0):
+    """Report final liver topology and volume without implicitly repairing it."""
+    sitk = backend()
+    connected = sitk.ConnectedComponentImageFilter()
+    connected.SetFullyConnected(False)
+    labels = connected.Execute(mask)
+    statistics = sitk.LabelShapeStatisticsImageFilter()
+    statistics.Execute(labels)
+    sizes = sorted(
+        (float(statistics.GetPhysicalSize(label)) for label in statistics.GetLabels()),
+        reverse=True,
+    )
+    voxel_volume = float(np.prod(mask.GetSpacing()))
+    volume = float(np.count_nonzero(sitk.GetArrayViewFromImage(mask)) * voxel_volume)
+    source_volume = float(
+        np.count_nonzero(sitk.GetArrayViewFromImage(source)) * voxel_volume
+    )
+    change = (volume - source_volume) / source_volume if source_volume else float("inf")
+    fragments = sizes[1:]
+    return FinalOrganQC(
+        component_count=len(sizes),
+        component_sizes_mm3=tuple(sizes),
+        fragment_count=len(fragments),
+        fragment_sizes_mm3=tuple(fragments),
+        volume_mm3=volume,
+        source_volume_mm3=source_volume,
+        volume_change_fraction=float(change),
+        residual_seam_voxels=int(residual_seam_voxels),
+        has_residual_seam=bool(residual_seam_voxels),
+        has_fragments=bool(fragments),
+    )
 
 
 def _missing_file(path):
@@ -447,7 +635,7 @@ def register_cohort(
         order = sorted(
             group.index, key=lambda index: reference_rank(df.loc[index], priorities)
         )
-        loaded, mask_qc = {}, {}
+        loaded, mask_qc, organ_fields = {}, {}, {}
         for i in order:
             organ_path = df.at[i, config.organ_mask_column]
             if _missing_file(organ_path):
@@ -525,12 +713,22 @@ def register_cohort(
             "Registration reference selected: %s",
             df.at[ref, "registration_scan_label"],
         )
+
+        def get_organ_field(index):
+            if index not in organ_fields:
+                organ_fields[index] = organ_distance_field(
+                    loaded[index][1],
+                    padding_mm=config.organ_distance_field_padding_mm,
+                )
+            return organ_fields[index]
+
         transforms, inverse_transforms, pair_results, native_organs = (
             {},
             {},
             {},
             {},
         )
+        native_organ_seams = {}
         consensus_eligible = set()
         for i, (image, organ) in loaded.items():
             started = time.perf_counter()
@@ -596,14 +794,19 @@ def register_cohort(
                 if config.preserve_source_organ_mask:
                     native_organ = organ
                 elif config.organ_consensus_method == "anchor":
-                    native_organ = resample(reference_organ, image, inverse)
-                    if mask_qc[ref].partial:
-                        # Reference has no annotation outside its FOV: retain the
-                        # scan's own organ there instead of erasing unobserved tissue.
-                        known = resample(coverage_image(reference), image, inverse)
-                        native_organ = sitk.Or(
-                            native_organ, sitk.And(organ, sitk.Equal(known, 0))
-                        )
+                    native_consensus = resample_organ_distance(
+                        get_organ_field(ref), image, inverse
+                    )
+                    known = resample(coverage_image(reference), image, inverse)
+                    source_distance = expand_organ_distance(get_organ_field(i), image)
+                    transfer = _fill_unobserved(
+                        native_consensus,
+                        known,
+                        source_distance,
+                        blend_width_mm=config.organ_coverage_blend_width_mm,
+                    )
+                    native_organ = transfer.mask
+                    native_organ_seams[i] = transfer.residual_seam_voxels
                     df.at[i, "reg_organ_native_path"] = write_artifact(
                         native_organ,
                         pair_dir / "organ_native.nii.gz",
@@ -659,15 +862,35 @@ def register_cohort(
                 " | ".join(contributor_labels),
             )
             try:
-                organ_masks, organ_coverages = [], []
+                aligned_fields, organ_coverages = [], []
+                fusion_reference = _organ_consensus_domain(
+                    reference,
+                    organ_contributors,
+                    loaded,
+                    inverse_transforms,
+                    mask_qc,
+                    padding_mm=(
+                        config.organ_distance_field_padding_mm
+                        + config.maximum_elastic_displacement_mm
+                        + max(reference.GetSpacing())
+                    ),
+                )
                 for i in organ_contributors:
                     organ = loaded[i][1]
-                    organ_masks.append(resample(organ, reference, transforms[i]))
+                    aligned_fields.append(
+                        resample_organ_distance(
+                            get_organ_field(i), fusion_reference, transforms[i]
+                        )
+                    )
                     organ_coverages.append(
-                        resample(coverage_image(organ), reference, transforms[i])
+                        resample(
+                            coverage_image(organ),
+                            fusion_reference,
+                            transforms[i],
+                        )
                     )
                 fused_organ = fuse_organs(
-                    organ_masks,
+                    aligned_fields,
                     organ_coverages,
                     organ_consensus=config.organ_consensus_method,
                 )
@@ -688,17 +911,19 @@ def register_cohort(
                 try:
                     image, source_organ = loaded[i]
                     inverse = inverse_transforms[i]
-                    native_organ = resample(
-                        fused_organ.mask,
-                        image,
-                        inverse,
+                    native_consensus = resample_organ_distance(
+                        fused_organ.distance_field, image, inverse
                     )
                     native_coverage = resample(fused_organ.coverage, image, inverse)
-                    native_organ = _fill_unobserved(
-                        native_organ,
+                    source_distance = expand_organ_distance(get_organ_field(i), image)
+                    transfer = _fill_unobserved(
+                        native_consensus,
                         native_coverage,
-                        source_organ,
+                        source_distance,
+                        blend_width_mm=config.organ_coverage_blend_width_mm,
                     )
+                    native_organ = transfer.mask
+                    native_organ_seams[i] = transfer.residual_seam_voxels
                     pair_dir = directory / ids[i]
                     df.at[i, "reg_organ_native_path"] = write_artifact(
                         native_organ, pair_dir / "organ_native.nii.gz"
@@ -724,6 +949,13 @@ def register_cohort(
                 _record_consensus_inputs(df, group.index, [], config)
                 publish_group_log(df, group.index, errors, config, directory)
                 continue
+        for i, native_organ in native_organs.items():
+            quality = final_organ_qc(
+                native_organ,
+                loaded[i][1],
+                residual_seam_voxels=native_organ_seams.get(i, 0),
+            )
+            record_final_organ_qc(df, i, quality)
         tumors = {}
         # Read all available inputs so tumor Dice can be reported independently
         # from the selected consensus policy. Use the final QC-aware reference

@@ -34,6 +34,116 @@ def resample(image, reference, transform, *, label=True):
     )
 
 
+def _mask_roi(mask, padding_mm):
+    """Crop a nonempty mask to its padded physical-space bounding box."""
+    sitk = backend()
+    labels = sitk.LabelShapeStatisticsImageFilter()
+    labels.Execute(mask)
+    if not labels.HasLabel(1):
+        raise ValueError("Cannot build a distance field from an empty organ mask")
+    bounds = labels.GetBoundingBox(1)
+    start = np.array(bounds[:3], dtype=int)
+    stop = start + np.array(bounds[3:], dtype=int)
+    padding = np.ceil(float(padding_mm) / np.array(mask.GetSpacing())).astype(int)
+    start = np.maximum(0, start - padding)
+    stop = np.minimum(np.array(mask.GetSize()), stop + padding)
+    return sitk.RegionOfInterest(
+        mask,
+        [int(value) for value in stop - start],
+        [int(value) for value in start],
+    )
+
+
+def organ_distance_field(mask, *, padding_mm):
+    """Return an unclamped physical signed-distance field for organ transfer.
+
+    The padded crop contains every zero crossing while avoiding a full-volume
+    distance transform. This field is deliberately separate from the bounded
+    optimizer distance map below.
+    """
+    sitk = backend()
+    padding = max(float(padding_mm), 2.0 * max(mask.GetSpacing()))
+    cropped = _mask_roi(mask, padding)
+    outside = sitk.Clamp(
+        sitk.SignedMaurerDistanceMap(
+            cropped,
+            insideIsPositive=False,
+            squaredDistance=False,
+            useImageSpacing=True,
+        ),
+        lowerBound=0.0,
+    )
+    complement = sitk.Cast(cropped == 0, sitk.sitkUInt8)
+    inside = sitk.Clamp(
+        sitk.SignedMaurerDistanceMap(
+            complement,
+            insideIsPositive=False,
+            squaredDistance=False,
+            useImageSpacing=True,
+        ),
+        lowerBound=0.0,
+    )
+    # A single SignedMaurer map is zero at foreground boundary voxel centers.
+    # Subtracting complementary distances puts zero between foreground and
+    # background centers and avoids systematic erosion after interpolation.
+    distances = sitk.Cast(outside - inside, sitk.sitkFloat32)
+    maximum = float(sitk.GetArrayViewFromImage(distances).max())
+    outside = max(maximum + max(mask.GetSpacing()), max(mask.GetSpacing()))
+    distances.SetMetaData("imperandi_outside_distance_mm", repr(outside))
+    return distances
+
+
+def _organ_distance_outside_value(field):
+    key = "imperandi_outside_distance_mm"
+    if field.HasMetaDataKey(key):
+        return float(field.GetMetaData(key))
+    maximum = float(backend().GetArrayViewFromImage(field).max())
+    return max(maximum + max(field.GetSpacing()), max(field.GetSpacing()))
+
+
+def resample_organ_distance(field, reference, transform):
+    """Linearly transfer an organ field and leave thresholding to its consumer."""
+    sitk = backend()
+    return sitk.Resample(
+        field,
+        reference,
+        transform,
+        sitk.sitkLinear,
+        _organ_distance_outside_value(field),
+        sitk.sitkFloat32,
+    )
+
+
+def expand_organ_distance(field, reference):
+    """Paste a cropped native field back onto its unchanged native lattice."""
+    sitk = backend()
+    if any(
+        not np.allclose(a, b, atol=1e-6, rtol=0)
+        for a, b in [
+            (field.GetSpacing(), reference.GetSpacing()),
+            (field.GetDirection(), reference.GetDirection()),
+        ]
+    ):
+        raise ValueError("Organ distance crop does not match its native lattice")
+    output = sitk.Image(reference.GetSize(), sitk.sitkFloat32)
+    output.CopyInformation(reference)
+    output += _organ_distance_outside_value(field)
+    destination = reference.TransformPhysicalPointToIndex(field.GetOrigin())
+    return sitk.Paste(
+        output,
+        field,
+        field.GetSize(),
+        [0] * field.GetDimension(),
+        destination,
+    )
+
+
+def threshold_organ_distance(field):
+    """Threshold an organ field exactly once on its destination grid."""
+    sitk = backend()
+    return sitk.Cast(field <= 0.0, sitk.sitkUInt8)
+
+
 def read_image(path):
     sitk = backend()
     image = sitk.ReadImage(str(path))
@@ -197,21 +307,7 @@ def dice(fixed, moving, transform):
 def distance_map(mask, *, padding_mm, band_mm):
     """Build a bounded signed distance map around a foreground mask."""
     sitk = backend()
-    labels = sitk.LabelShapeStatisticsImageFilter()
-    labels.Execute(mask)
-    if not labels.HasLabel(1):
-        raise ValueError("Cannot register an empty organ mask")
-    bounds = labels.GetBoundingBox(1)
-    start = np.array(bounds[:3], dtype=int)
-    stop = start + np.array(bounds[3:], dtype=int)
-    padding = np.ceil(float(padding_mm) / np.array(mask.GetSpacing())).astype(int)
-    start = np.maximum(0, start - padding)
-    stop = np.minimum(np.array(mask.GetSize()), stop + padding)
-    cropped = sitk.RegionOfInterest(
-        mask,
-        [int(value) for value in stop - start],
-        [int(value) for value in start],
-    )
+    cropped = _mask_roi(mask, padding_mm)
     distances = sitk.SignedMaurerDistanceMap(
         cropped, insideIsPositive=False, squaredDistance=False, useImageSpacing=True
     )
