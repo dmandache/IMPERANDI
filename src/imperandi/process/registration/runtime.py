@@ -27,7 +27,7 @@ from .reporting import ERROR_COLUMNS, build_error_record, build_qc, group_label
 logger = logging.getLogger(__name__)
 
 # Increment when registration behavior changes so old artifacts are not reused.
-REGISTRATION_SCHEMA = 24
+REGISTRATION_SCHEMA = 25
 
 
 def _has_failed_stage(rows, config):
@@ -36,7 +36,7 @@ def _has_failed_stage(rows, config):
     if config.enable_affine_stage:
         enabled.add("mi_affine")
     if config.enable_elastic_stage:
-        enabled.add("mi_elastic")
+        enabled.add("mask_elastic")
     for value in rows.registration_stage_details.dropna():
         try:
             stages = json.loads(value)
