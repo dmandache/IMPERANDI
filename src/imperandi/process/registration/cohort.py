@@ -115,25 +115,28 @@ def prepare_cohort(table: pd.DataFrame, config) -> pd.DataFrame:
     )
 
     # Source columns remain authoritative across repeated registration runs.
-    for column in (config.organ_column, config.tumor_column):
+    for column in (config.organ_mask_column, config.tumor_mask_column):
         source = f"source_{column}"
         if source not in df:
-            if column == config.organ_column and column not in df:
+            if column == config.organ_mask_column and column not in df:
                 continue
             df[source] = df[column] if column in df else None
         df[column] = df[source].astype(object)
 
-    required = [*config.group_columns, "nifti_path", config.organ_column]
+    required = [*config.grouping_columns, "nifti_path", config.organ_mask_column]
     missing = set(required) - set(df.columns)
     if missing:
         raise ValueError(f"Missing registration columns: {sorted(missing)}")
-    for column in [*config.group_columns, "nifti_path"]:
+    for column in [*config.grouping_columns, "nifti_path"]:
         if df[column].isna().any() or df[column].astype(str).str.strip().eq("").any():
             raise ValueError(f"Missing registration identity: {column}")
 
     identities = [
         [
-            *(identity_value(column, row[column]) for column in config.group_columns),
+            *(
+                identity_value(column, row[column])
+                for column in config.grouping_columns
+            ),
             str(Path(row.nifti_path).expanduser().resolve()),
         ]
         for _, row in df.iterrows()
@@ -146,13 +149,14 @@ def prepare_cohort(table: pd.DataFrame, config) -> pd.DataFrame:
     df["registration_group_id"] = [
         stable_id(
             tuple(
-                identity_value(column, row[column]) for column in config.group_columns
+                identity_value(column, row[column])
+                for column in config.grouping_columns
             )
         )
         for _, row in df.iterrows()
     ]
     df["registration_group_label"] = [
-        group_label(row, config.group_columns) for _, row in df.iterrows()
+        group_label(row, config.grouping_columns) for _, row in df.iterrows()
     ]
     # Clear previous-run values before planning, including organ volume used
     # as a priority criterion. Image-derived criteria become available after QC.
@@ -175,7 +179,9 @@ def prepare_cohort(table: pd.DataFrame, config) -> pd.DataFrame:
     for _, group in df.groupby("registration_group_id", sort=False):
         ordered = sorted(
             group.index,
-            key=lambda index: reference_rank(df.loc[index], config.reference_priority),
+            key=lambda index: reference_rank(
+                df.loc[index], config.reference_selection_priority
+            ),
         )
         for position, index in enumerate(ordered, start=1):
             df.at[index, "registration_series_number"] = position
@@ -384,7 +390,7 @@ def _record_consensus_inputs(df, indices, contributors, config):
         reasons, sort_keys=True
     )
     df.loc[indices, "registration_consensus_support_policy"] = (
-        "common_fov_only" if config.tumor_consensus == "staple" else "per_voxel"
+        "common_fov_only" if config.tumor_consensus_method == "staple" else "per_voxel"
     )
 
 
@@ -423,7 +429,7 @@ def register_cohort(
     groups = df.groupby("registration_group_id", sort=True)
     for _, group in groups:
         group_id = group.iloc[0].registration_group_id
-        label = group_label(group.iloc[0], config.group_columns)
+        label = group_label(group.iloc[0], config.grouping_columns)
         logger.info("Registration group started: %s, series=%d", label, len(group))
         directory = root / group_id
         group_started = time.perf_counter()
@@ -431,13 +437,13 @@ def register_cohort(
             timezone.utc
         ).isoformat()
         df.loc[group.index, "registration_group_id"] = group_id
-        priorities = config.reference_priority
+        priorities = config.reference_selection_priority
         order = sorted(
             group.index, key=lambda index: reference_rank(df.loc[index], priorities)
         )
         loaded, mask_qc = {}, {}
         for i in order:
-            organ_path = df.at[i, config.organ_column]
+            organ_path = df.at[i, config.organ_mask_column]
             if _missing_file(organ_path):
                 df.at[i, "registration_status"] = "skipped"
                 df.at[i, "registration_skip_reason"] = "missing_organ_mask"
@@ -463,7 +469,7 @@ def register_cohort(
                     )
                     continue
                 if quality.status == "invalid" or (
-                    quality.partial and not config.allow_partial_organs
+                    quality.partial and not config.accept_partial_organ_masks
                 ):
                     df.at[i, "registration_status"] = "invalid_organ_mask"
                     df.at[i, "registration_confidence"] = "invalid_organ_mask"
@@ -580,9 +586,9 @@ def register_cohort(
                 if inverse is None:
                     inverse = tx.GetInverse()
                 pair_dir = directory / ids[i]
-                if config.keep_source_segmentation:
+                if config.preserve_source_organ_mask:
                     native_organ = organ
-                elif config.organ_consensus == "anchor":
+                elif config.organ_consensus_method == "anchor":
                     native_organ = resample(reference_organ, image, inverse)
                     if mask_qc[ref].partial:
                         # Reference has no annotation outside its FOV: retain the
@@ -595,12 +601,14 @@ def register_cohort(
                         native_organ,
                         pair_dir / "organ_native.nii.gz",
                     )
-                    df.at[i, config.organ_column] = df.at[i, "reg_organ_native_path"]
+                    df.at[i, config.organ_mask_column] = df.at[
+                        i, "reg_organ_native_path"
+                    ]
                 transforms[i] = tx
                 inverse_transforms[i] = inverse
                 if (
-                    config.keep_source_segmentation
-                    or config.organ_consensus == "anchor"
+                    config.preserve_source_organ_mask
+                    or config.organ_consensus_method == "anchor"
                 ):
                     native_organs[i] = native_organ
                 df.at[i, "registration_status"] = (
@@ -624,14 +632,17 @@ def register_cohort(
             _record_consensus_inputs(df, group.index, [], config)
             publish_group_log(df, group.index, errors, config, directory)
             continue
-        if not config.keep_source_segmentation and config.organ_consensus != "anchor":
+        if (
+            not config.preserve_source_organ_mask
+            and config.organ_consensus_method != "anchor"
+        ):
             contributor_labels = [
                 df.at[i, "registration_scan_label"] for i in transforms
             ]
             logger.info(
                 "Registration organ consensus started: organ_consensus=%s, "
                 "contributors=%d [%s]",
-                config.organ_consensus,
+                config.organ_consensus_method,
                 len(transforms),
                 " | ".join(contributor_labels),
             )
@@ -646,7 +657,7 @@ def register_cohort(
                 fused_organ = fuse_organs(
                     organ_masks,
                     organ_coverages,
-                    organ_consensus=config.organ_consensus,
+                    organ_consensus=config.organ_consensus_method,
                 )
             except (RuntimeError, ValueError, TypeError) as exc:
                 df.loc[list(transforms), "registration_status"] = "failed"
@@ -680,7 +691,9 @@ def register_cohort(
                     df.at[i, "reg_organ_native_path"] = write_artifact(
                         native_organ, pair_dir / "organ_native.nii.gz"
                     )
-                    df.at[i, config.organ_column] = df.at[i, "reg_organ_native_path"]
+                    df.at[i, config.organ_mask_column] = df.at[
+                        i, "reg_organ_native_path"
+                    ]
                     native_organs[i] = native_organ
                 except (RuntimeError, ValueError, TypeError) as exc:
                     failed_transfers.append(i)
@@ -710,7 +723,11 @@ def register_cohort(
                     df.at[i, "registration_status"]
                 )
                 continue
-            path = df.at[i, config.tumor_column] if config.tumor_column in df else None
+            path = (
+                df.at[i, config.tumor_mask_column]
+                if config.tumor_mask_column in df
+                else None
+            )
             if _missing_file(path):
                 df.at[i, "tumor_consensus_input_status"] = "skipped_missing"
                 continue
@@ -748,7 +765,7 @@ def register_cohort(
                         )
 
         contributors = list(tumors)
-        if config.tumor_consensus == "anchor":
+        if config.tumor_consensus_method == "anchor":
             contributors = contributors[:1]
         for i in tumors:
             if i not in contributors:
@@ -766,7 +783,7 @@ def register_cohort(
             logger.info(
                 "Registration tumor consensus started: tumor_consensus=%s, "
                 "contributors=%d [%s]",
-                config.tumor_consensus,
+                config.tumor_consensus_method,
                 len(contributors),
                 " | ".join(contributor_labels),
             )
@@ -781,15 +798,15 @@ def register_cohort(
                 fused = fusion(
                     masks,
                     coverages,
-                    tumor_consensus=config.tumor_consensus,
-                    threshold=config.threshold,
+                    tumor_consensus=config.tumor_consensus_method,
+                    threshold=config.consensus_probability_threshold,
                 )
                 for i, tx in transforms.items():
                     try:
                         inverse = inverse_transforms[i]
                         image = loaded[i][0]
                         pair_dir = directory / ids[i]
-                        if config.tumor_consensus == "anchor":
+                        if config.tumor_consensus_method == "anchor":
                             composed = sitk.CompositeTransform(3)
                             composed.AddTransform(transforms[contributors[0]])
                             composed.AddTransform(inverse)
@@ -798,12 +815,12 @@ def register_cohort(
                             native = resample(fused.mask, image, inverse)
                         native_coverage = resample(fused.coverage, image, inverse)
                         native = sitk.And(native, native_coverage)
-                        if config.constrain_tumor_to_organ:
+                        if config.clip_tumor_consensus_to_organ:
                             native = sitk.And(native, native_organs[i])
                         df.at[i, "reg_tumor_native_path"] = write_artifact(
                             native, pair_dir / "tumor_native.nii.gz"
                         )
-                        df.at[i, config.tumor_column] = df.at[
+                        df.at[i, config.tumor_mask_column] = df.at[
                             i, "reg_tumor_native_path"
                         ]
                         df.at[i, "consensus_status"] = (

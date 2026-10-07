@@ -57,7 +57,9 @@ def test_physical_translation_and_inverse(affine):
     shift = np.array([4.0, -3.0, 2.0])
     moving.SetOrigin(tuple(np.array(fixed.GetOrigin()) + shift))
     result = register_pair(
-        fixed, moving, RegistrationConfig(affine=affine, iterations=20)
+        fixed,
+        moving,
+        RegistrationConfig(enable_affine_stage=affine, maximum_optimizer_iterations=20),
     )
     point = fixed.TransformIndexToPhysicalPoint((15, 13, 11))
     assert np.allclose(
@@ -153,7 +155,7 @@ def test_geometry_replaces_pca_only_for_partial_organs(monkeypatch, partial):
     monkeypatch.setattr(sitk, "CenteredTransformInitializer", geometry)
     monkeypatch.setattr(alignment, "initialize_pca", pca)
     result = register_pair(
-        fixed, moving, RegistrationConfig(iterations=1, min_dice=0.95)
+        fixed, moving, RegistrationConfig(maximum_optimizer_iterations=1)
     )
     assert result.dice_before == 0
     assert result.dice_after == pytest.approx(1)
@@ -233,7 +235,9 @@ def test_cohort_grouping_anchor_transfer_and_native_preservation(tmp_path):
     ]
     source = pd.DataFrame(rows)
     out, errors = register_cohort(
-        source, tmp_path / "out", RegistrationConfig(iterations=10)
+        source,
+        tmp_path / "out",
+        RegistrationConfig(maximum_optimizer_iterations=10),
     )
     assert errors.empty
     unchanged = [c for c in source if not c.startswith("mask_")]
@@ -255,16 +259,16 @@ def test_cohort_grouping_anchor_transfer_and_native_preservation(tmp_path):
     assert not any(c.startswith("mask_") for c in set(out) - set(source))
 
 
-def test_manifest_group_columns_control_cross_modality_registration(tmp_path):
+def test_manifest_grouping_columns_control_cross_modality_registration(tmp_path):
     rows = [
         {**save_scan(tmp_path, "ct", modality="CT"), "exam_stage": "baseline"},
         {**save_scan(tmp_path, "mr", modality="MRI"), "exam_stage": "baseline"},
         {**save_scan(tmp_path, "followup"), "exam_stage": "followup"},
     ]
     config = RegistrationConfig(
-        group_columns=["patient_key", "exam_stage"],
-        reference_priority=[{"Modality": ["MR", "CT"]}],
-        iterations=5,
+        grouping_columns=["patient_key", "exam_stage"],
+        reference_selection_priority=[{"Modality": ["MR", "CT"]}],
+        maximum_optimizer_iterations=5,
     )
 
     out, errors = register_cohort(pd.DataFrame(rows), tmp_path / "out", config)
@@ -286,8 +290,8 @@ def test_modality_column_is_optional_when_not_configured(tmp_path):
     planned = prepare_cohort(
         pd.DataFrame(rows),
         RegistrationConfig(
-            group_columns=["patient_key", "study_id"],
-            reference_priority=[{"phase": ["PORTAL_VENOUS", "ARTERIAL"]}],
+            grouping_columns=["patient_key", "study_id"],
+            reference_selection_priority=[{"phase": ["PORTAL_VENOUS", "ARTERIAL"]}],
         ),
     )
 
@@ -321,7 +325,7 @@ def test_tumor_resampling_failure_preserves_organ_registration(monkeypatch, tmp_
     out, errors = register_cohort(
         pd.DataFrame([row]),
         tmp_path / "out",
-        RegistrationConfig(keep_source_segmentation=True),
+        RegistrationConfig(preserve_source_organ_mask=True),
     )
     assert out.loc[0, "registration_status"] == "reference"
     assert out.loc[0, "consensus_status"] == "failed"
@@ -344,12 +348,6 @@ def test_config_rejects_unknown():
         RegistrationConfig.from_mapping({"afine": True})
 
 
-@pytest.mark.parametrize("value", [0, -1, float("inf"), float("nan"), True])
-def test_demons_smoothing_is_positive_and_finite(value):
-    with pytest.raises(ValueError, match="Demons smoothing sigma"):
-        RegistrationConfig(demons_smoothing_sigma_mm=value)
-
-
 def test_cli(tmp_path):
     from imperandi.cli import main
 
@@ -367,9 +365,9 @@ def test_cli(tmp_path):
                 str(output),
                 "--output_dir",
                 str(tmp_path / "out"),
-                "--organ_consensus",
+                "--organ_consensus_method",
                 "majority",
-                "--tumor_consensus",
+                "--tumor_consensus_method",
                 "union",
             ]
         )
@@ -399,7 +397,9 @@ def test_pca_rotation_with_oblique_geometry():
             ).ravel()
         )
     )
-    result = register_pair(fixed, moving, RegistrationConfig(iterations=20))
+    result = register_pair(
+        fixed, moving, RegistrationConfig(maximum_optimizer_iterations=20)
+    )
     assert result.dice_after > 0.95
     # Foreground placement remains accurate with the safe-angle PCA candidates.
     assert result.dice_after > result.dice_before
@@ -436,7 +436,9 @@ def test_majority_consensus_keeps_only_native_masks(tmp_path):
     out, errors = register_cohort(
         pd.DataFrame(rows),
         output_dir,
-        RegistrationConfig(tumor_consensus="majority", iterations=5),
+        RegistrationConfig(
+            tumor_consensus_method="majority", maximum_optimizer_iterations=5
+        ),
     )
     assert errors.empty
     assert out.consensus_status.tolist() == ["ok", "ok"]
@@ -483,7 +485,9 @@ def test_majority_organ_consensus_is_written_to_native_grids(tmp_path):
     out, errors = register_cohort(
         pd.DataFrame(rows),
         tmp_path / "out",
-        RegistrationConfig(organ_consensus="majority", iterations=5),
+        RegistrationConfig(
+            organ_consensus_method="majority", maximum_optimizer_iterations=5
+        ),
     )
 
     assert errors.empty
@@ -545,7 +549,9 @@ def test_empty_tumor_is_excluded_from_consensus(tmp_path):
     out, errors = register_cohort(
         pd.DataFrame(rows),
         tmp_path / "out",
-        RegistrationConfig(tumor_consensus="majority", iterations=5),
+        RegistrationConfig(
+            tumor_consensus_method="majority", maximum_optimizer_iterations=5
+        ),
     )
 
     assert errors.empty
@@ -572,7 +578,9 @@ def test_anchor_falls_back_to_moving_mask(tmp_path):
         save_scan(tmp_path, "arterial", offset=3),
     ]
     out, errors = register_cohort(
-        pd.DataFrame(rows), tmp_path / "out", RegistrationConfig(iterations=10)
+        pd.DataFrame(rows),
+        tmp_path / "out",
+        RegistrationConfig(maximum_optimizer_iterations=10),
     )
     assert errors.empty
     transferred = sitk.ReadImage(out.loc[0, "reg_tumor_native_path"])
@@ -589,7 +597,11 @@ def test_boundary_band_mi_affine_refines_scale():
     result = register_pair(
         fixed,
         moving,
-        RegistrationConfig(affine=True, early_stop_dice=1, iterations=100),
+        RegistrationConfig(
+            enable_affine_stage=True,
+            early_stop_organ_dice=1,
+            maximum_optimizer_iterations=100,
+        ),
     )
     assert result.stage == "mi_affine"
     assert result.dice_after > 0.9
@@ -654,10 +666,9 @@ def test_worse_stage_falls_back_to_previous_best(
         organ(),
         organ(),
         RegistrationConfig(
-            affine=affine,
-            early_stop_dice=1,
-            iterations=1,
-            min_dice=0,
+            enable_affine_stage=affine,
+            early_stop_organ_dice=1,
+            maximum_optimizer_iterations=1,
         ),
     )
 
@@ -670,7 +681,7 @@ def test_worse_stage_falls_back_to_previous_best(
     assert result.stages[selected_stage]["selected"] is True
 
 
-def test_stages_require_their_minimum_dice_delta(monkeypatch):
+def test_stages_require_their_minimum_dice_improvement(monkeypatch):
     class Optimizer:
         def GetOptimizerStopConditionDescription(self):
             return "test"
@@ -702,7 +713,7 @@ def test_stages_require_their_minimum_dice_delta(monkeypatch):
     result = register_pair(
         organ(),
         organ(),
-        RegistrationConfig(affine=True, early_stop_dice=1, min_dice=0),
+        RegistrationConfig(enable_affine_stage=True, early_stop_organ_dice=1),
     )
 
     assert list(scores) == []
@@ -710,12 +721,12 @@ def test_stages_require_their_minimum_dice_delta(monkeypatch):
     assert result.dice_after == pytest.approx(0.5025)
     for name, required in (("pca", 0.001), ("mask_rigid", 0.002)):
         assert result.stages[name]["status"] == "rejected_insufficient_improvement"
-        assert result.stages[name]["required_delta"] == required
+        assert result.stages[name]["minimum_required_dice_improvement"] == required
     assert result.stages["mi_rigid"]["status"] == "evaluated"
-    assert result.stages["mi_rigid"]["dice_delta"] == pytest.approx(0.0025)
+    assert result.stages["mi_rigid"]["dice_improvement"] == pytest.approx(0.0025)
     assert result.stages["mi_affine"]["status"] == "rejected_insufficient_improvement"
-    assert result.stages["mi_affine"]["dice_delta"] == pytest.approx(0.0029)
-    assert result.stages["mi_affine"]["required_delta"] == 0.003
+    assert result.stages["mi_affine"]["dice_improvement"] == pytest.approx(0.0029)
+    assert result.stages["mi_affine"]["minimum_required_dice_improvement"] == 0.003
 
 
 def test_demons_preserves_initial_transform_on_different_grids(tmp_path):
@@ -729,7 +740,10 @@ def test_demons_preserves_initial_transform_on_different_grids(tmp_path):
     moving_dm = alignment.distance_map(moving, padding_mm=10, band_mm=15)
 
     transform, demons = alignment.elastic_refine(
-        fixed_dm, moving_dm, initial, RegistrationConfig(iterations=5)
+        fixed_dm,
+        moving_dm,
+        initial,
+        RegistrationConfig(maximum_optimizer_iterations=5),
     )
 
     assert demons.GetName() == "DiffeomorphicDemonsRegistrationFilter"
@@ -757,7 +771,7 @@ def test_failed_linear_setup_retains_previous_alignment(monkeypatch):
         alignment, "initialize_pca", lambda *args: sitk.Euler3DTransform()
     )
     monkeypatch.setattr(sitk, "ImageRegistrationMethod", unavailable)
-    result = register_pair(organ(), organ(), RegistrationConfig(min_dice=0))
+    result = register_pair(organ(), organ(), RegistrationConfig())
     assert result.dice_after == 0.5
     assert result.stages["mask_rigid"]["status"] == "failed"
     assert result.stages["mask_rigid"]["fallback_stage"] == "baseline"
@@ -793,7 +807,9 @@ def test_nonfinite_candidate_retains_previous_alignment(monkeypatch, score):
         lambda *args, **kwargs: (sitk.Euler3DTransform(), Optimizer()),
     )
     result = register_pair(
-        organ(), organ(), RegistrationConfig(iterations=1, min_dice=0)
+        organ(),
+        organ(),
+        RegistrationConfig(maximum_optimizer_iterations=1),
     )
     assert result.stage == "identity"
     assert result.dice_after == 0.5
@@ -811,7 +827,10 @@ def test_demons_improves_nonrigid_organ_overlap():
     fixed_dm = alignment.distance_map(fixed, padding_mm=10, band_mm=15)
     moving_dm = alignment.distance_map(moving, padding_mm=10, band_mm=15)
     transform, _ = alignment.elastic_refine(
-        fixed_dm, moving_dm, initial, RegistrationConfig(iterations=50)
+        fixed_dm,
+        moving_dm,
+        initial,
+        RegistrationConfig(maximum_optimizer_iterations=50),
     )
     assert alignment.dice(fixed, moving, transform) > alignment.dice(
         fixed, moving, initial
@@ -831,11 +850,15 @@ def test_affine_is_not_gated_by_an_absolute_dice_threshold():
     result = register_pair(
         fixed,
         moving,
-        RegistrationConfig(affine=True, early_stop_dice=1, iterations=20),
+        RegistrationConfig(
+            enable_affine_stage=True,
+            early_stop_organ_dice=1,
+            maximum_optimizer_iterations=20,
+        ),
     )
     assert result.stages["mi_affine"]["status"] != "skipped_low_dice"
     assert result.stages["mi_affine"]["metric"] == "mattes_mutual_information"
-    assert result.stages["mi_affine"]["required_delta"] == 0.003
+    assert result.stages["mi_affine"]["minimum_required_dice_improvement"] == 0.003
 
 
 def test_intersection_ignores_unobserved_background():
@@ -882,7 +905,9 @@ def test_native_canonical_masks_preserve_files_and_rerun_sources(tmp_path):
         for path in [row["nifti_path"], row["mask_liver"], row["mask_liver_tumor"]]
     }
     first, errors = register_cohort(
-        source, tmp_path / "out", RegistrationConfig(iterations=10)
+        source,
+        tmp_path / "out",
+        RegistrationConfig(maximum_optimizer_iterations=10),
     )
     assert errors.empty
     for i, row in first.iterrows():
@@ -906,7 +931,9 @@ def test_native_canonical_masks_preserve_files_and_rerun_sources(tmp_path):
     # A fresh invocation on the output CSV must not use its fused masks as input.
     first_artifacts = {path: Path(path).read_bytes() for path in first.mask_liver_tumor}
     second, errors = register_cohort(
-        first, tmp_path / "out", RegistrationConfig(iterations=10)
+        first,
+        tmp_path / "out",
+        RegistrationConfig(maximum_optimizer_iterations=10),
     )
     assert errors.empty
     assert second.source_mask_liver.equals(first.source_mask_liver)
@@ -926,7 +953,7 @@ def test_stage_qc_and_trace_logs(tmp_path, caplog):
         save_scan(tmp_path, "portal", phase="PORTAL_VENOUS"),
         save_scan(tmp_path, "arterial", offset=4),
     ]
-    config = RegistrationConfig(iterations=10)
+    config = RegistrationConfig(maximum_optimizer_iterations=10)
     out, errors = register_cohort(pd.DataFrame(rows), tmp_path / "out", config)
     assert errors.empty
     qc = build_qc(out, errors, config)
@@ -999,7 +1026,7 @@ def test_logs_identify_groups_with_human_attributes(tmp_path, caplog):
     assert group_events == [
         {
             "event": "group_context",
-            "group_columns": ["patient_key", "study_id", "Modality"],
+            "grouping_columns": ["patient_key", "study_id", "Modality"],
             "group_values": {
                 "patient_key": "001",
                 "study_id": "v1",
@@ -1115,7 +1142,10 @@ def test_keep_source_segmentation_maps_tumor_to_source_organ(tmp_path, keep):
     out, errors = register_cohort(
         pd.DataFrame(rows),
         tmp_path / "out",
-        RegistrationConfig(iterations=10, keep_source_segmentation=keep),
+        RegistrationConfig(
+            maximum_optimizer_iterations=10,
+            preserve_source_organ_mask=keep,
+        ),
     )
     assert errors.empty
     assert out.consensus_status.eq("single_contributor").all()
@@ -1134,18 +1164,21 @@ def test_keep_source_segmentation_maps_tumor_to_source_organ(tmp_path, keep):
         rerun, errors = register_cohort(
             out,
             tmp_path / "rerun",
-            RegistrationConfig(iterations=10, keep_source_segmentation=True),
+            RegistrationConfig(
+                maximum_optimizer_iterations=10,
+                preserve_source_organ_mask=True,
+            ),
         )
         assert errors.empty
         assert rerun.mask_liver.tolist() == out.source_mask_liver.tolist()
 
 
-def test_keep_source_segmentation_requires_boolean():
-    with pytest.raises(ValueError, match="keep_source_segmentation"):
-        RegistrationConfig.from_mapping({"keep_source_segmentation": "true"})
+def test_preserve_source_organ_mask_requires_boolean():
+    with pytest.raises(ValueError, match="preserve_source_organ_mask"):
+        RegistrationConfig.from_mapping({"preserve_source_organ_mask": "true"})
 
 
-def test_keep_source_segmentation_bypasses_organ_consensus(monkeypatch, tmp_path):
+def test_preserve_source_organ_mask_bypasses_organ_consensus(monkeypatch, tmp_path):
     from imperandi.process.registration import cohort
 
     row = save_scan(tmp_path, "scan", tumor=False)
@@ -1159,7 +1192,9 @@ def test_keep_source_segmentation_bypasses_organ_consensus(monkeypatch, tmp_path
         pd.DataFrame([row]),
         tmp_path / "out",
         RegistrationConfig(
-            organ_consensus="majority", keep_source_segmentation=True, iterations=1
+            organ_consensus_method="majority",
+            preserve_source_organ_mask=True,
+            maximum_optimizer_iterations=1,
         ),
     )
 

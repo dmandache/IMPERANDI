@@ -15,13 +15,42 @@ REGISTRATION_STAGES = (
     "mi_affine",
 )
 
-DEFAULT_MIN_DELTA = {
+DEFAULT_MINIMUM_STAGE_DICE_IMPROVEMENT = {
     "geometry": 0.001,
     "pca": 0.001,
-    "rigid": 0.002,
+    "mask_rigid": 0.002,
     "mi_rigid": 0.002,
-    "affine": 0.003,
     "mi_affine": 0.003,
+}
+
+RENAMED_SETTINGS = {
+    "group_columns": "grouping_columns",
+    "organ_column": "organ_mask_column",
+    "tumor_column": "tumor_mask_column",
+    "organ_consensus": "organ_consensus_method",
+    "tumor_consensus": "tumor_consensus_method",
+    "affine": "enable_affine_stage",
+    "early_stop_dice": "early_stop_organ_dice",
+    "boundary_margin_mm": "partial_mask_boundary_margin_mm",
+    "allow_partial_organs": "accept_partial_organ_masks",
+    "min_largest_component_fraction": "minimum_largest_component_fraction",
+    "min_confidence_dice": "minimum_accepted_organ_dice",
+    "min_common_fov_fraction": "minimum_common_field_of_view_fraction",
+    "pca_max_rotation_degrees": "maximum_pca_rotation_degrees",
+    "min_delta": "minimum_stage_dice_improvement",
+    "iterations": "maximum_optimizer_iterations",
+    "crop_padding_mm": "distance_map_crop_padding_mm",
+    "distance_band_mm": "organ_boundary_band_half_width_mm",
+    "keep_source_segmentation": "preserve_source_organ_mask",
+    "constrain_tumor_to_organ": "clip_tumor_consensus_to_organ",
+    "threshold": "consensus_probability_threshold",
+    "reference_priority": "reference_selection_priority",
+}
+
+REMOVED_SETTINGS = {
+    "affine_min_dice": "affine execution is controlled by enable_affine_stage",
+    "min_dice": "use minimum_accepted_organ_dice",
+    "demons_smoothing_sigma_mm": "the elastic stage is not in the registration pipeline",
 }
 
 
@@ -35,31 +64,31 @@ def _finite_number(value):
 
 @dataclass(frozen=True)
 class RegistrationConfig:
-    group_columns: list[str] = field(
+    grouping_columns: list[str] = field(
         default_factory=lambda: ["patient_key", "study_id", "Modality"]
     )
-    organ_column: str = "mask_liver"
-    tumor_column: str = "mask_liver_tumor"
-    organ_consensus: str = "anchor"
-    tumor_consensus: str = "anchor"
-    affine: bool = False
-    early_stop_dice: float = 0.95
-    boundary_margin_mm: float = 1.0
-    allow_partial_organs: bool = True
-    min_largest_component_fraction: float = 0.8
-    min_confidence_dice: float = 0.5
-    min_common_fov_fraction: float = 0.05
-    pca_max_rotation_degrees: float = 45.0
-    min_delta: dict[str, float] = field(default_factory=lambda: dict(DEFAULT_MIN_DELTA))
-    demons_smoothing_sigma_mm: float = 1.0
-    iterations: int = 100
-    min_dice: float = 0.1
-    crop_padding_mm: float = 25.0
-    distance_band_mm: float = 15.0
-    keep_source_segmentation: bool = False
-    constrain_tumor_to_organ: bool = True
-    threshold: float = 0.5
-    reference_priority: list[dict] = field(
+    organ_mask_column: str = "mask_liver"
+    tumor_mask_column: str = "mask_liver_tumor"
+    organ_consensus_method: str = "anchor"
+    tumor_consensus_method: str = "anchor"
+    enable_affine_stage: bool = False
+    early_stop_organ_dice: float = 0.95
+    partial_mask_boundary_margin_mm: float = 1.0
+    accept_partial_organ_masks: bool = True
+    minimum_largest_component_fraction: float = 0.8
+    minimum_accepted_organ_dice: float = 0.5
+    minimum_common_field_of_view_fraction: float = 0.05
+    maximum_pca_rotation_degrees: float = 45.0
+    minimum_stage_dice_improvement: dict[str, float] = field(
+        default_factory=lambda: dict(DEFAULT_MINIMUM_STAGE_DICE_IMPROVEMENT)
+    )
+    maximum_optimizer_iterations: int = 100
+    distance_map_crop_padding_mm: float = 25.0
+    organ_boundary_band_half_width_mm: float = 15.0
+    preserve_source_organ_mask: bool = False
+    clip_tumor_consensus_to_organ: bool = True
+    consensus_probability_threshold: float = 0.5
+    reference_selection_priority: list[dict] = field(
         default_factory=lambda: [
             {"Modality": ["CT", "MR"]},
             {"phase": ["PORTAL_VENOUS", "ARTERIAL", "DELAYED", "NATIVE"]},
@@ -72,90 +101,111 @@ class RegistrationConfig:
 
     def __post_init__(self):
         for name in (
-            "keep_source_segmentation",
-            "allow_partial_organs",
-            "affine",
-            "constrain_tumor_to_organ",
+            "preserve_source_organ_mask",
+            "accept_partial_organ_masks",
+            "enable_affine_stage",
+            "clip_tumor_consensus_to_organ",
         ):
             if type(getattr(self, name)) is not bool:
                 raise ValueError(f"{name} must be a boolean")
         for name in (
-            "min_largest_component_fraction",
-            "min_confidence_dice",
-            "min_common_fov_fraction",
+            "minimum_largest_component_fraction",
+            "minimum_accepted_organ_dice",
+            "minimum_common_field_of_view_fraction",
         ):
             value = getattr(self, name)
             if not _finite_number(value) or not 0 < value <= 1:
                 raise ValueError(f"{name} must be in (0, 1]")
-        if not _finite_number(self.boundary_margin_mm) or self.boundary_margin_mm < 0:
-            raise ValueError("boundary_margin_mm must be finite and nonnegative")
         if (
-            not _finite_number(self.pca_max_rotation_degrees)
-            or not 0 <= self.pca_max_rotation_degrees <= 180
+            not _finite_number(self.partial_mask_boundary_margin_mm)
+            or self.partial_mask_boundary_margin_mm < 0
         ):
-            raise ValueError("pca_max_rotation_degrees must be in [0, 180]")
-        if self.organ_consensus not in ORGAN_CONSENSUS_METHODS:
-            raise ValueError(f"Unknown organ consensus: {self.organ_consensus}")
-        if self.tumor_consensus not in TUMOR_CONSENSUS_METHODS:
-            raise ValueError(f"Unknown tumor consensus: {self.tumor_consensus}")
-        if type(self.iterations) is not int or self.iterations < 1:
-            raise ValueError("iterations must be a positive integer")
-        for name in ("min_dice", "early_stop_dice", "threshold"):
+            raise ValueError(
+                "partial_mask_boundary_margin_mm must be finite and nonnegative"
+            )
+        if (
+            not _finite_number(self.maximum_pca_rotation_degrees)
+            or not 0 <= self.maximum_pca_rotation_degrees <= 180
+        ):
+            raise ValueError("maximum_pca_rotation_degrees must be in [0, 180]")
+        if self.organ_consensus_method not in ORGAN_CONSENSUS_METHODS:
+            raise ValueError(f"Unknown organ consensus: {self.organ_consensus_method}")
+        if self.tumor_consensus_method not in TUMOR_CONSENSUS_METHODS:
+            raise ValueError(f"Unknown tumor consensus: {self.tumor_consensus_method}")
+        if (
+            type(self.maximum_optimizer_iterations) is not int
+            or self.maximum_optimizer_iterations < 1
+        ):
+            raise ValueError("maximum_optimizer_iterations must be a positive integer")
+        for name in ("early_stop_organ_dice", "consensus_probability_threshold"):
             if not _finite_number(getattr(self, name)):
                 raise ValueError(f"{name} must be a finite numeric threshold")
-        if not 0 < self.early_stop_dice <= 1:
-            raise ValueError("early_stop_dice must be in (0, 1]")
-        if not 0 <= self.min_dice <= 1 or not 0 < self.threshold < 1:
+        if not 0 < self.early_stop_organ_dice <= 1:
+            raise ValueError("early_stop_organ_dice must be in (0, 1]")
+        if not 0 < self.consensus_probability_threshold < 1:
             raise ValueError("Invalid Dice or probability threshold")
-        if not isinstance(self.min_delta, Mapping):
-            raise ValueError("min_delta must be a mapping")
-        unknown_delta_stages = set(self.min_delta) - set(DEFAULT_MIN_DELTA)
+        if not isinstance(self.minimum_stage_dice_improvement, Mapping):
+            raise ValueError("minimum_stage_dice_improvement must be a mapping")
+        unknown_delta_stages = set(self.minimum_stage_dice_improvement) - set(
+            DEFAULT_MINIMUM_STAGE_DICE_IMPROVEMENT
+        )
         if unknown_delta_stages:
             raise ValueError(
-                f"Unknown min_delta stages: {sorted(unknown_delta_stages)}"
+                "Unknown minimum_stage_dice_improvement stages: "
+                f"{sorted(unknown_delta_stages)}"
             )
-        min_delta = {**DEFAULT_MIN_DELTA, **self.min_delta}
-        for name, value in min_delta.items():
+        minimum_improvement = {
+            **DEFAULT_MINIMUM_STAGE_DICE_IMPROVEMENT,
+            **self.minimum_stage_dice_improvement,
+        }
+        for name, value in minimum_improvement.items():
             if not _finite_number(value) or not 0 <= value <= 1:
-                raise ValueError(f"min_delta {name} must be in [0, 1]")
-        object.__setattr__(self, "min_delta", min_delta)
+                raise ValueError(
+                    f"minimum_stage_dice_improvement {name} must be in [0, 1]"
+                )
+        object.__setattr__(self, "minimum_stage_dice_improvement", minimum_improvement)
         if (
-            not _finite_number(self.crop_padding_mm)
-            or self.crop_padding_mm < 0
-            or not _finite_number(self.distance_band_mm)
-            or self.distance_band_mm <= 0
-            or not _finite_number(self.demons_smoothing_sigma_mm)
-            or self.demons_smoothing_sigma_mm <= 0
+            not _finite_number(self.distance_map_crop_padding_mm)
+            or self.distance_map_crop_padding_mm < 0
+            or not _finite_number(self.organ_boundary_band_half_width_mm)
+            or self.organ_boundary_band_half_width_mm <= 0
         ):
-            raise ValueError(
-                "Invalid registration crop, distance band or Demons smoothing sigma"
-            )
-        for name in (self.organ_column, self.tumor_column):
+            raise ValueError("Invalid distance-map crop or organ boundary band width")
+        for name in (self.organ_mask_column, self.tumor_mask_column):
             if not isinstance(name, str) or not name.strip():
                 raise ValueError("Column names must be nonempty strings")
         if (
-            not isinstance(self.group_columns, list)
-            or not self.group_columns
+            not isinstance(self.grouping_columns, list)
+            or not self.grouping_columns
             or any(
                 not isinstance(column, str) or not column.strip()
-                for column in self.group_columns
+                for column in self.grouping_columns
             )
-            or len(set(self.group_columns)) != len(self.group_columns)
+            or len(set(self.grouping_columns)) != len(self.grouping_columns)
         ):
-            raise ValueError("group_columns must be a nonempty list of unique columns")
-        if not isinstance(self.reference_priority, list):
-            raise ValueError("reference_priority must be an ordered criterion list")
+            raise ValueError(
+                "grouping_columns must be a nonempty list of unique columns"
+            )
+        if not isinstance(self.reference_selection_priority, list):
+            raise ValueError(
+                "reference_selection_priority must be an ordered criterion list"
+            )
         columns = set()
-        for criterion in self.reference_priority:
+        for criterion in self.reference_selection_priority:
             if not isinstance(criterion, Mapping) or len(criterion) != 1:
                 raise ValueError(
-                    "Each reference_priority criterion must contain exactly one column"
+                    "Each reference_selection_priority criterion must contain "
+                    "exactly one column"
                 )
             column, preference = next(iter(criterion.items()))
             if not isinstance(column, str) or not column.strip():
-                raise ValueError("reference_priority columns must be nonempty strings")
+                raise ValueError(
+                    "reference_selection_priority columns must be nonempty strings"
+                )
             if column in columns:
-                raise ValueError(f"Duplicate reference_priority column: {column}")
+                raise ValueError(
+                    f"Duplicate reference_selection_priority column: {column}"
+                )
             columns.add(column)
             if isinstance(preference, list):
                 if not preference or any(
@@ -163,18 +213,20 @@ class RegistrationConfig:
                     for value in preference
                 ):
                     raise ValueError(
-                        f"reference_priority {column} requires a nonempty string list"
+                        "reference_selection_priority "
+                        f"{column} requires a nonempty string list"
                     )
                 labels = [value.strip().upper() for value in preference]
                 if column == "Modality":
                     labels = ["MR" if label == "MRI" else label for label in labels]
                 if len(set(labels)) != len(labels):
                     raise ValueError(
-                        f"Duplicate reference_priority categories for {column}"
+                        "Duplicate reference_selection_priority categories for "
+                        f"{column}"
                     )
             elif not isinstance(preference, str) or preference not in {"min", "max"}:
                 raise ValueError(
-                    f"reference_priority {column} must be a categorical list "
+                    f"reference_selection_priority {column} must be a categorical list "
                     "(e.g. [T1, T2]), 'min', or 'max'"
                 )
 
@@ -182,6 +234,18 @@ class RegistrationConfig:
     def from_mapping(cls, value):
         if not isinstance(value, Mapping):
             raise ValueError("registration must be a mapping")
+        removed = set(value) & set(REMOVED_SETTINGS)
+        if removed:
+            explanations = ", ".join(
+                f"{name} ({REMOVED_SETTINGS[name]})" for name in sorted(removed)
+            )
+            raise ValueError(f"Removed registration settings: {explanations}")
+        renamed = set(value) & set(RENAMED_SETTINGS)
+        if renamed:
+            replacements = ", ".join(
+                f"{name} -> {RENAMED_SETTINGS[name]}" for name in sorted(renamed)
+            )
+            raise ValueError(f"Renamed registration settings: {replacements}")
         unknown = set(value) - set(cls.__dataclass_fields__)
         if unknown:
             raise ValueError(f"Unknown registration settings: {sorted(unknown)}")
