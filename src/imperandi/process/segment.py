@@ -1639,6 +1639,12 @@ def main(args: argparse.Namespace) -> None:
             max(0, len(df) - len(completed_indices)),
         )
 
+    semantic_reprocess_ids = (
+        set(semantic_fp.row_fingerprints) - completed_indices
+        if can_partial_resume
+        else set()
+    )
+
     errors_by_idx: Dict[str, str] = {}
     if (can_resume or can_partial_resume) and paths.error_checkpoint_path.exists():
         err_ckpt = pd.read_csv(paths.error_checkpoint_path)
@@ -1937,7 +1943,11 @@ def main(args: argparse.Namespace) -> None:
                             row,
                             resolved_config,
                             verbose=args.verbose,
-                            force=args.force,
+                            force=(
+                                args.force
+                                or normalize_source_id(df.at[idx, "_source_idx"])
+                                in semantic_reprocess_ids
+                            ),
                             crop_margin_mm=crop_margin_mm,
                         )
                         futures[fut] = idx
@@ -2145,10 +2155,13 @@ def main(args: argparse.Namespace) -> None:
             resolved_config = resolve_segmentation_config_for_modality(
                 tasks_config, row.get("Modality")
             )
+            source_idx = normalize_source_id(df.at[i, "_source_idx"])
+            if source_idx in semantic_reprocess_ids:
+                continue
             if resolved_config and _has_existing_task_outputs(
                 Path(nifti_path).parent, resolved_config
             ):
-                existing_output_ids.add(normalize_source_id(df.at[i, "_source_idx"]))
+                existing_output_ids.add(source_idx)
     run_serial = strategy.mode == "serial" or effective_workers <= 1
 
     if run_serial:
@@ -2169,7 +2182,11 @@ def main(args: argparse.Namespace) -> None:
                     row,
                     resolved_config,
                     verbose=args.verbose,
-                    force=args.force,
+                    force=(
+                        args.force
+                        or normalize_source_id(df.at[idx, "_source_idx"])
+                        in semantic_reprocess_ids
+                    ),
                     crop_margin_mm=crop_margin_mm,
                 )
             )
