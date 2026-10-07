@@ -66,7 +66,7 @@ def run_registration(args, table, config, manifest):
     signature = argparse.Namespace(
         settings=asdict(config),
         manifest_config=manifest,
-        registration_schema=2,
+        registration_schema=4,
         backend_version=sitk.Version_VersionString(),
         output_dir=args.output_dir,
         threads_per_worker=args.threads_per_worker,
@@ -163,12 +163,6 @@ def run_registration(args, table, config, manifest):
         len(completed),
         len(df),
     )
-    for _, group in pending:
-        logger.info(
-            "Queued registration: %s, scans=%d",
-            group_label(group.iloc[0], config.visit_column),
-            len(group),
-        )
 
     def checkpoint(force=False):
         if not manager.should_flush(force=force):
@@ -229,10 +223,9 @@ def run_registration(args, table, config, manifest):
                 if worker_error is not None:
                     context = group_context(group.iloc[0], config.visit_column)
                     logger.error(
-                        "Registration worker failed: %s, scans=%d, error=%s",
+                        "Registration worker failed: %s, scans=%d; see the error table for details",
                         label,
                         len(group),
-                        worker_error,
                     )
                     rows = group.copy()
                     rows["registration_status"] = "failed"
@@ -263,15 +256,6 @@ def run_registration(args, table, config, manifest):
                     errors = pd.concat(
                         [errors, group_errors[ERROR_COLUMNS]], ignore_index=True
                     )
-                logger.info(
-                    "Completed registration: %s, scans=%d, registration_status=%s, "
-                    "consensus_status=%s, errors=%d",
-                    label,
-                    len(rows),
-                    rows.registration_status.tolist(),
-                    rows.consensus_status.tolist(),
-                    len(group_errors),
-                )
                 paths = _artifact_paths(rows)
                 if any(not Path(p).is_file() for p in paths):
                     raise RuntimeError(

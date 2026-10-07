@@ -215,11 +215,10 @@ def main(args):
     if args.dry_run:
         planned = prepare_cohort(table, config)
         logger.info(
-            "Registration dry run: scans=%d, visit/modality_groups=%d, settings=%s, output=%s",
+            "Registration dry run: scans=%d, visit/modality_groups=%d, settings=%s",
             len(planned),
             planned.registration_group_id.nunique(),
             asdict(config),
-            args.csv_path_out,
         )
         for _, group in planned.groupby("registration_group_id", sort=True):
             logger.info(
