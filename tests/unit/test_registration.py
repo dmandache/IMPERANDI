@@ -98,7 +98,7 @@ def test_fusion_votes_and_ties(tumor_consensus, expected):
 
 
 @pytest.mark.parametrize("partial", [False, True])
-def test_pca_precedes_geometry_fallback_and_early_stops(monkeypatch, partial):
+def test_geometry_replaces_pca_only_for_partial_organs(monkeypatch, partial):
     fixed = organ()
     if partial:
         values = sitk.GetArrayFromImage(fixed)
@@ -117,7 +117,11 @@ def test_pca_precedes_geometry_fallback_and_early_stops(monkeypatch, partial):
 
     def pca(*args):
         calls.append("pca")
-        return sitk.Euler3DTransform()
+        return initializer(
+            *args,
+            sitk.Euler3DTransform(),
+            sitk.CenteredTransformInitializerFilter.GEOMETRY,
+        )
 
     monkeypatch.setattr(sitk, "CenteredTransformInitializer", geometry)
     monkeypatch.setattr(alignment, "initialize_pca", pca)
@@ -126,16 +130,19 @@ def test_pca_precedes_geometry_fallback_and_early_stops(monkeypatch, partial):
     )
     assert result.dice_before == 0
     assert result.dice_after == pytest.approx(1)
-    assert calls == (["geometry"] if partial else ["pca", "geometry"])
-    assert result.stage == "geometry"
-    assert result.stages["geometry"]["selected"] is True
-    assert result.stages["geometry"]["early_stop"] is True
+    expected_stage = "geometry" if partial else "pca"
+    assert calls == [expected_stage]
+    assert result.stage == expected_stage
+    assert result.stages[expected_stage]["selected"] is True
+    assert result.stages[expected_stage]["early_stop"] is True
     assert result.stages["mask_rigid"]["status"] == "skipped_early_stop"
     assert result.stages["mi_rigid"]["status"] == "skipped_early_stop"
     assert result.stages["mi_affine"]["status"] == "skipped_early_stop"
     assert "center_of_mass" not in result.stages
     if partial:
         assert result.stages["pca"]["status"] == "skipped_partial_coverage"
+    else:
+        assert result.stages["geometry"]["status"] == "skipped_complete_organ"
     point = fixed.TransformIndexToPhysicalPoint((15, 13, 11))
     assert np.allclose(result.reference_to_scan.TransformPoint(point), point + shift)
     assert np.allclose(result.scan_to_reference.TransformPoint(point + shift), point)
@@ -516,9 +523,9 @@ def test_boundary_band_mi_affine_refines_scale():
 @pytest.mark.parametrize(
     "scores,affine,selected_stage,rejected_stage,fallback_stage,selected_dice",
     [
-        ([0.5, 0.8, 0.4, 0.9, 0.7], False, "mask_rigid", "geometry", "pca", 0.9),
+        ([0.5, 0.8, 0.9, 0.7], False, "mask_rigid", "mi_rigid", "mask_rigid", 0.9),
         (
-            [0.5, 0.8, 0.4, 0.9, 0.7, 0.6],
+            [0.5, 0.8, 0.9, 0.7, 0.6],
             True,
             "mask_rigid",
             "mi_affine",
@@ -646,7 +653,7 @@ def test_nonfinite_candidate_retains_previous_alignment(monkeypatch, score):
         def GetOptimizerIteration(self):
             return 1
 
-    scores = iter([0.5, score, score, score, score])
+    scores = iter([0.5, score, score, score])
     monkeypatch.setattr(alignment, "dice", lambda *args: next(scores))
     monkeypatch.setattr(
         alignment, "initialize_pca", lambda *args: sitk.Euler3DTransform()
@@ -666,9 +673,10 @@ def test_nonfinite_candidate_retains_previous_alignment(monkeypatch, score):
     )
     assert result.stage == "identity"
     assert result.dice_after == 0.5
-    for name in ("pca", "geometry", "mask_rigid", "mi_rigid"):
+    for name in ("pca", "mask_rigid", "mi_rigid"):
         assert result.stages[name]["status"] == "failed"
         assert result.stages[name]["fallback_stage"] == "baseline"
+    assert result.stages["geometry"]["status"] == "skipped_complete_organ"
 
 
 def test_demons_improves_nonrigid_organ_overlap():
