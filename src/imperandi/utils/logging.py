@@ -28,9 +28,10 @@ class _ConsoleHandler(logging.StreamHandler):
 def log_script_namespace(logger, script_file: str, args: argparse.Namespace) -> None:
     """Log public execution settings without internal CLI handler attributes."""
     namespace = argparse.Namespace(
-        **{k: v for k, v in vars(args).items() if not k.startswith("_")}
+        **{k: v for k, v in {**vars(args), **settings}.items() if not k.startswith("_")}
     )
     logger.info("🚀 Running %s with namespace: %s", Path(script_file).name, namespace)
+    return namespace
 
 
 def _coerce_level(level: Optional[str | int]) -> int:
