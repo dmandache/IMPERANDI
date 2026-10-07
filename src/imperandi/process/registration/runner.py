@@ -18,23 +18,11 @@ from imperandi.utils.run_state import (
 )
 from .execution import iter_group_results
 from .grouping import prepare_cohort
-from .labels import group_context, group_label
+from .labels import group_label
 from .organ import backend
-from .qc import build_qc
+from .qc import ERROR_COLUMNS, build_error_record, build_qc
 
 logger = logging.getLogger(__name__)
-ERROR_COLUMNS = [
-    "patient_id",
-    "date",
-    "visit_order",
-    "visit",
-    "modality",
-    "registration_group_label",
-    "registration_scan_label",
-    "registration_scan_id",
-    "stage",
-    "error",
-]
 
 
 def _artifact_paths(rows):
@@ -66,7 +54,7 @@ def run_registration(args, table, config, manifest):
     signature = argparse.Namespace(
         settings=asdict(config),
         manifest_config=manifest,
-        registration_schema=4,
+        registration_schema=5,
         backend_version=sitk.Version_VersionString(),
         output_dir=args.output_dir,
         threads_per_worker=args.threads_per_worker,
@@ -143,7 +131,7 @@ def run_registration(args, table, config, manifest):
                     completed.add(group_id)
                     artifacts[group_id] = expected
                     logger.info(
-                        "Reusing completed registration: %s, scans=%d",
+                        "Registration group reused: %s, series=%d",
                         group_label(groups[group_id].iloc[0], config.visit_column),
                         len(groups[group_id]),
                     )
@@ -157,11 +145,13 @@ def run_registration(args, table, config, manifest):
 
     skipped_rows = int(df.registration_group_id.isin(completed).sum())
     pending = [(key, group) for key, group in groups.items() if key not in completed]
+    reused_groups = len(completed)
     logger.info(
-        "Registration plan: groups_to_process=%d, completed_groups_reused=%d, scans=%d",
+        "Registration plan: series=%d, groups=%d, groups_pending=%d, groups_reused=%d",
+        len(df),
+        len(groups),
         len(pending),
         len(completed),
-        len(df),
     )
 
     def checkpoint(force=False):
@@ -191,10 +181,21 @@ def run_registration(args, table, config, manifest):
         )
     ):
         logger.info(
-            "Registration output is already complete: groups=%d, scans=%d",
-            len(completed),
-            len(df),
+            "Resume enabled and matching registration run already finished; "
+            "skipping execution."
         )
+        log_task_summary(
+            logger,
+            "Registration",
+            total_rows=len(df),
+            processed_rows=0,
+            succeeded_rows=0,
+            skipped_rows=len(df),
+            success_label="registered",
+            skipped_label="reused",
+            extra_counts={"groups reused": len(completed)},
+        )
+        logger.info("Registration done ✔")
         return df.drop(columns="_source_idx"), errors
 
     # Replace incompatible state before any new work. Also covers empty cohorts.
@@ -214,16 +215,16 @@ def run_registration(args, table, config, manifest):
             total=len(df),
             initial=skipped_rows,
             desc="Registration",
-            unit="scan",
+            unit="series",
             disable=getattr(args, "quiet", False),
         ) as progress:
             for group_id, result, worker_error in results:
                 group = groups[group_id]
                 label = group_label(group.iloc[0], config.visit_column)
                 if worker_error is not None:
-                    context = group_context(group.iloc[0], config.visit_column)
                     logger.error(
-                        "Registration worker failed: %s, scans=%d; see the error table for details",
+                        "Registration group failed: %s, series=%d; "
+                        "see the error table for details",
                         label,
                         len(group),
                     )
@@ -232,17 +233,13 @@ def run_registration(args, table, config, manifest):
                     rows["consensus_status"] = "registration_failed"
                     group_errors = pd.DataFrame(
                         [
-                            {
-                                **context,
-                                "registration_group_label": label,
-                                "registration_scan_label": row.registration_scan_label,
-                                "registration_scan_id": scan_id,
-                                "stage": "worker",
-                                "error": worker_error,
-                            }
-                            for scan_id, (_, row) in zip(
-                                group.registration_scan_id, group.iterrows()
+                            build_error_record(
+                                row,
+                                config,
+                                stage="worker",
+                                error=worker_error,
                             )
+                            for _, row in group.iterrows()
                         ],
                         columns=ERROR_COLUMNS,
                     )
@@ -295,5 +292,12 @@ def run_registration(args, table, config, manifest):
         processed_rows=len(df) - skipped_rows,
         skipped_rows=skipped_rows,
         failed_rows=len(failed_ids & processed_ids),
+        success_label="registered",
+        skipped_label="reused",
+        extra_counts={
+            "groups processed": len(pending),
+            "groups reused": reused_groups,
+        },
     )
+    logger.info("Registration done ✔")
     return df.drop(columns="_source_idx"), errors

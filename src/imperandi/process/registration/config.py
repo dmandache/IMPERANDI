@@ -3,6 +3,10 @@
 from dataclasses import dataclass, field
 from typing import Mapping
 
+CONSENSUS_METHODS = ("anchor", "majority", "intersection", "union", "staple")
+REGISTRATION_STAGES = ("baseline", "pca", "rigid", "affine")
+SUPPORTED_MODALITIES = ("CT", "MR")
+
 
 @dataclass(frozen=True)
 class RegistrationConfig:
@@ -25,7 +29,7 @@ class RegistrationConfig:
     )
 
     def __post_init__(self):
-        if self.method not in {"anchor", "majority", "intersection", "union", "staple"}:
+        if self.method not in CONSENSUS_METHODS:
             raise ValueError(f"Unknown consensus method: {self.method}")
         if type(self.affine) is not bool:
             raise ValueError("affine must be a boolean")
@@ -44,7 +48,7 @@ class RegistrationConfig:
             raise ValueError("reference_priority must be a modality mapping")
         for modality, selectors in self.reference_priority.items():
             if (
-                modality not in {"CT", "MR"}
+                modality not in SUPPORTED_MODALITIES
                 or not isinstance(selectors, list)
                 or not selectors
             ):

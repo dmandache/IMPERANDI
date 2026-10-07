@@ -44,7 +44,7 @@ def group_label(record: Mapping[str, Any], visit_column: str) -> str:
     return ", ".join(f"{key}={value}" for key, value in context.items())
 
 
-def scan_label(record: Mapping[str, Any], _visit_column: str) -> str:
+def scan_label(record: Mapping[str, Any]) -> str:
     """Describe a scan within its group without repeating group attributes."""
     position = _value(record, "registration_series_number") or "?"
     total = _value(record, "registration_group_size") or "?"
