@@ -13,14 +13,19 @@ REGISTRATION_STAGES = (
     "mask_rigid",
     "mi_rigid",
     "mi_affine",
+    "mi_elastic",
 )
 
 DEFAULT_MINIMUM_STAGE_DICE_IMPROVEMENT = {
     "geometry": 0.001,
     "pca": 0.001,
     "mask_rigid": 0.002,
-    "mi_rigid": 0.002,
-    "mi_affine": 0.003,
+}
+
+DEFAULT_MINIMUM_STAGE_MI_IMPROVEMENT = {
+    "mi_rigid": 0.0,
+    "mi_affine": 0.0,
+    "mi_elastic": 0.0,
 }
 
 RENAMED_SETTINGS = {
@@ -30,6 +35,8 @@ RENAMED_SETTINGS = {
     "organ_consensus": "organ_consensus_method",
     "tumor_consensus": "tumor_consensus_method",
     "affine": "enable_affine_stage",
+    "elastic": "enable_elastic_stage",
+    "bspline_ctrl_spacing_mm": "elastic_control_point_spacing_mm",
     "early_stop_dice": "early_stop_organ_dice",
     "boundary_margin_mm": "partial_mask_boundary_margin_mm",
     "allow_partial_organs": "accept_partial_organ_masks",
@@ -49,8 +56,11 @@ RENAMED_SETTINGS = {
 
 REMOVED_SETTINGS = {
     "affine_min_dice": "affine execution is controlled by enable_affine_stage",
+    "elastic_min_dice": (
+        "use minimum_stage_mi_improvement.mi_elastic and maximum_mi_stage_dice_decrease"
+    ),
     "min_dice": "use minimum_accepted_organ_dice",
-    "demons_smoothing_sigma_mm": "the elastic stage is not in the registration pipeline",
+    "demons_smoothing_sigma_mm": "mi_elastic uses MI B-spline refinement, not Demons",
 }
 
 
@@ -72,6 +82,8 @@ class RegistrationConfig:
     organ_consensus_method: str = "anchor"
     tumor_consensus_method: str = "anchor"
     enable_affine_stage: bool = False
+    enable_elastic_stage: bool = False
+    elastic_control_point_spacing_mm: float = 90.0
     early_stop_organ_dice: float = 0.95
     partial_mask_boundary_margin_mm: float = 1.0
     accept_partial_organ_masks: bool = True
@@ -82,6 +94,10 @@ class RegistrationConfig:
     minimum_stage_dice_improvement: dict[str, float] = field(
         default_factory=lambda: dict(DEFAULT_MINIMUM_STAGE_DICE_IMPROVEMENT)
     )
+    minimum_stage_mi_improvement: dict[str, float] = field(
+        default_factory=lambda: dict(DEFAULT_MINIMUM_STAGE_MI_IMPROVEMENT)
+    )
+    maximum_mi_stage_dice_decrease: float = 0.002
     maximum_optimizer_iterations: int = 100
     distance_map_crop_padding_mm: float = 25.0
     organ_boundary_band_half_width_mm: float = 15.0
@@ -104,6 +120,7 @@ class RegistrationConfig:
             "preserve_source_organ_mask",
             "accept_partial_organ_masks",
             "enable_affine_stage",
+            "enable_elastic_stage",
             "clip_tumor_consensus_to_organ",
         ):
             if type(getattr(self, name)) is not bool:
@@ -164,6 +181,31 @@ class RegistrationConfig:
                     f"minimum_stage_dice_improvement {name} must be in [0, 1]"
                 )
         object.__setattr__(self, "minimum_stage_dice_improvement", minimum_improvement)
+        if not isinstance(self.minimum_stage_mi_improvement, Mapping):
+            raise ValueError("minimum_stage_mi_improvement must be a mapping")
+        unknown_mi_stages = set(self.minimum_stage_mi_improvement) - set(
+            DEFAULT_MINIMUM_STAGE_MI_IMPROVEMENT
+        )
+        if unknown_mi_stages:
+            raise ValueError(
+                "Unknown minimum_stage_mi_improvement stages: "
+                f"{sorted(unknown_mi_stages)}"
+            )
+        minimum_mi_improvement = {
+            **DEFAULT_MINIMUM_STAGE_MI_IMPROVEMENT,
+            **self.minimum_stage_mi_improvement,
+        }
+        for name, value in minimum_mi_improvement.items():
+            if not _finite_number(value) or value < 0:
+                raise ValueError(
+                    f"minimum_stage_mi_improvement {name} must be nonnegative"
+                )
+        object.__setattr__(self, "minimum_stage_mi_improvement", minimum_mi_improvement)
+        if (
+            not _finite_number(self.maximum_mi_stage_dice_decrease)
+            or not 0 <= self.maximum_mi_stage_dice_decrease <= 1
+        ):
+            raise ValueError("maximum_mi_stage_dice_decrease must be in [0, 1]")
         if (
             not _finite_number(self.distance_map_crop_padding_mm)
             or self.distance_map_crop_padding_mm < 0
@@ -171,6 +213,13 @@ class RegistrationConfig:
             or self.organ_boundary_band_half_width_mm <= 0
         ):
             raise ValueError("Invalid distance-map crop or organ boundary band width")
+        if (
+            not _finite_number(self.elastic_control_point_spacing_mm)
+            or self.elastic_control_point_spacing_mm <= 0
+        ):
+            raise ValueError(
+                "elastic_control_point_spacing_mm must be finite and positive"
+            )
         for name in (self.organ_mask_column, self.tumor_mask_column):
             if not isinstance(name, str) or not name.strip():
                 raise ValueError("Column names must be nonempty strings")
