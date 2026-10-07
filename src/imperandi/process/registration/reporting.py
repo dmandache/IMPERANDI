@@ -144,7 +144,7 @@ def _stage_summary(stages):
 def build_error_record(row, config, *, stage, error):
     """Build the shared error-table row for any registration failure."""
     return {
-        **group_context(row, config.group_columns),
+        **group_context(row, config.grouping_columns),
         "registration_group_label": row.get("registration_group_label"),
         "registration_scan_label": row.get("registration_scan_label"),
         "registration_scan_id": row.get("registration_scan_id"),
@@ -188,17 +188,17 @@ def build_qc(table, errors, config):
                 "patient_id",
                 "date",
                 "visit_order",
-                *config.group_columns,
+                *config.grouping_columns,
                 "study_id",
                 "series_id",
                 "Modality",
                 "phase",
                 "mri_sequence",
                 "nifti_path",
-                f"source_{config.organ_column}",
-                f"source_{config.tumor_column}",
-                config.organ_column,
-                config.tumor_column,
+                f"source_{config.organ_mask_column}",
+                f"source_{config.tumor_mask_column}",
+                config.organ_mask_column,
+                config.tumor_mask_column,
                 "registration_scan_id",
                 "registration_scan_label",
                 "registration_series_number",
@@ -218,8 +218,8 @@ def build_qc(table, errors, config):
         )
     )
     result = table.reindex(columns=columns).copy()
-    result["organ_consensus"] = config.organ_consensus
-    result["tumor_consensus"] = config.tumor_consensus
+    result["organ_consensus"] = config.organ_consensus_method
+    result["tumor_consensus"] = config.tumor_consensus_method
     messages = {}
     for row in errors.to_dict("records"):
         messages.setdefault(row["registration_scan_id"], []).append(
@@ -260,8 +260,8 @@ def publish_group_log(df, indices, errors, config, directory):
     events = [
         {
             "event": "group_context",
-            "group_columns": list(config.group_columns),
-            "group_values": group_values(first, config.group_columns),
+            "grouping_columns": list(config.grouping_columns),
+            "group_values": group_values(first, config.grouping_columns),
             "series_count": len(rows),
             "registration_reference_label": _optional(reference_label),
             "organ_consensus": first["organ_consensus"],

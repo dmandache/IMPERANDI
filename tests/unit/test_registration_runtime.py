@@ -58,9 +58,9 @@ def test_manifest_overrides_defaults_and_cli(tmp_path, cohort):
         yaml.safe_dump(
             {
                 "registration": {
-                    "organ_consensus": "anchor",
-                    "tumor_consensus": "majority",
-                    "affine": True,
+                    "organ_consensus_method": "anchor",
+                    "tumor_consensus_method": "majority",
+                    "enable_affine_stage": True,
                 }
             }
         )
@@ -69,23 +69,25 @@ def test_manifest_overrides_defaults_and_cli(tmp_path, cohort):
         args_for(cohort, "--manifest", str(manifest))
     )
     config, _ = register.resolve_config(args)
-    assert config.organ_consensus == "anchor"
-    assert config.tumor_consensus == "majority" and config.affine
+    assert config.organ_consensus_method == "anchor"
+    assert config.tumor_consensus_method == "majority"
+    assert config.enable_affine_stage
     override = register.normalize_registration_args(
         args_for(
             cohort,
             "--manifest",
             str(manifest),
-            "--organ_consensus",
+            "--organ_consensus_method",
             "majority",
-            "--tumor_consensus",
+            "--tumor_consensus_method",
             "union",
-            "--no_affine",
+            "--disable_affine_stage",
         )
     )
     config, _ = register.resolve_config(override)
-    assert config.organ_consensus == "majority"
-    assert config.tumor_consensus == "union" and not config.affine
+    assert config.organ_consensus_method == "majority"
+    assert config.tumor_consensus_method == "union"
+    assert not config.enable_affine_stage
     built_in = register.normalize_registration_args(
         args_for(cohort, "--manifest", "generic")
     )
@@ -109,8 +111,8 @@ def test_reference_criterion_order_changes_selection_and_invalidates_resume(
             yaml.safe_dump(
                 {
                     "registration": {
-                        "iterations": 1,
-                        "reference_priority": criteria,
+                        "maximum_optimizer_iterations": 1,
+                        "reference_selection_priority": criteria,
                     }
                 }
             )
@@ -126,7 +128,14 @@ def test_reference_criterion_order_changes_selection_and_invalidates_resume(
 def test_cli_overrides_manifest_affine_setting(tmp_path, cohort):
     manifest = tmp_path / "affine.yaml"
     manifest.write_text(
-        yaml.safe_dump({"registration": {"affine": True, "early_stop_dice": 0.9}})
+        yaml.safe_dump(
+            {
+                "registration": {
+                    "enable_affine_stage": True,
+                    "early_stop_organ_dice": 0.9,
+                }
+            }
+        )
     )
     enabled, _ = register.resolve_config(
         register.normalize_registration_args(
@@ -139,14 +148,14 @@ def test_cli_overrides_manifest_affine_setting(tmp_path, cohort):
                 cohort,
                 "--manifest",
                 str(manifest),
-                "--no_affine",
+                "--disable_affine_stage",
             )
         )
     )
-    assert enabled.affine is True
-    assert enabled.early_stop_dice == 0.9
-    assert disabled.affine is False
-    assert disabled.early_stop_dice == 0.9
+    assert enabled.enable_affine_stage is True
+    assert enabled.early_stop_organ_dice == 0.9
+    assert disabled.enable_affine_stage is False
+    assert disabled.early_stop_organ_dice == 0.9
 
 
 @pytest.mark.parametrize("entry_point", ["cli", "module"])
@@ -161,10 +170,10 @@ def test_startup_log_contains_effective_manifest_settings(
         yaml.safe_dump(
             {
                 "registration": {
-                    "organ_consensus": "anchor",
-                    "tumor_consensus": "majority",
-                    "affine": True,
-                    "iterations": 17,
+                    "organ_consensus_method": "anchor",
+                    "tumor_consensus_method": "majority",
+                    "enable_affine_stage": True,
+                    "maximum_optimizer_iterations": 17,
                 }
             }
         )
@@ -172,11 +181,11 @@ def test_startup_log_contains_effective_manifest_settings(
     flags = ["--manifest", str(manifest), "--dry-run"]
     if override:
         flags += [
-            "--organ_consensus",
+            "--organ_consensus_method",
             "majority",
-            "--tumor_consensus",
+            "--tumor_consensus_method",
             "union",
-            "--no_affine",
+            "--disable_affine_stage",
         ]
     args = args_for(cohort, *flags)
     with caplog.at_level(logging.INFO):
@@ -191,11 +200,10 @@ def test_startup_log_contains_effective_manifest_settings(
     ]
     assert len(records) == 1
     logged = records[0].args[1]
-    assert logged.organ_consensus == ("majority" if override else "anchor")
-    assert logged.tumor_consensus == ("union" if override else "majority")
-    assert logged.affine is not override
-    assert logged.iterations == 17
-    assert logged.min_dice == RegistrationConfig().min_dice
+    assert logged.organ_consensus_method == ("majority" if override else "anchor")
+    assert logged.tumor_consensus_method == ("union" if override else "majority")
+    assert logged.enable_affine_stage is not override
+    assert logged.maximum_optimizer_iterations == 17
     assert logged.manifest == str(manifest)
     assert logged.csv_path == str(cohort)
     assert not any(name.startswith("_") for name in vars(logged))
@@ -450,7 +458,7 @@ def test_changed_inputs_and_forced_runs_recompute(
     monkeypatch, cohort, tmp_path, change
 ):
     manifest = tmp_path / "settings.yaml"
-    manifest.write_text("registration:\n  tumor_consensus: anchor\n")
+    manifest.write_text("registration:\n  tumor_consensus_method: anchor\n")
     flags = ["--manifest", str(manifest)]
     register.main(args_for(cohort, *flags))
     if change == "mask":
@@ -459,7 +467,7 @@ def test_changed_inputs_and_forced_runs_recompute(
         image[0, 0, 0] = 1
         sitk.WriteImage(image, row.mask_liver)
     elif change == "manifest":
-        manifest.write_text("registration:\n  tumor_consensus: union\n")
+        manifest.write_text("registration:\n  tumor_consensus_method: union\n")
     else:
         flags += ["--" + change]
     actual = runtime.iter_group_results
@@ -644,14 +652,14 @@ def test_custom_qc_output_and_path_collision(cohort, tmp_path):
     "flag,expected",
     [
         (None, True),
-        ("--keep_source_segmentation", True),
-        ("--no_keep_source_segmentation", False),
+        ("--preserve_source_organ_mask", True),
+        ("--replace_source_organ_mask", False),
     ],
 )
-def test_keep_source_segmentation_manifest_and_cli(tmp_path, cohort, flag, expected):
+def test_preserve_source_organ_mask_manifest_and_cli(tmp_path, cohort, flag, expected):
     manifest = tmp_path / "keep.yaml"
     manifest.write_text(
-        yaml.safe_dump({"registration": {"keep_source_segmentation": True}})
+        yaml.safe_dump({"registration": {"preserve_source_organ_mask": True}})
     )
     flags = ["--manifest", str(manifest)]
     if flag:
@@ -659,4 +667,4 @@ def test_keep_source_segmentation_manifest_and_cli(tmp_path, cohort, flag, expec
     config, _ = register.resolve_config(
         register.normalize_registration_args(args_for(cohort, *flags))
     )
-    assert config.keep_source_segmentation is expected
+    assert config.preserve_source_organ_mask is expected
