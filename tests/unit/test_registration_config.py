@@ -44,6 +44,7 @@ def test_minimum_stage_improvement_partial_override_keeps_defaults():
     config = RegistrationConfig(minimum_stage_dice_improvement={"pca": 0.01})
     assert config.minimum_stage_dice_improvement["pca"] == 0.01
     assert config.minimum_stage_dice_improvement["mask_rigid"] == 0.002
+    assert config.minimum_stage_dice_improvement["mask_affine"] == 0.002
 
 
 def test_minimum_mi_improvement_partial_override_keeps_defaults():
