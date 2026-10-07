@@ -106,12 +106,10 @@ def test_reference_criterion_order_changes_selection_and_invalidates_resume(
         ).all()
 
 
-def test_cli_overrides_manifest_elastic_setting(tmp_path, cohort):
-    manifest = tmp_path / "elastic.yaml"
+def test_cli_overrides_manifest_affine_setting(tmp_path, cohort):
+    manifest = tmp_path / "affine.yaml"
     manifest.write_text(
-        yaml.safe_dump(
-            {"registration": {"elastic": True, "demons_smoothing_sigma_mm": 2.0}}
-        )
+        yaml.safe_dump({"registration": {"affine": True, "early_stop_dice": 0.9}})
     )
     enabled, _ = register.resolve_config(
         register.normalize_registration_args(
@@ -124,16 +122,14 @@ def test_cli_overrides_manifest_elastic_setting(tmp_path, cohort):
                 cohort,
                 "--manifest",
                 str(manifest),
-                "--no_elastic",
-                "--demons_smoothing_sigma_mm",
-                "1.5",
+                "--no_affine",
             )
         )
     )
-    assert enabled.elastic is True
-    assert enabled.demons_smoothing_sigma_mm == 2.0
-    assert disabled.elastic is False
-    assert disabled.demons_smoothing_sigma_mm == 1.5
+    assert enabled.affine is True
+    assert enabled.early_stop_dice == 0.9
+    assert disabled.affine is False
+    assert disabled.early_stop_dice == 0.9
 
 
 @pytest.mark.parametrize("entry_point", ["cli", "module"])
@@ -146,12 +142,12 @@ def test_startup_log_contains_effective_manifest_settings(
     manifest = tmp_path / "logging.yaml"
     manifest.write_text(
         yaml.safe_dump(
-            {"registration": {"method": "majority", "elastic": True, "iterations": 17}}
+            {"registration": {"method": "majority", "affine": True, "iterations": 17}}
         )
     )
     flags = ["--manifest", str(manifest), "--dry-run"]
     if override:
-        flags += ["--method", "union", "--no_elastic"]
+        flags += ["--method", "union", "--no_affine"]
     args = args_for(cohort, *flags)
     with caplog.at_level(logging.INFO):
         if entry_point == "cli":
@@ -166,7 +162,7 @@ def test_startup_log_contains_effective_manifest_settings(
     assert len(records) == 1
     logged = records[0].args[1]
     assert logged.method == ("union" if override else "majority")
-    assert logged.elastic is not override
+    assert logged.affine is not override
     assert logged.iterations == 17
     assert logged.min_dice == RegistrationConfig().min_dice
     assert logged.manifest == str(manifest)
@@ -232,30 +228,57 @@ def test_registration_behavior_change_invalidates_resume(monkeypatch, cohort):
     assert len(observed) == 2
 
 
-def test_retry_failed_recomputes_recovered_elastic_failure(monkeypatch, cohort):
+def test_retry_failed_recomputes_recovered_mi_failure(monkeypatch, cohort):
     from imperandi.process.registration import alignment
 
     table = pd.read_csv(cohort, dtype=str)
     table["study_id"] = "same-visit"
     table.to_csv(cohort, index=False)
-    actual_elastic = alignment.elastic_refine
 
-    def fail_elastic(*args):
-        raise ValueError("deliberate elastic failure")
+    class Optimizer:
+        def GetOptimizerStopConditionDescription(self):
+            return "test"
 
-    monkeypatch.setattr(alignment, "elastic_refine", fail_elastic)
-    register.main(args_for(cohort, "--elastic"))
+        def GetOptimizerIteration(self):
+            return 1
+
+    monkeypatch.setattr(alignment, "dice", lambda *args: 0.5)
+    monkeypatch.setattr(
+        alignment,
+        "overlap_qc",
+        lambda *args: {
+            "dice_full": 0.5,
+            "dice_common_fov": 0.5,
+            "common_fov_fraction": 1.0,
+            "common_foreground_voxels": 100,
+        },
+    )
+    monkeypatch.setattr(
+        alignment,
+        "mask_rigid_refine",
+        lambda *args: (sitk.Euler3DTransform(), Optimizer()),
+    )
+
+    def fail_mi(*args, **kwargs):
+        raise ValueError("deliberate MI failure")
+
+    monkeypatch.setattr(alignment, "mi_refine", fail_mi)
+    register.main(args_for(cohort))
     output, errors, _ = paths_for(cohort)
     saved = pd.read_csv(output)
     assert not saved.registration_status.eq("failed").any()
     assert pd.read_csv(errors).empty
     assert (
         saved.registration_stage_details.map(
-            lambda value: json.loads(value)["elastic"]["status"] == "failed"
+            lambda value: json.loads(value)["mi_rigid"]["status"] == "failed"
         ).sum()
         == 1
     )
-    monkeypatch.setattr(alignment, "elastic_refine", actual_elastic)
+    monkeypatch.setattr(
+        alignment,
+        "mi_refine",
+        lambda *args, **kwargs: (sitk.Euler3DTransform(), Optimizer()),
+    )
     actual_groups = runtime.iter_group_results
     observed = []
 
@@ -264,14 +287,14 @@ def test_retry_failed_recomputes_recovered_elastic_failure(monkeypatch, cohort):
         yield from actual_groups(groups, *args, **kwargs)
 
     monkeypatch.setattr(runtime, "iter_group_results", tracking)
-    register.main(args_for(cohort, "--elastic"))
+    register.main(args_for(cohort))
     assert observed == []
-    register.main(args_for(cohort, "--elastic", "--retry_failed"))
+    register.main(args_for(cohort, "--retry_failed"))
     assert len(observed) == 1
     observed.clear()
     # Identical masks now produce an expected no-improvement rejection, which
     # must not be confused with an optimizer or validation failure on retry.
-    register.main(args_for(cohort, "--elastic", "--retry_failed"))
+    register.main(args_for(cohort, "--retry_failed"))
     assert observed == []
 
 
@@ -577,7 +600,7 @@ def test_worker_failures_appear_in_qc(cohort):
     assert len(qc) == 2
     assert qc.registration_status.eq("failed").all()
     assert qc.errors.str.contains("timeout").all()
-    assert qc.dice_rigid.isna().all()
+    assert qc.dice_mask_rigid.isna().all()
 
 
 def test_custom_qc_output_and_path_collision(cohort, tmp_path):

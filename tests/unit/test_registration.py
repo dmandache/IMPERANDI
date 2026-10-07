@@ -36,6 +36,20 @@ def organ():
     return image(((x - 15) / 8) ** 2 + ((y - 13) / 6) ** 2 + ((z - 11) / 4) ** 2 < 1)
 
 
+def test_boundary_band_is_physical_shell_around_organ():
+    values = np.zeros((21, 21, 21), dtype=np.uint8)
+    values[5:16, 5:16, 5:16] = 1
+    mask = sitk.GetImageFromArray(values)
+    mask.SetSpacing((1.0, 2.0, 3.0))
+
+    band = sitk.GetArrayFromImage(alignment.boundary_band(mask, band_mm=2.1))
+
+    assert band[10, 10, 5]
+    assert band[10, 10, 4]
+    assert not band[10, 10, 10]
+    assert not band[0, 0, 0]
+
+
 @pytest.mark.parametrize("affine", [False, True])
 def test_physical_translation_and_inverse(affine):
     fixed = organ()
@@ -84,7 +98,7 @@ def test_fusion_votes_and_ties(method, expected):
 
 
 @pytest.mark.parametrize("partial", [False, True])
-def test_geometry_precedes_pca_and_min_dice_decision(monkeypatch, partial):
+def test_pca_precedes_geometry_fallback_and_early_stops(monkeypatch, partial):
     fixed = organ()
     if partial:
         values = sitk.GetArrayFromImage(fixed)
@@ -112,9 +126,13 @@ def test_geometry_precedes_pca_and_min_dice_decision(monkeypatch, partial):
     )
     assert result.dice_before == 0
     assert result.dice_after == pytest.approx(1)
-    assert calls == (["geometry"] if partial else ["geometry", "pca"])
+    assert calls == (["geometry"] if partial else ["pca", "geometry"])
     assert result.stage == "geometry"
     assert result.stages["geometry"]["selected"] is True
+    assert result.stages["geometry"]["early_stop"] is True
+    assert result.stages["mask_rigid"]["status"] == "skipped_early_stop"
+    assert result.stages["mi_rigid"]["status"] == "skipped_early_stop"
+    assert result.stages["mi_affine"]["status"] == "skipped_early_stop"
     assert "center_of_mass" not in result.stages
     if partial:
         assert result.stages["pca"]["status"] == "skipped_partial_coverage"
@@ -436,26 +454,36 @@ def test_anchor_falls_back_to_moving_mask(tmp_path):
     )
 
 
-def test_affine_refines_scale():
+def test_boundary_band_mi_affine_refines_scale():
     fixed = organ()
     moving = sitk.Image(fixed)
     moving.SetSpacing((fixed.GetSpacing()[0] * 1.2, *fixed.GetSpacing()[1:]))
     rigid = register_pair(fixed, moving, RegistrationConfig(iterations=100))
     result = register_pair(
-        fixed, moving, RegistrationConfig(affine=True, iterations=100)
+        fixed,
+        moving,
+        RegistrationConfig(
+            affine=True, affine_min_dice=0, early_stop_dice=1, iterations=100
+        ),
     )
-    assert result.stage == "affine"
-    assert result.reference_to_scan.GetName() == "AffineTransform"
+    assert result.stage == "mi_affine"
     assert result.dice_after > 0.9
     assert result.dice_after > rigid.dice_after + 0.01
+    assert result.stages["mi_affine"]["status"] == "evaluated"
 
 
 @pytest.mark.parametrize(
     "scores,affine,selected_stage,rejected_stage,fallback_stage,selected_dice",
     [
-        ([0.8, 0.4, 0.9], False, "rigid", "pca", "baseline", 0.9),
-        ([0.5, 0.8, 0.4], False, "pca", "rigid", "pca", 0.8),
-        ([0.5, 0.8, 0.9, 0.7], True, "rigid", "affine", "rigid", 0.9),
+        ([0.5, 0.8, 0.4, 0.9, 0.7], False, "mask_rigid", "geometry", "pca", 0.9),
+        (
+            [0.5, 0.8, 0.4, 0.9, 0.7, 0.6],
+            True,
+            "mask_rigid",
+            "mi_affine",
+            "mask_rigid",
+            0.9,
+        ),
     ],
 )
 def test_worse_stage_falls_back_to_previous_best(
@@ -467,13 +495,35 @@ def test_worse_stage_falls_back_to_previous_best(
     fallback_stage,
     selected_dice,
 ):
-    values = iter([scores[0], scores[0], *scores[1:]])
+    class Optimizer:
+        def GetOptimizerStopConditionDescription(self):
+            return "test"
+
+        def GetOptimizerIteration(self):
+            return 1
+
+    values = iter(scores)
     monkeypatch.setattr(
         alignment,
         "initialize_pca",
         lambda fixed, moving: sitk.Euler3DTransform(),
     )
     monkeypatch.setattr(alignment, "dice", lambda *args: next(values))
+    monkeypatch.setattr(
+        alignment,
+        "mask_rigid_refine",
+        lambda *args: (sitk.Euler3DTransform(), Optimizer()),
+    )
+    monkeypatch.setattr(
+        alignment,
+        "mi_refine",
+        lambda *args, **kwargs: (
+            sitk.AffineTransform(3)
+            if kwargs.get("affine")
+            else sitk.Euler3DTransform(),
+            Optimizer(),
+        ),
+    )
 
     result = alignment.register_pair(
         organ(),
@@ -481,6 +531,7 @@ def test_worse_stage_falls_back_to_previous_best(
         RegistrationConfig(
             affine=affine,
             affine_min_dice=0,
+            early_stop_dice=1,
             iterations=1,
             min_dice=0,
         ),
@@ -528,25 +579,53 @@ def test_failed_linear_setup_retains_previous_alignment(monkeypatch):
     def unavailable():
         raise RuntimeError("optimizer unavailable")
 
-    monkeypatch.setattr(sitk, "ImageRegistrationMethod", unavailable)
-    result = register_pair(organ(), organ(), RegistrationConfig())
-    assert result.dice_after == 1
-    assert result.stages["rigid"]["status"] == "failed"
-    assert result.stages["rigid"]["fallback_stage"] == "baseline"
-    assert result.warnings == ["rigid: optimizer unavailable"]
-
-
-@pytest.mark.parametrize("score", [float("nan"), float("inf")])
-def test_nonfinite_candidate_retains_previous_alignment(monkeypatch, score):
-    scores = iter([1, score, score, score])
+    scores = iter([0.5, 0.5, 0.5])
     monkeypatch.setattr(alignment, "dice", lambda *args: next(scores))
     monkeypatch.setattr(
         alignment, "initialize_pca", lambda *args: sitk.Euler3DTransform()
     )
-    result = register_pair(organ(), organ(), RegistrationConfig(iterations=1))
+    monkeypatch.setattr(sitk, "ImageRegistrationMethod", unavailable)
+    result = register_pair(organ(), organ(), RegistrationConfig(min_dice=0))
+    assert result.dice_after == 0.5
+    assert result.stages["mask_rigid"]["status"] == "failed"
+    assert result.stages["mask_rigid"]["fallback_stage"] == "baseline"
+    assert result.stages["mi_rigid"]["status"] == "failed"
+    assert result.warnings == [
+        "mask_rigid: optimizer unavailable",
+        "mi_rigid: optimizer unavailable",
+    ]
+
+
+@pytest.mark.parametrize("score", [float("nan"), float("inf")])
+def test_nonfinite_candidate_retains_previous_alignment(monkeypatch, score):
+    class Optimizer:
+        def GetOptimizerStopConditionDescription(self):
+            return "test"
+
+        def GetOptimizerIteration(self):
+            return 1
+
+    scores = iter([0.5, score, score, score, score])
+    monkeypatch.setattr(alignment, "dice", lambda *args: next(scores))
+    monkeypatch.setattr(
+        alignment, "initialize_pca", lambda *args: sitk.Euler3DTransform()
+    )
+    monkeypatch.setattr(
+        alignment,
+        "mask_rigid_refine",
+        lambda *args: (sitk.Euler3DTransform(), Optimizer()),
+    )
+    monkeypatch.setattr(
+        alignment,
+        "mi_refine",
+        lambda *args, **kwargs: (sitk.Euler3DTransform(), Optimizer()),
+    )
+    result = register_pair(
+        organ(), organ(), RegistrationConfig(iterations=1, min_dice=0)
+    )
     assert result.stage == "identity"
-    assert result.dice_after == 1
-    for name in ("geometry", "pca", "rigid"):
+    assert result.dice_after == 0.5
+    for name in ("pca", "geometry", "mask_rigid", "mi_rigid"):
         assert result.stages[name]["status"] == "failed"
         assert result.stages[name]["fallback_stage"] == "baseline"
 
@@ -572,45 +651,6 @@ def test_demons_improves_nonrigid_organ_overlap():
         )
 
 
-def test_elastic_stage_can_be_selected_and_retains_inverse(monkeypatch):
-    values = iter([0.5, 0.5, 0.6, 0.7, 0.8])
-    forward = sitk.CompositeTransform(3)
-    inverse = sitk.TranslationTransform(3)
-
-    class Optimizer:
-        def GetMetric(self):
-            return 0.01
-
-        def GetElapsedIterations(self):
-            return 3
-
-        def GetRMSChange(self):
-            return 0.001
-
-    monkeypatch.setattr(
-        alignment,
-        "initialize_pca",
-        lambda fixed, moving: sitk.Euler3DTransform(),
-    )
-    monkeypatch.setattr(alignment, "dice", lambda *args: next(values))
-    monkeypatch.setattr(
-        alignment,
-        "elastic_refine",
-        lambda *args: (forward, Optimizer()),
-    )
-    monkeypatch.setattr(alignment, "invert_elastic", lambda *args: inverse)
-    result = register_pair(
-        organ(),
-        organ(),
-        RegistrationConfig(elastic=True, iterations=1, min_dice=0),
-    )
-    assert result.stage == "elastic"
-    assert result.reference_to_scan is forward
-    assert result.scan_to_reference is inverse
-    assert result.stages["elastic"]["dice"] == 0.8
-    assert result.stages["elastic"]["optimizer_iteration"] == 3
-
-
 def test_affine_is_skipped_until_overlap_is_sufficient():
     fixed = organ()
     moving = sitk.Image(fixed)
@@ -620,11 +660,11 @@ def test_affine_is_skipped_until_overlap_is_sufficient():
         moving,
         RegistrationConfig(affine=True, affine_min_dice=0.99, iterations=20),
     )
-    assert result.stage != "affine"
+    assert result.stage != "mi_affine"
     assert result.dice_after < 0.99
-    assert result.stages["affine"]["status"] == "skipped_low_dice"
-    assert result.stages["affine"]["input_dice"] == result.dice_after
-    assert result.stages["affine"]["required_dice"] == 0.99
+    assert result.stages["mi_affine"]["status"] == "skipped_low_dice"
+    assert result.stages["mi_affine"]["input_dice"] == result.dice_after
+    assert result.stages["mi_affine"]["required_dice"] == 0.99
 
 
 @pytest.mark.parametrize("value", [-0.01, 1.01])
@@ -729,9 +769,12 @@ def test_stage_qc_and_trace_logs(tmp_path, caplog):
         out.loc[1, "registration_scan_id"]
     ]
     assert 0 <= moving.dice_baseline < moving.dice_pca <= 1
-    assert 0 <= moving.dice_rigid <= 1
-    assert pd.isna(moving.dice_affine)
-    assert moving.affine_status == "not_run"
+    assert pd.isna(moving.dice_mask_rigid)
+    assert pd.isna(moving.dice_mi_rigid)
+    assert pd.isna(moving.dice_mi_affine)
+    assert moving.mask_rigid_status == "skipped_early_stop"
+    assert moving.mi_rigid_status == "skipped_early_stop"
+    assert moving.mi_affine_status == "skipped_early_stop"
     assert moving.registration_reference_id == out.loc[0, "registration_scan_id"]
     events = [
         json.loads(line)
@@ -740,13 +783,13 @@ def test_stage_qc_and_trace_logs(tmp_path, caplog):
     assert any(
         event.get("event") == "scan_result"
         and event["registration_scan_label"] == moving.registration_scan_label
-        and event["stages"]["rigid"]["dice"] == pytest.approx(moving.dice_rigid)
+        and event["stages"]["pca"]["dice"] == pytest.approx(moving.dice_pca)
         for event in events
     )
     assert any(
         "series=2/2" in record.message
         and "phase=ARTERIAL" in record.message
-        and "rigid=" in record.message
+        and "pca=" in record.message
         for record in caplog.records
     )
 
@@ -864,15 +907,17 @@ def test_rejected_pair_keeps_qc_and_original_canonical_paths(tmp_path):
     def rejected(*args):
         result = TransformResult(
             sitk.Euler3DTransform(),
-            "rigid",
+            "mask_rigid",
             0.1,
             0.2,
             [],
             {
                 "baseline": {"dice": 0.1, "status": "evaluated"},
                 "pca": {"dice": 0.15, "status": "evaluated"},
-                "rigid": {"dice": 0.2, "status": "evaluated"},
-                "affine": {"dice": None, "status": "not_run"},
+                "geometry": {"dice": None, "status": "not_run"},
+                "mask_rigid": {"dice": 0.2, "status": "evaluated"},
+                "mi_rigid": {"dice": None, "status": "not_run"},
+                "mi_affine": {"dice": None, "status": "not_run"},
             },
         )
         raise RegistrationRejected("Overlap rejected", result)
@@ -884,7 +929,7 @@ def test_rejected_pair_keeps_qc_and_original_canonical_paths(tmp_path):
     assert out.loc[1, "mask_liver_tumor"] == rows[1]["mask_liver_tumor"]
     qc = build_qc(out, errors, RegistrationConfig()).set_index("registration_scan_id")
     moving = qc.loc[out.loc[1, "registration_scan_id"]]
-    assert moving.dice_rigid == 0.2
+    assert moving.dice_mask_rigid == 0.2
     assert moving.registration_status == "failed"
     assert "Overlap rejected" in moving.errors
 
