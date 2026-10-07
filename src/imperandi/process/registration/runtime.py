@@ -27,7 +27,7 @@ from .reporting import ERROR_COLUMNS, build_error_record, build_qc, group_label
 logger = logging.getLogger(__name__)
 
 # Increment when registration behavior changes so old artifacts are not reused.
-REGISTRATION_SCHEMA = 12
+REGISTRATION_SCHEMA = 13
 
 
 def _has_failed_stage(rows, config):

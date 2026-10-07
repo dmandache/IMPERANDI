@@ -195,6 +195,87 @@ def test_partial_reference_priority_and_qc(tmp_path):
     assert events[1]["anatomical_qc"]["registration_consensus_contributors"] == 2
 
 
+@pytest.mark.parametrize("fallback", [False, True])
+def test_volume_criterion_uses_native_physical_volume_for_reference_and_anchor(
+    tmp_path, fallback
+):
+    def sphere(radius, spacing):
+        z, y, x = np.indices((24, 24, 24))
+        values = (x - 12) ** 2 + (y - 12) ** 2 + (z - 12) ** 2 < radius**2
+        image = sitk.GetImageFromArray(values.astype(np.uint8))
+        image.SetSpacing((spacing,) * 3)
+        image.SetOrigin((-12 * spacing,) * 3)
+        return image
+
+    coarse = sphere(5, 2)
+    fine = sphere(8, 1)
+    assert np.count_nonzero(sitk.GetArrayFromImage(coarse)) < np.count_nonzero(
+        sitk.GetArrayFromImage(fine)
+    )
+    rows = [
+        save_row(tmp_path, "coarse", coarse, "ARTERIAL"),
+        save_row(tmp_path, "fine", fine, "PORTAL_VENOUS" if fallback else "ARTERIAL"),
+        save_row(tmp_path, "invalid", coarse + 1, "PORTAL_VENOUS"),
+    ]
+    config = RegistrationConfig()
+    if fallback:
+        # Before QC the smaller portal scan is first; after QC the volume-first
+        # policy must put the two larger organs ahead of it, including fallback.
+        reference = save_row(tmp_path, "reference", sphere(5, 2.2), "NATIVE")
+        reference["mask_liver_tumor"] = None
+        rows.append(reference)
+        config = RegistrationConfig(
+            reference_priority={
+                "CT": [
+                    {"registration_organ_volume_mm3": "max"},
+                    {"phase": ["PORTAL_VENOUS", "ARTERIAL", "NATIVE"]},
+                ]
+            }
+        )
+    source = pd.DataFrame(rows)
+    # Previous results cannot supply the organ-volume criterion on a fresh run.
+    source["registration_organ_volume_mm3"] = [1, 1e9, 1e12] + ([0] if fallback else [])
+    for table in (source, source.iloc[::-1]):
+        out, errors = register_cohort(
+            table,
+            tmp_path / "out",
+            config,
+            pair_registration=lambda *args: alignment.TransformResult(
+                sitk.Euler3DTransform(), "identity", 1, 1, []
+            ),
+        )
+        result = out.set_index("nifti_path")
+        selected = result.loc[rows[3 if fallback else 0]["nifti_path"]]
+        assert errors.stage.tolist() == ["organ_qc"]
+        assert selected.registration_status == "reference"
+        assert selected.registration_series_number == 1
+        assert selected.registration_group_size == (3 if fallback else 2)
+        assert (
+            result.loc[rows[0]["nifti_path"], "registration_organ_volume_mm3"]
+            > result.loc[rows[1]["nifti_path"], "registration_organ_volume_mm3"]
+        )
+        assert out.loc[
+            out.tumor_consensus_input_status.eq("contributed"), "nifti_path"
+        ].tolist() == [rows[0]["nifti_path"]]
+
+
+def test_fallback_anchor_keeps_complete_organs_ahead_of_partial_organs(tmp_path):
+    complete = complete_mask()
+    rows = [
+        save_row(tmp_path, "reference", complete, "PORTAL_VENOUS"),
+        save_row(tmp_path, "complete", complete, "NATIVE"),
+        save_row(tmp_path, "partial", partial_mask(complete), "ARTERIAL"),
+    ]
+    rows[0]["mask_liver_tumor"] = None
+    out, errors = register_cohort(
+        pd.DataFrame(rows), tmp_path / "out", RegistrationConfig(iterations=5)
+    )
+    assert errors.empty
+    assert out.loc[0, "registration_status"] == "reference"
+    assert out.loc[1, "tumor_consensus_input_status"] == "contributed"
+    assert out.loc[2, "tumor_consensus_input_status"] == "excluded_anchor_policy"
+
+
 def test_low_confidence_scan_excluded_from_consensus(tmp_path):
     mask = complete_mask()
     rows = [

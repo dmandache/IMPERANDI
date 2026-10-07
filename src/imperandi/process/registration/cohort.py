@@ -73,20 +73,31 @@ def normalize_modalities(table: pd.DataFrame) -> pd.Series:
     return table.Modality.map(normalize_label).replace({"MRI": "MR"})
 
 
-def reference_rank(row, priorities) -> tuple[int, str]:
-    """Rank a reference candidate using configured selectors and a stable tie-break."""
-    rank = next(
-        (
-            index
-            for index, selector in enumerate(priorities)
-            if all(
-                normalize_label(row.get(key)) == normalize_label(value)
-                for key, value in selector.items()
-            )
-        ),
-        len(priorities),
-    )
-    return rank, str(row["registration_scan_id"])
+def reference_rank(row, priorities) -> tuple[tuple, str]:
+    """Apply ordered categorical/numeric criteria, then a deterministic scan ID.
+
+    Missing/unlisted categories follow listed values. Numeric strings from CSVs
+    are supported; missing, malformed, boolean, and nonfinite numbers rank last
+    for both min and max. Each criterion breaks ties in the preceding criteria.
+    """
+    ranks = []
+    for criterion in priorities:
+        column, preference = next(iter(criterion.items()))
+        value = row.get(column)
+        if isinstance(preference, list):
+            labels = [normalize_label(label) for label in preference]
+            label = normalize_label(value)
+            ranks.append(labels.index(label) if label in labels else len(labels))
+        else:
+            try:
+                number = float(value)
+            except (TypeError, ValueError, OverflowError):
+                number = float("nan")
+            if isinstance(value, (bool, np.bool_)) or not np.isfinite(number):
+                ranks.append(float("inf"))
+            else:
+                ranks.append(number if preference == "min" else -number)
+    return tuple(ranks), str(row["registration_scan_id"])
 
 
 def prepare_cohort(table: pd.DataFrame, config) -> pd.DataFrame:
@@ -145,20 +156,8 @@ def prepare_cohort(table: pd.DataFrame, config) -> pd.DataFrame:
     df["registration_group_label"] = [
         group_label(row, config.visit_column) for _, row in df.iterrows()
     ]
-    df["registration_series_number"] = None
-    df["registration_group_size"] = None
-    for _, group in df.groupby("registration_group_id", sort=False):
-        modality = modalities.loc[group.index[0]]
-        priorities = config.reference_priority.get(modality, [])
-        ordered = sorted(
-            group.index,
-            key=lambda index: reference_rank(df.loc[index], priorities),
-        )
-        for position, index in enumerate(ordered, start=1):
-            df.at[index, "registration_series_number"] = position
-            df.at[index, "registration_group_size"] = len(group)
-    df["registration_scan_label"] = [scan_label(row) for _, row in df.iterrows()]
-
+    # Clear previous-run values before planning, including organ volume used
+    # as a priority criterion. Image-derived criteria become available after QC.
     derived_columns = [
         "registration_qc_path",
         "registration_log_path",
@@ -172,6 +171,20 @@ def prepare_cohort(table: pd.DataFrame, config) -> pd.DataFrame:
     ]
     for column in derived_columns:
         df[column] = pd.Series([None] * len(df), dtype=object)
+
+    df["registration_series_number"] = None
+    df["registration_group_size"] = None
+    for _, group in df.groupby("registration_group_id", sort=False):
+        modality = modalities.loc[group.index[0]]
+        priorities = config.reference_priority.get(modality, [])
+        ordered = sorted(
+            group.index,
+            key=lambda index: reference_rank(df.loc[index], priorities),
+        )
+        for position, index in enumerate(ordered, start=1):
+            df.at[index, "registration_series_number"] = position
+            df.at[index, "registration_group_size"] = len(group)
+    df["registration_scan_label"] = [scan_label(row) for _, row in df.iterrows()]
 
     return df
 
@@ -547,8 +560,10 @@ def register_cohort(
             continue
         tumors = {}
         # Read all available inputs so tumor Dice can be reported independently
-        # from the selected consensus policy.
-        for i in [ref] + [i for i in order if i != ref]:
+        # from the selected consensus policy. Use the final QC-aware reference
+        # order for fallback anchors, then record excluded scans as before.
+        tumor_order = active_order + [i for i in order if i not in loaded]
+        for i in tumor_order:
             if i not in transforms:
                 df.at[i, "tumor_consensus_input_status"] = "excluded_" + str(
                     df.at[i, "registration_status"]

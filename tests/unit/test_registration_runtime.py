@@ -75,6 +75,37 @@ def test_manifest_overrides_defaults_and_cli(tmp_path, cohort):
     assert isinstance(register.resolve_config(built_in)[0], RegistrationConfig)
 
 
+def test_reference_criterion_order_changes_selection_and_invalidates_resume(
+    tmp_path, cohort
+):
+    table = pd.read_csv(cohort, dtype=str)
+    table["study_id"] = "same-visit"
+    table["Modality"] = "MR"
+    table["mri_sequence"] = ["T1", "T2"]
+    table["PixelSpacingXY"] = [1, 0.5]
+    table.to_csv(cohort, index=False)
+    priorities = [{"mri_sequence": ["T1", "T2"]}, {"PixelSpacingXY": "min"}]
+    manifest = tmp_path / "reference.yaml"
+    output, _, _ = paths_for(cohort)
+    for criteria, expected in [(priorities, 0), (priorities[::-1], 1)]:
+        manifest.write_text(
+            yaml.safe_dump(
+                {
+                    "registration": {
+                        "iterations": 1,
+                        "reference_priority": {"MR": criteria},
+                    }
+                }
+            )
+        )
+        register.main(args_for(cohort, "--manifest", str(manifest)))
+        result = pd.read_csv(output)
+        assert result.loc[expected, "registration_status"] == "reference"
+        assert result.registration_reference_id.eq(
+            result.loc[expected, "registration_scan_id"]
+        ).all()
+
+
 def test_cli_overrides_manifest_elastic_setting(tmp_path, cohort):
     manifest = tmp_path / "elastic.yaml"
     manifest.write_text(

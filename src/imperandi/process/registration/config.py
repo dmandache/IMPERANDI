@@ -50,9 +50,18 @@ class RegistrationConfig:
     reference_priority: dict = field(
         default_factory=lambda: {
             "CT": [
-                {"phase": p} for p in ["PORTAL_VENOUS", "ARTERIAL", "DELAYED", "NATIVE"]
+                {"phase": ["PORTAL_VENOUS", "ARTERIAL", "DELAYED", "NATIVE"]},
+                {"PixelSpacingXY": "min"},
+                {"SliceThickness": "min"},
+                {"registration_organ_volume_mm3": "max"},
             ],
-            "MR": [{"mri_sequence": s} for s in ["T1", "T2", "DWI"]],
+            "MR": [
+                {"mri_sequence": ["T1", "T2", "DWI"]},
+                {"phase": ["PORTAL_VENOUS"]},
+                {"PixelSpacingXY": "min"},
+                {"SliceThickness": "min"},
+                {"registration_organ_volume_mm3": "max"},
+            ],
         }
     )
 
@@ -106,24 +115,47 @@ class RegistrationConfig:
                 raise ValueError("Column names must be nonempty strings")
         if not isinstance(self.reference_priority, Mapping):
             raise ValueError("reference_priority must be a modality mapping")
-        for modality, selectors in self.reference_priority.items():
+        for modality, criteria in self.reference_priority.items():
             if (
                 modality not in SUPPORTED_MODALITIES
-                or not isinstance(selectors, list)
-                or not selectors
+                or not isinstance(criteria, list)
+                or not criteria
             ):
-                raise ValueError("Reference priorities require CT/MR selector lists")
-            for selector in selectors:
-                if (
-                    not isinstance(selector, Mapping)
-                    or not selector
-                    or any(
-                        not isinstance(k, str) or not isinstance(v, str)
-                        for k, v in selector.items()
-                    )
-                ):
+                raise ValueError("reference_priority requires CT/MR criterion lists")
+            columns = set()
+            for criterion in criteria:
+                if not isinstance(criterion, Mapping) or len(criterion) != 1:
                     raise ValueError(
-                        "Reference selectors must be nonempty string mappings"
+                        "Each reference_priority criterion must contain exactly one column"
+                    )
+                column, preference = next(iter(criterion.items()))
+                if not isinstance(column, str) or not column.strip():
+                    raise ValueError(
+                        "reference_priority columns must be nonempty strings"
+                    )
+                if column in columns:
+                    raise ValueError(f"Duplicate reference_priority column: {column}")
+                columns.add(column)
+                if isinstance(preference, list):
+                    if not preference or any(
+                        not isinstance(value, str) or not value.strip()
+                        for value in preference
+                    ):
+                        raise ValueError(
+                            f"reference_priority {column} requires a nonempty string list"
+                        )
+                    labels = [value.strip().upper() for value in preference]
+                    if len(set(labels)) != len(labels):
+                        raise ValueError(
+                            f"Duplicate reference_priority categories for {column}"
+                        )
+                elif not isinstance(preference, str) or preference not in {
+                    "min",
+                    "max",
+                }:
+                    raise ValueError(
+                        f"reference_priority {column} must be a categorical list "
+                        "(e.g. [T1, T2]), 'min', or 'max'"
                     )
 
     @classmethod
