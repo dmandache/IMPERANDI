@@ -54,6 +54,16 @@ def test_elastic_control_point_spacing_must_be_positive(value):
         RegistrationConfig(elastic_control_point_spacing_mm=value)
 
 
+@pytest.mark.parametrize(
+    "name",
+    ["organ_distance_field_padding_mm", "organ_coverage_blend_width_mm"],
+)
+@pytest.mark.parametrize("value", [0, -1, True, None, "3", float("nan")])
+def test_organ_distance_transfer_widths_must_be_positive(name, value):
+    with pytest.raises(ValueError, match=name):
+        RegistrationConfig(**{name: value})
+
+
 @pytest.mark.parametrize("value", [0, 101, -1, True, None, 25.0])
 def test_elastic_optimizer_iterations_are_short_positive_integer(value):
     with pytest.raises(ValueError, match="elastic_optimizer_iterations"):
