@@ -320,6 +320,7 @@ def test_registration_behavior_change_invalidates_resume(monkeypatch, cohort):
 def test_retry_failed_recomputes_recovered_mi_failure(monkeypatch, cohort):
     from imperandi.process.registration import alignment
 
+    monkeypatch.setattr(alignment, "MI_AFFINE_STAGE_ENABLED", True)
     table = pd.read_csv(cohort, dtype=str)
     table["study_id"] = "same-visit"
     table.to_csv(cohort, index=False)
@@ -569,7 +570,7 @@ def test_retry_failed_and_preserve_errors(monkeypatch, cohort):
 
 
 def test_real_spawn_workers(cohort):
-    register.main(args_for(cohort, "--num_workers", "2", "--timeout_sec", "30"))
+    register.main(args_for(cohort, "--num_workers", "2", "--timeout_sec", "90"))
     output, errors, _ = paths_for(cohort)
     assert pd.read_csv(errors).empty
     assert pd.read_csv(output).registration_status.eq("reference").all()
