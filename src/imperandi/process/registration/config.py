@@ -92,6 +92,7 @@ class RegistrationConfig:
     accept_partial_organ_masks: bool = True
     minimum_largest_component_fraction: float = 0.8
     minimum_accepted_organ_dice: float = 0.5
+    minimum_consensus_dice: float = 0.8
     minimum_common_field_of_view_fraction: float = 0.05
     maximum_pca_rotation_degrees: float = 45.0
     minimum_stage_dice_improvement: dict[str, float] = field(
@@ -131,11 +132,17 @@ class RegistrationConfig:
         for name in (
             "minimum_largest_component_fraction",
             "minimum_accepted_organ_dice",
+            "minimum_consensus_dice",
             "minimum_common_field_of_view_fraction",
         ):
             value = getattr(self, name)
             if not _finite_number(value) or not 0 < value <= 1:
                 raise ValueError(f"{name} must be in (0, 1]")
+        if self.minimum_consensus_dice < self.minimum_accepted_organ_dice:
+            raise ValueError(
+                "minimum_consensus_dice must be greater than or equal to "
+                "minimum_accepted_organ_dice"
+            )
         if (
             not _finite_number(self.partial_mask_boundary_margin_mm)
             or self.partial_mask_boundary_margin_mm < 0

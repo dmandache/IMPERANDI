@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 
 from imperandi.process.registration import RegistrationConfig, register_cohort
-from imperandi.process.registration import alignment
+from imperandi.process.registration import alignment, cohort
 from imperandi.process.registration.alignment import (
     assess_organ_mask,
     overlap_qc,
@@ -309,6 +309,68 @@ def test_low_confidence_scan_excluded_from_consensus(tmp_path):
     assert pd.isna(out.loc[1, "reg_tumor_native_path"])
 
 
+def test_accepted_registration_below_consensus_dice_receives_but_does_not_vote(
+    tmp_path, monkeypatch
+):
+    mask = complete_mask()
+    rows = [
+        save_row(tmp_path, "reference", mask, "PORTAL_VENOUS"),
+        save_row(tmp_path, "accepted-recipient", mask, "ARTERIAL"),
+    ]
+    overlap = dict(
+        dice_full=0.6,
+        dice_common_fov=0.6,
+        common_fov_fraction=1.0,
+        common_foreground_voxels=100,
+    )
+
+    def accepted_but_not_consensus(*args):
+        return alignment.TransformResult(
+            sitk.Euler3DTransform(),
+            "identity",
+            0.6,
+            0.6,
+            [],
+            overlap=overlap,
+        )
+
+    contributor_counts = {}
+    original_organ_fusion = cohort.fuse_organs
+
+    def capture_organ_contributors(masks, coverages, **kwargs):
+        contributor_counts["organ"] = len(masks)
+        return original_organ_fusion(masks, coverages, **kwargs)
+
+    def capture_tumor_contributors(masks, coverages, **kwargs):
+        contributor_counts["tumor"] = len(masks)
+        return fuse_tumors(masks, coverages, **kwargs)
+
+    monkeypatch.setattr(cohort, "fuse_organs", capture_organ_contributors)
+    out, errors = register_cohort(
+        pd.DataFrame(rows),
+        tmp_path / "out",
+        RegistrationConfig(
+            organ_consensus_method="majority",
+            tumor_consensus_method="majority",
+            minimum_accepted_organ_dice=0.5,
+            minimum_consensus_dice=0.8,
+        ),
+        pair_registration=accepted_but_not_consensus,
+        fusion=capture_tumor_contributors,
+    )
+
+    assert errors.empty
+    assert out.loc[1, "registration_status"] == "ok"
+    assert out.loc[1, "tumor_consensus_input_status"] == (
+        "excluded_minimum_consensus_dice"
+    )
+    assert contributor_counts == {"organ": 1, "tumor": 1}
+    assert out.registration_consensus_contributors.eq(1).all()
+    assert Path(out.loc[1, "reg_organ_native_path"]).is_file()
+    assert Path(out.loc[1, "reg_tumor_native_path"]).is_file()
+    assert out.loc[1, "consensus_status"] == "single_contributor"
+
+
 @pytest.mark.parametrize("tumor_consensus", ["majority", "union", "intersection"])
 def test_unobserved_voxels_are_unknown(tumor_consensus):
     def image(values):
@@ -365,6 +427,7 @@ def test_nonfinite_overlap_is_low_confidence(partial, value):
     [
         "early_stop_organ_dice",
         "minimum_accepted_organ_dice",
+        "minimum_consensus_dice",
         "minimum_common_field_of_view_fraction",
         "minimum_largest_component_fraction",
     ],

@@ -5,6 +5,12 @@ import pytest
 from imperandi.process.registration.config import RegistrationConfig
 
 
+def test_registration_and_consensus_dice_defaults_are_distinct():
+    config = RegistrationConfig()
+    assert config.minimum_accepted_organ_dice == 0.5
+    assert config.minimum_consensus_dice == 0.8
+
+
 @pytest.mark.parametrize(
     "name", ["early_stop_organ_dice", "consensus_probability_threshold"]
 )
@@ -20,6 +26,14 @@ def test_thresholds_require_finite_numbers(name, value):
 def test_early_stop_dice_requires_positive_probability(value):
     with pytest.raises(ValueError, match="early_stop_organ_dice"):
         RegistrationConfig(early_stop_organ_dice=value)
+
+
+def test_consensus_dice_cannot_be_below_registration_acceptance():
+    with pytest.raises(ValueError, match="minimum_consensus_dice"):
+        RegistrationConfig(
+            minimum_accepted_organ_dice=0.7,
+            minimum_consensus_dice=0.6,
+        )
 
 
 @pytest.mark.parametrize("value", [-0.01, 180.01, True, None, "45", float("nan")])

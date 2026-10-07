@@ -373,6 +373,12 @@ def _registration_report(result):
     }
 
 
+def _consensus_eligible(metrics, partial, config):
+    """Return whether an accepted transform is reliable enough to vote."""
+    score = metrics["dice_common_fov" if partial else "dice_full"]
+    return np.isfinite(score) and score >= config.minimum_consensus_dice
+
+
 def _record_consensus_inputs(df, indices, contributors, config):
     """Record group counts and per-series reasons, including no-reference groups."""
     for i in indices:
@@ -525,6 +531,7 @@ def register_cohort(
             {},
             {},
         )
+        consensus_eligible = set()
         for i, (image, organ) in loaded.items():
             started = time.perf_counter()
             logger.info(
@@ -606,6 +613,10 @@ def register_cohort(
                     ]
                 transforms[i] = tx
                 inverse_transforms[i] = inverse
+                if _consensus_eligible(
+                    metrics, mask_qc[ref].partial or mask_qc[i].partial, config
+                ):
+                    consensus_eligible.add(i)
                 if (
                     config.preserve_source_organ_mask
                     or config.organ_consensus_method == "anchor"
@@ -636,19 +647,20 @@ def register_cohort(
             not config.preserve_source_organ_mask
             and config.organ_consensus_method != "anchor"
         ):
+            organ_contributors = [i for i in transforms if i in consensus_eligible]
             contributor_labels = [
-                df.at[i, "registration_scan_label"] for i in transforms
+                df.at[i, "registration_scan_label"] for i in organ_contributors
             ]
             logger.info(
                 "Registration organ consensus started: organ_consensus=%s, "
                 "contributors=%d [%s]",
                 config.organ_consensus_method,
-                len(transforms),
+                len(organ_contributors),
                 " | ".join(contributor_labels),
             )
             try:
                 organ_masks, organ_coverages = [], []
-                for i in transforms:
+                for i in organ_contributors:
                     organ = loaded[i][1]
                     organ_masks.append(resample(organ, reference, transforms[i]))
                     organ_coverages.append(
@@ -737,7 +749,11 @@ def register_cohort(
                     df.at[i, "tumor_consensus_input_status"] = "skipped_empty"
                     continue
                 tumors[i] = tumor
-                df.at[i, "tumor_consensus_input_status"] = "contributed"
+                df.at[i, "tumor_consensus_input_status"] = (
+                    "contributed"
+                    if i in consensus_eligible
+                    else "excluded_minimum_consensus_dice"
+                )
             except (RuntimeError, ValueError) as exc:
                 df.at[i, "tumor_consensus_input_status"] = "failed"
                 error(i, "tumor_input", exc)
@@ -764,11 +780,14 @@ def register_cohort(
                             type(exc).__name__,
                         )
 
-        contributors = list(tumors)
+        contributors = [i for i in tumors if i in consensus_eligible]
         if config.tumor_consensus_method == "anchor":
             contributors = contributors[:1]
         for i in tumors:
-            if i not in contributors:
+            if (
+                i not in contributors
+                and df.at[i, "tumor_consensus_input_status"] == "contributed"
+            ):
                 df.at[i, "tumor_consensus_input_status"] = "excluded_anchor_policy"
         _record_consensus_inputs(df, group.index, contributors, config)
         failed = df.loc[group.index, "registration_status"].isin(
