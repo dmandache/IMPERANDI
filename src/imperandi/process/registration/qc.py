@@ -1,6 +1,7 @@
 """Tabular QC, error records, and persistent series-level logs."""
 
 import json
+from dataclasses import asdict
 import logging
 from pathlib import Path
 
@@ -8,6 +9,24 @@ import pandas as pd
 
 from .config import REGISTRATION_STAGES
 from .labels import group_context
+
+ANATOMICAL_QC_FIELDS = [
+    "registration_organ_qc",
+    "registration_completeness",
+    "registration_organ_volume_mm3",
+    "registration_organ_bbox_index",
+    "registration_boundary_contact",
+    "registration_largest_component_fraction",
+    "registration_organ_volume_ratio",
+    "registration_confidence",
+    "registration_dice_full",
+    "registration_dice_common_fov",
+    "registration_common_fov_fraction",
+    "registration_consensus_contributors",
+    "registration_consensus_excluded",
+    "registration_consensus_exclusion_reasons",
+    "registration_consensus_support_policy",
+]
 
 logger = logging.getLogger(__name__)
 ERROR_COLUMNS = [
@@ -23,6 +42,7 @@ ERROR_COLUMNS = [
     "error",
 ]
 QC_FIELDS = [
+    *ANATOMICAL_QC_FIELDS,
     "registration_skip_reason",
     "tumor_consensus_input_status",
     "registration_selected_stage",
@@ -73,6 +93,10 @@ def build_error_record(row, config, *, stage, error):
 
 
 def record_stages(df, index, report):
+    for key in ("dice_full", "dice_common_fov", "common_fov_fraction"):
+        df.at[index, f"registration_{key}"] = report.get("overlap", {}).get(key)
+    df.at[index, "registration_organ_volume_ratio"] = report.get("organ_volume_ratio")
+    df.at[index, "registration_confidence"] = report.get("confidence")
     df.at[index, "registration_selected_stage"] = report.get("stage")
     df.at[index, "registration_dice_selected"] = report.get("dice_after")
     stages = report.get("stages", {})
@@ -80,6 +104,18 @@ def record_stages(df, index, report):
         df.at[index, f"registration_dice_{stage}"] = stages.get(stage, {}).get("dice")
     df.at[index, "registration_stage_details"] = json.dumps(stages, sort_keys=True)
     df.at[index, "registration_warnings"] = json.dumps(report.get("warnings", []))
+
+
+def record_organ_qc(df, index, quality):
+    """Keep anatomical QC serialization consistent between tables and logs."""
+    df.at[index, "registration_organ_qc"] = json.dumps(asdict(quality))
+    df.at[index, "registration_completeness"] = quality.status
+    df.at[index, "registration_organ_volume_mm3"] = quality.volume_mm3
+    df.at[index, "registration_organ_bbox_index"] = json.dumps(quality.bbox_index)
+    df.at[index, "registration_boundary_contact"] = json.dumps(quality.boundary_contact)
+    df.at[index, "registration_largest_component_fraction"] = (
+        quality.largest_component_fraction
+    )
 
 
 def build_qc(table, errors, config):
@@ -193,6 +229,12 @@ def publish_group_log(df, indices, errors, config, directory):
                 "registration_status": row["registration_status"],
                 "consensus_status": row["consensus_status"],
                 "has_errors": bool(row["errors"]),
+                "anatomical_qc": {
+                    key: _optional(row.get(key)) for key in ANATOMICAL_QC_FIELDS
+                },
+                "tumor_consensus_input_status": _optional(
+                    row.get("tumor_consensus_input_status")
+                ),
             }
         )
     temporary = log_path.with_suffix(".tmp")
