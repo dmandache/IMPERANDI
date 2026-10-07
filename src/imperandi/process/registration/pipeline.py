@@ -53,16 +53,11 @@ def register_cohort(
     def error(index, stage, exc):
         context = group_context(df.loc[index], config.visit_column)
         logger.error(
-            "Registration failed: patient=%s date=%s visit_order=%s visit=%s "
-            "modality=%s scan={%s} stage=%s error=%s",
-            context["patient_id"],
-            context["date"],
-            context["visit_order"],
-            context["visit"],
-            context["modality"],
+            "Registration failed: scan={%s}, stage=%s, error_type=%s; "
+            "see the error table for details",
             df.at[index, "registration_scan_label"],
             stage,
-            exc,
+            type(exc).__name__,
         )
         errors.append(
             {
@@ -81,7 +76,7 @@ def register_cohort(
     for group_key, group in groups:
         group_id = stable_id(tuple(str(value) for value in group_key))
         label = group_label(group.iloc[0], config.visit_column)
-        logger.info("Starting registration: %s, scans=%d", label, len(group))
+        logger.info("Starting registration group: %s, series=%d", label, len(group))
         directory = root / group_id
         group_started = time.perf_counter()
         df.loc[group.index, "registration_started_at"] = datetime.now(
@@ -104,7 +99,7 @@ def register_cohort(
                 df.at[i, "registration_status"] = "failed"
                 error(i, "input", exc)
         if not loaded:
-            logger.warning("No valid registration reference: %s", label)
+            logger.warning("No valid registration reference")
             df.loc[group.index, "consensus_status"] = "no_reference"
             df.loc[group.index, "registration_elapsed_seconds"] = (
                 time.perf_counter() - group_started
@@ -118,8 +113,7 @@ def register_cohort(
             ref, "registration_scan_label"
         ]
         logger.info(
-            "Selected registration reference: %s; reference={%s}",
-            label,
+            "Selected registration reference: %s",
             df.at[ref, "registration_scan_label"],
         )
         transforms = {}
@@ -127,9 +121,8 @@ def register_cohort(
         for i, (image, organ) in loaded.items():
             started = time.perf_counter()
             logger.info(
-                "Starting organ alignment: %s; reference={%s}",
+                "Starting organ alignment: %s",
                 df.at[i, "registration_scan_label"],
-                df.at[ref, "registration_scan_label"],
             )
             try:
                 if i == ref:
@@ -237,10 +230,11 @@ def register_cohort(
         df.loc[group.index, "consensus_status"] = "registration_failed"
         df.loc[list(transforms), "consensus_status"] = "no_tumor_input"
         if masks:
-            contributor_labels = [df.at[i, "registration_scan_label"] for i in contributors]
+            contributor_labels = [
+                df.at[i, "registration_scan_label"] for i in contributors
+            ]
             logger.info(
-                "Starting tumor consensus: %s, method=%s, contributors=%d [%s]",
-                label,
+                "Starting tumor consensus: method=%s, contributors=%d [%s]",
                 config.method,
                 len(contributors),
                 " | ".join(contributor_labels),
@@ -309,10 +303,7 @@ def register_cohort(
                 df.loc[group.index, "consensus_status"] = "failed"
                 error(ref, "consensus", exc)
         else:
-            logger.warning(
-                "Tumor consensus skipped because no tumor masks are available: %s",
-                label,
-            )
+            logger.warning("Tumor consensus skipped: no tumor masks are available")
         report_path = directory / "group.json"
         atomic_write_json(
             report_path,
@@ -336,11 +327,7 @@ def register_cohort(
         df.loc[group.index, "registration_report_path"] = str(report_path.resolve())
         publish_group_qc(df, group.index, errors, config, directory)
         logger.info(
-            "Finished registration group: %s, reference={%s}, method=%s, "
-            "registration_status=%s, consensus_status=%s",
-            label,
-            df.at[ref, "registration_scan_label"],
-            config.method,
+            "Finished registration group: registration_status=%s, consensus_status=%s",
             df.loc[group.index, "registration_status"].tolist(),
             df.loc[group.index, "consensus_status"].tolist(),
         )

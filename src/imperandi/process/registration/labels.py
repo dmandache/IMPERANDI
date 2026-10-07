@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -45,13 +44,14 @@ def group_label(record: Mapping[str, Any], visit_column: str) -> str:
     return ", ".join(f"{key}={value}" for key, value in context.items())
 
 
-def scan_label(record: Mapping[str, Any], visit_column: str) -> str:
-    """Describe a scan without requiring an opaque internal identifier."""
+def scan_label(record: Mapping[str, Any], _visit_column: str) -> str:
+    """Describe a scan within its group without repeating group attributes."""
+    position = _value(record, "registration_series_number") or "?"
+    total = _value(record, "registration_group_size") or "?"
     fields = {
-        "series": _value(record, "series_id", "volume_id"),
+        "series": f"{position}/{total}",
         "phase": _value(record, "phase"),
         "sequence": _value(record, "mri_sequence"),
-        "file": Path(_value(record, "nifti_path") or "unknown").name,
     }
     detail = ", ".join(f"{key}={value}" for key, value in fields.items() if value)
-    return f"{group_label(record, visit_column)}; {detail}"
+    return detail
