@@ -201,6 +201,49 @@ def test_registration_behavior_change_invalidates_resume(monkeypatch, cohort):
     assert len(observed) == 2
 
 
+def test_retry_failed_recomputes_recovered_elastic_failure(monkeypatch, cohort):
+    from imperandi.process.registration import alignment
+
+    table = pd.read_csv(cohort, dtype=str)
+    table["study_id"] = "same-visit"
+    table.to_csv(cohort, index=False)
+    actual_elastic = alignment.elastic_refine
+
+    def fail_elastic(*args):
+        raise ValueError("deliberate elastic failure")
+
+    monkeypatch.setattr(alignment, "elastic_refine", fail_elastic)
+    register.main(args_for(cohort, "--elastic"))
+    output, errors, _ = paths_for(cohort)
+    saved = pd.read_csv(output)
+    assert not saved.registration_status.eq("failed").any()
+    assert pd.read_csv(errors).empty
+    assert (
+        saved.registration_stage_details.map(
+            lambda value: json.loads(value)["elastic"]["status"] == "failed"
+        ).sum()
+        == 1
+    )
+    monkeypatch.setattr(alignment, "elastic_refine", actual_elastic)
+    actual_groups = runtime.iter_group_results
+    observed = []
+
+    def tracking(groups, *args, **kwargs):
+        observed.extend(key for key, _ in groups)
+        yield from actual_groups(groups, *args, **kwargs)
+
+    monkeypatch.setattr(runtime, "iter_group_results", tracking)
+    register.main(args_for(cohort, "--elastic"))
+    assert observed == []
+    register.main(args_for(cohort, "--elastic", "--retry_failed"))
+    assert len(observed) == 1
+    observed.clear()
+    # Identical masks now produce an expected no-improvement rejection, which
+    # must not be confused with an optimizer or validation failure on retry.
+    register.main(args_for(cohort, "--elastic", "--retry_failed"))
+    assert observed == []
+
+
 def test_in_process_group_failure_is_recorded_and_other_groups_continue(
     monkeypatch, cohort
 ):

@@ -92,7 +92,7 @@ def add_registration_arguments(parser):
     parser.add_argument(
         "--retry_failed",
         action="store_true",
-        help="Retry groups with recorded errors on resume.",
+        help="Retry groups with errors or failed enabled registration stages on resume.",
     )
     parser.add_argument("--verbose", "-v", action="store_true")
     parser.add_argument(
