@@ -26,6 +26,10 @@ def add_registration_arguments(parser):
     parser.add_argument("--csv_path_out", help="Default: <input_stem>_registered.csv.")
     parser.add_argument("--error_csv_path", help="Default: <output_stem>_errors.csv.")
     parser.add_argument(
+        "--qc_csv_path",
+        help="Stage Dice and provenance table (default: <output_stem>_qc.csv).",
+    )
+    parser.add_argument(
         "--output_dir", help="Artifact root (default: registration beside input CSV)."
     )
     parser.add_argument(
@@ -114,18 +118,28 @@ def normalize_registration_args(args):
         .expanduser()
         .resolve()
     )
+    qc = (
+        Path(
+            getattr(args, "qc_csv_path", None)
+            or output.with_name(output.stem + "_qc.csv")
+        )
+        .expanduser()
+        .resolve()
+    )
+    args.qc_csv_path = str(qc)
     checkpoint_paths = build_checkpoint_paths(output, error, "register")
     paths = [
         source,
         output,
         error,
+        qc,
         checkpoint_paths.state_path,
         checkpoint_paths.main_checkpoint_path,
         checkpoint_paths.error_checkpoint_path,
     ]
     if len(set(paths)) != len(paths):
         raise ValueError(
-            "Registration input, output, error and checkpoint paths must differ"
+            "Registration input, output, error, QC and checkpoint paths must differ"
         )
     if not source.is_file():
         raise FileNotFoundError(f"CSV file not found: {source}")

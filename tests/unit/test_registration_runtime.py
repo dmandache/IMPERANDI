@@ -314,3 +314,44 @@ def test_missing_error_checkpoint_reprocesses_instead_of_losing_errors(
     cli.main(args_for(cohort))
     assert len(seen) == 2
     assert len(pd.read_csv(paths_for(cohort)[1])) == 2
+
+
+def test_qc_and_canonical_paths_survive_resume_and_qc_restoration(monkeypatch, cohort):
+    cli.main(args_for(cohort))
+    output, _, _ = paths_for(cohort)
+    first = pd.read_csv(output)
+    qc_path = output.with_name(output.stem + "_qc.csv")
+    qc_before = pd.read_csv(qc_path)
+    assert set(qc_before.registration_scan_id) == set(first.registration_scan_id)
+    assert first.mask_liver.equals(first.reg_organ_native_path)
+    assert first.mask_liver_tumor.equals(first.reg_tumor_native_path)
+    assert first.source_mask_liver.equals(pd.read_csv(cohort).mask_liver)
+    qc_path.unlink()
+
+    def no_work(groups, *args, **kwargs):
+        assert not groups
+        yield from ()
+
+    monkeypatch.setattr(runner, "iter_group_results", no_work)
+    cli.main(args_for(cohort))
+    second = pd.read_csv(output)
+    pd.testing.assert_frame_equal(second, first)
+    pd.testing.assert_frame_equal(pd.read_csv(qc_path), qc_before)
+
+
+def test_worker_failures_appear_in_qc(cohort):
+    cli.main(args_for(cohort, "--timeout_sec", "0.001"))
+    output, _, _ = paths_for(cohort)
+    qc = pd.read_csv(output.with_name(output.stem + "_qc.csv"))
+    assert len(qc) == 2
+    assert qc.registration_status.eq("failed").all()
+    assert qc.errors.str.contains("timeout").all()
+    assert qc.dice_rigid.isna().all()
+
+
+def test_custom_qc_output_and_path_collision(cohort, tmp_path):
+    qc = tmp_path / "quality.csv"
+    cli.main(args_for(cohort, "--qc_csv_path", str(qc)))
+    assert len(pd.read_csv(qc)) == 2
+    with pytest.raises(ValueError, match="differ"):
+        cli.main(args_for(cohort, "--qc_csv_path", str(cohort)))
