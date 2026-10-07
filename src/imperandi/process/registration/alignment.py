@@ -292,6 +292,32 @@ def _bspline_displacement(transform, domain):
     )
 
 
+def _physical_qc_grid(domain, control_spacing_mm):
+    """Return a coarse grid whose sampling density is defined in millimetres."""
+    sitk = backend()
+    lengths = (np.asarray(domain.GetSize()) - 1) * np.asarray(domain.GetSpacing())
+    target_spacing = max(
+        max(domain.GetSpacing()), min(10.0, float(control_spacing_mm) / 4.0)
+    )
+    size = []
+    spacing = []
+    for voxel_count, native_spacing, length in zip(
+        domain.GetSize(), domain.GetSpacing(), lengths
+    ):
+        if voxel_count <= 1:
+            size.append(1)
+            spacing.append(float(native_spacing))
+            continue
+        intervals = max(1, int(np.ceil(length / target_spacing)))
+        size.append(intervals + 1)
+        spacing.append(float(length / intervals))
+    coarse = sitk.Image(size, sitk.sitkFloat32)
+    coarse.SetOrigin(domain.GetOrigin())
+    coarse.SetSpacing(spacing)
+    coarse.SetDirection(domain.GetDirection())
+    return coarse
+
+
 def _residual_jacobian(field):
     """Differentiate displacement components in the image-axis basis.
 
@@ -310,12 +336,8 @@ def _residual_jacobian(field):
     return sitk.GetArrayFromImage(sitk.DisplacementFieldJacobianDeterminant(local))
 
 
-def elastic_deformation_qc(transform, domain, config):
-    """Measure and validate the B-spline residual deformation."""
-    residual = transform.GetNthTransform(transform.GetNumberOfTransforms() - 1)
-    if residual.GetName() != "BSplineTransform":
-        raise ValueError("Elastic residual must be a BSplineTransform")
-    field = _bspline_displacement(residual, domain)
+def _elastic_field_qc(field, config):
+    """Measure displacement and Jacobian limits on a sampled residual field."""
     vectors = backend().GetArrayViewFromImage(field)
     if not np.isfinite(vectors).all():
         raise ValueError("Nonfinite elastic displacement field")
@@ -339,7 +361,7 @@ def elastic_deformation_qc(transform, domain, config):
         reasons.append("jacobian_below_plausible_range")
     if jacobian_max > config.maximum_elastic_jacobian_determinant:
         reasons.append("jacobian_above_plausible_range")
-    return field, {
+    return {
         "displacement_p95_mm": p95,
         "displacement_max_mm": maximum,
         "maximum_allowed_displacement_p95_mm": (
@@ -356,19 +378,124 @@ def elastic_deformation_qc(transform, domain, config):
     }
 
 
-def _round_trip_error(field, inverse_field):
-    """Maximum residual composition error in mm at field voxel centers."""
+def elastic_deformation_qc(transform, domain, config):
+    """Measure and validate the B-spline residual deformation."""
+    residual = transform.GetNthTransform(transform.GetNumberOfTransforms() - 1)
+    if residual.GetName() != "BSplineTransform":
+        raise ValueError("Elastic residual must be a BSplineTransform")
+    field = _bspline_displacement(residual, domain)
+    return field, _elastic_field_qc(field, config)
+
+
+def _inverse_field_domain(domain, field):
+    """Cover both the original grid and its displaced physical-space support."""
+    sitk = backend()
+    direction = np.asarray(domain.GetDirection()).reshape(3, 3)
+    vectors = sitk.GetArrayViewFromImage(field)
+    local_vectors = vectors @ direction
+    spacing = np.asarray(domain.GetSpacing())
+    low = (
+        np.floor(
+            np.minimum(0.0, local_vectors.reshape(-1, 3).min(axis=0)) / spacing
+        ).astype(int)
+        - 1
+    )
+    high = (
+        np.ceil(
+            np.maximum(0.0, local_vectors.reshape(-1, 3).max(axis=0)) / spacing
+        ).astype(int)
+        + 1
+    )
+    size = np.asarray(domain.GetSize(), dtype=int) + high - low
+    inverse_domain = sitk.Image([int(value) for value in size], sitk.sitkFloat32)
+    inverse_domain.SetOrigin(
+        domain.TransformContinuousIndexToPhysicalPoint([float(value) for value in low])
+    )
+    inverse_domain.SetSpacing(domain.GetSpacing())
+    inverse_domain.SetDirection(domain.GetDirection())
+    return inverse_domain, low, high
+
+
+def _expanded_displacement_field(domain, field):
+    """Pad a field to its inverse domain without an artificial zero boundary."""
+    sitk = backend()
+    inverse_domain, low, high = _inverse_field_domain(domain, field)
+    vectors = sitk.GetArrayFromImage(field)
+    pad_width = [
+        (-int(low[2]), int(high[2])),
+        (-int(low[1]), int(high[1])),
+        (-int(low[0]), int(high[0])),
+        (0, 0),
+    ]
+    expanded = sitk.GetImageFromArray(
+        np.pad(vectors, pad_width, mode="edge"), isVector=True
+    )
+    expanded.CopyInformation(inverse_domain)
+    return expanded
+
+
+def _error_statistics(values):
+    if not len(values):
+        raise ValueError("Elastic round-trip validation has no valid samples")
+    if not np.isfinite(values).all():
+        raise ValueError("Nonfinite elastic inverse round-trip error")
+    return {
+        "p95_mm": float(np.percentile(values, 95)),
+        "p99_mm": float(np.percentile(values, 99)),
+        "max_mm": float(values.max()),
+    }
+
+
+def _round_trip_error(field, inverse_field, anatomical_roi=None):
+    """Return errors where interpolation is defined, globally and in the ROI."""
     sitk = backend()
     residual = sitk.DisplacementFieldTransform(sitk.Image(field))
     warped = sitk.Resample(
         inverse_field, field, residual, sitk.sitkLinear, 0, sitk.sitkVectorFloat64
     )
+    support = sitk.Image(inverse_field.GetSize(), sitk.sitkFloat32) + 1.0
+    support.CopyInformation(inverse_field)
+    sampled_support = sitk.Resample(
+        support, field, residual, sitk.sitkLinear, 0.0, sitk.sitkFloat32
+    )
+    valid = sitk.GetArrayViewFromImage(sampled_support) >= 1.0 - 1e-6
     error = sitk.GetArrayFromImage(warped)
     error += sitk.GetArrayViewFromImage(field)
-    return float(np.linalg.norm(error, axis=-1).max())
+    error = np.linalg.norm(error, axis=-1)
+    if anatomical_roi is None:
+        roi = np.ones(error.shape, dtype=bool)
+    else:
+        roi = sitk.GetArrayViewFromImage(anatomical_roi) > 0
+        if roi.shape != error.shape:
+            raise ValueError("Anatomical ROI does not match round-trip field geometry")
+    valid_roi = valid & roi
+    return {
+        "full_grid": _error_statistics(error[valid]),
+        "valid_anatomical_roi": _error_statistics(error[valid_roi]),
+        "full_grid_valid_voxels": int(np.count_nonzero(valid)),
+        "full_grid_voxels": int(valid.size),
+        "valid_anatomical_roi_voxels": int(np.count_nonzero(valid_roi)),
+    }
 
 
-def invert_mask_elastic(transform, domain, diagnostics=None, field=None):
+def _record_round_trip_statistics(diagnostics, prefix, statistics):
+    for region in ("full_grid", "valid_anatomical_roi"):
+        for statistic, value in statistics[region].items():
+            diagnostics[f"{prefix}_round_trip_{region}_{statistic}"] = value
+    diagnostics[f"{prefix}_round_trip_full_grid_valid_voxels"] = statistics[
+        "full_grid_valid_voxels"
+    ]
+    diagnostics[f"{prefix}_round_trip_full_grid_voxels"] = statistics[
+        "full_grid_voxels"
+    ]
+    diagnostics[f"{prefix}_round_trip_valid_anatomical_roi_voxels"] = statistics[
+        "valid_anatomical_roi_voxels"
+    ]
+
+
+def invert_mask_elastic(
+    transform, domain, diagnostics=None, field=None, anatomical_roi=None
+):
     """Numerically invert the residual and exactly invert the linear stage."""
     sitk = backend()
     diagnostics = {} if diagnostics is None else diagnostics
@@ -376,12 +503,26 @@ def invert_mask_elastic(transform, domain, diagnostics=None, field=None):
     residual = transform.GetNthTransform(1)
     field = _bspline_displacement(residual, domain) if field is None else field
     diagnostics["validation_phase"] = "inversion"
-    inverter = sitk.InvertDisplacementFieldImageFilter()
-    inverter.SetMaximumNumberOfIterations(50)
-    inverter.SetMeanErrorToleranceThreshold(0.0)
-    inverter.SetMaxErrorToleranceThreshold(0.01)
-    inverter.SetEnforceBoundaryCondition(False)
-    inverse_field = inverter.Execute(field)
+    inversion_started = time.perf_counter()
+    try:
+        # This SimpleITK inverter inherits its output domain from the input;
+        # expand the input first so displaced boundary support is represented.
+        expanded_field = _expanded_displacement_field(domain, field)
+        diagnostics.update(
+            inverse_domain_size=list(expanded_field.GetSize()),
+            inverse_domain_origin=list(expanded_field.GetOrigin()),
+            inverse_domain_spacing=list(expanded_field.GetSpacing()),
+        )
+        inverter = sitk.InvertDisplacementFieldImageFilter()
+        inverter.SetMaximumNumberOfIterations(50)
+        inverter.SetMeanErrorToleranceThreshold(0.0)
+        inverter.SetMaxErrorToleranceThreshold(0.01)
+        inverter.SetEnforceBoundaryCondition(False)
+        inverse_field = inverter.Execute(expanded_field)
+    finally:
+        diagnostics["inversion_elapsed_seconds"] = (
+            time.perf_counter() - inversion_started
+        )
     if not np.isfinite(sitk.GetArrayViewFromImage(inverse_field)).all():
         raise ValueError("Nonfinite inverse elastic displacement field")
     diagnostics.update(
@@ -389,21 +530,43 @@ def invert_mask_elastic(transform, domain, diagnostics=None, field=None):
         inverse_mean_error_norm=float(inverter.GetMeanErrorNorm()),
         validation_phase="round_trip",
     )
-    # Check both residual compositions rather than accepting a finite but
-    # inaccurate inverse. Limit error to half the smallest reference voxel.
-    tolerance = 0.5 * min(domain.GetSpacing())
-    forward_error = _round_trip_error(field, inverse_field)
-    reverse_error = _round_trip_error(inverse_field, field)
-    diagnostics.update(
-        inverse_round_trip_max_mm=forward_error,
-        forward_round_trip_max_mm=reverse_error,
-        inverse_tolerance_mm=tolerance,
-    )
-    if (
-        not np.isfinite([forward_error, reverse_error]).all()
-        or max(forward_error, reverse_error) > tolerance
-    ):
-        raise ValueError("Elastic inverse round-trip error exceeds tolerance")
+    round_trip_started = time.perf_counter()
+    try:
+        if anatomical_roi is None:
+            anatomical_roi = sitk.Image(domain.GetSize(), sitk.sitkUInt8) + 1
+            anatomical_roi.CopyInformation(domain)
+        forward_statistics = _round_trip_error(field, inverse_field, anatomical_roi)
+        inverse_residual = sitk.DisplacementFieldTransform(sitk.Image(inverse_field))
+        inverse_roi = sitk.Resample(
+            anatomical_roi,
+            inverse_field,
+            inverse_residual,
+            sitk.sitkNearestNeighbor,
+            0,
+            sitk.sitkUInt8,
+        )
+        reverse_statistics = _round_trip_error(inverse_field, field, inverse_roi)
+        _record_round_trip_statistics(
+            diagnostics, "forward_then_inverse", forward_statistics
+        )
+        _record_round_trip_statistics(
+            diagnostics, "inverse_then_forward", reverse_statistics
+        )
+        # Retain these keys for consumers of the original diagnostics contract.
+        forward_error = forward_statistics["valid_anatomical_roi"]["max_mm"]
+        reverse_error = reverse_statistics["valid_anatomical_roi"]["max_mm"]
+        tolerance = 0.5 * min(domain.GetSpacing())
+        diagnostics.update(
+            inverse_round_trip_max_mm=forward_error,
+            forward_round_trip_max_mm=reverse_error,
+            inverse_tolerance_mm=tolerance,
+        )
+        if max(forward_error, reverse_error) > tolerance:
+            raise ValueError("Elastic inverse round-trip error exceeds tolerance")
+    finally:
+        diagnostics["round_trip_validation_elapsed_seconds"] = (
+            time.perf_counter() - round_trip_started
+        )
     inverse = sitk.CompositeTransform(3)
     inverse.AddTransform(sitk.DisplacementFieldTransform(inverse_field))
     inverse.AddTransform(linear.GetInverse())
@@ -684,9 +847,14 @@ def mutual_information_score(
     return value
 
 
-def mask_elastic_refine(fixed_dm, moving_dm, initial, config):
+def mask_elastic_refine(
+    fixed_dm, moving_dm, initial, config, optimization_diagnostics=None
+):
     """Refine an affine mapping with a coarse signed-distance B-spline."""
     sitk = backend()
+    optimization_diagnostics = (
+        {} if optimization_diagnostics is None else optimization_diagnostics
+    )
     lengths = (np.asarray(fixed_dm.GetSize()) - 1) * np.asarray(fixed_dm.GetSpacing())
     control_spacing = config.elastic_control_point_spacing_mm
     mesh_size = [max(1, int(round(length / control_spacing))) for length in lengths]
@@ -722,10 +890,72 @@ def mask_elastic_refine(fixed_dm, moving_dm, initial, config):
     registration.SetSmoothingSigmasPerLevel([2, 1, 0])
     registration.SmoothingSigmasAreSpecifiedInPhysicalUnitsOn()
     registration.SetInitialTransform(bspline, inPlace=True)
+    qc_domain = _physical_qc_grid(fixed_dm, control_spacing)
+    initial_parameters = tuple(bspline.GetParameters())
+    best_parameters = initial_parameters
+    best_metric = float("inf")
+    callback_error = None
+    stop_requested = False
+    stop_succeeded = False
+    checks = 0
+    valid_checkpoints = 0
+    stop_iteration = None
+    stop_reasons = []
+
+    def inspect_residual():
+        nonlocal best_parameters, best_metric, callback_error
+        nonlocal stop_requested, stop_succeeded, checks, valid_checkpoints
+        nonlocal stop_iteration, stop_reasons
+        if stop_requested:
+            return
+        try:
+            checks += 1
+            coarse_field = _bspline_displacement(bspline, qc_domain)
+            qc = _elastic_field_qc(coarse_field, config)
+            metric = float(registration.GetMetricValue())
+            if qc["deformation_qc_passed"]:
+                if np.isfinite(metric) and metric < best_metric:
+                    best_metric = metric
+                    best_parameters = tuple(bspline.GetParameters())
+                    valid_checkpoints += 1
+                return
+            stop_requested = True
+            stop_iteration = int(registration.GetOptimizerIteration())
+            stop_reasons = list(qc["deformation_qc_reasons"])
+            stop_succeeded = bool(registration.StopRegistration())
+        except (RuntimeError, ValueError) as exc:
+            callback_error = exc
+            stop_requested = True
+            stop_iteration = int(registration.GetOptimizerIteration())
+            stop_reasons = ["optimizer_qc_callback_failed"]
+            stop_succeeded = bool(registration.StopRegistration())
+
+    registration.AddCommand(sitk.sitkIterationEvent, inspect_residual)
     registration.Execute(
         sitk.Cast(fixed_dm, sitk.sitkFloat32),
         aligned_moving_dm,
     )
+    # SimpleITK transform mutation is unsafe while Execute is active.
+    if stop_requested:
+        bspline.SetParameters(best_parameters)
+    optimization_diagnostics.update(
+        optimizer_qc_grid_size=list(qc_domain.GetSize()),
+        optimizer_qc_grid_spacing_mm=list(qc_domain.GetSpacing()),
+        optimizer_qc_checks=checks,
+        optimizer_valid_checkpoints=valid_checkpoints,
+        optimizer_best_valid_metric=(
+            None if not np.isfinite(best_metric) else best_metric
+        ),
+        optimizer_qc_stop_requested=stop_requested,
+        optimizer_qc_stop_succeeded=stop_succeeded,
+        optimizer_qc_stop_iteration=stop_iteration,
+        optimizer_qc_stop_reasons=stop_reasons,
+        optimizer_checkpoint_restored=stop_requested,
+    )
+    if callback_error is not None:
+        raise ValueError("Elastic optimizer QC callback failed") from callback_error
+    if stop_requested and not stop_succeeded:
+        raise RuntimeError("SimpleITK optimizer did not honor callback stop request")
     if not np.isfinite(bspline.GetParameters()).all():
         raise ValueError("Nonfinite elastic transform")
     composite = sitk.CompositeTransform(3)
@@ -1029,6 +1259,13 @@ def register_pair(
         )
     elif stages["mask_elastic"]["status"] == "not_run":
         started = time.perf_counter()
+        detail = stages["mask_elastic"]
+        detail.update(
+            optimization_elapsed_seconds=0.0,
+            field_qc_elapsed_seconds=0.0,
+            inversion_elapsed_seconds=0.0,
+            round_trip_validation_elapsed_seconds=0.0,
+        )
         try:
             if fixed_dm is None:
                 fixed_dm = distance_map(
@@ -1042,15 +1279,23 @@ def register_pair(
                     padding_mm=config.distance_map_crop_padding_mm,
                     band_mm=config.organ_boundary_band_half_width_mm,
                 )
-            tx, reg = mask_elastic_refine(
-                fixed_dm,
-                moving_dm,
-                best,
-                config,
-            )
+            optimization_diagnostics = {}
+            optimization_started = time.perf_counter()
+            try:
+                tx, reg = mask_elastic_refine(
+                    fixed_dm,
+                    moving_dm,
+                    best,
+                    config,
+                    optimization_diagnostics,
+                )
+            finally:
+                detail["optimization_elapsed_seconds"] = (
+                    time.perf_counter() - optimization_started
+                )
+                detail.update(optimization_diagnostics)
             candidate = score_transform(tx, "mask_elastic")
             stage_transforms["mask_elastic"] = tx
-            detail = stages["mask_elastic"]
             detail.update(
                 optimizer_stop=reg.GetOptimizerStopConditionDescription(),
                 optimizer_iteration=int(reg.GetOptimizerIteration()),
@@ -1060,7 +1305,13 @@ def register_pair(
                 control_point_spacing_mm=config.elastic_control_point_spacing_mm,
                 boundary_band_half_width_mm=(config.organ_boundary_band_half_width_mm),
             )
-            field, deformation_qc = elastic_deformation_qc(tx, fixed_dm, config)
+            field_qc_started = time.perf_counter()
+            try:
+                field, deformation_qc = elastic_deformation_qc(tx, fixed_dm, config)
+            finally:
+                detail["field_qc_elapsed_seconds"] = (
+                    time.perf_counter() - field_qc_started
+                )
             detail.update(deformation_qc)
             minimum_improvement = minimum_stage_improvement("mask_elastic")
             if deformation_qc["deformation_qc_passed"]:
@@ -1075,6 +1326,7 @@ def register_pair(
                         fixed_dm,
                         detail,
                         field,
+                        sitk.Cast(fixed_dm <= 0, sitk.sitkUInt8),
                     )
                 best, score, stage = _select_candidate(
                     best,

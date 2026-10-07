@@ -42,6 +42,19 @@ def bspline_composite(reference, linear=None):
     )
 
 
+def translated_bspline_composite(reference, offset, linear=None):
+    residual = sitk.BSplineTransformInitializer(reference, [1, 1, 1], order=3)
+    parameters = np.asarray(residual.GetParameters())
+    component_size = len(parameters) // 3
+    for component, value in enumerate(offset):
+        start = component * component_size
+        parameters[start : start + component_size] = value
+    residual.SetParameters(parameters.tolist())
+    return sitk.CompositeTransform(
+        [linear if linear is not None else sitk.Euler3DTransform(), residual]
+    )
+
+
 def qc_for(monkeypatch, values, config=None):
     reference = domain()
     field = vector_field(reference, values)
@@ -68,6 +81,27 @@ def test_small_smooth_deformation_passes_qc(monkeypatch):
     assert qc["jacobian_nonpositive_voxels"] == 0
 
 
+def test_actual_small_smooth_bspline_is_invertible():
+    reference = domain()
+    transform = translated_bspline_composite(reference, (1.0, -0.5, 0.25))
+    field, qc = alignment.elastic_deformation_qc(
+        transform, reference, RegistrationConfig()
+    )
+    diagnostics = {}
+
+    inverse = alignment.invert_mask_elastic(transform, reference, diagnostics, field)
+    point = reference.TransformIndexToPhysicalPoint((10, 9, 8))
+
+    assert qc["deformation_qc_passed"] is True
+    assert inverse.TransformPoint(transform.TransformPoint(point)) == pytest.approx(
+        point, abs=0.05
+    )
+    for direction in ("forward_then_inverse", "inverse_then_forward"):
+        for region in ("full_grid", "valid_anatomical_roi"):
+            for statistic in ("p95_mm", "p99_mm", "max_mm"):
+                assert f"{direction}_round_trip_{region}_{statistic}" in diagnostics
+
+
 def test_p95_displacement_limit_rejects_deformation(monkeypatch):
     reference = domain()
     values = np.zeros(tuple(reversed(reference.GetSize())) + (3,))
@@ -78,6 +112,17 @@ def test_p95_displacement_limit_rejects_deformation(monkeypatch):
     assert qc["deformation_qc_passed"] is False
     assert "p95_displacement_exceeds_limit" in qc["deformation_qc_reasons"]
     assert "maximum_displacement_exceeds_limit" not in qc["deformation_qc_reasons"]
+
+
+def test_actual_bspline_exceeding_displacement_limit_is_rejected():
+    reference = domain()
+    transform = translated_bspline_composite(reference, (13.0, 0.0, 0.0))
+
+    _, qc = alignment.elastic_deformation_qc(transform, reference, RegistrationConfig())
+
+    assert qc["deformation_qc_passed"] is False
+    assert "p95_displacement_exceeds_limit" in qc["deformation_qc_reasons"]
+    assert "maximum_displacement_exceeds_limit" in qc["deformation_qc_reasons"]
 
 
 def test_maximum_displacement_limit_rejects_local_outlier(monkeypatch):
@@ -132,6 +177,34 @@ def test_identity_bspline_inverse_preserves_exact_linear_stage():
     assert diagnostics["validation_phase"] == "complete"
     assert inverse.TransformPoint(transform.TransformPoint(point)) == pytest.approx(
         point
+    )
+
+
+def test_inverse_domain_covers_displaced_boundary_support():
+    reference = domain()
+    transform = translated_bspline_composite(reference, (2.0, 0.0, 0.0))
+    field, _ = alignment.elastic_deformation_qc(
+        transform, reference, RegistrationConfig()
+    )
+    diagnostics = {}
+
+    inverse = alignment.invert_mask_elastic(transform, reference, diagnostics, field)
+    boundary_point = reference.TransformIndexToPhysicalPoint(
+        tuple(size - 1 for size in reference.GetSize())
+    )
+
+    assert any(
+        expanded > original
+        for expanded, original in zip(
+            diagnostics["inverse_domain_size"], reference.GetSize()
+        )
+    )
+    assert inverse.TransformPoint(
+        transform.TransformPoint(boundary_point)
+    ) == pytest.approx(boundary_point, abs=0.05)
+    assert (
+        diagnostics["forward_then_inverse_round_trip_valid_anatomical_roi_max_mm"]
+        <= diagnostics["inverse_tolerance_mm"]
     )
 
 
