@@ -592,6 +592,7 @@ def main(args):
             "dicom_path",
             "series_dir",
         ],
+        artifact_columns=["dicom_path"],
         strict=bool(getattr(args, "strict_resume", False)),
     )
     resume_ctx = prepare_resume_context(
