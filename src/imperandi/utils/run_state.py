@@ -284,10 +284,16 @@ def fingerprint_dataframe_semantic(
         values: dict[str, Any] = {}
         for column in present_columns:
             value = row.get(column)
-            if column in artifact_names:
-                values[column] = _fingerprint_artifact_value(value, strict=strict)
-            else:
-                values[column] = _normalize_semantic_value(value)
+            normalized_value = (
+                _fingerprint_artifact_value(value, strict=strict)
+                if column in artifact_names
+                else _normalize_semantic_value(value)
+            )
+            # A missing column and a present-but-null cell are semantically the
+            # same for one row. Omitting nulls keeps row-level invalidation
+            # selective when a new optional mask/metadata column is introduced.
+            if normalized_value is not None:
+                values[column] = normalized_value
         payload = {
             "source_id": source_id,
             "values": values,
