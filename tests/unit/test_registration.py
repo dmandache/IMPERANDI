@@ -422,9 +422,7 @@ def test_pca_excludes_rotation_beyond_configured_limit():
         )
     )
 
-    limited = alignment.initialize_pca(
-        fixed, moving, max_rotation_degrees=30.0
-    )
+    limited = alignment.initialize_pca(fixed, moving, max_rotation_degrees=30.0)
     angle = alignment._rotation_angle_degrees(
         np.array(limited.GetMatrix()).reshape(3, 3)
     )
@@ -591,9 +589,7 @@ def test_boundary_band_mi_affine_refines_scale():
     result = register_pair(
         fixed,
         moving,
-        RegistrationConfig(
-            affine=True, affine_min_dice=0, early_stop_dice=1, iterations=100
-        ),
+        RegistrationConfig(affine=True, early_stop_dice=1, iterations=100),
     )
     assert result.stage == "mi_affine"
     assert result.dice_after > 0.9
@@ -635,7 +631,7 @@ def test_worse_stage_falls_back_to_previous_best(
     monkeypatch.setattr(
         alignment,
         "initialize_pca",
-        lambda fixed, moving: sitk.Euler3DTransform(),
+        lambda *args: sitk.Euler3DTransform(),
     )
     monkeypatch.setattr(alignment, "dice", lambda *args: next(values))
     monkeypatch.setattr(
@@ -659,7 +655,6 @@ def test_worse_stage_falls_back_to_previous_best(
         organ(),
         RegistrationConfig(
             affine=affine,
-            affine_min_dice=0,
             early_stop_dice=1,
             iterations=1,
             min_dice=0,
@@ -673,6 +668,54 @@ def test_worse_stage_falls_back_to_previous_best(
     assert result.stages[rejected_stage]["fallback_stage"] == fallback_stage
     assert result.stages[rejected_stage]["selected"] is False
     assert result.stages[selected_stage]["selected"] is True
+
+
+def test_stages_require_their_minimum_dice_delta(monkeypatch):
+    class Optimizer:
+        def GetOptimizerStopConditionDescription(self):
+            return "test"
+
+        def GetOptimizerIteration(self):
+            return 1
+
+    scores = iter([0.5, 0.5005, 0.5015, 0.5025, 0.5054])
+    monkeypatch.setattr(alignment, "dice", lambda *args: next(scores))
+    monkeypatch.setattr(
+        alignment, "initialize_pca", lambda *args: sitk.Euler3DTransform()
+    )
+    monkeypatch.setattr(
+        alignment,
+        "mask_rigid_refine",
+        lambda *args: (sitk.Euler3DTransform(), Optimizer()),
+    )
+    monkeypatch.setattr(
+        alignment,
+        "mi_refine",
+        lambda *args, **kwargs: (
+            sitk.AffineTransform(3)
+            if kwargs.get("affine")
+            else sitk.Euler3DTransform(),
+            Optimizer(),
+        ),
+    )
+
+    result = register_pair(
+        organ(),
+        organ(),
+        RegistrationConfig(affine=True, early_stop_dice=1, min_dice=0),
+    )
+
+    assert list(scores) == []
+    assert result.stage == "mi_rigid"
+    assert result.dice_after == pytest.approx(0.5025)
+    for name, required in (("pca", 0.001), ("mask_rigid", 0.002)):
+        assert result.stages[name]["status"] == "rejected_insufficient_improvement"
+        assert result.stages[name]["required_delta"] == required
+    assert result.stages["mi_rigid"]["status"] == "evaluated"
+    assert result.stages["mi_rigid"]["dice_delta"] == pytest.approx(0.0025)
+    assert result.stages["mi_affine"]["status"] == "rejected_insufficient_improvement"
+    assert result.stages["mi_affine"]["dice_delta"] == pytest.approx(0.0029)
+    assert result.stages["mi_affine"]["required_delta"] == 0.003
 
 
 def test_demons_preserves_initial_transform_on_different_grids(tmp_path):
@@ -781,26 +824,18 @@ def test_demons_improves_nonrigid_organ_overlap():
         )
 
 
-def test_affine_is_skipped_until_overlap_is_sufficient():
+def test_affine_is_not_gated_by_an_absolute_dice_threshold():
     fixed = organ()
     moving = sitk.Image(fixed)
     moving.SetSpacing((fixed.GetSpacing()[0] * 1.2, *fixed.GetSpacing()[1:]))
     result = register_pair(
         fixed,
         moving,
-        RegistrationConfig(affine=True, affine_min_dice=0.99, iterations=20),
+        RegistrationConfig(affine=True, early_stop_dice=1, iterations=20),
     )
-    assert result.stage != "mi_affine"
-    assert result.dice_after < 0.99
-    assert result.stages["mi_affine"]["status"] == "skipped_low_dice"
-    assert result.stages["mi_affine"]["input_dice"] == result.dice_after
-    assert result.stages["mi_affine"]["required_dice"] == 0.99
-
-
-@pytest.mark.parametrize("value", [-0.01, 1.01])
-def test_affine_dice_threshold_is_validated(value):
-    with pytest.raises(ValueError, match="threshold"):
-        RegistrationConfig(affine_min_dice=value)
+    assert result.stages["mi_affine"]["status"] != "skipped_low_dice"
+    assert result.stages["mi_affine"]["metric"] == "mattes_mutual_information"
+    assert result.stages["mi_affine"]["required_delta"] == 0.003
 
 
 def test_intersection_ignores_unobserved_background():
