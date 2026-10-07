@@ -1,5 +1,6 @@
 """Bounded group workers with hard timeouts and deterministic cleanup."""
 
+import logging
 import multiprocessing as mp
 from multiprocessing.connection import wait
 import time
@@ -8,7 +9,10 @@ from .organ import backend
 from .pipeline import register_cohort
 
 
-def _process_group(connection, table, output_dir, config, threads):
+def _process_group(connection, table, output_dir, config, threads, log_level):
+    logging.basicConfig(
+        level=log_level, format="%(asctime)s %(levelname)s %(name)s %(message)s"
+    )
     try:
         backend().ProcessObject.SetGlobalDefaultNumberOfThreads(threads)
         connection.send((register_cohort(table, output_dir, config), None))
@@ -72,7 +76,14 @@ def iter_group_results(
                 receiver, sender = context.Pipe(duplex=False)
                 process = context.Process(
                     target=_process_group,
-                    args=(sender, table, str(output_dir), config, threads),
+                    args=(
+                        sender,
+                        table,
+                        str(output_dir),
+                        config,
+                        threads,
+                        logging.getLogger().getEffectiveLevel(),
+                    ),
                 )
                 try:
                     process.start()
