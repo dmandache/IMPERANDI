@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import logging
@@ -212,6 +213,15 @@ def _fingerprint_artifact_value(value: Any, *, strict: bool) -> Any:
     raw = normalized.strip()
     if not raw:
         return raw
+    if raw[:1] in {"[", "("}:
+        try:
+            parsed = ast.literal_eval(raw)
+        except (SyntaxError, ValueError):
+            parsed = None
+        if isinstance(parsed, (list, tuple)):
+            return [
+                _fingerprint_artifact_value(item, strict=strict) for item in parsed
+            ]
     p = Path(raw).expanduser()
     try:
         rp = p.resolve()
