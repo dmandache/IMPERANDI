@@ -50,6 +50,22 @@ def test_boundary_band_is_physical_shell_around_organ():
     assert not band[0, 0, 0]
 
 
+def test_mutual_information_score_is_deterministic():
+    fixed = organ()
+    config = RegistrationConfig()
+    transform = sitk.Euler3DTransform()
+
+    first = alignment.mutual_information_score(
+        fixed, fixed, fixed, fixed, transform, config
+    )
+    second = alignment.mutual_information_score(
+        fixed, fixed, fixed, fixed, transform, config
+    )
+
+    assert np.isfinite(first)
+    assert second == pytest.approx(first, abs=1e-12)
+
+
 @pytest.mark.parametrize("affine", [False, True])
 def test_physical_translation_and_inverse(affine):
     fixed = organ()
@@ -167,6 +183,7 @@ def test_geometry_replaces_pca_only_for_partial_organs(monkeypatch, partial):
     assert result.stages["mask_rigid"]["status"] == "skipped_early_stop"
     assert result.stages["mi_rigid"]["status"] == "skipped_early_stop"
     assert result.stages["mi_affine"]["status"] == "skipped_early_stop"
+    assert result.stages["mi_elastic"]["status"] == "skipped_early_stop"
     assert "center_of_mass" not in result.stages
     if partial:
         assert result.stages["pca"]["status"] == "skipped_partial_coverage"
@@ -681,7 +698,7 @@ def test_worse_stage_falls_back_to_previous_best(
     assert result.stages[selected_stage]["selected"] is True
 
 
-def test_stages_require_their_minimum_dice_improvement(monkeypatch):
+def test_dice_and_mi_stages_use_their_respective_acceptance_criteria(monkeypatch):
     class Optimizer:
         def GetOptimizerStopConditionDescription(self):
             return "test"
@@ -689,8 +706,14 @@ def test_stages_require_their_minimum_dice_improvement(monkeypatch):
         def GetOptimizerIteration(self):
             return 1
 
-    scores = iter([0.5, 0.5005, 0.5015, 0.5025, 0.5054])
+    scores = iter([0.5, 0.5005, 0.5015, 0.499, 0.4985])
+    mutual_information = iter([0.1, 0.2, 0.2, 0.20001])
     monkeypatch.setattr(alignment, "dice", lambda *args: next(scores))
+    monkeypatch.setattr(
+        alignment,
+        "mutual_information_score",
+        lambda *args: next(mutual_information),
+    )
     monkeypatch.setattr(
         alignment, "initialize_pca", lambda *args: sitk.Euler3DTransform()
     )
@@ -713,20 +736,39 @@ def test_stages_require_their_minimum_dice_improvement(monkeypatch):
     result = register_pair(
         organ(),
         organ(),
-        RegistrationConfig(enable_affine_stage=True, early_stop_organ_dice=1),
+        RegistrationConfig(
+            enable_affine_stage=True,
+            early_stop_organ_dice=1,
+            minimum_stage_mi_improvement={"mi_affine": 0.001},
+        ),
     )
 
     assert list(scores) == []
+    assert list(mutual_information) == []
     assert result.stage == "mi_rigid"
-    assert result.dice_after == pytest.approx(0.5025)
+    assert result.dice_after == pytest.approx(0.499)
     for name, required in (("pca", 0.001), ("mask_rigid", 0.002)):
         assert result.stages[name]["status"] == "rejected_insufficient_improvement"
         assert result.stages[name]["minimum_required_dice_improvement"] == required
     assert result.stages["mi_rigid"]["status"] == "evaluated"
-    assert result.stages["mi_rigid"]["dice_improvement"] == pytest.approx(0.0025)
-    assert result.stages["mi_affine"]["status"] == "rejected_insufficient_improvement"
-    assert result.stages["mi_affine"]["dice_improvement"] == pytest.approx(0.0029)
-    assert result.stages["mi_affine"]["minimum_required_dice_improvement"] == 0.003
+    assert result.stages["mi_rigid"]["dice_improvement"] == pytest.approx(-0.001)
+    assert result.stages["mi_rigid"]["mutual_information_improvement"] == 0.1
+    assert result.stages["mi_affine"]["status"] == (
+        "rejected_insufficient_mi_improvement"
+    )
+    assert result.stages["mi_affine"]["minimum_required_mi_improvement"] == 0.001
+    assert result.stages["mi_affine"]["dice_guard_reference"] == 0.5
+
+
+def test_mi_candidate_requires_improvement_and_respects_peak_dice_guard():
+    evaluate = alignment._mi_candidate_rejection
+
+    assert evaluate(0.998, 1.0, 0.1, 0.2, 0.0, 0.002) is None
+    assert evaluate(0.997, 1.0, 0.1, 0.2, 0.0, 0.002) == "rejected_worse_dice"
+    assert (
+        evaluate(1.0, 1.0, 0.1, 0.1, 0.0, 0.002)
+        == "rejected_insufficient_mi_improvement"
+    )
 
 
 def test_demons_preserves_initial_transform_on_different_grids(tmp_path):
@@ -843,6 +885,100 @@ def test_demons_improves_nonrigid_organ_overlap():
         )
 
 
+def test_mi_elastic_builds_an_invertible_bspline_residual():
+    fixed = organ()
+    domain = alignment.distance_map(fixed, padding_mm=10, band_mm=15)
+
+    transform, registration = alignment.mi_elastic_refine(
+        fixed,
+        fixed,
+        fixed,
+        fixed,
+        domain,
+        sitk.Euler3DTransform(),
+        RegistrationConfig(maximum_optimizer_iterations=1),
+    )
+    diagnostics = {}
+    inverse = alignment.invert_elastic(transform, fixed, diagnostics)
+    point = fixed.TransformIndexToPhysicalPoint((15, 13, 11))
+
+    assert transform.GetNumberOfTransforms() == 2
+    assert registration.GetOptimizerIteration() == 1
+    assert diagnostics["validation_phase"] == "complete"
+    assert np.allclose(
+        inverse.TransformPoint(transform.TransformPoint(point)), point, atol=0.2
+    )
+
+
+def test_mi_elastic_is_the_optional_final_stage_and_retains_inverse(monkeypatch):
+    scores = iter([0.5, 0.6, 0.7, 0.8, 0.9])
+    mutual_information = iter([0.1, 0.2, 0.2, 0.3])
+    forward = sitk.CompositeTransform(3)
+    inverse = sitk.TranslationTransform(3)
+
+    class Optimizer:
+        def GetOptimizerStopConditionDescription(self):
+            return "test"
+
+        def GetOptimizerIteration(self):
+            return 1
+
+        def GetElapsedIterations(self):
+            return 2
+
+        def GetMetric(self):
+            return 0.01
+
+        def GetRMSChange(self):
+            return 0.001
+
+    monkeypatch.setattr(alignment, "dice", lambda *args: next(scores))
+    monkeypatch.setattr(
+        alignment,
+        "mutual_information_score",
+        lambda *args: next(mutual_information),
+    )
+    monkeypatch.setattr(
+        alignment, "initialize_pca", lambda *args: sitk.Euler3DTransform()
+    )
+    monkeypatch.setattr(
+        alignment,
+        "mask_rigid_refine",
+        lambda *args: (sitk.Euler3DTransform(), Optimizer()),
+    )
+    monkeypatch.setattr(
+        alignment,
+        "mi_refine",
+        lambda *args, **kwargs: (sitk.Euler3DTransform(), Optimizer()),
+    )
+    monkeypatch.setattr(
+        alignment, "mi_elastic_refine", lambda *args: (forward, Optimizer())
+    )
+    monkeypatch.setattr(alignment, "invert_elastic", lambda *args: inverse)
+
+    result = register_pair(
+        organ(),
+        organ(),
+        RegistrationConfig(
+            enable_elastic_stage=True,
+            early_stop_organ_dice=1,
+            maximum_optimizer_iterations=3,
+        ),
+    )
+
+    assert list(scores) == []
+    assert list(mutual_information) == []
+    assert result.stage == "mi_elastic"
+    assert result.reference_to_scan is forward
+    assert result.scan_to_reference is inverse
+    assert result.stages["mi_affine"]["status"] == "skipped_disabled"
+    assert result.stages["mi_elastic"]["status"] == "evaluated"
+    assert result.stages["mi_elastic"]["algorithm"] == "BSplineTransform"
+    assert result.stages["mi_elastic"]["metric"] == "mattes_mutual_information"
+    assert result.stages["mi_elastic"]["minimum_required_mi_improvement"] == 0.0
+    assert result.stages["mi_elastic"]["maximum_allowed_dice_decrease"] == 0.002
+
+
 def test_affine_is_not_gated_by_an_absolute_dice_threshold():
     fixed = organ()
     moving = sitk.Image(fixed)
@@ -858,7 +994,7 @@ def test_affine_is_not_gated_by_an_absolute_dice_threshold():
     )
     assert result.stages["mi_affine"]["status"] != "skipped_low_dice"
     assert result.stages["mi_affine"]["metric"] == "mattes_mutual_information"
-    assert result.stages["mi_affine"]["minimum_required_dice_improvement"] == 0.003
+    assert result.stages["mi_affine"]["minimum_required_mi_improvement"] == 0.0
 
 
 def test_intersection_ignores_unobserved_background():
@@ -964,9 +1100,11 @@ def test_stage_qc_and_trace_logs(tmp_path, caplog):
     assert pd.isna(moving.dice_mask_rigid)
     assert pd.isna(moving.dice_mi_rigid)
     assert pd.isna(moving.dice_mi_affine)
+    assert pd.isna(moving.dice_mi_elastic)
     assert moving.mask_rigid_status == "skipped_early_stop"
     assert moving.mi_rigid_status == "skipped_early_stop"
     assert moving.mi_affine_status == "skipped_early_stop"
+    assert moving.mi_elastic_status == "skipped_early_stop"
     assert moving.registration_reference_id == out.loc[0, "registration_scan_id"]
     events = [
         json.loads(line)
@@ -1110,6 +1248,7 @@ def test_rejected_pair_keeps_qc_and_original_canonical_paths(tmp_path):
                 "mask_rigid": {"dice": 0.2, "status": "evaluated"},
                 "mi_rigid": {"dice": None, "status": "not_run"},
                 "mi_affine": {"dice": None, "status": "not_run"},
+                "mi_elastic": {"dice": None, "status": "not_run"},
             },
         )
         raise RegistrationRejected("Overlap rejected", result)

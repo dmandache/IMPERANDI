@@ -166,6 +166,7 @@ def test_equal_volume_does_not_establish_registration_confidence(monkeypatch):
     monkeypatch.setattr(
         alignment, "initialize_pca", lambda *args: sitk.Euler3DTransform()
     )
+    monkeypatch.setattr(alignment, "mutual_information_score", lambda *args: 0.0)
     result = alignment.register_pair(fixed, moving, RegistrationConfig())
     assert result.organ_volume_ratio == 1
     assert result.confidence == "low_confidence"
