@@ -1276,7 +1276,8 @@ def register_pair(
             stages["mask_affine"]["early_stop"] = True
             skip_remaining("mask_affine")
 
-    if stages["mi_affine"]["status"] == "not_run" and not config.enable_affine_stage:
+    # Temporarily disable MI-affine while retaining its implementation below.
+    if stages["mi_affine"]["status"] == "not_run":
         stages["mi_affine"].update(
             status="skipped_disabled",
             input_dice=score,
