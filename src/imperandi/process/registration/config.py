@@ -5,7 +5,14 @@ from math import isfinite
 from typing import Mapping
 
 CONSENSUS_METHODS = ("anchor", "majority", "intersection", "union", "staple")
-REGISTRATION_STAGES = ("baseline", "geometry", "pca", "rigid", "affine", "elastic")
+REGISTRATION_STAGES = (
+    "baseline",
+    "geometry",
+    "pca",
+    "rigid",
+    "affine",
+    "elastic",
+)
 SUPPORTED_MODALITIES = ("CT", "MR")
 
 
@@ -21,7 +28,6 @@ class RegistrationConfig:
     elastic_min_dice: float = 0.7
     boundary_margin_mm: float = 1.0
     allow_partial_organs: bool = True
-    partial_mask_pca: bool = False
     min_largest_component_fraction: float = 0.8
     min_confidence_dice: float = 0.5
     min_common_fov_fraction: float = 0.05
@@ -42,9 +48,8 @@ class RegistrationConfig:
     )
 
     def __post_init__(self):
-        for name in ("allow_partial_organs", "partial_mask_pca"):
-            if type(getattr(self, name)) is not bool:
-                raise ValueError(f"{name} must be a boolean")
+        if type(self.allow_partial_organs) is not bool:
+            raise ValueError("allow_partial_organs must be a boolean")
         for name in (
             "elastic_min_dice",
             "min_largest_component_fraction",
