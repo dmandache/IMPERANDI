@@ -75,7 +75,7 @@ def test_physical_translation_and_inverse(affine):
 
 
 @pytest.mark.parametrize(
-    "method,expected",
+    "tumor_consensus,expected",
     [
         ("anchor", [1, 0, 1, 0]),
         ("majority", [1, 0, 0, 0]),
@@ -83,12 +83,12 @@ def test_physical_translation_and_inverse(affine):
         ("union", [1, 1, 1, 0]),
     ],
 )
-def test_fusion_votes_and_ties(method, expected):
+def test_fusion_votes_and_ties(tumor_consensus, expected):
     masks = [image(np.array(v).reshape(1, 1, 4)) for v in [[1, 0, 1, 0], [1, 1, 0, 0]]]
     coverage = image(np.ones((1, 1, 4)))
-    result = fuse_tumors(masks, [coverage, coverage], method=method)
+    result = fuse_tumors(masks, [coverage, coverage], tumor_consensus=tumor_consensus)
     assert sitk.GetArrayFromImage(result.mask).ravel().tolist() == expected
-    if method == "majority":
+    if tumor_consensus == "majority":
         assert sitk.GetArrayFromImage(result.probability).ravel().tolist() == [
             1,
             0.5,
@@ -142,15 +142,15 @@ def test_pca_precedes_geometry_fallback_and_early_stops(monkeypatch, partial):
 
 
 @pytest.mark.parametrize(
-    "method", ["anchor", "majority", "intersection", "union", "staple"]
+    "tumor_consensus", ["anchor", "majority", "intersection", "union", "staple"]
 )
-def test_empty_resampled_tumor_preserves_observed_negative_votes(method):
+def test_empty_resampled_tumor_preserves_observed_negative_votes(tumor_consensus):
     empty = image(np.zeros((2, 3, 4)))
     coverage = image(np.ones((2, 3, 4)))
-    result = fuse_tumors([empty], [coverage], method=method)
+    result = fuse_tumors([empty], [coverage], tumor_consensus=tumor_consensus)
     assert not sitk.GetArrayFromImage(result.mask).any()
     with pytest.raises(ValueError, match="support"):
-        fuse_tumors([coverage], [empty], method=method)
+        fuse_tumors([coverage], [empty], tumor_consensus=tumor_consensus)
 
 
 def test_staple_excludes_unknown_voxels():
@@ -160,7 +160,9 @@ def test_staple_excludes_unknown_voxels():
     b[0, 1, 1] = 0
     support = np.ones_like(a)
     support[:, :, -1] = 0
-    result = fuse_tumors([image(a), image(b)], [image(support)] * 2, method="staple")
+    result = fuse_tumors(
+        [image(a), image(b)], [image(support)] * 2, tumor_consensus="staple"
+    )
     p = sitk.GetArrayFromImage(result.probability)
     assert np.isfinite(p).all()
     assert not p[:, :, -1].any()
@@ -331,7 +333,7 @@ def test_cli(tmp_path):
                 str(output),
                 "--output_dir",
                 str(tmp_path / "out"),
-                "--method",
+                "--tumor_consensus",
                 "union",
             ]
         )
@@ -374,7 +376,7 @@ def test_majority_consensus_keeps_only_native_masks(tmp_path):
     out, errors = register_cohort(
         pd.DataFrame(rows),
         output_dir,
-        RegistrationConfig(method="majority", iterations=5),
+        RegistrationConfig(tumor_consensus="majority", iterations=5),
     )
     assert errors.empty
     assert out.consensus_status.tolist() == ["ok", "ok"]
@@ -457,7 +459,7 @@ def test_empty_tumor_is_excluded_from_consensus(tmp_path):
     out, errors = register_cohort(
         pd.DataFrame(rows),
         tmp_path / "out",
-        RegistrationConfig(method="majority", iterations=5),
+        RegistrationConfig(tumor_consensus="majority", iterations=5),
     )
 
     assert errors.empty
@@ -718,7 +720,7 @@ def test_intersection_ignores_unobserved_background():
     b = image(np.ones((2, 3, 4)))
     coverage = np.ones((2, 3, 4))
     coverage[:, :, 3] = 0
-    result = fuse_tumors([a, b], [a, image(coverage)], method="intersection")
+    result = fuse_tumors([a, b], [a, image(coverage)], tumor_consensus="intersection")
     mask = sitk.GetArrayFromImage(result.mask)
     assert mask[:, :, :3].all()
     assert mask[:, :, 3].all()
@@ -884,7 +886,7 @@ def test_logs_identify_groups_with_human_attributes(tmp_path, caplog):
             "registration_reference_label": (
                 "series=1/1, phase=PORTAL_VENOUS, sequence=T1"
             ),
-            "consensus_method": "anchor",
+            "tumor_consensus": "anchor",
         }
     ]
     assert len(scan_events) == 1

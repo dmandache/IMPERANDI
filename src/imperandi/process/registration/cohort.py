@@ -14,7 +14,7 @@ import pandas as pd
 
 from .config import (
     REGISTRATION_STAGES,
-    CONSENSUS_METHODS,
+    TUMOR_CONSENSUS_METHODS,
     RegistrationConfig,
 )
 from .alignment import (
@@ -193,7 +193,7 @@ class ConsensusResult:
     support_policy: str = "per_voxel"
 
 
-def fuse_tumors(masks, coverages, *, method, threshold=0.5):
+def fuse_tumors(masks, coverages, *, tumor_consensus, threshold=0.5):
     """Fuse aligned masks with their spatial observations; anchor is first input.
 
     Voting uses strict > threshold; STAPLE uses >= threshold. Unknown spatial
@@ -202,8 +202,8 @@ def fuse_tumors(masks, coverages, *, method, threshold=0.5):
     model missing observations. Native empty masks are filtered by the caller.
     """
     sitk = backend()
-    if method not in CONSENSUS_METHODS:
-        raise ValueError(f"Unknown consensus method: {method}")
+    if tumor_consensus not in TUMOR_CONSENSUS_METHODS:
+        raise ValueError(f"Unknown tumor consensus: {tumor_consensus}")
     if not masks or len(masks) != len(coverages):
         raise ValueError("Consensus requires masks and matching coverage")
     if not 0 < threshold < 1:
@@ -220,19 +220,19 @@ def fuse_tumors(masks, coverages, *, method, threshold=0.5):
     # Native empty-mask exclusion belongs to the pipeline. A nonempty native
     # mask can become empty on the reference grid and still supplies negative
     # observations inside its FOV; do not silently remove that contributor.
-    if method == "anchor":
+    if tumor_consensus == "anchor":
         masks, coverages = masks[:1], coverages[:1]
     values = np.stack([sitk.GetArrayFromImage(m) > 0 for m in masks])
     observations = np.stack([sitk.GetArrayFromImage(c) > 0 for c in coverages])
     counts = observations.sum(axis=0)
     votes = (values & observations).sum(axis=0)
-    support = counts == len(masks) if method == "staple" else counts > 0
+    support = counts == len(masks) if tumor_consensus == "staple" else counts > 0
     if not support.any():
-        raise ValueError("Tumor inputs have no observed support for this method")
+        raise ValueError("Tumor inputs have no observed support for this consensus")
     probability = np.divide(
         votes, counts, out=np.zeros(counts.shape, np.float32), where=counts > 0
     )
-    if method == "staple" and len(masks) > 1 and values[:, support].any():
+    if tumor_consensus == "staple" and len(masks) > 1 and values[:, support].any():
         # STAPLE's estimator is voxelwise: pack only observed samples so padding
         # cannot affect its estimated prior or rater performance.
         packed = [
@@ -247,13 +247,13 @@ def fuse_tumors(masks, coverages, *, method, threshold=0.5):
         probability = np.zeros(support.shape, np.float32)
         probability[support] = estimated
         binary = probability >= threshold
-    elif method in {"majority", "staple"}:
+    elif tumor_consensus in {"majority", "staple"}:
         binary = (
             probability > threshold
-            if method == "majority"
+            if tumor_consensus == "majority"
             else probability >= threshold
         )
-    elif method == "intersection":
+    elif tumor_consensus == "intersection":
         binary = (votes == counts) & (counts > 0)
     else:
         binary = votes > 0
@@ -268,7 +268,7 @@ def fuse_tumors(masks, coverages, *, method, threshold=0.5):
         image(support, np.uint8),
         image(probability * support, np.float32),
         image(counts, np.uint32),
-        "common_fov_only" if method == "staple" else "per_voxel",
+        "common_fov_only" if tumor_consensus == "staple" else "per_voxel",
     )
 
 
@@ -321,7 +321,7 @@ def _record_consensus_inputs(df, indices, contributors, config):
         reasons, sort_keys=True
     )
     df.loc[indices, "registration_consensus_support_policy"] = (
-        "common_fov_only" if config.method == "staple" else "per_voxel"
+        "common_fov_only" if config.tumor_consensus == "staple" else "per_voxel"
     )
 
 
@@ -606,7 +606,7 @@ def register_cohort(
                         )
 
         contributors = list(tumors)
-        if config.method == "anchor":
+        if config.tumor_consensus == "anchor":
             contributors = contributors[:1]
         for i in tumors:
             if i not in contributors:
@@ -622,8 +622,9 @@ def register_cohort(
                 df.at[i, "registration_scan_label"] for i in contributors
             ]
             logger.info(
-                "Registration tumor consensus started: method=%s, contributors=%d [%s]",
-                config.method,
+                "Registration tumor consensus started: tumor_consensus=%s, "
+                "contributors=%d [%s]",
+                config.tumor_consensus,
                 len(contributors),
                 " | ".join(contributor_labels),
             )
@@ -638,7 +639,7 @@ def register_cohort(
                 fused = fusion(
                     masks,
                     coverages,
-                    method=config.method,
+                    tumor_consensus=config.tumor_consensus,
                     threshold=config.threshold,
                 )
                 for i, tx in transforms.items():
@@ -646,7 +647,7 @@ def register_cohort(
                         inverse = inverse_transforms[i]
                         image = loaded[i][0]
                         pair_dir = directory / ids[i]
-                        if config.method == "anchor":
+                        if config.tumor_consensus == "anchor":
                             composed = sitk.CompositeTransform(3)
                             composed.AddTransform(transforms[contributors[0]])
                             composed.AddTransform(inverse)

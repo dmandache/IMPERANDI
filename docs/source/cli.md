@@ -105,7 +105,7 @@ and creates shared tumor masks with anchor, majority, intersection, union, or ST
 - `--error_csv_path` defaults to `register_errors.csv`.
 - `--qc_csv_path` defaults to `register_qc.csv` and records stage Dice and provenance.
 - `--manifest` accepts a built-in name or YAML file; default is `generic`.
-- `--method` and `--affine`/`--no_affine` override manifest settings.
+- `--tumor_consensus` and `--affine`/`--no_affine` override manifest settings.
   Grouping is defined by `registration.group_columns` in the manifest.
 - `--num_workers`, `--threads_per_worker`, `--start_method`, and `--timeout_sec`
   control group execution. Timeout defaults to 900 seconds; 0 disables it.
