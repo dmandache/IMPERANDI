@@ -1363,6 +1363,14 @@ def register_pair(
             round_trip_validation_elapsed_seconds=0.0,
         )
         try:
+            input_mi = mutual_information_score(
+                fixed_image,
+                moving_image,
+                fixed_organ,
+                moving_organ,
+                best,
+                config,
+            )
             if fixed_dm is None:
                 fixed_dm = distance_map(
                     fixed_organ,
@@ -1391,6 +1399,14 @@ def register_pair(
                 )
                 detail.update(optimization_diagnostics)
             candidate = score_transform(tx, "mask_elastic")
+            candidate_mi = mutual_information_score(
+                fixed_image,
+                moving_image,
+                fixed_organ,
+                moving_organ,
+                tx,
+                config,
+            )
             stage_transforms["mask_elastic"] = tx
             detail.update(
                 optimizer_stop=reg.GetOptimizerStopConditionDescription(),
@@ -1400,6 +1416,9 @@ def register_pair(
                 algorithm="BSplineTransform",
                 control_point_spacing_mm=config.elastic_control_point_spacing_mm,
                 boundary_band_half_width_mm=(config.organ_boundary_band_half_width_mm),
+                input_mutual_information=input_mi,
+                mutual_information=candidate_mi,
+                mutual_information_improvement=candidate_mi - input_mi,
             )
             field_qc_started = time.perf_counter()
             try:
