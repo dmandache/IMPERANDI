@@ -96,8 +96,8 @@ The output table overwrites the input unless `--csv_path_out` is supplied.
 imperandi register [CSV_PATH] [CSV_PATH_OUT] [OPTIONS]
 ```
 
-Requires `imperandi[registration]`. Aligns organs within each visit/modality and
-creates shared tumor masks with anchor, majority, intersection, union, or STAPLE.
+Requires `imperandi[registration]`. Aligns organs within manifest-defined groups
+and creates shared tumor masks with anchor, majority, intersection, union, or STAPLE.
 
 - `--csv_path` and `--csv_path_out` provide named alternatives to positional paths.
   Defaults: `./nifti_index.csv` and `<input_stem>_registered.csv`.
@@ -105,8 +105,8 @@ creates shared tumor masks with anchor, majority, intersection, union, or STAPLE
 - `--error_csv_path` defaults to `register_errors.csv`.
 - `--qc_csv_path` defaults to `register_qc.csv` and records stage Dice and provenance.
 - `--manifest` accepts a built-in name or YAML file; default is `generic`.
-- `--method`, `--affine`/`--no_affine`, and `--visit_column` override manifest
-  settings.
+- `--method` and `--affine`/`--no_affine` override manifest settings.
+  Grouping is defined by `registration.group_columns` in the manifest.
 - `--num_workers`, `--threads_per_worker`, `--start_method`, and `--timeout_sec`
   control group execution. Timeout defaults to 900 seconds; 0 disables it.
 - Common checkpoint controls apply. `--force` starts fresh; `--retry_failed`
@@ -114,8 +114,8 @@ creates shared tumor masks with anchor, majority, intersection, union, or STAPLE
 - `--dry-run` validates the group plan without creating artifacts; `--verbose`
   enables verbose logging.
 
-Progress logs identify each group once with patient ID, date, visit order,
-configured visit value, and modality. Messages within that group use only the
+Progress logs identify each group once with its configured columns and values.
+Messages within that group use only the
 series position and group total (for example `series=1/6`) plus phase or
 sequence. File paths and source series IDs remain in the CSV/QC tables and are
 omitted from logs.

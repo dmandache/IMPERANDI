@@ -54,12 +54,11 @@ def add_registration_arguments(parser):
     affine = parser.add_mutually_exclusive_group()
     affine.add_argument("--affine", action="store_true", default=None)
     affine.add_argument("--no_affine", action="store_false", dest="affine")
-    parser.add_argument("--visit_column")
     parser.add_argument(
         "--num_workers",
         type=int,
         default=1,
-        help="Maximum concurrent visit/modality groups.",
+        help="Maximum concurrent manifest-defined groups.",
     )
     parser.add_argument(
         "--threads_per_worker",
@@ -182,7 +181,6 @@ def normalize_registration_args(args):
         method=None,
         keep_source_segmentation=None,
         affine=None,
-        visit_column=None,
     )
     for name, default in defaults.items():
         if not hasattr(args, name):
@@ -213,7 +211,6 @@ def resolve_config(args):
         "method",
         "keep_source_segmentation",
         "affine",
-        "visit_column",
     ]:
         value = getattr(args, name)
         if value is not None:
@@ -229,7 +226,7 @@ def main(args):
     )
     log_script_namespace(logger, __file__, effective_args)
     table = pd.read_csv(
-        args.csv_path, dtype={"patient_key": str, config.visit_column: str}
+        args.csv_path, dtype={column: str for column in config.group_columns}
     )
     if args.dry_run:
         planned = prepare_cohort(table, config)
@@ -243,7 +240,7 @@ def main(args):
         for _, group in planned.groupby("registration_group_id", sort=True):
             logger.info(
                 "Registration group planned: %s, series=%d",
-                group_label(group.iloc[0], config.visit_column),
+                group_label(group.iloc[0], config.group_columns),
                 len(group),
             )
         return None

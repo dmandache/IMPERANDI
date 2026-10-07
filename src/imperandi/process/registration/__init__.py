@@ -1,4 +1,4 @@
-"""Intra-visit, intra-modal organ registration and tumor consensus.
+"""Manifest-grouped organ registration and tumor consensus.
 
 The library exposes registration configuration, cohort execution and anatomical
 mask QC. ``alignment`` owns mask assessment and pairwise registration; ``cohort``

@@ -219,6 +219,46 @@ def test_cohort_grouping_anchor_transfer_and_native_preservation(tmp_path):
     assert not any(c.startswith("mask_") for c in set(out) - set(source))
 
 
+def test_manifest_group_columns_control_cross_modality_registration(tmp_path):
+    rows = [
+        {**save_scan(tmp_path, "ct", modality="CT"), "exam_stage": "baseline"},
+        {**save_scan(tmp_path, "mr", modality="MRI"), "exam_stage": "baseline"},
+        {**save_scan(tmp_path, "followup"), "exam_stage": "followup"},
+    ]
+    config = RegistrationConfig(
+        group_columns=["patient_key", "exam_stage"],
+        reference_priority=[{"Modality": ["MR", "CT"]}],
+        iterations=5,
+    )
+
+    out, errors = register_cohort(pd.DataFrame(rows), tmp_path / "out", config)
+
+    assert errors.empty
+    assert out.registration_group_id.nunique() == 2
+    assert out.loc[0, "registration_group_id"] == out.loc[1, "registration_group_id"]
+    assert out.loc[1, "registration_status"] == "reference"
+    assert out.loc[0, "registration_reference_id"] == out.loc[1, "registration_scan_id"]
+    assert out.loc[2, "registration_status"] == "reference"
+
+
+def test_modality_column_is_optional_when_not_configured(tmp_path):
+    from imperandi.process.registration.cohort import prepare_cohort
+
+    rows = [save_scan(tmp_path, "a"), save_scan(tmp_path, "b")]
+    for row in rows:
+        row.pop("Modality")
+    planned = prepare_cohort(
+        pd.DataFrame(rows),
+        RegistrationConfig(
+            group_columns=["patient_key", "study_id"],
+            reference_priority=[{"phase": ["PORTAL_VENOUS", "ARTERIAL"]}],
+        ),
+    )
+
+    assert planned.registration_group_id.nunique() == 1
+    assert planned.registration_group_size.tolist() == [2, 2]
+
+
 def test_failure_is_not_identity_success(tmp_path):
     rows = [save_scan(tmp_path, "a", phase="PORTAL_VENOUS"), save_scan(tmp_path, "b")]
 
@@ -810,9 +850,7 @@ def test_logs_identify_groups_with_human_attributes(tmp_path, caplog):
     ]
     out, errors = register_cohort(pd.DataFrame(rows), tmp_path / "out")
     assert errors.empty
-    expected = (
-        "patient_id=PATIENT-A, date=2024-05-17, visit_order=2, visit=v1, modality=CT"
-    )
+    expected = "patient_key=001, study_id=v1, Modality=CT"
     assert out.loc[0, "registration_group_label"] == expected
     info_messages = [
         record.message for record in caplog.records if record.levelno == logging.INFO
@@ -836,11 +874,12 @@ def test_logs_identify_groups_with_human_attributes(tmp_path, caplog):
     assert group_events == [
         {
             "event": "group_context",
-            "patient_id": "PATIENT-A",
-            "date": "2024-05-17",
-            "visit_order": "2",
-            "visit": "v1",
-            "modality": "CT",
+            "group_columns": ["patient_key", "study_id", "Modality"],
+            "group_values": {
+                "patient_key": "001",
+                "study_id": "v1",
+                "Modality": "CT",
+            },
             "series_count": 1,
             "registration_reference_label": (
                 "series=1/1, phase=PORTAL_VENOUS, sequence=T1"
