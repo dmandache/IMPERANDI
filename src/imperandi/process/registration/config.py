@@ -5,6 +5,7 @@ from math import isfinite
 from typing import Mapping
 
 TUMOR_CONSENSUS_METHODS = ("anchor", "majority", "intersection", "union", "staple")
+ORGAN_CONSENSUS_METHODS = ("anchor", "majority")
 REGISTRATION_STAGES = (
     "baseline",
     "pca",
@@ -30,6 +31,7 @@ class RegistrationConfig:
     )
     organ_column: str = "mask_liver"
     tumor_column: str = "mask_liver_tumor"
+    organ_consensus: str = "anchor"
     tumor_consensus: str = "anchor"
     affine: bool = False
     affine_min_dice: float = 0.9
@@ -77,6 +79,8 @@ class RegistrationConfig:
                 raise ValueError(f"{name} must be in (0, 1]")
         if not _finite_number(self.boundary_margin_mm) or self.boundary_margin_mm < 0:
             raise ValueError("boundary_margin_mm must be finite and nonnegative")
+        if self.organ_consensus not in ORGAN_CONSENSUS_METHODS:
+            raise ValueError(f"Unknown organ consensus: {self.organ_consensus}")
         if self.tumor_consensus not in TUMOR_CONSENSUS_METHODS:
             raise ValueError(f"Unknown tumor consensus: {self.tumor_consensus}")
         if type(self.iterations) is not int or self.iterations < 1:
