@@ -1640,14 +1640,14 @@ def main(args: argparse.Namespace) -> None:
         )
 
     errors_by_idx: Dict[str, str] = {}
-    if can_resume and paths.error_checkpoint_path.exists():
+    if (can_resume or can_partial_resume) and paths.error_checkpoint_path.exists():
         err_ckpt = pd.read_csv(paths.error_checkpoint_path)
         err_key = "_source_idx" if "_source_idx" in err_ckpt.columns else "idx"
         if err_key in err_ckpt.columns and "error_message" in err_ckpt.columns:
             for _, row in err_ckpt.iterrows():
                 try:
                     source_idx = normalize_source_id(row[err_key])
-                    if source_idx:
+                    if source_idx in completed_indices:
                         errors_by_idx[source_idx] = str(row["error_message"])
                 except Exception:
                     continue
