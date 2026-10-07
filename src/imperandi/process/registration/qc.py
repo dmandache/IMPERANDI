@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pandas as pd
 
-from imperandi.utils.run_state import atomic_write_csv
 from .config import REGISTRATION_STAGES
 from .labels import group_context
 
@@ -111,11 +110,8 @@ def build_qc(table, errors, config):
                 "registration_status",
                 "consensus_status",
                 *QC_FIELDS,
-                "reg_reference_to_scan_path",
-                "reg_scan_to_reference_path",
                 "reg_organ_native_path",
                 "reg_tumor_native_path",
-                "registration_report_path",
                 "registration_qc_path",
                 "registration_log_path",
             ]
@@ -147,14 +143,12 @@ def build_qc(table, errors, config):
     )
 
 
-def publish_group_qc(df, indices, errors, config, directory):
+def publish_group_log(df, indices, errors, config, directory):
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
-    qc_path, log_path = directory / "qc.csv", directory / "registration.jsonl"
-    df.loc[indices, "registration_qc_path"] = str(qc_path.resolve())
+    log_path = directory / "registration.jsonl"
     df.loc[indices, "registration_log_path"] = str(log_path.resolve())
     qc = build_qc(df.loc[indices], pd.DataFrame(errors), config)
-    atomic_write_csv(qc, qc_path, index=False)
     rows = qc.to_dict("records")
     first = rows[0]
     reference_label = first["registration_reference_label"]

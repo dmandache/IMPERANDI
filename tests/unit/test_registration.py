@@ -7,8 +7,10 @@ import pandas as pd
 import pytest
 
 from imperandi.process.registration import RegistrationConfig, register_cohort
+from imperandi.process.registration import organ as organ_registration
 from imperandi.process.registration.consensus import fuse_tumors
 from imperandi.process.registration.organ import register_pair
+from imperandi.process.registration.qc import build_qc
 
 sitk = pytest.importorskip("SimpleITK")
 
@@ -241,20 +243,42 @@ def test_pca_rotation_with_oblique_geometry():
     assert result.dice_after > result.dice_before
 
 
-def test_probability_consensus_pipeline(tmp_path):
+def test_majority_consensus_keeps_only_native_masks(tmp_path):
     rows = [save_scan(tmp_path, "a", phase="PORTAL_VENOUS"), save_scan(tmp_path, "b")]
+    output_dir = tmp_path / "out"
     out, errors = register_cohort(
         pd.DataFrame(rows),
-        tmp_path / "out",
+        output_dir,
         RegistrationConfig(method="majority", iterations=5),
     )
     assert errors.empty
     assert out.consensus_status.tolist() == ["ok", "ok"]
-    assert out.reg_tumor_probability_native_path.notna().all()
-    ref = sitk.ReadImage(rows[0]["nifti_path"])
-    registered = sitk.ReadImage(out.loc[1, "reg_nifti_path"])
-    assert registered.GetOrigin() == ref.GetOrigin()
-    assert registered.GetPixelID() == sitk.sitkFloat32
+    assert out.reg_organ_native_path.notna().all()
+    assert out.reg_tumor_native_path.notna().all()
+    for index, row in out.iterrows():
+        source = sitk.ReadImage(rows[index]["nifti_path"])
+        tumor = sitk.ReadImage(row.reg_tumor_native_path)
+        assert tumor.GetOrigin() == source.GetOrigin()
+        assert tumor.GetSize() == source.GetSize()
+    artifacts = [path.name for path in output_dir.rglob("*") if path.is_file()]
+    assert artifacts.count("organ_native.nii.gz") == 2
+    assert artifacts.count("tumor_native.nii.gz") == 2
+    assert artifacts.count("registration.jsonl") == 1
+    assert len(artifacts) == 5
+    assert not set(out).intersection(
+        {
+            "registration_report_path",
+            "reg_reference_to_scan_path",
+            "reg_scan_to_reference_path",
+            "reg_tumor_common_path",
+            "reg_tumor_coverage_common_path",
+            "reg_tumor_coverage_native_path",
+            "reg_tumor_probability_common_path",
+            "reg_tumor_probability_native_path",
+            "reg_nifti_path",
+            "reg_organ_path",
+        }
+    )
 
 
 def test_invalid_mask_and_missing_tumor(tmp_path):
@@ -265,7 +289,7 @@ def test_invalid_mask_and_missing_tumor(tmp_path):
     rows[0]["mask_liver"] = str(tmp_path / "missing.nii.gz")
     out, errors = register_cohort(pd.DataFrame(rows), tmp_path / "out2")
     assert out.registration_status.tolist() == ["failed"]
-    assert out.reg_nifti_path.isna().all()
+    assert out.reg_organ_native_path.isna().all()
     assert len(errors) == 1
 
 
@@ -297,6 +321,51 @@ def test_affine_refines_scale():
     assert result.reference_to_scan.GetName() == "AffineTransform"
     assert result.dice_after > 0.9
     assert result.dice_after > rigid.dice_after + 0.01
+
+
+@pytest.mark.parametrize(
+    "scores,affine,selected_stage,rejected_stage,fallback_stage,selected_dice",
+    [
+        ([0.8, 0.4, 0.9], False, "rigid", "pca", "baseline", 0.9),
+        ([0.5, 0.8, 0.4], False, "pca", "rigid", "pca", 0.8),
+        ([0.5, 0.8, 0.9, 0.7], True, "rigid", "affine", "rigid", 0.9),
+    ],
+)
+def test_worse_stage_falls_back_to_previous_best(
+    monkeypatch,
+    scores,
+    affine,
+    selected_stage,
+    rejected_stage,
+    fallback_stage,
+    selected_dice,
+):
+    values = iter(scores)
+    monkeypatch.setattr(
+        organ_registration,
+        "initialize_pca",
+        lambda fixed, moving: sitk.Euler3DTransform(),
+    )
+    monkeypatch.setattr(organ_registration, "dice", lambda *args: next(values))
+
+    result = organ_registration.register_pair(
+        organ(),
+        organ(),
+        RegistrationConfig(
+            affine=affine,
+            affine_min_dice=0,
+            iterations=1,
+            min_dice=0,
+        ),
+    )
+
+    assert list(values) == []
+    assert result.stage == selected_stage
+    assert result.dice_after == selected_dice
+    assert result.stages[rejected_stage]["status"] == "rejected_worse_dice"
+    assert result.stages[rejected_stage]["fallback_stage"] == fallback_stage
+    assert result.stages[rejected_stage]["selected"] is False
+    assert result.stages[selected_stage]["selected"] is True
 
 
 def test_affine_is_skipped_until_overlap_is_sufficient():
@@ -409,11 +478,10 @@ def test_stage_qc_and_trace_logs(tmp_path, caplog):
         save_scan(tmp_path, "portal", phase="PORTAL_VENOUS"),
         save_scan(tmp_path, "arterial", offset=4),
     ]
-    out, errors = register_cohort(
-        pd.DataFrame(rows), tmp_path / "out", RegistrationConfig(iterations=10)
-    )
+    config = RegistrationConfig(iterations=10)
+    out, errors = register_cohort(pd.DataFrame(rows), tmp_path / "out", config)
     assert errors.empty
-    qc = pd.read_csv(out.loc[1, "registration_qc_path"])
+    qc = build_qc(out, errors, config)
     moving = qc.set_index("registration_scan_id").loc[
         out.loc[1, "registration_scan_id"]
     ]
@@ -499,7 +567,7 @@ def test_logs_identify_groups_with_human_attributes(tmp_path, caplog):
     assert all(
         "series=1/1" in event["registration_scan_label"] for event in scan_events
     )
-    qc = pd.read_csv(out.loc[0, "registration_qc_path"])
+    qc = build_qc(out, errors, RegistrationConfig())
     assert qc.loc[0, "patient_id"] == "PATIENT-A"
     assert qc.loc[0, "date"] == "2024-05-17"
     assert qc.loc[0, "visit_order"] == 2
@@ -571,9 +639,7 @@ def test_rejected_pair_keeps_qc_and_original_canonical_paths(tmp_path):
     )
     assert out.loc[1, "mask_liver"] == rows[1]["mask_liver"]
     assert out.loc[1, "mask_liver_tumor"] == rows[1]["mask_liver_tumor"]
-    qc = pd.read_csv(out.loc[1, "registration_qc_path"]).set_index(
-        "registration_scan_id"
-    )
+    qc = build_qc(out, errors, RegistrationConfig()).set_index("registration_scan_id")
     moving = qc.loc[out.loc[1, "registration_scan_id"]]
     assert moving.dice_rigid == 0.2
     assert moving.registration_status == "failed"
