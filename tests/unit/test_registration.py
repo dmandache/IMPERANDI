@@ -1,5 +1,7 @@
 """Synthetic geometry and cohort contracts for registration."""
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -138,7 +140,14 @@ def test_cohort_grouping_anchor_transfer_and_native_preservation(tmp_path):
         source, tmp_path / "out", RegistrationConfig(iterations=10)
     )
     assert errors.empty
-    pd.testing.assert_frame_equal(out[source.columns], source)
+    unchanged = [c for c in source if not c.startswith("mask_")]
+    pd.testing.assert_frame_equal(out[unchanged], source[unchanged])
+    for column in ["mask_liver", "mask_liver_tumor"]:
+        pd.testing.assert_series_equal(
+            out[f"source_{column}"], source[column], check_names=False
+        )
+    assert out.mask_liver.equals(out.reg_organ_native_path)
+    assert out.mask_liver_tumor.equals(out.reg_tumor_native_path)
     assert out.registration_group_id.nunique() == 3
     assert out.loc[0, "registration_reference_id"] == out.loc[1, "registration_scan_id"]
     native = sitk.ReadImage(out.loc[0, "reg_tumor_native_path"])
@@ -320,3 +329,127 @@ def test_cli_cannot_overwrite_source_with_error_table(tmp_path):
     )
     with pytest.raises(ValueError, match="differ"):
         main(args)
+
+
+def test_native_canonical_masks_preserve_files_and_rerun_sources(tmp_path):
+    rows = [
+        save_scan(tmp_path, "portal", phase="PORTAL_VENOUS"),
+        save_scan(tmp_path, "arterial", offset=4),
+    ]
+    source = pd.DataFrame(rows)
+    originals = {
+        path: Path(path).read_bytes()
+        for row in rows
+        for path in [row["nifti_path"], row["mask_liver"], row["mask_liver_tumor"]]
+    }
+    first, errors = register_cohort(
+        source, tmp_path / "out", RegistrationConfig(iterations=10)
+    )
+    assert errors.empty
+    for i, row in first.iterrows():
+        scan = sitk.ReadImage(row.nifti_path)
+        for column in ["mask_liver", "mask_liver_tumor"]:
+            assert row[column] != rows[i][column]
+            assert row[f"source_{column}"] == rows[i][column]
+            mask = sitk.ReadImage(row[column])
+            assert (
+                mask.GetSize(),
+                mask.GetOrigin(),
+                mask.GetSpacing(),
+                mask.GetDirection(),
+            ) == (
+                scan.GetSize(),
+                scan.GetOrigin(),
+                scan.GetSpacing(),
+                scan.GetDirection(),
+            )
+    assert all(Path(path).read_bytes() == data for path, data in originals.items())
+    # A fresh invocation on the output CSV must not use its fused masks as input.
+    first_artifacts = {path: Path(path).read_bytes() for path in first.mask_liver_tumor}
+    second, errors = register_cohort(
+        first, tmp_path / "out", RegistrationConfig(iterations=10)
+    )
+    assert errors.empty
+    assert second.source_mask_liver.equals(first.source_mask_liver)
+    assert second.source_mask_liver_tumor.equals(first.source_mask_liver_tumor)
+    assert set(second.mask_liver_tumor).isdisjoint(first.mask_liver_tumor)
+    assert all(
+        Path(path).read_bytes() == data for path, data in first_artifacts.items()
+    )
+
+
+def test_stage_qc_and_trace_logs(tmp_path, caplog):
+    import json
+    import logging
+
+    caplog.set_level(logging.INFO)
+    rows = [
+        save_scan(tmp_path, "portal", phase="PORTAL_VENOUS"),
+        save_scan(tmp_path, "arterial", offset=4),
+    ]
+    out, errors = register_cohort(
+        pd.DataFrame(rows), tmp_path / "out", RegistrationConfig(iterations=10)
+    )
+    assert errors.empty
+    qc = pd.read_csv(out.loc[1, "registration_qc_path"])
+    moving = qc.set_index("registration_scan_id").loc[
+        out.loc[1, "registration_scan_id"]
+    ]
+    assert 0 <= moving.dice_baseline < moving.dice_pca <= 1
+    assert 0 <= moving.dice_rigid <= 1
+    assert pd.isna(moving.dice_affine)
+    assert moving.affine_status == "not_run"
+    assert moving.registration_reference_id == out.loc[0, "registration_scan_id"]
+    events = [
+        json.loads(line)
+        for line in Path(out.loc[1, "registration_log_path"]).read_text().splitlines()
+    ]
+    assert any(
+        event.get("stage") == "rigid" and event["registration_scan_id"] == moving.name
+        for event in events
+    )
+    assert any(
+        moving.name in record.message and "stage=rigid" in record.message
+        for record in caplog.records
+    )
+
+
+def test_rejected_pair_keeps_qc_and_original_canonical_paths(tmp_path):
+    from imperandi.process.registration.organ import (
+        RegistrationRejected,
+        TransformResult,
+    )
+
+    rows = [
+        save_scan(tmp_path, "portal", phase="PORTAL_VENOUS"),
+        save_scan(tmp_path, "arterial"),
+    ]
+
+    def rejected(*args):
+        result = TransformResult(
+            sitk.Euler3DTransform(),
+            "rigid",
+            0.1,
+            0.2,
+            [],
+            {
+                "baseline": {"dice": 0.1, "status": "evaluated"},
+                "pca": {"dice": 0.15, "status": "evaluated"},
+                "rigid": {"dice": 0.2, "status": "evaluated"},
+                "affine": {"dice": None, "status": "not_run"},
+            },
+        )
+        raise RegistrationRejected("Overlap rejected", result)
+
+    out, errors = register_cohort(
+        pd.DataFrame(rows), tmp_path / "out", pair_registration=rejected
+    )
+    assert out.loc[1, "mask_liver"] == rows[1]["mask_liver"]
+    assert out.loc[1, "mask_liver_tumor"] == rows[1]["mask_liver_tumor"]
+    qc = pd.read_csv(out.loc[1, "registration_qc_path"]).set_index(
+        "registration_scan_id"
+    )
+    moving = qc.loc[out.loc[1, "registration_scan_id"]]
+    assert moving.dice_rigid == 0.2
+    assert moving.registration_status == "failed"
+    assert "Overlap rejected" in moving.errors
