@@ -158,6 +158,30 @@ def test_cli_overrides_manifest_affine_setting(tmp_path, cohort):
     assert disabled.early_stop_organ_dice == 0.9
 
 
+def test_cli_overrides_manifest_elastic_stage_setting(tmp_path, cohort):
+    manifest = tmp_path / "elastic.yaml"
+    manifest.write_text(
+        yaml.safe_dump({"registration": {"enable_elastic_stage": True}})
+    )
+    enabled, _ = register.resolve_config(
+        register.normalize_registration_args(
+            args_for(cohort, "--manifest", str(manifest))
+        )
+    )
+    disabled, _ = register.resolve_config(
+        register.normalize_registration_args(
+            args_for(
+                cohort,
+                "--manifest",
+                str(manifest),
+                "--disable_elastic_stage",
+            )
+        )
+    )
+    assert enabled.enable_elastic_stage is True
+    assert disabled.enable_elastic_stage is False
+
+
 @pytest.mark.parametrize("entry_point", ["cli", "module"])
 @pytest.mark.parametrize("override", [False, True])
 def test_startup_log_contains_effective_manifest_settings(

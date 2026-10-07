@@ -9,6 +9,7 @@ from scipy import ndimage
 from .config import REGISTRATION_STAGES
 
 DICE_TOLERANCE = 1e-6
+MI_TOLERANCE = 1e-8
 
 
 def backend():
@@ -507,6 +508,75 @@ def _select_candidate(
     return candidate, candidate_score, candidate_stage
 
 
+def _mi_candidate_rejection(
+    candidate_dice,
+    dice_guard_reference,
+    input_mi,
+    candidate_mi,
+    minimum_mi_improvement,
+    maximum_dice_decrease,
+):
+    if not np.isfinite(
+        [candidate_dice, dice_guard_reference, input_mi, candidate_mi]
+    ).all():
+        raise ValueError("Nonfinite MI-stage evaluation")
+    if candidate_dice < dice_guard_reference - maximum_dice_decrease - DICE_TOLERANCE:
+        return "rejected_worse_dice"
+    improvement = candidate_mi - input_mi
+    if improvement < max(minimum_mi_improvement, MI_TOLERANCE):
+        return "rejected_insufficient_mi_improvement"
+    return None
+
+
+def _select_mi_candidate(
+    best,
+    score,
+    stage,
+    candidate,
+    candidate_dice,
+    candidate_stage,
+    stages,
+    *,
+    dice_guard_reference,
+    input_mi,
+    candidate_mi,
+    minimum_mi_improvement,
+    maximum_dice_decrease,
+    dice_guard_metric,
+):
+    """Accept an MI improvement only when anatomical Dice stays within tolerance."""
+    improvement = candidate_mi - input_mi
+    detail = stages[candidate_stage]
+    detail.update(
+        dice=candidate_dice,
+        input_dice=score,
+        dice_improvement=candidate_dice - score,
+        dice_guard_reference=dice_guard_reference,
+        maximum_allowed_dice_decrease=maximum_dice_decrease,
+        input_mutual_information=input_mi,
+        mutual_information=candidate_mi,
+        mutual_information_improvement=improvement,
+        minimum_required_mi_improvement=minimum_mi_improvement,
+        selection_metric="mattes_mutual_information",
+        dice_guard_metric=dice_guard_metric,
+        selected=False,
+    )
+    rejection = _mi_candidate_rejection(
+        candidate_dice,
+        dice_guard_reference,
+        input_mi,
+        candidate_mi,
+        minimum_mi_improvement,
+        maximum_dice_decrease,
+    )
+    if rejection is not None:
+        detail.update(status=rejection, fallback_stage=stage)
+        return best, score, stage
+    stages[stage]["selected"] = False
+    detail.update(status="evaluated", selected=True)
+    return candidate, candidate_dice, candidate_stage
+
+
 def _record_stage_failure(stages, warnings, name, exc, score, fallback):
     warnings.append(f"{name}: {exc}")
     stages[name].update(
@@ -600,6 +670,105 @@ def mi_refine(
     return transform, registration
 
 
+def mutual_information_score(
+    fixed_image,
+    moving_image,
+    fixed_organ,
+    moving_organ,
+    transform,
+    config,
+):
+    """Return deterministic boundary-band Mattes MI, with higher being better."""
+    sitk = backend()
+    evaluator = sitk.ImageRegistrationMethod()
+    evaluator.SetMetricAsMattesMutualInformation(numberOfHistogramBins=50)
+    evaluator.SetMetricFixedMask(
+        boundary_band(fixed_organ, band_mm=config.organ_boundary_band_half_width_mm)
+    )
+    evaluator.SetMetricMovingMask(
+        boundary_band(moving_organ, band_mm=config.organ_boundary_band_half_width_mm)
+    )
+    evaluator.SetInterpolator(sitk.sitkLinear)
+    evaluator.SetInitialTransform(transform)
+    # SimpleITK minimizes negative Mattes MI. Negate it so positive deltas mean
+    # better intensity correspondence in stage diagnostics and selection.
+    value = -float(
+        evaluator.MetricEvaluate(
+            sitk.Cast(fixed_image, sitk.sitkFloat32),
+            sitk.Cast(moving_image, sitk.sitkFloat32),
+        )
+    )
+    if not np.isfinite(value):
+        raise ValueError("Nonfinite mutual information")
+    return value
+
+
+def mi_elastic_refine(
+    fixed_image,
+    moving_image,
+    fixed_organ,
+    moving_organ,
+    fixed_domain,
+    initial,
+    config,
+):
+    """Refine a fixed-to-moving mapping with boundary-band MI and a B-spline.
+
+    The optimized B-spline is sampled as a residual displacement field so the
+    same boundary taper, topology validation, and numerical inversion used by
+    the elastic transform contract apply before the candidate can be selected.
+    """
+    sitk = backend()
+    lengths = (np.asarray(fixed_domain.GetSize()) - 1) * np.asarray(
+        fixed_domain.GetSpacing()
+    )
+    control_spacing = config.elastic_control_point_spacing_mm
+    mesh_size = [max(1, int(round(length / control_spacing))) for length in lengths]
+    bspline = sitk.BSplineTransformInitializer(fixed_domain, mesh_size, order=3)
+    registration = sitk.ImageRegistrationMethod()
+    registration.SetMetricAsMattesMutualInformation(numberOfHistogramBins=50)
+    registration.SetMetricFixedMask(
+        boundary_band(fixed_organ, band_mm=config.organ_boundary_band_half_width_mm)
+    )
+    registration.SetMetricMovingMask(
+        boundary_band(moving_organ, band_mm=config.organ_boundary_band_half_width_mm)
+    )
+    registration.SetMetricSamplingStrategy(registration.REGULAR)
+    registration.SetMetricSamplingPercentage(0.2)
+    registration.SetInterpolator(sitk.sitkLinear)
+    registration.SetOptimizerAsGradientDescentLineSearch(
+        learningRate=1.0,
+        numberOfIterations=config.maximum_optimizer_iterations,
+        convergenceMinimumValue=1e-3,
+        convergenceWindowSize=5,
+    )
+    registration.SetOptimizerScalesFromPhysicalShift()
+    registration.SetShrinkFactorsPerLevel([2, 1])
+    registration.SetSmoothingSigmasPerLevel([1, 0])
+    registration.SmoothingSigmasAreSpecifiedInPhysicalUnitsOn()
+    registration.SetMovingInitialTransform(initial)
+    registration.SetInitialTransform(bspline, inPlace=True)
+    registration.Execute(
+        sitk.Cast(fixed_image, sitk.sitkFloat32),
+        sitk.Cast(moving_image, sitk.sitkFloat32),
+    )
+    if not np.isfinite(bspline.GetParameters()).all():
+        raise ValueError("Nonfinite elastic transform")
+    field = sitk.TransformToDisplacementField(
+        bspline,
+        sitk.sitkVectorFloat64,
+        fixed_domain.GetSize(),
+        fixed_domain.GetOrigin(),
+        fixed_domain.GetSpacing(),
+        fixed_domain.GetDirection(),
+    )
+    field = _extend_residual(field)
+    composite = sitk.CompositeTransform(3)
+    composite.AddTransform(initial)
+    composite.AddTransform(sitk.DisplacementFieldTransform(field))
+    return composite, registration
+
+
 def register_pair(
     fixed_organ,
     moving_organ,
@@ -642,15 +811,27 @@ def register_pair(
     identity = sitk.Euler3DTransform()
     before = score_transform(identity, "baseline")
     best, score, stage = identity, before, "baseline"
+    peak_dice = before
     warnings = []
     stage_transforms = {"baseline": identity}
     stages = {name: {"dice": None, "status": "not_run"} for name in REGISTRATION_STAGES}
     stages["baseline"].update(dice=before, status="evaluated", selected=True)
     initializer_stage = "geometry" if partial else "pca"
-    pipeline = [initializer_stage, "mask_rigid", "mi_rigid", "mi_affine"]
+    pipeline = [
+        initializer_stage,
+        "mask_rigid",
+        "mi_rigid",
+        "mi_affine",
+        "mi_elastic",
+    ]
 
     def minimum_stage_improvement(name):
         return config.minimum_stage_dice_improvement[name]
+
+    def minimum_mi_improvement(name):
+        return config.minimum_stage_mi_improvement[name]
+
+    dice_metric = "dice_common_fov" if partial else "dice_full"
 
     if partial:
         stages["pca"].update(status="skipped_partial_coverage", selected=False)
@@ -710,6 +891,7 @@ def register_pair(
                 stages,
                 minimum_stage_improvement(initializer_stage),
             )
+            peak_dice = max(peak_dice, score)
         except (RuntimeError, ValueError) as exc:
             _record_stage_failure(
                 stages, warnings, initializer_stage, exc, score, stage
@@ -752,6 +934,7 @@ def register_pair(
                 stages,
                 minimum_stage_improvement("mask_rigid"),
             )
+            peak_dice = max(peak_dice, score)
         except (RuntimeError, ValueError) as exc:
             _record_stage_failure(stages, warnings, "mask_rigid", exc, score, stage)
         finally:
@@ -763,6 +946,14 @@ def register_pair(
     if not reached_target():
         started = time.perf_counter()
         try:
+            input_mi = mutual_information_score(
+                fixed_image,
+                moving_image,
+                fixed_organ,
+                moving_organ,
+                best,
+                config,
+            )
             tx, reg = mi_refine(
                 fixed_image,
                 moving_image,
@@ -777,8 +968,16 @@ def register_pair(
                 metric="mattes_mutual_information",
             )
             candidate = score_transform(tx, "mi_rigid")
+            candidate_mi = mutual_information_score(
+                fixed_image,
+                moving_image,
+                fixed_organ,
+                moving_organ,
+                tx,
+                config,
+            )
             stage_transforms["mi_rigid"] = tx
-            best, score, stage = _select_candidate(
+            best, score, stage = _select_mi_candidate(
                 best,
                 score,
                 stage,
@@ -786,8 +985,14 @@ def register_pair(
                 candidate,
                 "mi_rigid",
                 stages,
-                minimum_stage_improvement("mi_rigid"),
+                dice_guard_reference=peak_dice,
+                input_mi=input_mi,
+                candidate_mi=candidate_mi,
+                minimum_mi_improvement=minimum_mi_improvement("mi_rigid"),
+                maximum_dice_decrease=config.maximum_mi_stage_dice_decrease,
+                dice_guard_metric=dice_metric,
             )
+            peak_dice = max(peak_dice, score)
         except (RuntimeError, ValueError) as exc:
             _record_stage_failure(stages, warnings, "mi_rigid", exc, score, stage)
         finally:
@@ -806,6 +1011,14 @@ def register_pair(
     elif stages["mi_affine"]["status"] == "not_run":
         started = time.perf_counter()
         try:
+            input_mi = mutual_information_score(
+                fixed_image,
+                moving_image,
+                fixed_organ,
+                moving_organ,
+                best,
+                config,
+            )
             tx, reg = mi_refine(
                 fixed_image,
                 moving_image,
@@ -821,8 +1034,16 @@ def register_pair(
                 metric="mattes_mutual_information",
             )
             candidate = score_transform(tx, "mi_affine")
+            candidate_mi = mutual_information_score(
+                fixed_image,
+                moving_image,
+                fixed_organ,
+                moving_organ,
+                tx,
+                config,
+            )
             stage_transforms["mi_affine"] = tx
-            best, score, stage = _select_candidate(
+            best, score, stage = _select_mi_candidate(
                 best,
                 score,
                 stage,
@@ -830,12 +1051,105 @@ def register_pair(
                 candidate,
                 "mi_affine",
                 stages,
-                minimum_stage_improvement("mi_affine"),
+                dice_guard_reference=peak_dice,
+                input_mi=input_mi,
+                candidate_mi=candidate_mi,
+                minimum_mi_improvement=minimum_mi_improvement("mi_affine"),
+                maximum_dice_decrease=config.maximum_mi_stage_dice_decrease,
+                dice_guard_metric=dice_metric,
             )
+            peak_dice = max(peak_dice, score)
         except (RuntimeError, ValueError) as exc:
             _record_stage_failure(stages, warnings, "mi_affine", exc, score, stage)
         finally:
             stages["mi_affine"]["elapsed_seconds"] = time.perf_counter() - started
+        if reached_target():
+            stages["mi_affine"]["early_stop"] = True
+            skip_remaining("mi_affine")
+
+    selected_inverse = None
+    if stages["mi_elastic"]["status"] == "not_run" and not config.enable_elastic_stage:
+        stages["mi_elastic"].update(
+            status="skipped_disabled",
+            input_dice=score,
+            selected=False,
+            fallback_stage=stage,
+        )
+    elif stages["mi_elastic"]["status"] == "not_run":
+        started = time.perf_counter()
+        try:
+            if fixed_dm is None:
+                fixed_dm = distance_map(
+                    fixed_organ,
+                    padding_mm=config.distance_map_crop_padding_mm,
+                    band_mm=config.organ_boundary_band_half_width_mm,
+                )
+            input_mi = mutual_information_score(
+                fixed_image,
+                moving_image,
+                fixed_organ,
+                moving_organ,
+                best,
+                config,
+            )
+            tx, reg = mi_elastic_refine(
+                fixed_image,
+                moving_image,
+                fixed_organ,
+                moving_organ,
+                fixed_dm,
+                best,
+                config,
+            )
+            candidate = score_transform(tx, "mi_elastic")
+            candidate_mi = mutual_information_score(
+                fixed_image,
+                moving_image,
+                fixed_organ,
+                moving_organ,
+                tx,
+                config,
+            )
+            stage_transforms["mi_elastic"] = tx
+            stages["mi_elastic"].update(
+                optimizer_stop=reg.GetOptimizerStopConditionDescription(),
+                optimizer_iteration=int(reg.GetOptimizerIteration()),
+                metric="mattes_mutual_information",
+                algorithm="BSplineTransform",
+            )
+            if (
+                _mi_candidate_rejection(
+                    candidate,
+                    peak_dice,
+                    input_mi,
+                    candidate_mi,
+                    minimum_mi_improvement("mi_elastic"),
+                    config.maximum_mi_stage_dice_decrease,
+                )
+                is None
+            ):
+                selected_inverse = invert_elastic(tx, fixed_organ, stages["mi_elastic"])
+            best, score, stage = _select_mi_candidate(
+                best,
+                score,
+                stage,
+                tx,
+                candidate,
+                "mi_elastic",
+                stages,
+                dice_guard_reference=peak_dice,
+                input_mi=input_mi,
+                candidate_mi=candidate_mi,
+                minimum_mi_improvement=minimum_mi_improvement("mi_elastic"),
+                maximum_dice_decrease=config.maximum_mi_stage_dice_decrease,
+                dice_guard_metric=dice_metric,
+            )
+            peak_dice = max(peak_dice, score)
+        except (RuntimeError, ValueError) as exc:
+            selected_inverse = None
+            _record_stage_failure(stages, warnings, "mi_elastic", exc, score, stage)
+        finally:
+            stages["mi_elastic"]["elapsed_seconds"] = time.perf_counter() - started
     selected_stage = "identity" if stage == "baseline" else stage
     result = TransformResult(
         best,
@@ -845,13 +1159,13 @@ def register_pair(
         warnings,
         stages,
         stage_transforms,
-        best.GetInverse(),
+        selected_inverse if selected_inverse is not None else best.GetInverse(),
     )
     for name, tx in stage_transforms.items():
         if name not in overlaps:
             overlaps[name] = overlap_qc(fixed_organ, moving_organ, tx)
         stages[name].update(overlaps[name])
-        stages[name]["selection_metric"] = "dice_common_fov" if partial else "dice_full"
+        stages[name].setdefault("selection_metric", dice_metric)
     result.overlap = overlaps[stage]
     result.organ_volume_ratio = fixed_qc.volume_mm3 / moving_qc.volume_mm3
     result.confidence = registration_confidence(result.overlap, partial, config)
