@@ -679,16 +679,16 @@ def main(args):
             len(completed_indices),
             max(0, len(df_all) - len(completed_indices)),
         )
-        if paths.error_checkpoint_path.exists():
-            err_ckpt = pd.read_csv(paths.error_checkpoint_path)
-            for _, row in err_ckpt.iterrows():
-                if "_source_idx" in row:
-                    try:
-                        source_idx = normalize_source_id(row["_source_idx"])
-                        if source_idx:
-                            errors_by_idx[source_idx] = row.to_dict()
-                    except Exception:
-                        continue
+    if (can_resume or can_partial_resume) and paths.error_checkpoint_path.exists():
+        err_ckpt = pd.read_csv(paths.error_checkpoint_path)
+        for _, row in err_ckpt.iterrows():
+            if "_source_idx" in row:
+                try:
+                    source_idx = normalize_source_id(row["_source_idx"])
+                    if source_idx in completed_indices:
+                        errors_by_idx[source_idx] = row.to_dict()
+                except Exception:
+                    continue
 
     resumed_ids = set(df_all["_source_idx"]) & completed_indices
     resume_failed_count = len(resumed_ids & set(errors_by_idx))
