@@ -86,11 +86,11 @@ def test_fusion_votes_and_ties(method, expected):
 @pytest.mark.parametrize(
     "method", ["anchor", "majority", "intersection", "union", "staple"]
 )
-def test_empty_tumor_is_not_a_consensus_contributor(method):
+def test_empty_resampled_tumor_preserves_observed_negative_votes(method):
     empty = image(np.zeros((2, 3, 4)))
     coverage = image(np.ones((2, 3, 4)))
-    with pytest.raises(ValueError, match="nonempty tumor mask"):
-        fuse_tumors([empty], [coverage], method=method)
+    result = fuse_tumors([empty], [coverage], method=method)
+    assert not sitk.GetArrayFromImage(result.mask).any()
     with pytest.raises(ValueError, match="support"):
         fuse_tumors([coverage], [empty], method=method)
 
@@ -457,9 +457,7 @@ def test_elastic_stage_can_be_selected_and_retains_inverse(monkeypatch):
         "elastic_refine",
         lambda *args: (forward, Optimizer()),
     )
-    monkeypatch.setattr(
-        organ_registration, "invert_elastic", lambda *args: inverse
-    )
+    monkeypatch.setattr(organ_registration, "invert_elastic", lambda *args: inverse)
     result = register_pair(
         organ(),
         organ(),
@@ -502,8 +500,8 @@ def test_intersection_ignores_unobserved_background():
     result = fuse_tumors([a, b], [a, image(coverage)], method="intersection")
     mask = sitk.GetArrayFromImage(result.mask)
     assert mask[:, :, :3].all()
-    assert not mask[:, :, 3].any()
-    assert np.array_equal(sitk.GetArrayFromImage(result.coverage), coverage)
+    assert mask[:, :, 3].all()
+    assert sitk.GetArrayFromImage(result.coverage).all()
 
 
 def test_numeric_visit_identifiers(tmp_path):
