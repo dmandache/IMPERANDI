@@ -725,13 +725,21 @@ def mi_elastic_refine(
     control_spacing = config.elastic_control_point_spacing_mm
     mesh_size = [max(1, int(round(length / control_spacing))) for length in lengths]
     bspline = sitk.BSplineTransformInitializer(fixed_domain, mesh_size, order=3)
+    # Optimize the residual in fixed space. Prewarping avoids exposing the
+    # preceding linear stage as the registration metric's moving transform,
+    # which some ITK builds reject when optimizing a local-support transform.
+    aligned_moving_image = resample(moving_image, fixed_image, initial, label=False)
+    aligned_moving_organ = resample(moving_organ, fixed_organ, initial)
     registration = sitk.ImageRegistrationMethod()
     registration.SetMetricAsMattesMutualInformation(numberOfHistogramBins=50)
     registration.SetMetricFixedMask(
         boundary_band(fixed_organ, band_mm=config.organ_boundary_band_half_width_mm)
     )
     registration.SetMetricMovingMask(
-        boundary_band(moving_organ, band_mm=config.organ_boundary_band_half_width_mm)
+        boundary_band(
+            aligned_moving_organ,
+            band_mm=config.organ_boundary_band_half_width_mm,
+        )
     )
     registration.SetMetricSamplingStrategy(registration.REGULAR)
     registration.SetMetricSamplingPercentage(0.2)
@@ -746,11 +754,10 @@ def mi_elastic_refine(
     registration.SetShrinkFactorsPerLevel([2, 1])
     registration.SetSmoothingSigmasPerLevel([1, 0])
     registration.SmoothingSigmasAreSpecifiedInPhysicalUnitsOn()
-    registration.SetMovingInitialTransform(initial)
     registration.SetInitialTransform(bspline, inPlace=True)
     registration.Execute(
         sitk.Cast(fixed_image, sitk.sitkFloat32),
-        sitk.Cast(moving_image, sitk.sitkFloat32),
+        aligned_moving_image,
     )
     if not np.isfinite(bspline.GetParameters()).all():
         raise ValueError("Nonfinite elastic transform")
