@@ -1,6 +1,7 @@
 """Mask completeness heuristics and overlap restricted to observed image space.
 
 Boundary contact suggests truncation, not proof of anatomical completeness.
+Broad, flat end faces also suggest truncation within the image.
 Axes refer to image index axes (x, y, z), including oblique acquisitions.
 """
 
@@ -21,6 +22,30 @@ class OrganMaskQC:
     @property
     def partial(self) -> bool:
         return self.status == "partial"
+
+
+def _has_straight_side(values):
+    """Detect a broad, abrupt end face along any image axis.
+
+    A cut face occupies at least a quarter of the largest cross-section and
+    retains at least 90% of the adjacent inward section. Requiring both avoids
+    treating small, voxelized rounded tips as cuts. This heuristic detects
+    image-axis-aligned cuts, including images with oblique physical geometry.
+    """
+    for axis in range(values.ndim):
+        areas = values.sum(axis=tuple(i for i in range(values.ndim) if i != axis))
+        occupied = np.flatnonzero(areas)
+        if len(occupied) < 3:
+            continue
+        for edge, inward in (
+            (occupied[0], occupied[0] + 1),
+            (occupied[-1], occupied[-1] - 1),
+        ):
+            if areas[edge] >= max(4, 0.25 * areas.max()) and (
+                areas[edge] >= 0.9 * areas[inward]
+            ):
+                return True
+    return False
 
 
 def assess_organ_mask(mask, config) -> OrganMaskQC:
@@ -50,6 +75,9 @@ def assess_organ_mask(mask, config) -> OrganMaskQC:
     if values.all():
         reasons.append("fills_entire_fov")
     status = "invalid" if reasons else "partial" if any(low | high) else "complete"
+    if status != "invalid" and _has_straight_side(labels == sizes.argmax() + 1):
+        status = "partial"
+        reasons.append("straight_side")
     return OrganMaskQC(
         status,
         volume,
