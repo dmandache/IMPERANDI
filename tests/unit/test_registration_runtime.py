@@ -77,7 +77,11 @@ def test_manifest_overrides_defaults_and_cli(tmp_path, cohort):
 
 def test_cli_overrides_manifest_elastic_setting(tmp_path, cohort):
     manifest = tmp_path / "elastic.yaml"
-    manifest.write_text(yaml.safe_dump({"registration": {"elastic": True}}))
+    manifest.write_text(
+        yaml.safe_dump(
+            {"registration": {"elastic": True, "demons_smoothing_sigma_mm": 2.0}}
+        )
+    )
     enabled, _ = register.resolve_config(
         register.normalize_registration_args(
             args_for(cohort, "--manifest", str(manifest))
@@ -85,11 +89,20 @@ def test_cli_overrides_manifest_elastic_setting(tmp_path, cohort):
     )
     disabled, _ = register.resolve_config(
         register.normalize_registration_args(
-            args_for(cohort, "--manifest", str(manifest), "--no_elastic")
+            args_for(
+                cohort,
+                "--manifest",
+                str(manifest),
+                "--no_elastic",
+                "--demons_smoothing_sigma_mm",
+                "1.5",
+            )
         )
     )
     assert enabled.elastic is True
+    assert enabled.demons_smoothing_sigma_mm == 2.0
     assert disabled.elastic is False
+    assert disabled.demons_smoothing_sigma_mm == 1.5
 
 
 def test_default_error_and_qc_filenames_follow_output_directory(cohort, tmp_path):

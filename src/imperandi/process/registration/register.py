@@ -43,9 +43,9 @@ def add_registration_arguments(parser):
     elastic.add_argument("--elastic", action="store_true", default=None)
     elastic.add_argument("--no_elastic", action="store_false", dest="elastic")
     parser.add_argument(
-        "--bspline_ctrl_spacing_mm",
+        "--demons_smoothing_sigma_mm",
         type=float,
-        help="Approximate elastic B-spline control-point spacing in mm.",
+        help="Gaussian smoothing sigma for the Demons displacement field in mm.",
     )
     parser.add_argument("--visit_column")
     parser.add_argument(
@@ -175,7 +175,7 @@ def normalize_registration_args(args):
         method=None,
         affine=None,
         elastic=None,
-        bspline_ctrl_spacing_mm=None,
+        demons_smoothing_sigma_mm=None,
         visit_column=None,
     )
     for name, default in defaults.items():
@@ -207,7 +207,7 @@ def resolve_config(args):
         "method",
         "affine",
         "elastic",
-        "bspline_ctrl_spacing_mm",
+        "demons_smoothing_sigma_mm",
         "visit_column",
     ]:
         value = getattr(args, name)
