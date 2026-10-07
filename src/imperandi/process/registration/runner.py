@@ -53,7 +53,7 @@ def run_registration(args, table, config, manifest):
     signature = argparse.Namespace(
         settings=asdict(config),
         manifest_config=manifest,
-        registration_schema=9,
+        registration_schema=10,
         backend_version=sitk.Version_VersionString(),
         output_dir=args.output_dir,
         threads_per_worker=args.threads_per_worker,
@@ -90,7 +90,13 @@ def run_registration(args, table, config, manifest):
         and (
             c.startswith("reg_")
             or c.startswith("registration_")
-            or c in {"consensus_status", config.organ_column, config.tumor_column}
+            or c
+            in {
+                "consensus_status",
+                "tumor_consensus_input_status",
+                config.organ_column,
+                config.tumor_column,
+            }
         )
     ]
     if context["can_resume"]:
@@ -119,7 +125,9 @@ def run_registration(args, table, config, manifest):
                     if fingerprint_inputs(paths, strict=args.strict_resume) != expected:
                         continue
                     if args.retry_failed and (
-                        previous.registration_status.eq("failed").any()
+                        previous.registration_status.isin(
+                            ["failed", "low_confidence", "invalid_organ_mask"]
+                        ).any()
                         or previous.consensus_status.eq("failed").any()
                         or (
                             saved_errors is not None
@@ -283,7 +291,14 @@ def run_registration(args, table, config, manifest):
             "final_outputs": fingerprint_inputs(final_paths, strict=args.strict_resume),
         },
     )
-    failed_ids = set(errors.registration_scan_id)
+    failed_ids = set(errors.registration_scan_id) | set(
+        df.loc[
+            df.registration_status.isin(
+                ["failed", "low_confidence", "invalid_organ_mask"]
+            ),
+            "registration_scan_id",
+        ]
+    )
     pending_ids = {key for key, _ in pending}
     processed_ids = set(
         df.loc[df.registration_group_id.isin(pending_ids), "registration_scan_id"]

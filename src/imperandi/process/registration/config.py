@@ -5,7 +5,7 @@ from math import isfinite
 from typing import Mapping
 
 CONSENSUS_METHODS = ("anchor", "majority", "intersection", "union", "staple")
-REGISTRATION_STAGES = ("baseline", "pca", "rigid", "affine", "elastic")
+REGISTRATION_STAGES = ("baseline", "geometry", "pca", "rigid", "affine", "elastic")
 SUPPORTED_MODALITIES = ("CT", "MR")
 
 
@@ -18,6 +18,13 @@ class RegistrationConfig:
     affine: bool = False
     affine_min_dice: float = 0.9
     elastic: bool = False
+    elastic_min_dice: float = 0.7
+    boundary_margin_mm: float = 1.0
+    allow_partial_organs: bool = True
+    partial_mask_pca: bool = False
+    min_largest_component_fraction: float = 0.8
+    min_confidence_dice: float = 0.5
+    min_common_fov_fraction: float = 0.05
     bspline_ctrl_spacing_mm: float = 90.0
     iterations: int = 100
     min_dice: float = 0.1
@@ -35,6 +42,29 @@ class RegistrationConfig:
     )
 
     def __post_init__(self):
+        for name in ("allow_partial_organs", "partial_mask_pca"):
+            if type(getattr(self, name)) is not bool:
+                raise ValueError(f"{name} must be a boolean")
+        for name in (
+            "elastic_min_dice",
+            "min_largest_component_fraction",
+            "min_confidence_dice",
+            "min_common_fov_fraction",
+        ):
+            value = getattr(self, name)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not 0 < value <= 1
+            ):
+                raise ValueError(f"{name} must be in (0, 1]")
+        if (
+            isinstance(self.boundary_margin_mm, bool)
+            or not isinstance(self.boundary_margin_mm, (int, float))
+            or not isfinite(self.boundary_margin_mm)
+            or self.boundary_margin_mm < 0
+        ):
+            raise ValueError("boundary_margin_mm must be finite and nonnegative")
         if self.method not in CONSENSUS_METHODS:
             raise ValueError(f"Unknown consensus method: {self.method}")
         if (
