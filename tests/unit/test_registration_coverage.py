@@ -144,11 +144,11 @@ def test_partial_fov_perfect_alignment_uses_common_dice(monkeypatch):
     )
     assert result.confidence == "ok_partial_coverage"
     assert result.overlap["dice_common_fov"] == 1
-    assert result.stages["pca"]["status"] == "skipped_partial_coverage"
+    assert result.stages["pca"]["status"] == "skipped_early_stop"
     assert result.organ_volume_ratio > 2
 
 
-def test_equal_volume_does_not_establish_confidence_or_allow_elastic(monkeypatch):
+def test_equal_volume_does_not_establish_registration_confidence(monkeypatch):
     fixed = complete_mask()
     moving = sitk.Image(fixed)
     moving.SetOrigin(tuple(np.array(fixed.GetOrigin()) + [25, 0, 0]))
@@ -162,15 +162,10 @@ def test_equal_volume_does_not_establish_confidence_or_allow_elastic(monkeypatch
     monkeypatch.setattr(
         alignment, "initialize_pca", lambda *args: sitk.Euler3DTransform()
     )
-    elastic = Mock(side_effect=AssertionError("Poor overlap must block elastic"))
-    monkeypatch.setattr(alignment, "elastic_refine", elastic)
-    result = alignment.register_pair(
-        fixed, moving, RegistrationConfig(min_dice=0, elastic=True)
-    )
+    result = alignment.register_pair(fixed, moving, RegistrationConfig(min_dice=0))
     assert result.organ_volume_ratio == 1
     assert result.confidence == "low_confidence"
-    assert result.stages["elastic"]["status"] == "skipped_low_dice"
-    elastic.assert_not_called()
+    assert result.stages["mi_affine"]["status"] == "skipped_disabled"
 
 
 def test_partial_reference_priority_and_qc(tmp_path):
@@ -285,7 +280,12 @@ def test_low_confidence_scan_excluded_from_consensus(tmp_path):
 
     def uncertain(*args):
         return alignment.TransformResult(
-            sitk.Euler3DTransform(), "rigid", 1, 1, [], confidence="low_confidence"
+            sitk.Euler3DTransform(),
+            "mask_rigid",
+            1,
+            1,
+            [],
+            confidence="low_confidence",
         )
 
     out, errors = register_cohort(
@@ -356,7 +356,7 @@ def test_nonfinite_overlap_is_low_confidence(partial, value):
 @pytest.mark.parametrize(
     "name",
     [
-        "elastic_min_dice",
+        "early_stop_dice",
         "min_confidence_dice",
         "min_common_fov_fraction",
         "min_largest_component_fraction",
