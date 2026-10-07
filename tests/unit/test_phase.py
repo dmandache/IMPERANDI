@@ -102,6 +102,55 @@ def test_process_single_volume_success(tmp_path, monkeypatch):
     assert phase_info["totalseg_probability"] == 0.9
 
 
+def test_process_single_volume_supports_generator_api(tmp_path, monkeypatch):
+    nifti = tmp_path / "vol.nii.gz"
+    nifti.write_text("nifti")
+
+    monkeypatch.setattr(phase_module.nib, "load", lambda _: object())
+
+    def generator_extractor(_, quiet=True):
+        yield {"id": 1, "progress": 2, "status": "Loading data"}
+        yield {"id": 4, "progress": 85, "status": "Predicting phase"}
+        yield {
+            "id": 5,
+            "progress": 100,
+            "status": "Done",
+            "result": {"phase": "portal_venous", "probability": 0.9},
+        }
+
+    idx, phase_info, err = phase_module.process_single_volume(
+        0,
+        {"nifti_path": str(nifti)},
+        phase_extractor=generator_extractor,
+    )
+
+    assert idx == 0
+    assert err is None
+    assert phase_info["totalseg_phase"] == "portal_venous"
+    assert phase_info["totalseg_probability"] == 0.9
+
+
+def test_process_single_volume_generator_without_result_fails(tmp_path, monkeypatch):
+    nifti = tmp_path / "vol.nii.gz"
+    nifti.write_text("nifti")
+
+    monkeypatch.setattr(phase_module.nib, "load", lambda _: object())
+
+    def generator_extractor(_, quiet=True):
+        yield {"id": 1, "progress": 2, "status": "Loading data"}
+        yield {"id": 4, "progress": 85, "status": "Predicting phase"}
+
+    idx, phase_info, err = phase_module.process_single_volume(
+        0,
+        {"nifti_path": str(nifti)},
+        phase_extractor=generator_extractor,
+    )
+
+    assert idx == 0
+    assert phase_info is None
+    assert err == "phase extractor did not return a prediction dictionary"
+
+
 def test_process_single_volume_missing_file():
     idx, phase_info, err = phase_module.process_single_volume(
         0,
