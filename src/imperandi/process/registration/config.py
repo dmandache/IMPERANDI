@@ -15,6 +15,15 @@ REGISTRATION_STAGES = (
     "mi_affine",
 )
 
+DEFAULT_MIN_DELTA = {
+    "geometry": 0.001,
+    "pca": 0.001,
+    "rigid": 0.002,
+    "mi_rigid": 0.002,
+    "affine": 0.003,
+    "mi_affine": 0.003,
+}
+
 
 def _finite_number(value):
     return (
@@ -34,7 +43,6 @@ class RegistrationConfig:
     organ_consensus: str = "anchor"
     tumor_consensus: str = "anchor"
     affine: bool = False
-    affine_min_dice: float = 0.9
     early_stop_dice: float = 0.95
     boundary_margin_mm: float = 1.0
     allow_partial_organs: bool = True
@@ -42,6 +50,7 @@ class RegistrationConfig:
     min_confidence_dice: float = 0.5
     min_common_fov_fraction: float = 0.05
     pca_max_rotation_degrees: float = 45.0
+    min_delta: dict[str, float] = field(default_factory=lambda: dict(DEFAULT_MIN_DELTA))
     demons_smoothing_sigma_mm: float = 1.0
     iterations: int = 100
     min_dice: float = 0.1
@@ -91,17 +100,25 @@ class RegistrationConfig:
             raise ValueError(f"Unknown tumor consensus: {self.tumor_consensus}")
         if type(self.iterations) is not int or self.iterations < 1:
             raise ValueError("iterations must be a positive integer")
-        for name in ("min_dice", "affine_min_dice", "early_stop_dice", "threshold"):
+        for name in ("min_dice", "early_stop_dice", "threshold"):
             if not _finite_number(getattr(self, name)):
                 raise ValueError(f"{name} must be a finite numeric threshold")
         if not 0 < self.early_stop_dice <= 1:
             raise ValueError("early_stop_dice must be in (0, 1]")
-        if (
-            not 0 <= self.min_dice <= 1
-            or not 0 <= self.affine_min_dice <= 1
-            or not 0 < self.threshold < 1
-        ):
+        if not 0 <= self.min_dice <= 1 or not 0 < self.threshold < 1:
             raise ValueError("Invalid Dice or probability threshold")
+        if not isinstance(self.min_delta, Mapping):
+            raise ValueError("min_delta must be a mapping")
+        unknown_delta_stages = set(self.min_delta) - set(DEFAULT_MIN_DELTA)
+        if unknown_delta_stages:
+            raise ValueError(
+                f"Unknown min_delta stages: {sorted(unknown_delta_stages)}"
+            )
+        min_delta = {**DEFAULT_MIN_DELTA, **self.min_delta}
+        for name, value in min_delta.items():
+            if not _finite_number(value) or not 0 <= value <= 1:
+                raise ValueError(f"min_delta {name} must be in [0, 1]")
+        object.__setattr__(self, "min_delta", min_delta)
         if (
             not _finite_number(self.crop_padding_mm)
             or self.crop_padding_mm < 0
