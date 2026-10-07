@@ -48,7 +48,7 @@ def args_for(source, *flags):
 
 def paths_for(source):
     output = source.with_name(source.stem + "_registered.csv")
-    errors = output.with_name(output.stem + "_errors.csv")
+    errors = output.with_name("register_errors.csv")
     return output, errors, build_checkpoint_paths(output, errors, "register")
 
 
@@ -73,6 +73,15 @@ def test_manifest_overrides_defaults_and_cli(tmp_path, cohort):
         args_for(cohort, "--manifest", "generic")
     )
     assert isinstance(register.resolve_config(built_in)[0], RegistrationConfig)
+
+
+def test_default_error_and_qc_filenames_follow_output_directory(cohort, tmp_path):
+    output = tmp_path / "custom_result.csv"
+    args = register.normalize_registration_args(
+        args_for(cohort, "--csv_path_out", str(output))
+    )
+    assert Path(args.error_csv_path) == tmp_path / "register_errors.csv"
+    assert Path(args.qc_csv_path) == tmp_path / "register_qc.csv"
 
 
 def test_dry_run_no_backend_or_writes(monkeypatch, cohort, tmp_path):
@@ -340,7 +349,7 @@ def test_qc_and_canonical_paths_survive_resume_and_qc_restoration(monkeypatch, c
     register.main(args_for(cohort))
     output, _, _ = paths_for(cohort)
     first = pd.read_csv(output)
-    qc_path = output.with_name(output.stem + "_qc.csv")
+    qc_path = output.with_name("register_qc.csv")
     qc_before = pd.read_csv(qc_path)
     assert set(qc_before.registration_scan_id) == set(first.registration_scan_id)
     assert first.registration_qc_path.eq(str(qc_path.resolve())).all()
@@ -363,7 +372,7 @@ def test_qc_and_canonical_paths_survive_resume_and_qc_restoration(monkeypatch, c
 def test_worker_failures_appear_in_qc(cohort):
     register.main(args_for(cohort, "--timeout_sec", "0.001"))
     output, _, _ = paths_for(cohort)
-    qc = pd.read_csv(output.with_name(output.stem + "_qc.csv"))
+    qc = pd.read_csv(output.with_name("register_qc.csv"))
     assert len(qc) == 2
     assert qc.registration_status.eq("failed").all()
     assert qc.errors.str.contains("timeout").all()
