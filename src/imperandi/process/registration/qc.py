@@ -37,6 +37,9 @@ def build_qc(table, errors, config):
         dict.fromkeys(
             [
                 "patient_key",
+                "patient_id",
+                "date",
+                "visit_order",
                 config.visit_column,
                 "study_id",
                 "series_id",
@@ -49,8 +52,11 @@ def build_qc(table, errors, config):
                 config.organ_column,
                 config.tumor_column,
                 "registration_scan_id",
+                "registration_scan_label",
                 "registration_group_id",
+                "registration_group_label",
                 "registration_reference_id",
+                "registration_reference_label",
                 "registration_status",
                 "consensus_status",
                 *QC_FIELDS,
@@ -106,9 +112,18 @@ def publish_group_qc(df, indices, errors, config, directory):
         context = {
             key: row[key]
             for key in [
+                "patient_key",
+                "patient_id",
+                "date",
+                "visit_order",
+                config.visit_column,
+                "Modality",
                 "registration_group_id",
+                "registration_group_label",
                 "registration_scan_id",
+                "registration_scan_label",
                 "registration_reference_id",
+                "registration_reference_label",
                 "nifti_path",
                 "registration_started_at",
                 "selected_stage",
@@ -131,10 +146,8 @@ def publish_group_qc(df, indices, errors, config, directory):
         for stage, detail in stages.items():
             events.append({**context, "event": "organ_stage", "stage": stage, **detail})
             logger.info(
-                "group=%s scan=%s reference=%s stage=%s dice=%s status=%s",
-                context["registration_group_id"],
-                context["registration_scan_id"],
-                context["registration_reference_id"],
+                "Registration stage: %s; stage=%s, dice=%s, status=%s",
+                context["registration_scan_label"],
                 stage,
                 detail.get("dice"),
                 detail.get("status"),

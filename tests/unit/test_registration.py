@@ -299,6 +299,28 @@ def test_affine_refines_scale():
     assert result.dice_after > rigid.dice_after + 0.01
 
 
+def test_affine_is_skipped_until_overlap_is_sufficient():
+    fixed = organ()
+    moving = sitk.Image(fixed)
+    moving.SetSpacing((fixed.GetSpacing()[0] * 1.2, *fixed.GetSpacing()[1:]))
+    result = register_pair(
+        fixed,
+        moving,
+        RegistrationConfig(affine=True, affine_min_dice=0.99, iterations=20),
+    )
+    assert result.stage != "affine"
+    assert result.dice_after < 0.99
+    assert result.stages["affine"]["status"] == "skipped_low_dice"
+    assert result.stages["affine"]["input_dice"] == result.dice_after
+    assert result.stages["affine"]["required_dice"] == 0.99
+
+
+@pytest.mark.parametrize("value", [-0.01, 1.01])
+def test_affine_dice_threshold_is_validated(value):
+    with pytest.raises(ValueError, match="threshold"):
+        RegistrationConfig(affine_min_dice=value)
+
+
 def test_intersection_ignores_unobserved_background():
     a = image(np.ones((2, 3, 4)))
     b = image(np.ones((2, 3, 4)))
@@ -321,7 +343,7 @@ def test_numeric_visit_identifiers(tmp_path):
 
 def test_cli_cannot_overwrite_source_with_error_table(tmp_path):
     from argparse import Namespace
-    from imperandi.process.registration.cli import main
+    from imperandi.process.registration.register import main
 
     args = Namespace(
         csv_path=str(tmp_path / "cohort_errors.csv"),
@@ -409,9 +431,43 @@ def test_stage_qc_and_trace_logs(tmp_path, caplog):
         for event in events
     )
     assert any(
-        moving.name in record.message and "stage=rigid" in record.message
+        "patient_id=001" in record.message
+        and "modality=CT" in record.message
+        and "phase=ARTERIAL" in record.message
+        and "stage=rigid" in record.message
         for record in caplog.records
     )
+
+
+def test_logs_identify_groups_with_human_attributes(tmp_path, caplog):
+    import logging
+
+    caplog.set_level(logging.INFO)
+    rows = [
+        {
+            **save_scan(tmp_path, "portal", phase="PORTAL_VENOUS"),
+            "patient_id": "PATIENT-A",
+            "date": "2024-05-17",
+            "visit_order": 2,
+        }
+    ]
+    out, errors = register_cohort(pd.DataFrame(rows), tmp_path / "out")
+    assert errors.empty
+    expected = (
+        "patient_id=PATIENT-A, date=2024-05-17, visit_order=2, " "visit=v1, modality=CT"
+    )
+    assert out.loc[0, "registration_group_label"] == expected
+    info_messages = [
+        record.message for record in caplog.records if record.levelno == logging.INFO
+    ]
+    assert any(expected in message for message in info_messages)
+    assert not any(
+        out.loc[0, "registration_group_id"] in message for message in info_messages
+    )
+    qc = pd.read_csv(out.loc[0, "registration_qc_path"])
+    assert qc.loc[0, "patient_id"] == "PATIENT-A"
+    assert qc.loc[0, "date"] == "2024-05-17"
+    assert qc.loc[0, "visit_order"] == 2
 
 
 def test_rejected_pair_keeps_qc_and_original_canonical_paths(tmp_path):

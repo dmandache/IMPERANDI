@@ -11,6 +11,7 @@ class RegistrationConfig:
     tumor_column: str = "mask_liver_tumor"
     method: str = "anchor"
     affine: bool = False
+    affine_min_dice: float = 0.9
     iterations: int = 100
     min_dice: float = 0.1
     threshold: float = 0.5
@@ -30,7 +31,11 @@ class RegistrationConfig:
             raise ValueError("affine must be a boolean")
         if type(self.iterations) is not int or self.iterations < 1:
             raise ValueError("iterations must be a positive integer")
-        if not 0 <= self.min_dice <= 1 or not 0 < self.threshold < 1:
+        if (
+            not 0 <= self.min_dice <= 1
+            or not 0 <= self.affine_min_dice <= 1
+            or not 0 < self.threshold < 1
+        ):
             raise ValueError("Invalid Dice or probability threshold")
         for name in (self.visit_column, self.organ_column, self.tumor_column):
             if not isinstance(name, str) or not name.strip():

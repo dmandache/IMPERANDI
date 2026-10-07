@@ -2,128 +2,29 @@
 
 from dataclasses import asdict
 from datetime import datetime, timezone
-import time
-import hashlib
-import json
 import logging
 from pathlib import Path
+import time
 import uuid
+
 import numpy as np
 import pandas as pd
 
 from imperandi.utils.run_state import atomic_write_json
+from .artifacts import write_artifact
 from .config import RegistrationConfig
 from .consensus import fuse_tumors
+from .grouping import (
+    normalize_modalities,
+    prepare_cohort,
+    reference_rank,
+    stable_id,
+)
+from .labels import group_context, group_label
 from .organ import backend, read_image, read_mask, register_pair, resample
-from .qc import QC_FIELDS, STAGES, publish_group_qc, record_stages
+from .qc import STAGES, publish_group_qc, record_stages
 
 logger = logging.getLogger(__name__)
-
-
-def _key(value):
-    return hashlib.sha256(
-        json.dumps(value, sort_keys=True, default=str).encode()
-    ).hexdigest()[:20]
-
-
-def _label(value):
-    return "" if pd.isna(value) else str(value).strip().upper()
-
-
-def _rank(row, priorities):
-    rank = next(
-        (
-            i
-            for i, selector in enumerate(priorities)
-            if all(_label(row.get(k)) == _label(v) for k, v in selector.items())
-        ),
-        len(priorities),
-    )
-    return rank, str(row["registration_scan_id"])
-
-
-def _write(image, path, *, transform=False):
-    """Publish a complete artifact with a sibling temporary file."""
-    sitk = backend()
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{uuid.uuid4().hex}.{path.name}")
-    try:
-        (sitk.WriteTransform if transform else sitk.WriteImage)(image, str(temporary))
-        temporary.replace(path)
-    finally:
-        temporary.unlink(missing_ok=True)
-    return str(path.resolve())
-
-
-def prepare_cohort(table, config):
-    """Validate identities and initialize derived columns without loading images."""
-    df = table.copy().reset_index(drop=True)
-    # Source columns are authoritative on reruns: never fuse prior consensus masks.
-    for column in (config.organ_column, config.tumor_column):
-        source = f"source_{column}"
-        if source not in df:
-            if column == config.organ_column and column not in df:
-                continue
-            df[source] = df[column] if column in df else None
-        df[column] = df[source].astype(object)
-    required = [
-        "patient_key",
-        config.visit_column,
-        "Modality",
-        "nifti_path",
-        config.organ_column,
-    ]
-    missing = set(required) - set(df.columns)
-    if missing:
-        raise ValueError(f"Missing registration columns: {sorted(missing)}")
-    for col in ["patient_key", config.visit_column, "Modality", "nifti_path"]:
-        if df[col].isna().any() or df[col].astype(str).str.strip().eq("").any():
-            raise ValueError(f"Missing registration identity: {col}")
-    modalities = df.Modality.map(_label).replace({"MRI": "MR"})
-    if not modalities.isin(["CT", "MR"]).all():
-        raise ValueError("Registration supports CT and MR only")
-    # Paths distinguish converted volumes even when series IDs are repeated.
-    identities = [
-        [
-            str(row.patient_key),
-            str(row[config.visit_column]),
-            modalities[i],
-            str(Path(row.nifti_path).expanduser().resolve()),
-        ]
-        for i, row in df.iterrows()
-    ]
-    ids = [_key(identity) for identity in identities]
-    if len(ids) != len(set(ids)):
-        raise ValueError("Duplicate scan identity in registration input")
-    df["registration_scan_id"] = ids
-    columns = [
-        "registration_report_path",
-        "registration_qc_path",
-        "registration_log_path",
-        *QC_FIELDS,
-        "registration_reference_id",
-        "registration_status",
-        "consensus_status",
-        "reg_reference_to_scan_path",
-        "reg_scan_to_reference_path",
-        "reg_tumor_common_path",
-        "reg_tumor_native_path",
-        "reg_tumor_coverage_common_path",
-        "reg_tumor_coverage_native_path",
-        "reg_tumor_probability_common_path",
-        "reg_tumor_probability_native_path",
-        "reg_nifti_path",
-        "reg_organ_path",
-        "reg_organ_native_path",
-    ]
-    for col in columns:
-        df[col] = pd.Series([None] * len(df), dtype=object)
-    df["registration_group_id"] = [
-        _key((str(row.patient_key), str(row[config.visit_column]), modalities[i]))
-        for i, row in df.iterrows()
-    ]
-    return df
 
 
 def register_cohort(
@@ -144,29 +45,43 @@ def register_cohort(
     sitk = backend()
     df = prepare_cohort(table, config)
     ids = df.registration_scan_id.tolist()
-    modalities = df.Modality.map(_label).replace({"MRI": "MR"})
+    modalities = normalize_modalities(df)
     root = Path(output_dir).expanduser().resolve() / uuid.uuid4().hex
     root.mkdir(parents=True)
     errors = []
 
     def error(index, stage, exc):
+        context = group_context(df.loc[index], config.visit_column)
         logger.error(
-            "group=%s scan=%s stage=%s error=%s",
-            df.at[index, "registration_group_id"],
-            ids[index],
+            "Registration failed: patient=%s date=%s visit_order=%s visit=%s "
+            "modality=%s scan={%s} stage=%s error=%s",
+            context["patient_id"],
+            context["date"],
+            context["visit_order"],
+            context["visit"],
+            context["modality"],
+            df.at[index, "registration_scan_label"],
             stage,
             exc,
         )
         errors.append(
-            {"registration_scan_id": ids[index], "stage": stage, "error": str(exc)}
+            {
+                **context,
+                "registration_group_label": df.at[index, "registration_group_label"],
+                "registration_scan_label": df.at[index, "registration_scan_label"],
+                "registration_scan_id": ids[index],
+                "stage": stage,
+                "error": str(exc),
+            }
         )
 
     groups = df.groupby(
         [df.patient_key, df[config.visit_column], modalities], sort=True
     )
     for group_key, group in groups:
-        group_id = _key(tuple(str(value) for value in group_key))
-        logger.info("Registering group %s (%d scans)", group_id, len(group))
+        group_id = stable_id(tuple(str(value) for value in group_key))
+        label = group_label(group.iloc[0], config.visit_column)
+        logger.info("Starting registration: %s, scans=%d", label, len(group))
         directory = root / group_id
         group_started = time.perf_counter()
         df.loc[group.index, "registration_started_at"] = datetime.now(
@@ -174,7 +89,9 @@ def register_cohort(
         ).isoformat()
         df.loc[group.index, "registration_group_id"] = group_id
         priorities = config.reference_priority.get(group_key[2], [])
-        order = sorted(group.index, key=lambda i: _rank(df.loc[i], priorities))
+        order = sorted(
+            group.index, key=lambda index: reference_rank(df.loc[index], priorities)
+        )
         loaded = {}
         for i in order:
             try:
@@ -187,6 +104,7 @@ def register_cohort(
                 df.at[i, "registration_status"] = "failed"
                 error(i, "input", exc)
         if not loaded:
+            logger.warning("No valid registration reference: %s", label)
             df.loc[group.index, "consensus_status"] = "no_reference"
             df.loc[group.index, "registration_elapsed_seconds"] = (
                 time.perf_counter() - group_started
@@ -196,15 +114,22 @@ def register_cohort(
         ref = next(iter(loaded))
         reference, reference_organ = loaded[ref]
         df.loc[group.index, "registration_reference_id"] = ids[ref]
+        df.loc[group.index, "registration_reference_label"] = df.at[
+            ref, "registration_scan_label"
+        ]
+        logger.info(
+            "Selected registration reference: %s; reference={%s}",
+            label,
+            df.at[ref, "registration_scan_label"],
+        )
         transforms = {}
         pair_reports = []
         for i, (image, organ) in loaded.items():
             started = time.perf_counter()
             logger.info(
-                "group=%s scan=%s reference=%s organ_registration=start",
-                group_id,
-                ids[i],
-                ids[ref],
+                "Starting organ alignment: %s; reference={%s}",
+                df.at[i, "registration_scan_label"],
+                df.at[ref, "registration_scan_label"],
             )
             try:
                 if i == ref:
@@ -235,27 +160,33 @@ def register_cohort(
                 record_stages(df, i, report)
                 inverse = tx.GetInverse()
                 pair_dir = directory / ids[i]
-                df.at[i, "reg_reference_to_scan_path"] = _write(
+                df.at[i, "reg_reference_to_scan_path"] = write_artifact(
                     tx, pair_dir / "reference_to_scan.tfm", transform=True
                 )
-                df.at[i, "reg_scan_to_reference_path"] = _write(
+                df.at[i, "reg_scan_to_reference_path"] = write_artifact(
                     inverse, pair_dir / "scan_to_reference.tfm", transform=True
                 )
-                df.at[i, "reg_nifti_path"] = _write(
+                df.at[i, "reg_nifti_path"] = write_artifact(
                     resample(image, reference, tx, label=False),
                     pair_dir / "image_registered.nii.gz",
                 )
-                df.at[i, "reg_organ_path"] = _write(
+                df.at[i, "reg_organ_path"] = write_artifact(
                     resample(organ, reference, tx), pair_dir / "organ_registered.nii.gz"
                 )
-                df.at[i, "reg_organ_native_path"] = _write(
+                df.at[i, "reg_organ_native_path"] = write_artifact(
                     resample(reference_organ, image, inverse),
                     pair_dir / "organ_native.nii.gz",
                 )
                 df.at[i, config.organ_column] = df.at[i, "reg_organ_native_path"]
                 transforms[i] = tx
                 df.at[i, "registration_status"] = "reference" if i == ref else "ok"
-                pair_reports.append({"scan_id": ids[i], **report})
+                pair_reports.append(
+                    {
+                        "scan_id": ids[i],
+                        "scan": df.at[i, "registration_scan_label"],
+                        **report,
+                    }
+                )
             except (RuntimeError, ValueError) as exc:
                 if hasattr(exc, "result"):
                     report = {
@@ -264,7 +195,14 @@ def register_cohort(
                         if k != "reference_to_scan"
                     }
                     record_stages(df, i, report)
-                    pair_reports.append({"scan_id": ids[i], "rejected": True, **report})
+                    pair_reports.append(
+                        {
+                            "scan_id": ids[i],
+                            "scan": df.at[i, "registration_scan_label"],
+                            "rejected": True,
+                            **report,
+                        }
+                    )
                 df.at[i, "registration_status"] = "failed"
                 error(i, "organ", exc)
             finally:
@@ -299,14 +237,26 @@ def register_cohort(
         df.loc[group.index, "consensus_status"] = "registration_failed"
         df.loc[list(transforms), "consensus_status"] = "no_tumor_input"
         if masks:
+            contributor_labels = [df.at[i, "registration_scan_label"] for i in contributors]
+            logger.info(
+                "Starting tumor consensus: %s, method=%s, contributors=%d [%s]",
+                label,
+                config.method,
+                len(contributors),
+                " | ".join(contributor_labels),
+            )
             try:
                 fused = fusion(
                     masks, coverages, method=config.method, threshold=config.threshold
                 )
-                common = _write(fused.mask, directory / "tumor_common.nii.gz")
-                support = _write(fused.coverage, directory / "coverage_common.nii.gz")
+                common = write_artifact(fused.mask, directory / "tumor_common.nii.gz")
+                support = write_artifact(
+                    fused.coverage, directory / "coverage_common.nii.gz"
+                )
                 probability = (
-                    _write(fused.probability, directory / "probability_common.nii.gz")
+                    write_artifact(
+                        fused.probability, directory / "probability_common.nii.gz"
+                    )
                     if fused.probability is not None
                     else None
                 )
@@ -326,10 +276,10 @@ def register_cohort(
                             native = resample(fused.mask, image, inverse)
                         native_coverage = resample(fused.coverage, image, inverse)
                         native = sitk.And(native, native_coverage)
-                        df.at[i, "reg_tumor_native_path"] = _write(
+                        df.at[i, "reg_tumor_native_path"] = write_artifact(
                             native, pair_dir / "tumor_native.nii.gz"
                         )
-                        df.at[i, "reg_tumor_coverage_native_path"] = _write(
+                        df.at[i, "reg_tumor_coverage_native_path"] = write_artifact(
                             native_coverage,
                             pair_dir / "coverage_native.nii.gz",
                         )
@@ -337,7 +287,7 @@ def register_cohort(
                             df.at[
                                 i,
                                 "reg_tumor_probability_native_path",
-                            ] = _write(
+                            ] = write_artifact(
                                 resample(
                                     fused.probability, image, inverse, label=False
                                 ),
@@ -358,12 +308,20 @@ def register_cohort(
             except (RuntimeError, ValueError) as exc:
                 df.loc[group.index, "consensus_status"] = "failed"
                 error(ref, "consensus", exc)
+        else:
+            logger.warning(
+                "Tumor consensus skipped because no tumor masks are available: %s",
+                label,
+            )
         report_path = directory / "group.json"
         atomic_write_json(
             report_path,
             {
                 "group": [str(value) for value in group_key],
+                "group_context": group_context(group.iloc[0], config.visit_column),
+                "group_label": label,
                 "reference": ids[ref],
+                "reference_label": df.at[ref, "registration_scan_label"],
                 "config": asdict(config),
                 "contributors": [ids[i] for i in contributors],
                 "pairs": pair_reports,
@@ -377,4 +335,27 @@ def register_cohort(
         )
         df.loc[group.index, "registration_report_path"] = str(report_path.resolve())
         publish_group_qc(df, group.index, errors, config, directory)
-    return df, pd.DataFrame(errors, columns=["registration_scan_id", "stage", "error"])
+        logger.info(
+            "Finished registration group: %s, reference={%s}, method=%s, "
+            "registration_status=%s, consensus_status=%s",
+            label,
+            df.at[ref, "registration_scan_label"],
+            config.method,
+            df.loc[group.index, "registration_status"].tolist(),
+            df.loc[group.index, "consensus_status"].tolist(),
+        )
+    return df, pd.DataFrame(
+        errors,
+        columns=[
+            "patient_id",
+            "date",
+            "visit_order",
+            "visit",
+            "modality",
+            "registration_group_label",
+            "registration_scan_label",
+            "registration_scan_id",
+            "stage",
+            "error",
+        ],
+    )
