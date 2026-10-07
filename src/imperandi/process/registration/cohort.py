@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 
 from .config import (
+    ORGAN_CONSENSUS_METHODS,
     REGISTRATION_STAGES,
     TUMOR_CONSENSUS_METHODS,
     RegistrationConfig,
@@ -193,6 +194,56 @@ class ConsensusResult:
     support_policy: str = "per_voxel"
 
 
+def fuse_organs(masks, coverages, *, organ_consensus):
+    """Fuse aligned organ masks, treating unobserved FOV as missing data."""
+    sitk = backend()
+    if organ_consensus not in ORGAN_CONSENSUS_METHODS:
+        raise ValueError(f"Unknown organ consensus: {organ_consensus}")
+    if not masks or len(masks) != len(coverages):
+        raise ValueError("Organ consensus requires masks and matching coverage")
+    reference = masks[0]
+    for image in [*masks, *coverages]:
+        if (
+            image.GetSize(),
+            image.GetOrigin(),
+            image.GetSpacing(),
+            image.GetDirection(),
+        ) != (
+            reference.GetSize(),
+            reference.GetOrigin(),
+            reference.GetSpacing(),
+            reference.GetDirection(),
+        ):
+            raise ValueError("Organ consensus inputs must share one grid")
+    if organ_consensus == "anchor":
+        masks, coverages = masks[:1], coverages[:1]
+    values = np.stack([sitk.GetArrayFromImage(mask) > 0 for mask in masks])
+    observations = np.stack(
+        [sitk.GetArrayFromImage(coverage) > 0 for coverage in coverages]
+    )
+    counts = observations.sum(axis=0)
+    votes = (values & observations).sum(axis=0)
+    support = counts > 0
+    if not support.any():
+        raise ValueError("Organ inputs have no observed support for this consensus")
+    probability = np.divide(
+        votes, counts, out=np.zeros(counts.shape, np.float32), where=support
+    )
+    output = probability > 0.5
+
+    def consensus_image(array, dtype):
+        image = sitk.GetImageFromArray(array.astype(dtype))
+        image.CopyInformation(reference)
+        return image
+
+    return ConsensusResult(
+        consensus_image(output * support, np.uint8),
+        consensus_image(support, np.uint8),
+        consensus_image(probability * support, np.float32),
+        consensus_image(counts, np.uint32),
+    )
+
+
 def fuse_tumors(masks, coverages, *, tumor_consensus, threshold=0.5):
     """Fuse aligned masks with their spatial observations; anchor is first input.
 
@@ -284,6 +335,18 @@ def write_artifact(image, path) -> str:
     finally:
         temporary.unlink(missing_ok=True)
     return str(destination.resolve())
+
+
+def _fill_unobserved(consensus, coverage, source):
+    """Retain the native annotation where no consensus contributor was observed."""
+    sitk = backend()
+    values = sitk.GetArrayFromImage(consensus)
+    observed = sitk.GetArrayViewFromImage(coverage) > 0
+    source_values = sitk.GetArrayViewFromImage(source) > 0
+    values[~observed] = source_values[~observed]
+    output = sitk.GetImageFromArray(values.astype(np.uint8))
+    output.CopyInformation(consensus)
+    return output
 
 
 def _missing_file(path):
@@ -519,7 +582,7 @@ def register_cohort(
                 pair_dir = directory / ids[i]
                 if config.keep_source_segmentation:
                     native_organ = organ
-                else:
+                elif config.organ_consensus == "anchor":
                     native_organ = resample(reference_organ, image, inverse)
                     if mask_qc[ref].partial:
                         # Reference has no annotation outside its FOV: retain the
@@ -535,7 +598,11 @@ def register_cohort(
                     df.at[i, config.organ_column] = df.at[i, "reg_organ_native_path"]
                 transforms[i] = tx
                 inverse_transforms[i] = inverse
-                native_organs[i] = native_organ
+                if (
+                    config.keep_source_segmentation
+                    or config.organ_consensus == "anchor"
+                ):
+                    native_organs[i] = native_organ
                 df.at[i, "registration_status"] = (
                     "reference" if i == ref else confidence
                 )
@@ -557,6 +624,81 @@ def register_cohort(
             _record_consensus_inputs(df, group.index, [], config)
             publish_group_log(df, group.index, errors, config, directory)
             continue
+        if not config.keep_source_segmentation and config.organ_consensus != "anchor":
+            contributor_labels = [
+                df.at[i, "registration_scan_label"] for i in transforms
+            ]
+            logger.info(
+                "Registration organ consensus started: organ_consensus=%s, "
+                "contributors=%d [%s]",
+                config.organ_consensus,
+                len(transforms),
+                " | ".join(contributor_labels),
+            )
+            try:
+                organ_masks, organ_coverages = [], []
+                for i in transforms:
+                    organ = loaded[i][1]
+                    organ_masks.append(resample(organ, reference, transforms[i]))
+                    organ_coverages.append(
+                        resample(coverage_image(organ), reference, transforms[i])
+                    )
+                fused_organ = fuse_organs(
+                    organ_masks,
+                    organ_coverages,
+                    organ_consensus=config.organ_consensus,
+                )
+            except (RuntimeError, ValueError, TypeError) as exc:
+                df.loc[list(transforms), "registration_status"] = "failed"
+                df.loc[list(transforms), "registration_confidence"] = "failed"
+                error(ref, "organ_consensus", exc)
+                df.loc[group.index, "consensus_status"] = "no_reference"
+                df.loc[group.index, "registration_elapsed_seconds"] = (
+                    time.perf_counter() - group_started
+                )
+                _record_consensus_inputs(df, group.index, [], config)
+                publish_group_log(df, group.index, errors, config, directory)
+                continue
+
+            failed_transfers = []
+            for i in list(transforms):
+                try:
+                    image, source_organ = loaded[i]
+                    inverse = inverse_transforms[i]
+                    native_organ = resample(
+                        fused_organ.mask,
+                        image,
+                        inverse,
+                    )
+                    native_coverage = resample(fused_organ.coverage, image, inverse)
+                    native_organ = _fill_unobserved(
+                        native_organ,
+                        native_coverage,
+                        source_organ,
+                    )
+                    pair_dir = directory / ids[i]
+                    df.at[i, "reg_organ_native_path"] = write_artifact(
+                        native_organ, pair_dir / "organ_native.nii.gz"
+                    )
+                    df.at[i, config.organ_column] = df.at[i, "reg_organ_native_path"]
+                    native_organs[i] = native_organ
+                except (RuntimeError, ValueError, TypeError) as exc:
+                    failed_transfers.append(i)
+                    df.at[i, "registration_status"] = "failed"
+                    df.at[i, "registration_confidence"] = "failed"
+                    error(i, "organ_consensus_transfer", exc)
+            for i in failed_transfers:
+                transforms.pop(i, None)
+                inverse_transforms.pop(i, None)
+                pair_results.pop(i, None)
+            if ref not in transforms:
+                df.loc[group.index, "consensus_status"] = "no_reference"
+                df.loc[group.index, "registration_elapsed_seconds"] = (
+                    time.perf_counter() - group_started
+                )
+                _record_consensus_inputs(df, group.index, [], config)
+                publish_group_log(df, group.index, errors, config, directory)
+                continue
         tumors = {}
         # Read all available inputs so tumor Dice can be reported independently
         # from the selected consensus policy. Use the final QC-aware reference

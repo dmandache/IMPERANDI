@@ -8,7 +8,7 @@ import pytest
 
 from imperandi.process.registration import RegistrationConfig, register_cohort
 from imperandi.process.registration import alignment
-from imperandi.process.registration.cohort import fuse_tumors
+from imperandi.process.registration.cohort import fuse_organs, fuse_tumors
 from imperandi.process.registration.alignment import register_pair
 from imperandi.process.registration.reporting import build_qc
 
@@ -95,6 +95,33 @@ def test_fusion_votes_and_ties(tumor_consensus, expected):
             0.5,
             0,
         ]
+
+
+@pytest.mark.parametrize(
+    "organ_consensus,expected",
+    [
+        ("anchor", [1, 0, 1, 0]),
+        ("majority", [1, 0, 0, 0]),
+    ],
+)
+def test_organ_consensus_anchor_and_majority(organ_consensus, expected):
+    masks = [image(np.array(v).reshape(1, 1, 4)) for v in [[1, 0, 1, 0], [1, 1, 0, 0]]]
+    coverage = image(np.ones((1, 1, 4)))
+
+    result = fuse_organs(masks, [coverage, coverage], organ_consensus=organ_consensus)
+
+    assert sitk.GetArrayFromImage(result.mask).ravel().tolist() == expected
+    assert result.mask.GetPixelID() == sitk.sitkUInt8
+
+
+def test_organ_majority_excludes_unobserved_votes():
+    masks = [image([[[1, 1]]]), image([[[0, 0]]])]
+    coverages = [image([[[1, 0]]]), image([[[0, 1]]])]
+
+    result = fuse_organs(masks, coverages, organ_consensus="majority")
+
+    assert sitk.GetArrayFromImage(result.mask).ravel().tolist() == [1, 0]
+    assert sitk.GetArrayFromImage(result.observation_count).ravel().tolist() == [1, 1]
 
 
 @pytest.mark.parametrize("partial", [False, True])
@@ -340,6 +367,8 @@ def test_cli(tmp_path):
                 str(output),
                 "--output_dir",
                 str(tmp_path / "out"),
+                "--organ_consensus",
+                "majority",
                 "--tumor_consensus",
                 "union",
             ]
@@ -413,6 +442,32 @@ def test_majority_consensus_keeps_only_native_masks(tmp_path):
             "reg_organ_path",
         }
     )
+
+
+def test_majority_organ_consensus_is_written_to_native_grids(tmp_path):
+    rows = [
+        save_scan(tmp_path, "portal", phase="PORTAL_VENOUS"),
+        save_scan(tmp_path, "arterial"),
+    ]
+    moving = sitk.ReadImage(rows[1]["mask_liver"])
+    values = sitk.GetArrayFromImage(moving)
+    values[11, 13, 15] = 0
+    altered = sitk.GetImageFromArray(values)
+    altered.CopyInformation(moving)
+    sitk.WriteImage(altered, rows[1]["mask_liver"])
+
+    out, errors = register_cohort(
+        pd.DataFrame(rows),
+        tmp_path / "out",
+        RegistrationConfig(organ_consensus="majority", iterations=5),
+    )
+
+    assert errors.empty
+    assert out.mask_liver.equals(out.reg_organ_native_path)
+    for path in out.reg_organ_native_path:
+        consensus = sitk.ReadImage(path)
+        assert consensus.GetPixelID() == sitk.sitkUInt8
+        assert sitk.GetArrayFromImage(consensus)[11, 13, 15] == 0
 
 
 def test_invalid_mask_and_missing_tumor(tmp_path):
@@ -893,6 +948,7 @@ def test_logs_identify_groups_with_human_attributes(tmp_path, caplog):
             "registration_reference_label": (
                 "series=1/1, phase=PORTAL_VENOUS, sequence=T1"
             ),
+            "organ_consensus": "anchor",
             "tumor_consensus": "anchor",
         }
     ]
@@ -1026,3 +1082,26 @@ def test_keep_source_segmentation_maps_tumor_to_source_organ(tmp_path, keep):
 def test_keep_source_segmentation_requires_boolean():
     with pytest.raises(ValueError, match="keep_source_segmentation"):
         RegistrationConfig.from_mapping({"keep_source_segmentation": "true"})
+
+
+def test_keep_source_segmentation_bypasses_organ_consensus(monkeypatch, tmp_path):
+    from imperandi.process.registration import cohort
+
+    row = save_scan(tmp_path, "scan", tumor=False)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("organ consensus must not run")
+
+    monkeypatch.setattr(cohort, "fuse_organs", forbidden)
+
+    out, errors = register_cohort(
+        pd.DataFrame([row]),
+        tmp_path / "out",
+        RegistrationConfig(
+            organ_consensus="majority", keep_source_segmentation=True, iterations=1
+        ),
+    )
+
+    assert errors.empty
+    assert out.loc[0, "mask_liver"] == row["mask_liver"]
+    assert pd.isna(out.loc[0, "reg_organ_native_path"])
