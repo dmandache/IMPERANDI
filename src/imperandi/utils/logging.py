@@ -14,12 +14,15 @@ DEFAULT_LOG_FORMAT = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
 DEFAULT_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
-def log_script_namespace(logger, script_file: str, args: argparse.Namespace) -> None:
-    """Log public execution settings without internal CLI handler attributes."""
+def log_script_namespace(
+    logger, script_file: str, args: argparse.Namespace, **settings
+) -> argparse.Namespace:
+    """Log resolved settings without mutating arguments or exposing CLI handlers."""
     namespace = argparse.Namespace(
-        **{k: v for k, v in vars(args).items() if not k.startswith("_")}
+        **{k: v for k, v in {**vars(args), **settings}.items() if not k.startswith("_")}
     )
     logger.info("🚀 Running %s with namespace: %s", Path(script_file).name, namespace)
+    return namespace
 
 
 def _coerce_level(level: Optional[str | int]) -> int:
