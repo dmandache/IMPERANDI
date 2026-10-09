@@ -1,12 +1,33 @@
 import sys
 from pathlib import Path
 import json
+import os
+import subprocess
 import pytest
 
 # Ensure src/ is on sys.path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from imperandi import cli
+
+
+@pytest.mark.parametrize("command", [[], ["parse"], ["clean"], ["convert"]])
+def test_cli_help_starts_in_fresh_interpreter(command):
+    """Exercise CLI imports and argument parsing on every supported Python."""
+    env = os.environ.copy()
+    src_root = str(Path(__file__).resolve().parents[2] / "src")
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [src_root, env.get("PYTHONPATH")]))
+    result = subprocess.run(
+        [sys.executable, "-m", "imperandi.cli", *command, "--help"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "usage:" in result.stdout
+    assert "--help" in result.stdout
 
 
 def test_cli_parse_prefers_flag_paths_over_positionals(tmp_path, capsys):
