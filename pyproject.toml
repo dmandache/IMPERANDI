@@ -20,7 +20,7 @@ keywords = [
   "ct",
 ]
 readme = { text = "See [README.md on GitHub](https://github.com/dmandache/IMPERANDI#readme) for more details.", content-type = "text/markdown" }
-requires-python = ">=3.10,<3.13"
+requires-python = ">=3.10,<3.14"
 dependencies = [
   "numpy",
   "scipy",

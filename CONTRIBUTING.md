@@ -57,7 +57,7 @@ collections or generated pipeline outputs.
 
 ## Development setup
 
-Use Python 3.10, 3.11, or 3.12, matching the versions supported by the project and
+Use Python 3.10, 3.11, 3.12, or 3.13, matching the versions supported by the project and
 tested in CI. Fork the repository on GitHub, then clone your fork:
 
 ```bash
@@ -131,7 +131,7 @@ python -m ruff check .
 python -m pytest -m "not slow"
 ```
 
-CI runs Ruff and the fast tests on Python 3.10, 3.11, and 3.12 using the full
+CI runs Ruff and the fast tests on Python 3.10, 3.11, 3.12, and 3.13 using the full
 development environment above. Its test command includes a 70% coverage minimum:
 
 ```bash
