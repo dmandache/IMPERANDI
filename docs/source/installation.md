@@ -1,6 +1,6 @@
 # Installation
 
-IMPERANDI requires Python 3.10–3.12. A virtual environment keeps its
+IMPERANDI requires Python 3.10–3.13. A virtual environment keeps its
 scientific dependencies isolated from other projects.
 
 Install from PyPI:
