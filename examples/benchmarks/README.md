@@ -1,4 +1,4 @@
-# TCGA-LIHC cohort benchmarks
+# TCGA-LIHC cohort ingestions benchmarks
 
 Interactive notebooks: [demos](../demos/).
 
