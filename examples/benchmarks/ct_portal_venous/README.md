@@ -18,6 +18,24 @@ pinned to commit `39adfaf08aabd31e85640b852c0c0a32285cb885`. Filename fields sup
 patient/date/portal phase, not a DICOM series UID. Ishak annotations belong to
 the evaluation reference and are not used to choose predicted scans.
 
+## Run
+
+From the repository root, with IMPERANDI installed and the full DICOM collection downloaded:
+
+```bash
+bash examples/benchmarks/ct_portal_venous/run.sh /data/TCGA-LIHC /work/lihc-ct
+TOTALSEG_PHASE=1 bash examples/benchmarks/ct_portal_venous/run.sh /data/TCGA-LIHC /work/lihc-ct-ts
+```
+
+```powershell
+.\examples\benchmarks\ct_portal_venous\run.ps1 "D:\data\TCGA-LIHC" "D:\work\lihc-ct"
+```
+
+Both study runners take `DICOM_DIR WORK_DIR`. For CT image-based phase prediction in PowerShell, set `$env:TOTALSEG_PHASE = "1"`.
+Use a separate work directory for that mode.
+See [shared entry points, Slurm, and environment overrides](../README.md#run)
+for the unchanged `run.sh TARGET DICOM_DIR WORK_DIR` interface.
+
 ## IMPERANDI protocol
 
 `manifest.yaml` retains CT volumes and provides an ordered phase fallback chain:

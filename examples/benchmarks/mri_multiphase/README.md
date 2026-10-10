@@ -18,6 +18,22 @@ NIfTI archive; `include_tumor` records the paper's tumor subgroup (14 patients).
 Dates in the archive are MM-DD-YYYY. `cohort.py` expands each reference patient
 to the four required phases. No DICOM series UID is claimed.
 
+## Run
+
+From the repository root, with IMPERANDI installed and the full DICOM collection downloaded:
+
+```bash
+bash examples/benchmarks/mri_multiphase/run.sh /data/TCGA-LIHC /work/lihc-mr
+```
+
+```powershell
+.\examples\benchmarks\mri_multiphase\run.ps1 "D:\data\TCGA-LIHC" "D:\work\lihc-mr"
+```
+
+Both study runners take `DICOM_DIR WORK_DIR`. This runner uses metadata only; no conversion or image-based phase prediction is needed.
+See [shared entry points, Slurm, and environment overrides](../README.md#run)
+for the unchanged `run.sh TARGET DICOM_DIR WORK_DIR` interface.
+
 ## IMPERANDI protocol
 
 The runner uses metadata-only phase curation. If `TOTALSEG_PHASE` is set, it

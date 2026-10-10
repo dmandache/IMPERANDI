@@ -50,42 +50,68 @@ The full cohort comparison uses the default download of all available patients.
 ## Run
 
 Activate an environment with IMPERANDI installed (`python -m pip install -e .`).
-Submit from the repository root; add your cluster's account/partition options:
+From the repository root, choose a study. Each study's runner sits beside its
+manifest, reference CSV, and inclusion notes:
 
 ```bash
-sbatch examples/benchmarks/run.sbatch mri_multiphase /data/TCGA-LIHC /work/lihc-mr
-sbatch examples/benchmarks/run.sbatch ct_portal_venous /data/TCGA-LIHC /work/lihc-ct
+# Gross et al.: metadata-only MRI phase curation and cohort comparison.
+bash examples/benchmarks/mri_multiphase/run.sh /data/TCGA-LIHC /work/lihc-mr
 
-# CT metadata + TotalSegmentator phase prediction (includes NIfTI conversion).
-TOTALSEG_PHASE=1 sbatch examples/benchmarks/run.sbatch ct_portal_venous /data/TCGA-LIHC /work/lihc-ct-ts
+# Sarfati et al.: metadata-only CT phase curation and cohort comparison.
+bash examples/benchmarks/ct_portal_venous/run.sh /data/TCGA-LIHC /work/lihc-ct
+
+# CT with TotalSegmentator phase prediction, including NIfTI conversion.
+TOTALSEG_PHASE=1 bash examples/benchmarks/ct_portal_venous/run.sh /data/TCGA-LIHC /work/lihc-ct-ts
 ```
 
-The shared Slurm wrapper forwards the target to `run.sh`. Both benchmarks use
-metadata-only phase curation by default. For CT, `TOTALSEG_PHASE=1` converts the
-full cleaned inventory and runs metadata rules followed by TotalSegmentator
-prediction before cohort selection; `TOTALSEG_PHASE=0` skips both conversion and
-prediction. Install `imperandi[segment]` for the CT phase predictor.
-For MRI,  `TOTALSEG_PHASE=1` is not supported by backend.
-`PYTHON` overrides the interpreter; `REFERENCE_CSV` overrides the reference.
-Each dataset has its own manifest and inclusion notes. Local use:
+The study runners take **two positional arguments**: `DICOM_DIR WORK_DIR`.
+Both use metadata-only phase curation by default. For CT, `TOTALSEG_PHASE=1`
+converts the full cleaned inventory and runs metadata rules followed by
+TotalSegmentator prediction before cohort selection; `TOTALSEG_PHASE=0` skips
+conversion and prediction. Install `imperandi[segment]` for the CT predictor.
+For MRI, setting `TOTALSEG_PHASE` prints the CT-only backend explanation and
+continues with metadata only. Use separate work directories for the two CT modes.
+
+From PowerShell, use the study's `run.ps1` with the same two positional arguments:
+
+```powershell
+.\examples\benchmarks\mri_multiphase\run.ps1 "D:\data\TCGA-LIHC" "D:\work\lihc-mr"
+.\examples\benchmarks\ct_portal_venous\run.ps1 "D:\data\TCGA-LIHC" "D:\work\lihc-ct"
+
+# Enable CT conversion and phase prediction.
+$env:TOTALSEG_PHASE = "1"
+.\examples\benchmarks\ct_portal_venous\run.ps1 "D:\data\TCGA-LIHC" "D:\work\lihc-ct-ts"
+Remove-Item Env:TOTALSEG_PHASE
+```
+
+All runners support the existing environment overrides: `PYTHON` chooses the
+interpreter, `SLURM_CPUS_PER_TASK` sets the worker count (default 4),
+`REFERENCE_CSV` supplies an alternate reference, and `TOTALSEG_PHASE` controls
+CT image-based phase prediction.
+
+### Shared entry point and Slurm
+
+The shared runners dispatch to the study scripts and preserve the existing
+**three-argument syntax**: `TARGET DICOM_DIR WORK_DIR`. Existing commands continue
+to work:
 
 ```bash
 bash examples/benchmarks/run.sh mri_multiphase /data/TCGA-LIHC /work/lihc-mr
 TOTALSEG_PHASE=1 bash examples/benchmarks/run.sh ct_portal_venous /data/TCGA-LIHC /work/lihc-ct-ts
 ```
 
-From PowerShell, `run.ps1` accepts the same three positional arguments and
-environment overrides as `run.sh` (`PYTHON`, `SLURM_CPUS_PER_TASK`,
-`REFERENCE_CSV`, and `TOTALSEG_PHASE`):
-
 ```powershell
 .\examples\benchmarks\run.ps1 mri_multiphase "D:\data\TCGA-LIHC" "D:\work\lihc-mr"
 .\examples\benchmarks\run.ps1 ct_portal_venous "D:\data\TCGA-LIHC" "D:\work\lihc-ct"
+```
 
-# CT metadata + TotalSegmentator phase prediction (requires imperandi[segment]).
-$env:TOTALSEG_PHASE = "1"
-.\examples\benchmarks\run.ps1 ct_portal_venous "D:\data\TCGA-LIHC" "D:\work\lihc-ct-ts"
-Remove-Item Env:TOTALSEG_PHASE
+The shared Slurm wrapper still forwards all arguments to `run.sh`. Submit from
+the repository root and add your cluster's account/partition options:
+
+```bash
+sbatch examples/benchmarks/run.sbatch mri_multiphase /data/TCGA-LIHC /work/lihc-mr
+sbatch examples/benchmarks/run.sbatch ct_portal_venous /data/TCGA-LIHC /work/lihc-ct
+TOTALSEG_PHASE=1 sbatch examples/benchmarks/run.sbatch ct_portal_venous /data/TCGA-LIHC /work/lihc-ct-ts
 ```
 
 ## Main comparison: cohort building

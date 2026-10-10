@@ -30,7 +30,9 @@ cohort = load_example("cohort")
 download = load_example("download")
 
 
-def run_benchmark_runner(tmp_path, target, *, totalseg=None):
+def run_benchmark_runner(
+    tmp_path, target, *, totalseg=None, direct=False, overrides=None, fail_command=None
+):
     """Record runner commands without loading DICOMs or running a model."""
     log = tmp_path / "calls.jsonl"
     interpreter = tmp_path / "record_python"
@@ -39,22 +41,36 @@ def run_benchmark_runner(tmp_path, target, *, totalseg=None):
         "import json, os, sys\n"
         "with open(os.environ['BENCHMARK_CALL_LOG'], 'a') as stream:\n"
         "    stream.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+        "command = sys.argv[5] if sys.argv[1:3] == ['-m', 'imperandi'] else sys.argv[2]\n"
+        "if command == os.environ.get('BENCHMARK_FAIL_COMMAND'):\n"
+        "    sys.exit(23)\n"
     )
     interpreter.chmod(0o755)
     env = {**os.environ, "PYTHON": str(interpreter), "BENCHMARK_CALL_LOG": str(log)}
-    env.pop("TOTALSEG_PHASE", None)
+    for key in (
+        "TOTALSEG_PHASE", "REFERENCE_CSV", "SLURM_CPUS_PER_TASK", "BENCHMARK_FAIL_COMMAND"
+    ):
+        env.pop(key, None)
     if totalseg is not None:
         env["TOTALSEG_PHASE"] = totalseg
-    work = tmp_path / "work"
+    if fail_command is not None:
+        env["BENCHMARK_FAIL_COMMAND"] = fail_command
+    env.update(overrides or {})
+    work = tmp_path / "work directory"
+    script_args = (
+        [str(BENCHMARK / target / "run.sh")]
+        if direct
+        else [str(BENCHMARK / "run.sh"), target]
+    )
     result = subprocess.run(
         [
             "bash",
-            str(BENCHMARK / "run.sh"),
-            target,
-            str(tmp_path / "dicoms"),
+            *script_args,
+            str(tmp_path / "dicom export"),
             str(work),
         ],
         env=env,
+        cwd=tmp_path,
         capture_output=True,
         text=True,
     )
@@ -66,10 +82,13 @@ def run_benchmark_runner(tmp_path, target, *, totalseg=None):
     return result, calls, work
 
 
+@pytest.mark.parametrize("direct", [False, True])
 @pytest.mark.parametrize("totalseg", [None, "0", "1"])
-def test_ct_runner_prediction_controls_conversion_and_cohort_input(tmp_path, totalseg):
+def test_ct_runner_prediction_controls_conversion_and_cohort_input(
+    tmp_path, totalseg, direct
+):
     result, calls, work = run_benchmark_runner(
-        tmp_path, "ct_portal_venous", totalseg=totalseg
+        tmp_path, "ct_portal_venous", totalseg=totalseg, direct=direct
     )
     assert result.returncode == 0, result.stderr
     commands = [
@@ -92,20 +111,22 @@ def test_ct_runner_prediction_controls_conversion_and_cohort_input(tmp_path, tot
         assert calls[2][5] == str(work / "nifti_index.csv")
 
 
-def test_mri_runner_stays_metadata_only_without_conversion(tmp_path):
-    result, calls, work = run_benchmark_runner(tmp_path, "mri_multiphase")
+@pytest.mark.parametrize("direct", [False, True])
+def test_mri_runner_stays_metadata_only_without_conversion(tmp_path, direct):
+    result, calls, work = run_benchmark_runner(tmp_path, "mri_multiphase", direct=direct)
     assert result.returncode == 0, result.stderr
     assert len(calls) == 3
     assert calls[1][3] == str(work / "dicom_index_curated.csv")
     assert calls[-1][-2:] == ["--inventory", str(work / "dicom_index_curated.csv")]
 
 
+@pytest.mark.parametrize("direct", [False, True])
 @pytest.mark.parametrize("totalseg", ["0", "1", "", "invalid"])
 def test_mri_runner_explains_ct_only_backend_and_continues_metadata_only(
-    tmp_path, totalseg
+    tmp_path, totalseg, direct
 ):
     result, calls, work = run_benchmark_runner(
-        tmp_path, "mri_multiphase", totalseg=totalseg
+        tmp_path, "mri_multiphase", totalseg=totalseg, direct=direct
     )
     assert result.returncode == 0, result.stderr
     assert result.stderr.strip() == (
@@ -121,15 +142,72 @@ def test_mri_runner_explains_ct_only_backend_and_continues_metadata_only(
     assert calls[-1][-2:] == ["--inventory", str(work / "dicom_index_curated.csv")]
 
 
+@pytest.mark.parametrize("direct", [False, True])
 @pytest.mark.parametrize("totalseg", ["", "2", "true"])
 def test_ct_runner_rejects_invalid_prediction_values_before_processing(
-    tmp_path, totalseg
+    tmp_path, totalseg, direct
 ):
     result, calls, work = run_benchmark_runner(
-        tmp_path, "ct_portal_venous", totalseg=totalseg
+        tmp_path, "ct_portal_venous", totalseg=totalseg, direct=direct
     )
     assert result.returncode == 2
     assert "TOTALSEG_PHASE must be 0 or 1" in result.stderr
+    assert calls == []
+    assert not work.exists()
+
+
+@pytest.mark.parametrize("direct", [False, True])
+@pytest.mark.parametrize("target", ["ct_portal_venous", "mri_multiphase"])
+def test_runner_keeps_reference_workers_and_study_manifest_overrides(
+    tmp_path, direct, target
+):
+    reference = str(tmp_path / "custom reference.csv")
+    result, calls, work = run_benchmark_runner(
+        tmp_path, target, direct=direct,
+        overrides={"REFERENCE_CSV": reference, "SLURM_CPUS_PER_TASK": "7"},
+    )
+    assert result.returncode == 0, result.stderr
+    assert calls[0][5:7] == [str(tmp_path / "dicom export"), str(work)]
+    assert calls[0][calls[0].index("--manifest") + 1] == str(
+        BENCHMARK / target / "manifest.yaml"
+    )
+    assert calls[0][calls[0].index("--num_workers") + 1] == "7"
+    assert calls[-1][4] == reference
+
+
+@pytest.mark.parametrize("direct", [False, True])
+@pytest.mark.parametrize(
+    "failed_command", ["ingest", "convert", "phase", "build", "compare"]
+)
+def test_ct_runner_propagates_failure_and_stops_at_failed_stage(
+    tmp_path, direct, failed_command
+):
+    result, calls, _ = run_benchmark_runner(
+        tmp_path, "ct_portal_venous", totalseg="1", direct=direct,
+        fail_command=failed_command,
+    )
+    commands = [
+        call[4] if call[:2] == ["-m", "imperandi"] else call[1] for call in calls
+    ]
+    stages = ["ingest", "convert", "phase", "build", "compare"]
+    assert result.returncode == 23
+    assert commands == stages[: stages.index(failed_command) + 1]
+
+
+@pytest.mark.parametrize("direct", [False, True])
+def test_mri_runner_propagates_build_failure_without_comparing(tmp_path, direct):
+    result, calls, _ = run_benchmark_runner(
+        tmp_path, "mri_multiphase", direct=direct, fail_command="build"
+    )
+    assert result.returncode == 23
+    assert len(calls) == 2
+    assert calls[-1][1] == "build"
+
+
+def test_shared_runner_rejects_unknown_study_before_processing(tmp_path):
+    result, calls, work = run_benchmark_runner(tmp_path, "unknown")
+    assert result.returncode == 2
+    assert "Unknown benchmark: unknown" in result.stderr
     assert calls == []
     assert not work.exists()
 
