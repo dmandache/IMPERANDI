@@ -109,9 +109,8 @@ cleaning:
       name: keep_only_T1w_MRI
       kind: keep
       scope: row
-      logic: and
+      keep_null: true
       rules:
-        - {column: Modality, op: in, value: [MR, MRI]}
         - {column: mri_sequence, op: eq, value: T1}
         
     - type: finalize
