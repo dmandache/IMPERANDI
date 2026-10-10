@@ -6,7 +6,7 @@ Welcome to IMPERANDI’s documentation!
    :width: 700px
    :align: center
 
-`IMPERANDI<https://github.com/dmandache/IMPERANDI/>`_ [IMaging PREprocessing And Normalization for Diagnostic
+`IMPERANDI <https://github.com/dmandache/IMPERANDI/>`_ [IMaging PREprocessing And Normalization for Diagnostic
 Interoperability] is a Python framework and command-line interface for
 turning heterogeneous CT DICOM exports into traceable, analysis-ready cohorts.
 
