@@ -44,7 +44,7 @@ DEFAULT_CHECKPOINT_EVERY_ROWS = 50
 DEFAULT_CHECKPOINT_EVERY_SEC = 5 * 60
 
 
-def _load_phase_extractor() -> Callable[[Any], Dict[str, Any]]:
+def _load_phase_extractor() -> Callable[..., Any]:
     try:
         from totalsegmentator.bin.totalseg_get_phase import get_ct_contrast_phase
     except ModuleNotFoundError as exc:
@@ -184,11 +184,32 @@ def _has_populated_value(value: Any) -> bool:
     return True
 
 
+def _normalize_phase_extractor_output(output: Any) -> Dict[str, Any] | None:
+    """Normalize legacy and generator-based TotalSegmentator phase outputs."""
+    if isinstance(output, dict):
+        return output
+
+    try:
+        updates = iter(output)
+    except TypeError:
+        return None
+
+    phase_info = None
+    for update in updates:
+        if not isinstance(update, dict):
+            continue
+        result = update.get("result")
+        if isinstance(result, dict):
+            phase_info = result
+
+    return phase_info
+
+
 def process_single_volume(
     idx: int,
     row: Mapping[str, Any],
     *,
-    phase_extractor: Callable[[Any], Dict[str, Any]],
+    phase_extractor: Callable[..., Any],
     verbose: bool = False,
 ) -> Tuple[int, Dict[str, Any] | None, str | None]:
     """Extract phase metadata for one cohort row without raising row errors.
@@ -207,13 +228,14 @@ def process_single_volume(
 
     try:
         nifti_image = nib.load(str(nifti_path))
-        phase_info = phase_extractor(nifti_image, quiet=not verbose)
+        raw_phase_info = phase_extractor(nifti_image, quiet=not verbose)
+        phase_info = _normalize_phase_extractor_output(raw_phase_info)
     except Exception as exc:
         logger.debug("Traceback for %s:\n%s", nifti_path, traceback.format_exc())
         return idx, None, str(exc)
 
-    if not isinstance(phase_info, dict):
-        return idx, None, "phase extractor did not return a dictionary"
+    if phase_info is None:
+        return idx, None, "phase extractor did not return a prediction dictionary"
     if not phase_info:
         return idx, None, "phase extractor returned no values"
 
@@ -386,6 +408,19 @@ def main(args: argparse.Namespace) -> None:
         ),
         None,
     )
+    if semantic_reprocess_ids and prediction_strategy is not None:
+        # Imported predictions belong to the old inputs. A failed rerun must
+        # not silently resolve from the stale prediction or confidence.
+        invalidated = df["_source_idx"].map(normalize_source_id).isin(
+            semantic_reprocess_ids
+        )
+        prediction_columns = {
+            prediction_strategy["column"],
+            *prediction_strategy["confidence_columns"],
+            *(column for column in df if column.startswith("totalseg_")),
+        }
+        for column in prediction_columns.intersection(df.columns):
+            df.loc[invalidated, column] = pd.NA
     if prediction_strategy is not None:
         logger.info(
             "Phase extraction step: %s (totalsegmentator) selected %d/%d volume(s)",

@@ -102,6 +102,23 @@ modification timestamps.
 
 Do not manually edit checkpoint/state files while a command is running.
 
+The `phase` command fingerprints the columns used by its configured strategies,
+including rule results and phase applicability. After a completed run, it can
+reuse unchanged rows and reevaluate rows whose relevant inputs changed. Adding
+unrelated CSV columns does not invalidate phase inference. Image identity uses
+the NIfTI path and existence by default; use `--strict_resume` to detect changed
+image contents at the same path. Invalidated predictions are cleared before
+reevaluation so that a failed prediction cannot reuse a stale phase.
+
+Curation exports retain the original rule evidence and use the manifest's text
+column precedence for selection. `phase_text_column` and `phase_text_value`
+identify the selected metadata evidence; unresolved `phase_reason` includes the
+rule's blocking explanation. MRI dynamic reasons report acquisition and inferred
+injection-interval seconds (relative to midnight), compatible phases on ambiguity,
+and rejected anchor clocks. These intervals are inferred constraints, not recorded
+injection times. Wide QC cells include volume identifiers and phase provenance.
+Selection scores rank candidates; they are not calibrated phase confidence.
+
 ## Example Slurm batch script
 
 For scheduled runs, a single Slurm job can execute the full pipeline with

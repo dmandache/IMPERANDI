@@ -12,7 +12,7 @@ from imperandi.curation.mri.curate import (
     add_scores,
     select_best_candidates,
 )
-from imperandi.curation.common import get_exam_group_cols, norm_label
+from imperandi.curation.common import get_exam_group_cols, norm_label, manifest_text_columns
 from imperandi.curation.phase import validate_phase_curation
 from imperandi.utils.run_state import atomic_write_csv
 
@@ -42,24 +42,21 @@ def unresolved_phase_qc_path(path: Path) -> Path:
 
 
 def save_unresolved_phase_cases(df: pd.DataFrame, path: Path) -> None:
-    """Export pre-fallback cases from the resolver's recorded provenance.
+    """Export only genuinely unresolved phase cases.
 
-    Retain raw rule/model evidence, but clear the phase and provenance assigned
-    by fallback. This also works when fallback is disabled or a run is resumed.
+    Rows marked NOT_APPLICABLE are intentionally excluded from phase QC.
     """
-    empty = pd.Series(pd.NA, index=df.index, dtype="object")
-    fallback = df.get("phase_source", empty).eq("fallback") & df.get(
-        "phase_reason", empty
-    ).eq("no phase strategy resolved")
-    unresolved = df.loc[
-        df.get("phase", empty).isna() | fallback.fillna(False)
-    ].copy()
-    for column in ("phase", "phase_source", "phase_confidence", "phase_reason"):
-        unresolved[column] = pd.NA
+    if "phase_status" in df.columns:
+        unresolved = df.loc[df["phase_status"].eq("UNRESOLVED")].copy()
+    else:
+        empty = pd.Series(pd.NA, index=df.index, dtype="object")
+        fallback = df.get("phase_source", empty).eq("fallback") & df.get(
+            "phase_reason", empty
+        ).eq("no phase strategy resolved")
+        unresolved = df.loc[df.get("phase", empty).isna() | fallback.fillna(False)].copy()
     unresolved = unresolved.drop(columns=["_source_idx"], errors="ignore")
     atomic_write_csv(unresolved, path, index=False)
-    logger.info("Saved %d unresolved phase cases before fallback -> %s", len(unresolved), path)
-
+    logger.info("Saved %d unresolved phase cases -> %s", len(unresolved), path)
 
 def selected_output_path(
     configured, output_path, *, input_path=None, protected_paths=()
@@ -108,29 +105,41 @@ def save_selected_candidates(df: pd.DataFrame, path: Path, config) -> int:
                 len(data),
             )
             continue
-        # Annotation supplies selection features even for a phase-only input.
-        annotated = (
-            annotate_ct(data)
-            if modality == "CT"
-            else annotate_mri(data, phase_curation=normalized)
-        )
-        for column in ("phase", "phase_source", "phase_confidence", "phase_reason"):
-            if column in data:
-                annotated[column] = data[column]
-        if modality == "CT":
-            annotated["selection_score"] = annotated.apply(score_ct, axis=1)
-            annotated["ct_selection_score"] = annotated["selection_score"]
-            annotated["selection_slot"] = annotated["phase"].map(
-                lambda value: f"CT_{norm_label(value)}"
+        with manifest_text_columns(modality, normalized):
+            # Annotation supplies selection features even for a phase-only input.
+            annotated = (
+                annotate_ct(data, exam_group_columns=exam_columns)
+                if modality == "CT"
+                else annotate_mri(data, phase_curation=normalized)
             )
-            selected_long, selected_wide = select_ct_per_exam(
-                annotated, exam_group_columns=exam_columns
-            )
-        else:
-            annotated = add_scores(annotated)
-            selected_long, selected_wide = select_best_candidates(
-                annotated, exam_group_columns=exam_columns
-            )
+            for column in (
+                "phase",
+                "phase_status",
+                "phase_source",
+                "phase_confidence",
+                "phase_reason",
+            ):
+                if column in data:
+                    annotated[column] = data[column]
+            # Preserve the evidence that produced the input decision. Reannotation
+            # supplies missing selection features, not a replacement audit trail.
+            for column in data.columns:
+                if column.startswith(("rule_phase", "ct_phase", "mri_perfusion_", "mri_dynamic_", "phase_text_")):
+                    annotated[column] = data[column]
+            if modality == "CT":
+                annotated["selection_score"] = annotated.apply(score_ct, axis=1)
+                annotated["ct_selection_score"] = annotated["selection_score"]
+                annotated["selection_slot"] = annotated["phase"].map(
+                    lambda value: f"CT_{norm_label(value)}"
+                )
+                selected_long, selected_wide = select_ct_per_exam(
+                    annotated, exam_group_columns=exam_columns
+                )
+            else:
+                annotated = add_scores(annotated)
+                selected_long, selected_wide = select_best_candidates(
+                    annotated, exam_group_columns=exam_columns
+                )
         long_parts.append(selected_long.assign(curation_modality=modality))
         wide_parts.append(selected_wide.assign(curation_modality=modality))
     selected_long = (

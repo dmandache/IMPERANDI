@@ -114,6 +114,12 @@ def test_shared_phase_vocabulary_across_separators(phase, words, separator):
     "text,phase",
     [
         ("19 sec", None),
+        ("t20s", "ARTERIAL"),
+        ("T35sec", "ARTERIAL"),
+        ("t_60s", "PORTAL_VENOUS"),
+        ("T90 seconds", "PORTAL_VENOUS"),
+        ("t180s", "DELAYED"),
+        ("T5min", "DELAYED"),
         ("20 sec", "ARTERIAL"),
         ("35 seconds", "ARTERIAL"),
         ("36 sec", None),
@@ -253,12 +259,12 @@ def test_phase_provenance_and_text_column_precedence(monkeypatch):
 
     assert detect_ct_phase(row) == (
         "ARTERIAL",
-        "matched CT arterial keyword",
+        "matched CT arterial evidence in SeriesDescription='arterial'",
         "high",
     )
     assert mr.detect_explicit_phase_from_text(row) == (
         "ARTERIAL",
-        "matched explicit arterial keyword",
+        "matched explicit arterial evidence in SeriesDescription='arterial'",
         "explicit",
         "explicit_text",
     )
@@ -425,13 +431,12 @@ def test_ct_selection_uses_strengthened_shared_rules():
         ]
     )
     result = curate_ct(frame)
-    assert set(result["selected_long"]["volume_id"]) == {"0", "1", "2", "3", "6"}
+    assert set(result["selected_long"]["volume_id"]) == {"0", "1", "2", "3"}
     assert set(result["selected_long"]["selection_slot"]) == {
         "CT_NATIVE",
         "CT_ARTERIAL",
         "CT_PORTAL_VENOUS",
         "CT_DELAYED",
-        "CT_OTHER",
     }
 
 

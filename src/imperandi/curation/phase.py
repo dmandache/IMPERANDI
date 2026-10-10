@@ -18,6 +18,10 @@ DEFAULT_PHASE_CURATION = {
     "unresolved_labels": DEFAULT_UNRESOLVED_LABELS,
 }
 
+PHASE_STATUS_RESOLVED = "RESOLVED"
+PHASE_STATUS_UNRESOLVED = "UNRESOLVED"
+PHASE_STATUS_NOT_APPLICABLE = "NOT_APPLICABLE"
+
 
 def normalize_phase_label(value: Any) -> str | None:
     """Normalize a phase value to uppercase underscore form."""
@@ -171,11 +175,32 @@ def validate_phase_curation(config: Mapping[str, Any] | None) -> dict[str, Any]:
             raise ValueError(
                 "phase_curation.best_candidate_group_columns must be unique."
             )
+    raw_text_columns = config.get("text_columns", {})
+    if not isinstance(raw_text_columns, Mapping):
+        raise ValueError(
+            "phase_curation.text_columns must be a mapping of CT/MR to lists."
+        )
+    text_columns = {}
+    for modality, columns in raw_text_columns.items():
+        if modality not in {"CT", "MR", "MRI"}:
+            raise ValueError("phase_curation.text_columns keys must be CT, MR, or MRI.")
+        canonical = "MR" if modality == "MRI" else modality
+        if canonical in text_columns:
+            raise ValueError(
+                "phase_curation.text_columns cannot define both MR and MRI."
+            )
+        field = f"phase_curation.text_columns.{modality}"
+        validated = _validate_string_list(columns, field)
+        if len(set(validated)) != len(validated):
+            raise ValueError(f"{field} must be unique.")
+        text_columns[canonical] = validated
+
     return {
         "strategies": normalized_strategies,
         "fallback": fallback,
         "unresolved_labels": unresolved_labels,
         "best_candidate_group_columns": best_candidate_columns,
+        "text_columns": text_columns,
     }
 
 
@@ -183,6 +208,10 @@ def phase_curation_input_columns(config: Mapping[str, Any] | None) -> set[str]:
     """Return source columns referenced by manifest-defined strategies."""
     normalized = validate_phase_curation(config)
     columns: set[str] = set(normalized["best_candidate_group_columns"] or [])
+    # Applicability is evaluated before every strategy, including rules-only runs.
+    columns.add("phase_applicability_reason")
+    for text_columns in normalized["text_columns"].values():
+        columns.update(text_columns)
     for strategy in normalized["strategies"]:
         if strategy["type"] == "ontology":
             columns.update(strategy["columns"])
@@ -312,29 +341,39 @@ def apply_phase_curation(
     apply_fallback: bool = True,
     progress_logger: logging.Logger | None = None,
 ) -> pd.DataFrame:
-    """Resolve a canonical phase using configured strategy precedence.
-
-    When ``progress_logger`` is provided, emit one compact summary per applied
-    strategy with the number of newly resolved and still-unresolved volumes.
-    """
+    """Resolve canonical phase and explicit applicability status."""
     normalized = validate_phase_curation(config)
     source = df.copy()
     out = df.copy()
     out["phase"] = pd.Series(pd.NA, index=out.index, dtype="object")
+    out["phase_status"] = pd.Series(pd.NA, index=out.index, dtype="object")
     out["phase_source"] = pd.Series(pd.NA, index=out.index, dtype="object")
     out["phase_confidence"] = pd.Series(pd.NA, index=out.index, dtype="object")
     out["phase_reason"] = pd.Series(pd.NA, index=out.index, dtype="object")
 
-    unresolved = [True] * len(out)
     output_positions = {
         column: out.columns.get_loc(column)
-        for column in (
-            "phase",
-            "phase_source",
-            "phase_confidence",
-            "phase_reason",
-        )
+        for column in ("phase", "phase_status", "phase_source", "phase_confidence", "phase_reason")
     }
+
+    unresolved: list[bool] = []
+    for row_position in range(len(out)):
+        reason = normalize_phase_label(source.iloc[row_position].get("phase_applicability_reason"))
+        # Older curated CSVs used DERIVED as an applicability veto. It describes
+        # the product, not whether phase evidence can be used by a strategy.
+        if reason == "DERIVED":
+            reason = None
+            out.iat[row_position, out.columns.get_loc("phase_applicability_reason")] = (
+                pd.NA
+            )
+        if reason is None:
+            unresolved.append(True)
+            continue
+        unresolved.append(False)
+        out.iat[row_position, output_positions["phase_status"]] = PHASE_STATUS_NOT_APPLICABLE
+        out.iat[row_position, output_positions["phase_source"]] = "not_applicable"
+        out.iat[row_position, output_positions["phase_reason"]] = reason
+
     stop_type = stop_before.strip().lower() if stop_before else None
     strategy_count = len(normalized["strategies"])
     for strategy_index, strategy in enumerate(normalized["strategies"], start=1):
@@ -344,12 +383,11 @@ def apply_phase_curation(
         for row_position, is_unresolved in enumerate(unresolved):
             if not is_unresolved:
                 continue
-            phase, confidence, reason = _resolve_strategy(
-                source.iloc[row_position], strategy
-            )
+            phase, confidence, reason = _resolve_strategy(source.iloc[row_position], strategy)
             if phase is None or phase in normalized["unresolved_labels"]:
                 continue
             out.iat[row_position, output_positions["phase"]] = phase
+            out.iat[row_position, output_positions["phase_status"]] = PHASE_STATUS_RESOLVED
             out.iat[row_position, output_positions["phase_source"]] = strategy["name"]
             out.iat[row_position, output_positions["phase_confidence"]] = confidence
             out.iat[row_position, output_positions["phase_reason"]] = reason
@@ -359,36 +397,41 @@ def apply_phase_curation(
         if progress_logger is not None:
             progress_logger.info(
                 "Phase strategy %d/%d: %s (%s) resolved %d volume(s); %d unresolved",
-                strategy_index,
-                strategy_count,
-                strategy["name"],
-                strategy["type"],
-                resolved_count,
-                sum(unresolved),
+                strategy_index, strategy_count, strategy["name"], strategy["type"],
+                resolved_count, sum(unresolved),
             )
 
-    if apply_fallback and normalized["fallback"] is not None:
-        fallback_count = sum(unresolved)
-        for row_position, is_unresolved in enumerate(unresolved):
-            if not is_unresolved:
-                continue
-            out.iat[row_position, output_positions["phase"]] = normalized["fallback"]
-            out.iat[row_position, output_positions["phase_source"]] = "fallback"
-            out.iat[row_position, output_positions["phase_reason"]] = (
-                "no phase strategy resolved"
-            )
-            unresolved[row_position] = False
+    unresolved_count = sum(unresolved)
+    for row_position, is_unresolved in enumerate(unresolved):
+        if not is_unresolved:
+            continue
+        out.iat[row_position, output_positions["phase"]] = "OTHER"
+        out.iat[row_position, output_positions["phase_status"]] = PHASE_STATUS_UNRESOLVED
+        out.iat[row_position, output_positions["phase_source"]] = (
+            "fallback" if apply_fallback and normalized["fallback"] is not None else "unresolved"
+        )
+        out.iat[row_position, output_positions["phase_reason"]] = "no phase strategy resolved"
+        if any(strategy["type"] == "rules" for strategy in normalized["strategies"]):
+            reason = source.iloc[row_position].get("rule_phase_reason")
+            if isinstance(reason, str) and reason.strip():
+                out.iat[row_position, output_positions["phase_reason"]] += (
+                    f"; metadata rules: {reason}"
+                )
 
-        if progress_logger is not None:
+    if progress_logger is not None and apply_fallback and normalized["fallback"] is not None:
+        progress_logger.info(
+            "Phase fallback assigned OTHER to %d unresolved volume(s)",
+            unresolved_count,
+        )
+
+    if progress_logger is not None:
+        progress_logger.info("Phase status counts: %s", out["phase_status"].value_counts().to_dict())
+        if "mri_perfusion_source" in out:
             progress_logger.info(
-                "Phase fallback (%s) resolved %d volume(s); %d unresolved",
-                normalized["fallback"],
-                fallback_count,
-                sum(unresolved),
+                "MRI rule evidence counts: %s",
+                out["mri_perfusion_source"].value_counts().to_dict(),
             )
-
     return out
-
 
 def phase_needs_strategy(
     df: pd.DataFrame,
@@ -416,7 +459,8 @@ def phase_needs_strategy(
     ]
     return pd.Series(
         [
-            bool(pd.isna(prior["phase"].iloc[position])) and eligible[position]
+            prior["phase_status"].iloc[position] == PHASE_STATUS_UNRESOLVED
+            and eligible[position]
             for position in range(len(df))
         ],
         index=df.index,
@@ -425,6 +469,9 @@ def phase_needs_strategy(
 
 __all__ = [
     "DEFAULT_PHASE_CURATION",
+    "PHASE_STATUS_NOT_APPLICABLE",
+    "PHASE_STATUS_RESOLVED",
+    "PHASE_STATUS_UNRESOLVED",
     "SUPPORTED_PHASE_STRATEGIES",
     "apply_phase_curation",
     "get_phase_strategy",
