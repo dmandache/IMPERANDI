@@ -1,0 +1,92 @@
+# Candidate inventory and native metadata ranking; paper inclusion is documented in README.md.
+# Start with the FULL TCGA-LIHC export to evaluate curation, not dicoms.zip (already selected).
+dataset_name: tcga_lihc_mri_multiphase_candidates
+id_extraction:
+  source: tags
+  force_dicom_read: false
+  patient_key: {from_tag: PatientID, fallback: path}
+  study_id: {from_tag: StudyInstanceUID, fallback: path}
+  series_id: {from_tag: SeriesInstanceUID, fallback: path}
+phase_curation:
+  best_candidate_group_columns: [patient_key, date]
+  text_columns:
+    MR: [SeriesDescription, ImageComments, StudyDescription, ProtocolName]
+  strategies:
+    - type: rules
+      name: metadata_phase_candidates
+  unresolved_labels: ["", OTHER, UNKNOWN, UNCLASSIFIED, NONE]
+  fallback: OTHER
+cleaning:
+  steps:
+    - type: coalesce_date
+      candidates: [StudyDate, SeriesDate, AcquisitionDate]
+    - type: coalesce_time
+      candidates: [AcquisitionTime, ContentTime, SeriesTime]
+    - type: sop_class
+    - type: filter
+      name: retain_mr_candidates
+      kind: keep
+      scope: row
+      logic: or
+      rules:
+        - column: Modality
+          op: in
+          value: [MR, MRI]
+        - column: sop_class
+          op: in
+          value:
+            - MRImageStorage
+            - EnhancedMRImageStorage
+            - LegacyConvertedEnhancedMRImageStorage
+            - EnhancedMRColorImageStorage
+
+    - type: filter
+      name: discard_localizers
+      kind: discard
+      scope: row
+      logic: or
+      rules:
+        - {column: ImageType, op: contains, value: LOCALIZER}
+        - {column: SeriesDescription, op: icontains, value: localizer}
+        - {column: SeriesDescription, op: icontains, value: scout}
+
+    - type: filter
+      name: discard_very_thick_acquisitions
+      kind: discard
+      scope: row
+      rules:
+        - {column: SliceThickness, op: gt, value: 15.0}
+
+    - type: pixel_spacing_xy
+    - type: standardize_iop
+    - type: classify_acquisition_plane
+    - type: filter
+      name: discard_unknown_acquisition_plane
+      kind: discard
+      scope: row
+      rules:
+        - {column: acquisition_plane, op: is_null}
+    - type: build_volume_id
+      preferred_columns: [patient_key, study_id, series_id, ImageType, AcquisitionNumber, ImageOrientationPatient, SliceThickness, PixelSpacingXY]
+      fallback_columns: [patient_key, study_id, series_id]
+      series_group_columns: [patient_key, study_id, series_id]
+      split_z_tolerance: 0.01
+      min_slices: 3
+      min_repeated_slice_fraction: 0.7
+      merge_group_columns: [patient_key, study_id, series_id, ImageType, ImageOrientationPatient, SliceThickness, PixelSpacingXY]
+      merge_z_sources: [ImagePositionPatient, SliceLocation]
+      merge_z_tolerance: 0.001
+    - type: group_volumes
+    - type: compute_volume_length
+    - type: compute_visit_order
+    - type: compute_acquisition_order
+    - type: modality_curation
+    - type: filter
+      name: retain_T1_only
+      kind: keep
+      scope: row
+      rules: [{column: mri_sequence, op: eq, value: T1}]
+    - type: finalize
+# Only very thick acquisitions (>15 mm) and obvious localizers/scouts are excluded.
+# No pixel-spacing, matrix-size or volume-length exclusion is imposed.
+# The geometry tolerances above are IMPERANDI engineering settings, not paper criteria.
