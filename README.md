@@ -25,6 +25,15 @@
 
 IMPERANDI is a Python framework and CLI for transforming heterogeneous DICOM collections into analysis-ready CT and MR imaging cohorts. It standardizes identifiers, curates imaging series and volume-level metadata, converts selected volumes to NIfTI, and supports downstream segmentation, contrast-phase identification, radiomics extraction, and quality control within a coherent, reproducible pipeline.
 
+## Google Colab demos
+
+Try IMPERANDI on three public TCGA-LIHC patients:
+
+| Demo | Workflow | Launch |
+| --- | --- | --- |
+| [Light demo](examples/demos/demo_light.ipynb) | DICOM ingestion, metadata phase curation, and QC. | [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/dmandache/IMPERANDI/blob/main/examples/demos/demo_light.ipynb) |
+| [Full demo](examples/demos/demo_full.ipynb) | Adds NIfTI conversion, liver segmentation, radiomics, a liver-volume plot, and the interactive viewer. | [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/dmandache/IMPERANDI/blob/main/examples/demos/demo_full.ipynb) |
+
 ## Disclaimers
 
 ### Research use only
