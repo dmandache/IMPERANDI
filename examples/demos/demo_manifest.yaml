@@ -80,8 +80,7 @@ cleaning:
       scope: row
       keep_null: false
       rules:
-        - {column: aquisition_plane, op: eq, value: AX}
-        
+        - {column: acquisition_plane, op: eq, value: AX}
     - type: build_volume_id
       preferred_columns: [patient_key, study_id, series_id, ImageType, AcquisitionNumber, ImageOrientationPatient, SliceThickness, PixelSpacingXY]
       fallback_columns: [patient_key, study_id, series_id]
