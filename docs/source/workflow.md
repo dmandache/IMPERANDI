@@ -14,10 +14,10 @@ DICOM roots / archives
  clean ------> dicom_index_clean.csv
         |
         v
- convert ----> nifti_index.csv + NIfTI images
+ convert ----> nifti_index.csv with paths + NIfTI images
         |
         v
- segment ----> mask_* paths
+ segment ----> nifti_index.csv with mask_* paths + NIfTI masks
         |
         v
  phase ------> canonical phase + provenance
