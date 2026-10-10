@@ -7,7 +7,7 @@ These demos use the public [TCGA-LIHC](https://www.cancerimagingarchive.net/coll
 Both notebooks use the same three public patients: `TCGA-BC-A10Y`, `TCGA-DD-A113`, and `TCGA-DD-A4NJ`.
 
 - [**Light demo**](demo_light.ipynb): base IMPERANDI installation; download, ingest, inspect outputs, and metadata-only phase curation.
-- [**Full demo**](demo_full.ipynb): installs `.[all]`; continues through NIfTI conversion, liver segmentation, and the interactive viewer. PyRadiomics is installed separately and its execution cell is included but commented out.
+- [**Full demo**](demo_full.ipynb): continues through NIfTI conversion, liver segmentation, radiomic feature extraction, a longitudinal liver-volume plot, and the interactive viewer.
 
 The demos are intentionally small and user-facing. They showcase IMPERANDI functionality rather than reproduce the full scientific comparisons.
 

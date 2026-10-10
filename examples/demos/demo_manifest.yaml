@@ -109,7 +109,6 @@ segmentation:
             roi_subset: [liver]
             fastest: true
 
-# Full demo only. The notebook keeps radiomics execution commented out by default.
 radiomics:
   modalities:
     CT:
