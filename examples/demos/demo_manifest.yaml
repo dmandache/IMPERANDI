@@ -74,6 +74,14 @@ cleaning:
 
     - type: standardize_iop
     - type: classify_acquisition_plane
+    - type: filter
+      name: keep_only_AXIAL_acquisition
+      kind: keep
+      scope: row
+      keep_null: false
+      rules:
+        - {column: aquisition_plane, op: eq, value: AX}
+        
     - type: build_volume_id
       preferred_columns: [patient_key, study_id, series_id, ImageType, AcquisitionNumber, ImageOrientationPatient, SliceThickness, PixelSpacingXY]
       fallback_columns: [patient_key, study_id, series_id]
@@ -98,6 +106,15 @@ cleaning:
         - {column: visit_order, op: lt, value: 3}
     
     - type: modality_curation
+    - type: filter
+      name: keep_only_T1w_MRI
+      kind: keep
+      scope: row
+      logic: and
+      rules:
+        - {column: Modality, op: in, value: [MR, MRI]}
+        - {column: mri_sequence, op: eq, value: T1}
+        
     - type: finalize
 
 # Full demo only: liver segmentation for both CT and MR.
