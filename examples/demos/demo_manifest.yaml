@@ -1,0 +1,134 @@
+# Lightweight configuration shared by the public TCGA-LIHC demos.
+# Scientific benchmark manifests live separately under benchmarks/.
+dataset_name: tcga_lihc_demo
+
+id_extraction:
+  source: tags
+  force_dicom_read: false
+  patient_key: {from_tag: PatientID, fallback: path}
+  study_id: {from_tag: StudyInstanceUID, fallback: path}
+  series_id: {from_tag: SeriesInstanceUID, fallback: path}
+
+# Metadata-only phase curation: no model fallback is required for the light demo.
+phase_curation:
+  best_candidate_group_columns: [patient_key, study_id, date]
+  strategies:
+    - type: rules
+      name: metadata_phase_candidates
+  unresolved_labels: ["", OTHER, UNKNOWN, UNCLASSIFIED, NONE]
+  fallback: OTHER
+
+# Ingest builds the volume-level inventory and runs the modality metadata engines.
+# Those engines retain raw phase evidence in rule_phase/rule_phase_*; the separate
+# 'imperandi phase' step then resolves the canonical phase from that evidence.
+cleaning:
+  steps:
+    - type: coalesce_date
+      candidates: [StudyDate, SeriesDate, AcquisitionDate]
+    - type: coalesce_time
+    - type: filter
+      name: retain_ct_mr
+      kind: keep
+      scope: row
+      logic: and
+      rules:
+        - {column: Modality, op: in, value: [CT, MR, MRI]}
+
+    - type: filter
+      name: discard_localizers
+      kind: discard
+      scope: row
+      logic: or
+      rules:
+        - {column: ImageType, op: contains, value: LOCALIZER}
+        - {column: SeriesDescription, op: icontains, value: localizer}
+        - {column: SeriesDescription, op: icontains, value: scout}
+
+    - type: filter
+      name: discard_thick_ct
+      kind: discard
+      scope: row
+      logic: and
+      rules:
+        - {column: Modality, op: eq, value: CT}
+        - {column: SliceThickness, op: gt, value: 5.0}
+
+    - type: filter
+      name: discard_thick_mr
+      kind: discard
+      scope: row
+      logic: and
+      rules:
+        - {column: Modality, op: in, value: [MR, MRI]}
+        - {column: SliceThickness, op: gt, value: 7.0}
+
+    - type: pixel_spacing_xy
+
+    - type: filter
+      name: discard_coarse_resolution
+      kind: discard
+      scope: row
+      keep_null: true
+      rules:
+        - {column: PixelSpacingXY, op: gt, value: 2.0}
+
+    - type: standardize_iop
+    - type: classify_acquisition_plane
+    - type: build_volume_id
+      preferred_columns: [patient_key, study_id, series_id, ImageType, AcquisitionNumber, ImageOrientationPatient, SliceThickness, PixelSpacingXY]
+      fallback_columns: [patient_key, study_id, series_id]
+      series_group_columns: [patient_key, study_id, series_id]
+      split_z_tolerance: 0.01
+      min_slices: 1
+      min_repeated_slice_fraction: 0.7
+      merge_group_columns: [patient_key, study_id, series_id, ImageType, ImageOrientationPatient, SliceThickness, PixelSpacingXY]
+      merge_z_sources: [ImagePositionPatient, SliceLocation]
+      merge_z_tolerance: 0.001
+    - type: group_volumes
+    - type: compute_volume_length
+    - type: compute_visit_order
+    - type: compute_acquisition_order
+    - type: modality_curation
+    - type: finalize
+
+# Full demo only: liver segmentation for both CT and MR.
+segmentation:
+  backend: totalsegmentator
+  crop: false
+  modalities:
+    CT:
+      tasks:
+        - task: total
+          extra:
+            roi_subset: [liver]
+            fastest: true
+    MR:
+      tasks:
+        - task: total_mr
+          extra:
+            roi_subset: [liver]
+            fastest: true
+
+# Full demo only. The notebook keeps radiomics execution commented out by default.
+radiomics:
+  modalities:
+    CT:
+      pyradiomics:
+        setting:
+          binWidth: 25
+          resampledPixelSpacing: [2, 2, 2]
+          resegmentRange: [-150, 250]
+          correctMask: true
+        imageType:
+          Original: {}
+    MR:
+      pyradiomics:
+        setting:
+          binWidth: 5
+          resampledPixelSpacing: [2, 2, 2]
+          normalize: true
+          normalizeScale: 100
+          removeOutliers: 3
+          correctMask: true
+        imageType:
+          Original: {}
