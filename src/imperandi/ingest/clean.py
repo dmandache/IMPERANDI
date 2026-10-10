@@ -321,14 +321,18 @@ def add_time(df, candidate_columns=None):
     }
     # Ordered fallback: first candidate has highest priority, next ones fill gaps.
     time = parsed_by_candidate[candidate_cols[0]].copy()
+    source = pd.Series(None, index=df.index, dtype=object)
+    source.loc[time.notna()] = candidate_cols[0]
     fill_contrib = {}
     for col in candidate_cols[1:]:
         missing_before = int(time.isna().sum())
+        source.loc[time.isna() & parsed_by_candidate[col].notna()] = col
         time = time.fillna(parsed_by_candidate[col])
         missing_after = int(time.isna().sum())
         fill_contrib[col] = missing_before - missing_after
 
     df["time"] = time
+    df["time_source"] = source
     total_valid = int(df["time"].notna().sum())
     logger.info(
         "Time candidates (priority order) %s -> %d/%d valid%s",
@@ -1804,7 +1808,7 @@ def _get_step_outputs(step: dict) -> set[str]:
     if step_type == "coalesce_date":
         return {"date"}
     if step_type == "coalesce_time":
-        return {"time"}
+        return {"time", "time_source"}
     if step_type == "sop_class":
         return {"sop_class"}
     if step_type == "normalize_string":
@@ -1854,6 +1858,8 @@ def _get_step_outputs(step: dict) -> set[str]:
             "rule_phase_reason",
             "rule_phase_confidence",
             "phase",
+            "phase_status",
+            "phase_applicability_reason",
             "phase_source",
             "phase_reason",
             "phase_confidence",

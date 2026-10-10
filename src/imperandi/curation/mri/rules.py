@@ -12,6 +12,7 @@ RX_LOCALIZER = shared.RX_LOCALIZER
 RX_KEY_IMAGES = shared.RX_KEY_IMAGES
 RX_SUBTRACTION = shared.RX_SUBTRACTION
 RX_MIP_MPR = shared.RX_MIP_MPR
+RX_IMAGE_DERIVED = shared.RX_IMAGE_DERIVED
 RX_PLANE_AXIAL = shared.RX_PLANE_AXIAL
 RX_PLANE_CORONAL = shared.RX_PLANE_CORONAL
 RX_PLANE_SAGITTAL = shared.RX_PLANE_SAGITTAL
@@ -58,8 +59,8 @@ RX_SEQUENCE_T2 = token(
 
 # Contrast-agent and hepatobiliary phases are specific to MR.
 RX_PHASE_NATIVE = token(
-    shared.RX_PHASE_NATIVE,
     rf"(?:pr[eé]|sans|non){SEP}(?:{GADOLINIUM})|mas(?:k|que)",
+    shared.RX_PHASE_NATIVE,
 )
 RX_PHASE_POST_CONTRAST = token(shared.RX_PHASE_POST_CONTRAST, GADOLINIUM)
 RX_PHASE_HEPATOBILIARY = token(
@@ -100,6 +101,22 @@ RX_T1_DYNAMIC = token(
     RX_PHASE_POST_CONTRAST,
 )
 
+# Engineering guard against joining unrelated dynamic acquisitions. It uses the
+# upper end of the existing 3–15 minute delayed-phase policy, not injection time.
+GENERIC_DYNAMIC_MAX_GAP_SECONDS = 900.0
+
+GENERIC_DYNAMIC_FAMILIES = (
+    ("DIXON", token(DIXON)),
+    ("VIBE", token(r"vibe|twist|grasp|dynava")),
+    ("LAVA", token(r"lava")),
+    ("THRIVE", token(r"e?thrive")),
+    ("IDEAL", token(r"idea(?:l)?")),
+    ("DISCO", token(r"disco")),
+    ("SPGR", token(r"fspgr|spgr")),
+    ("TFE", token(r"tfe")),
+    ("FLASH", token(r"flash")),
+)
+
 # Features used to rank MR diagnostic candidates.
 RX_T2_FATSAT = token(rf"fs|fat{SEP}sat|spair|spir|stir|tirm")
 RX_T2_MOTION_ROBUST = token(T2_MOTION_ROBUST, r"multivane|radial", RX_RESP_TRIGGERED)
@@ -111,7 +128,18 @@ RX_T1_3D_GRE = token(r"3d", T1_GRE)
 # Dixon components.
 RX_DIXON_CONTEXT = token(DIXON, rf"lava{SEP}flex|flex|idea(?:l)?|disco")
 RX_DIXON_ALL = token(rf"all(?:{SEP}bh)?|{DIXON}{SEP}all")
-RX_DIXON_WATER = token(r"w|water|wat|eau")
+RX_DIXON_WATER = token(r"water|wat|eau")
+# Short W is a reconstruction tag only with Dixon context in the same field.
+# Accept attached suffixes (_W/-W/.W) or a final standalone W, never arbitrary W.
+RX_DIXON_WATER_SUFFIX = token(r"(?<=[_.-])w(?=$|[\s_.-])|w(?=\s*$)")
+# Mask contrast shorthand before interpreting W suffixes, including wo-W.
+_CONTRAST_JOIN = rf"{SEP}(?:(?:&|,|and){SEP})?"
+_WITHOUT_SHORT = rf"w{SEP}o|without"
+RX_DIXON_CONTRAST_SHORTHAND = token(
+    rf"(?:w|with){_CONTRAST_JOIN}(?:{_WITHOUT_SHORT})"
+    rf"|(?:{_WITHOUT_SHORT}){_CONTRAST_JOIN}(?:w|with)"
+    rf"|w{SEP}(?:{shared.CONTRAST}|{shared.INJECTION}|{GADOLINIUM})"
+)
 RX_DIXON_IN = token(rf"in|ip|in{SEP}phase|phase{SEP}in|eco{SEP}0")
 RX_DIXON_OPPOSED = token(
     rf"opp|opposed|out|op|oop|out{SEP}phase|phase{SEP}out|eco{SEP}1"
@@ -128,10 +156,14 @@ T1_PHASE_SOURCE_PRIORITY = {
     "explicit_text_art_port_single": 25,
     "explicit_text_mask_multiart_single": 25,
     "ordinal_context": 15,
+    "group_pre_post_order": 10,
     "acquisition_order_art_port_late": 10,
     "acquisition_order_art_port": 10,
     "acquisition_order_mask_multiart": 10,
     "acquisition_order_dixon_component": 5,
+    "dynamic_explicit_anchor": 15,
+    "generic_dynamic_context_pending": -20,
+    "generic_dynamic_context_blocked": -20,
     "volume_order_art_port_late": 10,
     "volume_order_art_port": 10,
     "volume_order_mask_multiart": 10,

@@ -56,6 +56,12 @@ derived_columns:
 # labels are normalized uppercase strings; typical values are NATIVE, ARTERIAL,
 # PORTAL_VENOUS, DELAYED, and OTHER, but custom non-empty labels are accepted.
 phase_curation:
+  # Optional ordered text fields for metadata classification and phase rules.
+  # Each list replaces that modality's defaults; missing fields are skipped.
+  # Omit a modality to keep its defaults. MRI is an alias for MR.
+  # text_columns:
+  #   CT: [SeriesDescription, ProtocolName]
+  #   MR: [SeriesDescription, ProtocolName, SequenceName]
   # Together these identify each group that gets one best candidate per slot.
   best_candidate_group_columns: [patient_key, study_id, date]
   strategies:

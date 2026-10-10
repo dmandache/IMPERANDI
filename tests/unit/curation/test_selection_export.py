@@ -48,6 +48,49 @@ def config():
     }
 
 
+def test_export_keeps_manifest_text_evidence_and_excludes_comment_mip(tmp_path):
+    df = cohort().iloc[:2].copy()
+    df["SeriesDescription"] = "Body CE"
+    df["ImageComments"] = ["Venous\\Phase", "Venous\\Phase MIP"]
+    cfg = {**config(), "text_columns": {"CT": ["SeriesDescription", "ImageComments"]}}
+    curated = curate_by_modality(df, phase_curation=cfg)["curated_all"]
+    path = tmp_path / "selected.csv"
+    assert save_selected_candidates(curated, path, cfg) == 1
+    exported = pd.read_csv(path)
+    assert exported.volume_id.tolist() == ["v0"]
+    assert exported.loc[0, "phase_text_column"] == "ImageComments"
+    assert exported.loc[0, "rule_phase"] == exported.loc[0, "phase"] == "PORTAL_VENOUS"
+    assert "ImageComments" in exported.loc[0, "phase_reason"]
+    wide = pd.read_csv(selected_qc_path(path))
+    assert "volume_id=v0" in wide.loc[0, "CT_PORTAL_VENOUS"]
+    assert "ImageComments" in wide.loc[0, "CT_PORTAL_VENOUS"]
+
+
+def test_unresolved_final_reason_keeps_rule_diagnostics(tmp_path):
+    df = cohort().iloc[:1].copy()
+    df["rule_phase"] = "OTHER"
+    df["rule_phase_reason"] = "generic dynamic inference blocked: incompatible timing"
+    out = apply_phase_curation(df, config())
+    assert out.loc[0, "phase_status"] == "UNRESOLVED"
+    assert "incompatible timing" in out.loc[0, "phase_reason"]
+    path = tmp_path / "selected.csv"
+    save_selected_candidates(out, path, config())
+    qc = pd.read_csv(unresolved_phase_qc_path(path))
+    assert qc.loc[0, "phase_reason"] == out.loc[0, "phase_reason"]
+
+
+def test_export_preserves_original_dynamic_audit_fields(tmp_path):
+    df = cohort("MR").iloc[:1].copy()
+    curated = curate_by_modality(df, phase_curation=config())["curated_all"]
+    curated["mri_dynamic_order_source"] = "TemporalPositionIdentifier within series"
+    curated["mri_perfusion_reason"] = "original grouped acquisition evidence"
+    path = tmp_path / "selected.csv"
+    save_selected_candidates(curated, path, config())
+    exported = pd.read_csv(path)
+    assert exported.loc[0, "mri_dynamic_order_source"] == curated.loc[0, "mri_dynamic_order_source"]
+    assert exported.loc[0, "mri_perfusion_reason"] == curated.loc[0, "mri_perfusion_reason"]
+
+
 @pytest.mark.parametrize("modality", ["CT", "MR"])
 def test_exam_columns_control_selection_and_null_exams_are_retained(modality):
     df = cohort(modality)
@@ -309,15 +352,72 @@ def test_unresolved_qc_matches_pre_fallback_rows_and_preserves_evidence(tmp_path
     path = tmp_path / "cohort_curated.csv"
     save_selected_candidates(final, path, phase_config)
     report = pd.read_csv(unresolved_phase_qc_path(path))
-    assert report["volume_id"].tolist() == before.loc[before["phase"].isna(), "volume_id"].tolist() == ["v2"]
-    assert report["phase"].isna().all()
-    assert report[["phase_source", "phase_confidence", "phase_reason"]].isna().all().all()
+    assert report["volume_id"].tolist() == before.loc[
+        before["phase_status"].eq("UNRESOLVED"), "volume_id"
+    ].tolist() == ["v2"]
+    assert report["phase"].eq("OTHER").all()
+    assert report["phase_status"].eq("UNRESOLVED").all()
     assert report.loc[0, "rule_phase"] == "UNKNOWN"
     assert report.loc[0, "totalseg_phase"] == "unknown"
     assert report.loc[0, "nifti_path"] == "volume2.nii.gz"
     assert "_source_idx" not in report
-    if fallback:
-        assert final.loc[2, "phase"] == fallback
+    assert final.loc[2, "phase"] == "OTHER"
+    assert final.loc[2, "phase_status"] == "UNRESOLVED"
+
+
+
+
+
+def test_unresolved_qc_excludes_not_applicable_but_keeps_true_unknown(tmp_path):
+    df = cohort()
+    df["SeriesDescription"] = [
+        "portal venous",
+        "localizer scout",
+        "unclassified diagnostic acquisition",
+    ]
+    df["ImageType"] = [
+        "ORIGINAL PRIMARY AXIAL",
+        "ORIGINAL PRIMARY LOCALIZER",
+        "ORIGINAL PRIMARY AXIAL",
+    ]
+    results = curate_by_modality(df, phase_curation=config())
+    curated = results["curated_all"]
+
+    path = tmp_path / "selected.csv"
+    save_selected_candidates(curated, path, config())
+    report = pd.read_csv(unresolved_phase_qc_path(path))
+
+    assert report["volume_id"].tolist() == ["v2"]
+    assert report["phase"].eq("OTHER").all()
+    assert report["phase_status"].eq("UNRESOLVED").all()
+    localizer = curated.loc[curated["volume_id"].eq("v1")].iloc[0]
+    assert localizer["phase_status"] == "NOT_APPLICABLE"
+    assert pd.isna(localizer["phase"])
+
+
+@pytest.mark.parametrize("modality", ["CT", "MR"])
+def test_derived_phase_qc_and_selection_are_independent(tmp_path, modality):
+    df = cohort(modality)
+    df["SeriesDescription"] = [
+        "AX T1 portal venous MIP",
+        "AX T1 MIP",
+        "AX T1 portal venous",
+    ]
+    df["visit"] = 1
+    df["ImageType"] = [
+        "DERIVED PRIMARY MIP",
+        "DERIVED PRIMARY MIP",
+        "ORIGINAL PRIMARY AXIAL",
+    ]
+    results = curate_by_modality(df, phase_curation=config())
+    curated = results["curated_all"]
+    path = tmp_path / "selected.csv"
+
+    assert curated["phase_status"].tolist() == ["RESOLVED", "UNRESOLVED", "RESOLVED"]
+    assert curated.loc[0, "phase"] == "PORTAL_VENOUS"
+    assert save_selected_candidates(curated, path, config()) == 1
+    assert pd.read_csv(path)["volume_id"].tolist() == ["v2"]
+    assert pd.read_csv(unresolved_phase_qc_path(path))["volume_id"].tolist() == ["v1"]
 
 
 @pytest.mark.parametrize("command", ["clean", "phase"])
@@ -325,6 +425,7 @@ def test_cli_exports_unresolved_cases_excluded_from_selection(tmp_path, command)
     df = cohort()
     df["SeriesDescription"] = ["portal venous", "localizer scout", "localizer scout"]
     df["rule_phase"] = ["PORTAL_VENOUS", "OTHER", "UNKNOWN"]
+    df["phase_applicability_reason"] = [pd.NA, "LOCALIZER", "LOCALIZER"]
     source, main = tmp_path / "input.csv", tmp_path / "output.csv"
     df.to_csv(source, index=False)
     manifest = tmp_path / "site.yaml"
@@ -336,14 +437,15 @@ def test_cli_exports_unresolved_cases_excluded_from_selection(tmp_path, command)
     assert cli.main(args) == 0
     report_path = tmp_path / "qc_unresolved_phase.csv"
     report = pd.read_csv(report_path)
-    assert report["volume_id"].tolist() == ["v1", "v2"]
-    assert report["phase"].isna().all()
+    assert report.empty
     assert set(pd.read_csv(tmp_path / "input_curated.csv")["volume_id"]) == {
         "v0",
-        "v1",
-        "v2",
     }
-    assert pd.read_csv(main)["phase"].tolist() == ["PORTAL_VENOUS", "OTHER", "OTHER"]
+    main_df = pd.read_csv(main)
+    assert main_df.loc[0, "phase"] == "PORTAL_VENOUS"
+    assert main_df.loc[0, "phase_status"] == "RESOLVED"
+    assert main_df.loc[1:, "phase"].isna().all()
+    assert main_df.loc[1:, "phase_status"].eq("NOT_APPLICABLE").all()
 
     # A later fully resolved run replaces the report, including its old rows.
     df["SeriesDescription"] = "portal venous"

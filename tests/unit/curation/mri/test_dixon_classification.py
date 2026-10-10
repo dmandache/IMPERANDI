@@ -104,6 +104,115 @@ def test_dixon_free_text_compatibility(series_description: str, expected: str):
     assert _classify(series_description)["dixon_component"] == expected
 
 
+@pytest.mark.parametrize(
+    "series_description",
+    [
+        "W",
+        "T1 axial w",
+        "T1 VIBE_W",
+        "Ax LAVA w",
+        "MRI ABD W+WO CONT",
+        "MRI Abd wo&w",
+        "T1 axial w contrast",
+        "T1 axial w gad",
+    ],
+)
+def test_free_text_w_does_not_identify_water_without_dixon_context(series_description):
+    classified = _classify(series_description)
+
+    assert classified["dixon_component"] == "NOT_DIXON"
+    assert classified["dixon_component_source"] == "none"
+
+
+@pytest.mark.parametrize(
+    "contrast_text",
+    [
+        "w/wo contrast",
+        "w+wo",
+        "wo&w",
+        "w&w/o",
+        "W, W/O Contrast",
+        "wo-W",
+        "w-wo",
+        "w - w/o",
+        "without-W",
+        "w contrast",
+        "w gad",
+        "w arterial",
+    ],
+)
+def test_dixon_context_does_not_turn_contrast_w_into_water(contrast_text):
+    classified = _classify(f"T1 mDIXON {contrast_text}")
+
+    assert classified["dixon_component"] == "DIXON_UNKNOWN"
+    assert classified["dixon_component_source"] == "dixon_context"
+
+
+@pytest.mark.parametrize(
+    "series_description",
+    [
+        "WATER: Ax LAVA-Flex APNEE",
+        "water only",
+        "mDIXON wat",
+        "mDIXON eau",
+        "mDIXON_W",
+        "mDIXON-W",
+        "mDIXON.W",
+        "mDIXON W",
+        "T1 VIBE DIXON CAIPI_W arterial",
+        "T1 IDEAL pre gad_W",
+        "T1 mDIXON w/wo contrast CAIPI_W",
+    ],
+)
+def test_explicit_water_names_and_contextual_reconstruction_suffixes(
+    series_description,
+):
+    assert _classify(series_description)["dixon_component"] == "WATER"
+
+
+def test_exact_image_type_water_is_valid_without_free_text_dixon_context():
+    classified = _classify("T1 axial w/wo contrast", ["DERIVED", "PRIMARY", "W"])
+
+    assert classified["dixon_component"] == "WATER"
+    assert classified["dixon_component_source"] == "image_type"
+
+
+@pytest.mark.parametrize(
+    "column", ["SeriesDescription", "StudyDescription", "ProtocolName"]
+)
+def test_contrast_shorthand_in_configured_text_fields_is_not_water(column):
+    df = pd.DataFrame(
+        [{"SeriesDescription": "T1 VIBE axial", column: "MRI ABD W+WO CONT"}]
+    )
+    classified = mc.annotate_mri(
+        df,
+        phase_curation={
+            "strategies": [{"type": "rules"}],
+            "text_columns": {
+                "MR": ["SeriesDescription", "StudyDescription", "ProtocolName"]
+            },
+        },
+    ).iloc[0]
+
+    assert classified["dixon_component"] == "NOT_DIXON"
+
+
+def test_water_suffix_cannot_borrow_dixon_context_from_another_field():
+    df = pd.DataFrame(
+        [{"SeriesDescription": "T1 VIBE_W", "ProtocolName": "mDIXON acquisition"}]
+    )
+    classified = mc.annotate_mri(
+        df,
+        phase_curation={
+            "strategies": [{"type": "rules"}],
+            "text_columns": {"MR": ["SeriesDescription", "ProtocolName"]},
+        },
+    ).iloc[0]
+
+    assert classified["dixon_component"] == "DIXON_UNKNOWN"
+    assert classified["dixon_component_source"] == "dixon_context"
+
+
 def test_dixon_components_are_independent_from_acquisition_order():
     rows = []
     for component, image_type, offset in [

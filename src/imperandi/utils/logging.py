@@ -12,6 +12,17 @@ DEFAULT_LOG_FORMAT = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
 DEFAULT_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
+class _ConsoleHandler(logging.StreamHandler):
+    """Escape unsupported characters without changing the console encoding."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        text = super().format(record)
+        encoding = getattr(self.stream, "encoding", None)
+        if encoding:
+            return text.encode(encoding, errors="backslashreplace").decode(encoding)
+        return text
+
+
 def _coerce_level(level: Optional[str | int]) -> int:
     if level is None:
         return logging.INFO
@@ -89,6 +100,9 @@ def setup_logging(
 ) -> None:
     """Configure root logging with sensible defaults.
 
+    Log files use UTF-8. Console output escapes characters unsupported by the
+    stream's encoding, including when redirected on Windows.
+
     Environment variables:
     - IMPERANDI_LOG_LEVEL
     - IMPERANDI_LOG_FORMAT
@@ -115,9 +129,11 @@ def setup_logging(
         root.setLevel(_coerce_level(level))
         return
 
-    handlers = [logging.StreamHandler(sys.stdout)]
+    handlers = [_ConsoleHandler(sys.stdout)]
     if log_file:
-        handlers.append(logging.FileHandler(log_file))
+        handlers.append(
+            logging.FileHandler(log_file, encoding="utf-8", errors="backslashreplace")
+        )
 
     logging.basicConfig(
         level=_coerce_level(level),

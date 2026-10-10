@@ -275,6 +275,33 @@ def test_add_time_selects_best_time_candidate():
     assert out["time"].notna().sum() == 3
     assert out.loc[0, "time"] == dt_time(12, 0, 0)
     assert out.loc[2, "time"] == dt_time(12, 2, 0)
+    assert out["time_source"].tolist() == ["ContentTime"] * 3
+
+
+def test_coalesced_time_preserves_per_row_provenance_through_volume_aggregation():
+    df = pd.DataFrame(
+        {
+            "volume_id": ["scan", "scan", "series", "creation", "missing"],
+            "AcquisitionTime": ["120001", "120000", None, None, None],
+            "SeriesTime": ["115900", "115900", "121000", None, None],
+            "InstanceCreationTime": ["140000", "140000", "140000", "140001", None],
+        }
+    )
+    out = clean.add_time(
+        df, candidate_columns=["AcquisitionTime", "SeriesTime", "InstanceCreationTime"]
+    )
+    assert out["time_source"].iloc[:4].tolist() == [
+        "AcquisitionTime",
+        "AcquisitionTime",
+        "SeriesTime",
+        "InstanceCreationTime",
+    ]
+    assert pd.isna(out.loc[4, "time_source"])
+    grouped = clean.group_volumes(out).set_index("volume_id")
+    assert grouped.loc["scan", "time"] == dt_time(12, 0)
+    assert grouped.loc["scan", "time_source"] == "AcquisitionTime"
+    assert grouped.loc["series", "time_source"] == "SeriesTime"
+    assert grouped.loc["creation", "time_source"] == "InstanceCreationTime"
 
 
 def test_generic_manifest_filters_pixel_spacing_declaratively():
@@ -834,6 +861,7 @@ def test_validate_cleaning_manifest_requires_phase_curation_for_modality_step():
 def test_phase_curation_sources_are_loaded_for_modality_curation():
     manifest = {
         "phase_curation": {
+            "text_columns": {"CT": ["custom_ct_text"], "MR": ["custom_mr_text"]},
             "strategies": [
                 {
                     "type": "ontology",
@@ -855,6 +883,7 @@ def test_phase_curation_sources_are_loaded_for_modality_curation():
     required = clean._collect_required_input_columns(steps, manifest["phase_curation"])
 
     assert {"reviewed_phase", "predicted_phase"}.issubset(required)
+    assert {"custom_ct_text", "custom_mr_text"}.issubset(required)
     assert {"TemporalPositionIdentifier", "InstanceNumber"}.issubset(required)
 
 

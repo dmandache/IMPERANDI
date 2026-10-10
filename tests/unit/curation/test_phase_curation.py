@@ -60,6 +60,12 @@ def test_phase_curation_uses_ordered_fallbacks_and_provenance():
         "totalseg_prediction",
         "fallback",
     ]
+    assert out["phase_status"].tolist() == [
+        "RESOLVED",
+        "RESOLVED",
+        "RESOLVED",
+        "UNRESOLVED",
+    ]
 
 
 def test_phase_curation_logs_resolution_counts_for_each_strategy_and_fallback():
@@ -80,7 +86,7 @@ def test_phase_curation_logs_resolution_counts_for_each_strategy_and_fallback():
         (1, 2),
         (1, 1),
     ]
-    assert progress_logger.info.call_args_list[3].args[1:] == ("OTHER", 1, 0)
+    assert progress_logger.info.call_args_list[3].args[1:] == (1,)
 
 
 def test_phase_curation_order_can_prefer_totalsegmentator():
@@ -198,6 +204,93 @@ def test_ct_selection_uses_resolved_ontology_phase():
     assert results["curated"].loc[0, "rule_phase"] == "OTHER"
     assert results["curated"].loc[0, "phase"] == "PORTAL_VENOUS"
     assert results["selected_long"].loc[0, "selection_slot"] == "CT_PORTAL_VENOUS"
+
+
+
+
+
+def test_phase_curation_marks_not_applicable_rows_without_phase():
+    df = pd.DataFrame(
+        [
+            {
+                "rule_phase": "ARTERIAL",
+                "phase_applicability_reason": "LOCALIZER",
+            },
+            {"rule_phase": "PORTAL_VENOUS"},
+            {"rule_phase": "OTHER"},
+        ]
+    )
+
+    out = apply_phase_curation(df, {"strategies": [{"type": "rules"}]})
+
+    assert pd.isna(out.loc[0, "phase"])
+    assert out.loc[0, "phase_status"] == "NOT_APPLICABLE"
+    assert out.loc[0, "phase_reason"] == "LOCALIZER"
+    assert out.loc[1, "phase"] == "PORTAL_VENOUS"
+    assert out.loc[1, "phase_status"] == "RESOLVED"
+    assert out.loc[2, "phase"] == "OTHER"
+    assert out.loc[2, "phase_status"] == "UNRESOLVED"
+
+
+def test_legacy_derived_applicability_does_not_block_phase_strategies():
+    df = pd.DataFrame(
+        [
+            {"phase_applicability_reason": "DERIVED", "site_phase": "portal-site"},
+            {"phase_applicability_reason": "DERIVED", "rule_phase": "ARTERIAL"},
+            {"phase_applicability_reason": "DERIVED", "totalseg_phase": "portal"},
+            {"phase_applicability_reason": "DERIVED"},
+        ]
+    )
+
+    out = apply_phase_curation(df, PHASE_CONFIG)
+
+    assert out["phase"].tolist() == [
+        "PORTAL_VENOUS",
+        "ARTERIAL",
+        "PORTAL_VENOUS",
+        "OTHER",
+    ]
+    assert out["phase_status"].tolist() == ["RESOLVED"] * 3 + ["UNRESOLVED"]
+    assert out["phase_source"].tolist() == [
+        "site_ontology",
+        "metadata_rules",
+        "totalseg_prediction",
+        "fallback",
+    ]
+    assert out["phase_applicability_reason"].isna().all()
+    assert phase_needs_strategy(df, PHASE_CONFIG, "totalsegmentator").tolist() == [
+        False,
+        False,
+        True,
+        True,
+    ]
+
+
+def test_ct_localizer_timing_is_not_misclassified_as_arterial():
+    df = pd.DataFrame(
+        [
+            {
+                "patient_key": "p1",
+                "study_id": "s1",
+                "series_id": "scout",
+                "volume_id": "v1",
+                "date": "2020-01-01",
+                "Modality": "CT",
+                "SeriesDescription": "Topogram 0.6 T20s",
+                "ImageType": "ORIGINAL PRIMARY LOCALIZER",
+                "Rows": 512,
+                "Columns": 512,
+                "SliceThickness": 0.6,
+                "n_files": 1,
+            }
+        ]
+    )
+
+    out = curate_ct(df)["curated"]
+
+    assert out.loc[0, "phase_status"] == "NOT_APPLICABLE"
+    assert pd.isna(out.loc[0, "phase"])
+    assert out.loc[0, "phase_reason"] == "LOCALIZER"
 
 
 @pytest.mark.parametrize(

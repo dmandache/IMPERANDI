@@ -24,7 +24,7 @@ def token(*patterns: str) -> str:
 
 # Non-diagnostic images and reconstructions, independent of modality.
 RX_LOCALIZER = token(
-    rf"loc|loca|locali[sz]er|scout|survey|topogram|surview|rep[eéè]rage"
+    rf"loc|loca|locali[sz]er|scout|scouts|survey|topogram|tomogramme|surview|rep[eéè]rage"
     rf"|calibration|cal{SEP}body|test|phantom|dummy"
 )
 RX_KEY_IMAGES = token(
@@ -56,6 +56,7 @@ PLANE_RULES = (
 )
 RX_IMAGE_ORIGINAL = token(r"original")
 RX_IMAGE_PRIMARY = token(r"primary")
+RX_IMAGE_DERIVED = token(r"derived")
 RX_BREATH_HOLD = token(rf"bh|mbh|apn[eé]e|breath{SEP}hold")
 RX_RESP_TRIGGERED = token(
     rf"pace|trigger(?:ed)?|resp(?:i)?|rtr|rt|nav(?:igator)?"
@@ -72,7 +73,9 @@ RX_PHASE_NATIVE = token(
     rf"|sans(?:{SEP}(?:iv|{INJECTION}|{CONTRAST}))?"
     rf"|without{SEP}(?:{CONTRAST}|{INJECTION})"
     rf"|non{SEP}(?:{INJECTION}|{CONTRAST})"
+    rf"|wo{SEP}(?:{INJECTION}|{CONTRAST})"
     rf"|ss{SEP}(?:iv|i)|si|siv|blanc|c-"
+    rf"|w/o(?:{SEP}(?:{INJECTION}|{CONTRAST}))?|wo|w/o"
 )
 ARTERIAL = r"art(?:erial|[eé]riel(?:le)?)?"
 RX_PHASE_ARTERIAL = token(
@@ -90,8 +93,21 @@ RX_PHASE_DELAYED = token(
 )
 RX_PHASE_POST_CONTRAST = token(
     rf"post(?:{SEP}(?:{CONTRAST}|{INJECTION}))?"
-    rf"avec(?:{SEP}(?:{CONTRAST}|{INJECTION}))?"
-    rf"|{CONTRAST}|{INJECTION}|enhanced|c\+"
+    rf"|avec(?:{SEP}(?:{CONTRAST}|{INJECTION}))?"
+    rf"|with(?:{SEP}(?:{CONTRAST}|{INJECTION}))?"
+    rf"|w(?:{SEP}(?:{CONTRAST}|{INJECTION}))?"
+    rf"|{CONTRAST}|{INJECTION}|enhanced|c\+|\+c"
+)
+# Direct mixed labels are group context even without generic native/post words.
+# Require a separator or conjunction and whole terms: w/o alone is native.
+_MIXED_PHASE_JOIN = rf"(?:{SEP_CHARS}+|{SEP}(?:&|,|and|et){SEP})"
+# Short W joins exclude underscores and hyphens to preserve Dixon wo_W/wo-W.
+_MIXED_W_JOIN = rf"(?:\s+|{SEP}(?:/|\+|&|,|and|et){SEP})"
+_MIXED_WITHOUT = rf"w{SEP}o|without"
+RX_PHASE_MIXED_PRE_POST = token(
+    rf"(?:w|with){_MIXED_W_JOIN}(?:{_MIXED_WITHOUT})"
+    rf"|(?:{_MIXED_WITHOUT}){_MIXED_W_JOIN}(?:w|with)"
+    rf"|pr[eé]{_MIXED_PHASE_JOIN}post|post{_MIXED_PHASE_JOIN}pr[eé]"
 )
 RX_PHASE_ORDINAL = token(rf"ph(?:ase)?{SEP}([1-9])(?!\d)")
 DYNAMIC = (
@@ -108,7 +124,7 @@ MINUTE = r"(?:mn|min(?:ute)?s?)"
 HOUR = r"(?:h|hrs?|hours?|heures?)"
 NUMBER = r"\d+(?:[.,]\d+)?"
 RX_DURATION = token(
-    rf"(?<!\d[.,:])(?:"
+    rf"(?<!\d[.,:])(?:t{SEP})?(?:"
     rf"(?P<clock_minutes>\d+):(?P<clock_seconds>[0-5]\d)(?![.,:]\d)"
     rf"(?:{SEP}{MINUTE})?"
     rf"|(?P<hours>{NUMBER}){SEP}{HOUR}"
@@ -189,16 +205,71 @@ def match_plane(text: str) -> str | None:
     )
 
 
+def has_post_contrast_text(text: str, post: str = RX_PHASE_POST_CONTRAST) -> bool:
+    """Recognize postcontrast words without mistaking a water suffix for 'with'."""
+    text = re.sub(r"(?i)(?<=[_-])w(?=$|[\s_.-])", " ", text)
+    return bool(re.search(post, text))
+
+
+def has_pre_post_contrast_text(
+    text: str,
+    native: str = RX_PHASE_NATIVE,
+    post: str = RX_PHASE_POST_CONTRAST,
+) -> bool:
+    """Recognize explicit mixed labels, then combined native/post evidence.
+
+    For example, ``pre contrast`` is purely native: its ``contrast`` token is
+    not independent postcontrast evidence. ``pre and post contrast`` is mixed.
+    """
+    if re.search(RX_PHASE_MIXED_PRE_POST, text):
+        return True
+    if not re.search(native, text):
+        return False
+    return has_post_contrast_text(re.sub(native, " ", text), post)
+
+
+def has_phase_text_evidence(
+    text: str,
+    *,
+    phase_rules: Sequence[PhaseRule] = PHASE_RULES,
+    post: str = RX_PHASE_POST_CONTRAST,
+    extra_patterns: Sequence[str] = (),
+) -> bool:
+    """Recognize the field that owns phase matching and subsequent inference."""
+    return bool(
+        any(re.search(rule.pattern, text) for rule in phase_rules)
+        or has_post_contrast_text(text, post)
+        or re.search(RX_PHASE_MIXED_PRE_POST, text)
+        or any(
+            re.search(pattern, text)
+            for pattern in (
+                RX_PHASE_GENERIC_DYNAMIC,
+                RX_PHASE_ORDINAL,
+                RX_DURATION,
+                *extra_patterns,
+            )
+        )
+    )
+
+
 def match_phase(
-    text: str, rules: Sequence[PhaseRule] = PHASE_RULES
+    text: str,
+    rules: Sequence[PhaseRule] = PHASE_RULES,
+    *,
+    post: str = RX_PHASE_POST_CONTRAST,
 ) -> tuple[str, str] | None:
     """Match explicit words first, then an unambiguous complete duration.
 
-    Native precedes post-contrast terms; portal precedes arterial, which precedes
-    generic 'late'. Multiple conflicting durations do not identify a pure phase.
+    Mixed pre/post text supplies group context rather than a pure native label.
+    Portal precedes arterial, which precedes generic 'late'. Multiple conflicting
+    durations do not identify a pure phase.
     """
     durations = _durations(text)
     for rule in rules:
+        if rule.label == "NATIVE" and has_pre_post_contrast_text(
+            text, rule.pattern, post
+        ):
+            continue
         for match in re.finditer(rule.pattern, text):
             if rule.label == "DELAYED" and any(
                 duration.start() >= match.end()

@@ -755,6 +755,7 @@ def test_ssoustration_art_port_is_treated_as_subtraction():
     assert bool(curated["is_subtraction"])
     assert curated["mri_perfusion_label"] == "OTHER"
     assert curated["selection_slot"] == "T1_OTHER"
+    assert curated["phase_status"] == "UNRESOLVED"
     assert results["selected_long"].empty
 
 
@@ -868,7 +869,7 @@ def test_generic_4d_mdixon_volume_order_pre_art_port_delayed():
             row("4D mDIXON-W", series_id="SER_4D", volume_id="V1", time="120000"),
             row("4D mDIXON-W", series_id="SER_4D", volume_id="V2", time="120100"),
             row("4D mDIXON-W", series_id="SER_4D", volume_id="V3", time="120200"),
-            row("4D mDIXON-W", series_id="SER_4D", volume_id="V4", time="120300"),
+            row("4D mDIXON-W", series_id="SER_4D", volume_id="V4", time="120400"),
         ]
     )
     cur = results["curated"].sort_values("volume_order_in_series")
@@ -910,14 +911,14 @@ def test_generic_4d_mdixon_mixed_multivolume_and_single_volume_uses_acquisition_
                 "4D mDIXON-W",
                 series_id="SER_MULTI",
                 volume_id="VM2",
-                time="120300",
+                time="120400",
                 acquisition_order=3,
             ),
             row(
                 "4D mDIXON-W",
                 series_id="SER_MULTI",
                 volume_id="VM3",
-                time="120400",
+                time="120500",
                 acquisition_order=4,
             ),
         ]
@@ -1056,6 +1057,141 @@ def test_water_component_scores_higher_than_in_phase_and_fat_for_same_phase():
         cur.loc["AX T1 DIXON ART_in", "t1_score"]
         > cur.loc["AX T1 DIXON ART_F", "t1_score"]
     )
+
+
+@pytest.mark.parametrize("component", ["W", "IP", "OP", "F"])
+@pytest.mark.parametrize(
+    "phase_text,phase",
+    [
+        ("native", "NATIVE"),
+        ("arterial", "ARTERIAL"),
+        ("portal", "PORTAL_VENOUS"),
+        ("delayed", "DELAYED"),
+    ],
+)
+def test_diagnostic_derived_dixon_remains_phaseable_and_selectable(
+    component, phase_text, phase
+):
+    result = curate(
+        [row(f"AX T1 DIXON {phase_text}", image_type=["DERIVED", "PRIMARY", component])]
+    )
+    annotated = result["curated"].iloc[0]
+
+    assert pd.isna(annotated["phase_applicability_reason"])
+    assert annotated["phase"] == phase
+    assert annotated["phase_status"] == "RESOLVED"
+    assert len(selected_for_slot(result, f"T1_{phase}")) == 1
+
+
+def test_diagnostic_derived_gre_remains_phaseable():
+    result = curate([row("AX T1 VIBE arterial", image_type="DERIVED\\PRIMARY")])
+
+    assert result["curated"].iloc[0]["phase_status"] == "RESOLVED"
+    assert len(selected_for_slot(result, "T1_ARTERIAL")) == 1
+
+
+@pytest.mark.parametrize(
+    "marker", ["SUBTRACTION", "MIP", "MPR", "SECONDARY", "FF", "R2S"]
+)
+@pytest.mark.parametrize(
+    "phase_text,phase",
+    [
+        ("native", "NATIVE"),
+        ("arterial", "ARTERIAL"),
+        ("portal", "PORTAL_VENOUS"),
+        ("delayed", "DELAYED"),
+    ],
+)
+def test_derived_mri_product_keeps_phase_but_is_not_selected(marker, phase_text, phase):
+    result = curate(
+        [row(f"AX T1 DIXON {phase_text}", image_type=["DERIVED", "PRIMARY", marker])]
+    )
+    annotated = result["curated"].iloc[0]
+
+    assert pd.isna(annotated["phase_applicability_reason"])
+    assert annotated["phase_status"] == "RESOLVED"
+    assert annotated["phase"] == phase
+    assert annotated["rule_phase"] == phase
+    assert result["selected_long"].empty
+
+
+@pytest.mark.parametrize(
+    "marker", ["SUBTRACTION", "MIP", "PDFF", "SECONDARY", "KEY IMAGES"]
+)
+@pytest.mark.parametrize(
+    "phase_text,phase",
+    [
+        ("native", "NATIVE"),
+        ("arterial", "ARTERIAL"),
+        ("portal", "PORTAL_VENOUS"),
+        ("delayed", "DELAYED"),
+    ],
+)
+def test_derived_mri_description_keeps_phase_but_is_not_selected(
+    marker, phase_text, phase
+):
+    result = curate(
+        [
+            row(
+                f"AX T1 DIXON {phase_text} {marker}",
+                image_type=["DERIVED", "PRIMARY", "W"],
+            )
+        ]
+    )
+
+    assert result["curated"].iloc[0]["phase_status"] == "RESOLVED"
+    assert result["curated"].iloc[0]["phase"] == phase
+    assert result["selected_long"].empty
+
+
+@pytest.mark.parametrize(
+    "marker", ["SUBTRACTION", "MIP", "PDFF", "SECONDARY", "KEY IMAGES"]
+)
+def test_derived_mri_product_without_phase_is_unresolved_and_not_selected(marker):
+    result = curate([row(f"AX T1 DIXON {marker}")])
+
+    assert result["curated"].iloc[0]["phase_status"] == "UNRESOLVED"
+    assert result["selected_long"].empty
+
+
+def test_derived_dynamic_product_does_not_shift_source_acquisition_phases():
+    result = curate(
+        [
+            row(
+                "AX T1 DIXON ART-PORT_W",
+                series_id="S1",
+                volume_id="V1",
+                AcquisitionNumber=1,
+            ),
+            row(
+                "AX T1 DIXON ART-PORT_W_SUB",
+                series_id="SUB",
+                volume_id="VS",
+                AcquisitionNumber=1,
+            ),
+            row(
+                "AX T1 DIXON ART-PORT_W",
+                series_id="S2",
+                volume_id="V2",
+                AcquisitionNumber=2,
+            ),
+        ]
+    )
+    cur = result["curated"].set_index("volume_id")
+
+    assert cur.loc["V1", "phase"] == "ARTERIAL"
+    assert cur.loc["V2", "phase"] == "PORTAL_VENOUS"
+    assert cur.loc["VS", "phase_status"] == "UNRESOLVED"
+    assert set(result["selected_long"]["volume_id"]) == {"V1", "V2"}
+
+
+def test_derived_dixon_without_phase_evidence_remains_unresolved():
+    result = curate([row("AX T1 DIXON", image_type=["DERIVED", "PRIMARY", "W"])])
+    annotated = result["curated"].iloc[0]
+
+    assert annotated["phase"] == "OTHER"
+    assert annotated["phase_status"] == "UNRESOLVED"
+    assert result["selected_long"].empty
 
 
 # -----------------------------------------------------------------------------
