@@ -86,8 +86,17 @@ cleaning:
       merge_z_tolerance: 0.001
     - type: group_volumes
     - type: compute_volume_length
+    
     - type: compute_visit_order
     - type: compute_acquisition_order
+    - type: filter
+      name: keep_first_3_visits
+      kind: keep
+      scope: row
+      keep_null: false
+      rules:
+        - {column: visit_order, op: lt, value: 3}
+    
     - type: modality_curation
     - type: finalize
 
