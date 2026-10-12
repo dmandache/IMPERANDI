@@ -390,7 +390,7 @@ def test_manifest_grouping_columns_control_cross_modality_registration(
         expected_group = output_dir.joinpath(*(row[c] for c in grouping_columns))
         log_path = Path(row.registration_log_path)
         assert log_path.is_file()
-        assert log_path.parent.parent == expected_group
+        assert log_path.parent == expected_group
         for column in ("mask_liver", "mask_liver_tumor"):
             artifact_path = Path(row[column])
             assert artifact_path.is_file()
@@ -1371,7 +1371,7 @@ def test_cli_cannot_overwrite_source_with_error_table(tmp_path):
         main(args)
 
 
-def test_native_canonical_masks_preserve_files_and_rerun_sources(tmp_path):
+def test_native_canonical_masks_preserve_files_and_rerun_sources(tmp_path, caplog):
     rows = [
         save_scan(tmp_path, "portal", phase="PORTAL_VENOUS"),
         save_scan(tmp_path, "arterial", offset=4),
@@ -1407,7 +1407,11 @@ def test_native_canonical_masks_preserve_files_and_rerun_sources(tmp_path):
             )
     assert all(Path(path).read_bytes() == data for path, data in originals.items())
     # A fresh invocation on the output CSV must not use its fused masks as input.
-    first_artifacts = {path: Path(path).read_bytes() for path in first.mask_liver_tumor}
+    group_directory = Path(first.loc[0, "registration_log_path"]).parent
+    stale_file = group_directory / "old-run" / "removed-scan" / "obsolete.nii.gz"
+    stale_file.parent.mkdir(parents=True)
+    stale_file.write_bytes(b"obsolete")
+    caplog.clear()
     second, errors = register_cohort(
         first,
         tmp_path / "out",
@@ -1416,10 +1420,39 @@ def test_native_canonical_masks_preserve_files_and_rerun_sources(tmp_path):
     assert errors.empty
     assert second.source_mask_liver.equals(first.source_mask_liver)
     assert second.source_mask_liver_tumor.equals(first.source_mask_liver_tumor)
-    assert set(second.mask_liver_tumor).isdisjoint(first.mask_liver_tumor)
-    assert all(
-        Path(path).read_bytes() == data for path, data in first_artifacts.items()
+    assert second.mask_liver_tumor.tolist() == first.mask_liver_tumor.tolist()
+    assert not (group_directory / "old-run").exists()
+    assert "Overwriting registration outputs" in caplog.text
+    assert all(Path(path).is_file() for path in second.mask_liver_tumor)
+    assert all(Path(path).read_bytes() == data for path, data in originals.items())
+
+
+def test_rerun_removes_missing_scans_and_previous_output_space(tmp_path):
+    rows = [save_scan(tmp_path, "a"), save_scan(tmp_path, "b")]
+    output_dir = tmp_path / "out"
+    first, errors = register_cohort(
+        pd.DataFrame(rows),
+        output_dir,
+        RegistrationConfig(output_space="reference", maximum_optimizer_iterations=5),
     )
+    assert errors.empty
+    removed_scan_directory = Path(first.loc[1, "reg_nifti_path"]).parent
+    previous_images = first.reg_nifti_path.tolist()
+
+    second, errors = register_cohort(
+        first.iloc[:1], output_dir, RegistrationConfig(output_space="moving")
+    )
+
+    assert errors.empty
+    assert not removed_scan_directory.exists()
+    assert all(not Path(path).exists() for path in previous_images)
+    assert second.loc[0, "nifti_path"] == rows[0]["nifti_path"]
+    group_directory = Path(second.loc[0, "registration_log_path"]).parent
+    assert {path.name for path in group_directory.rglob("*") if path.is_file()} == {
+        "registration.jsonl",
+        "organ_native.nii.gz",
+        "tumor_native.nii.gz",
+    }
 
 
 def test_stage_qc_and_trace_logs(tmp_path, caplog):

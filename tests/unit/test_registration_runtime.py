@@ -121,7 +121,7 @@ def test_reference_output_space_is_published_by_runtime(cohort):
             / "CT"
         )
         log_path = Path(row.registration_log_path)
-        assert log_path.parent.parent == expected_group
+        assert log_path.parent == expected_group
         assert Path(row.reg_nifti_path).parent.parent == log_path.parent
 
     register.main(args_for(cohort, "--output_space", "reference"))
@@ -494,10 +494,18 @@ def test_interruption_resumes_only_committed_group(monkeypatch, cohort):
 
 
 @pytest.mark.parametrize("mutation", ["delete", "modify"])
-def test_missing_artifact_recomputes_only_affected_group(monkeypatch, cohort, mutation):
+def test_missing_artifact_recomputes_only_affected_group(
+    monkeypatch, cohort, mutation, caplog
+):
     register.main(args_for(cohort))
     output, _, _ = paths_for(cohort)
     first = pd.read_csv(output)
+    stale = Path(first.loc[0, "registration_log_path"]).parent / "old-run" / "stale.txt"
+    stale.parent.mkdir()
+    stale.write_text("obsolete")
+    sibling = Path(first.loc[1, "registration_log_path"]).parent / "keep.txt"
+    sibling.write_text("reused group")
+    caplog.clear()
     artifact = Path(first.loc[0, "reg_tumor_native_path"])
     if mutation == "delete":
         artifact.unlink()
@@ -518,6 +526,12 @@ def test_missing_artifact_recomputes_only_affected_group(monkeypatch, cohort, mu
         second.loc[1, "reg_tumor_native_path"] == first.loc[1, "reg_tumor_native_path"]
     )
     assert Path(second.loc[0, "reg_tumor_native_path"]).is_file()
+    assert (
+        second.loc[0, "reg_tumor_native_path"] == first.loc[0, "reg_tumor_native_path"]
+    )
+    assert not stale.parent.exists()
+    assert sibling.read_text() == "reused group"
+    assert caplog.text.count("Overwriting registration outputs") == 1
 
 
 @pytest.mark.parametrize("change", ["mask", "manifest", "force", "no_resume"])

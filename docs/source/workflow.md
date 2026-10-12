@@ -93,8 +93,11 @@ The default is `[patient_key, study_id, Modality]`; a dataset can instead use,
 for example, `[patient_key, exam_stage]`. Saved artifacts use these grouping
 values as folders in the configured order. For `[patient_key, exam_stage]`, a
 group with values `patient001` and `BASELINE` is saved under
-`<output_dir>/patient001/BASELINE/<run_id>/`, with a `registration.jsonl` group
-log and a subfolder per scan. Each fresh run gets its own run folder.
+`<output_dir>/patient001/BASELINE/`, with a `registration.jsonl` group log and
+a subfolder per scan. Before recomputing an existing group, registration warns
+that its outputs will be overwritten and clears that group's folder and all
+subfolders, including artifacts from previous output spaces or removed scans.
+Groups reused on resume retain their files.
 Path separators and unsafe characters in grouping values are percent-encoded;
 ordinary values retain their spelling, with `MRI` normalized to `MR` for
 `Modality`, matching group identity. `Modality` has no special grouping
@@ -374,7 +377,9 @@ Deleting or modifying a group's outputs reruns that group; changed input data or
 settings invalidate the run. `--strict_resume` verifies referenced image, mask,
 and output contents rather than relying only on file metadata. Failed groups remain recorded on resume;
 use `--retry_failed` to retry them, or `--force`/`--no_resume` to recompute all groups.
-Fresh work gets separate artifact directories; native inputs remain unchanged.
+Fresh work replaces the recomputed groups' artifact directories after an
+overwrite warning; native inputs remain unchanged. Registration refuses to clear
+an output group folder containing source inputs or reached through symlinks.
 
 `--num_workers` bounds concurrent groups (default 1), `--threads_per_worker`
 sets SimpleITK threads (default 1), and `--timeout_sec` imposes a hard per-group
