@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 from pathlib import Path
+import shutil
 import time
 from urllib.parse import quote
 import uuid
@@ -92,6 +93,30 @@ def group_output_path(row, grouping_columns) -> Path:
             component = component.replace(".", "%2E")
         components.append(component)
     return Path(*components)
+
+
+def reset_group_output(directory, root, source_paths, label):
+    """Clear one exam's generated outputs before publishing fresh results."""
+    resolved = directory.resolve()
+    if resolved == root or not resolved.is_relative_to(root):
+        raise ValueError("Registration group output must be inside the output root")
+    if resolved != directory:
+        raise ValueError("Registration group output must not use symlink folders")
+    if directory.exists():
+        if any(
+            Path(path).expanduser().resolve().is_relative_to(resolved)
+            for path in source_paths
+        ):
+            raise ValueError(
+                "Cannot clear registration output containing source inputs"
+            )
+        logger.warning(
+            "Overwriting registration outputs for %s; "
+            "clearing the existing exam folder and all subfolders",
+            label,
+        )
+        shutil.rmtree(directory)
+    directory.mkdir(parents=True, exist_ok=True)
 
 
 def reference_rank(row, priorities) -> tuple[tuple, str]:
@@ -631,7 +656,16 @@ def register_cohort(
     ids = df.registration_scan_id.tolist()
     root = Path(output_dir).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
-    run_id = uuid.uuid4().hex
+    source_paths = {
+        str(path)
+        for column in (
+            "nifti_path",
+            f"source_{config.organ_mask_column}",
+            f"source_{config.tumor_mask_column}",
+        )
+        for path in df[column].dropna()
+        if str(path).strip()
+    }
     errors = []
 
     def error(index, stage, exc):
@@ -649,9 +683,8 @@ def register_cohort(
         group_id = group.iloc[0].registration_group_id
         label = group_label(group.iloc[0], config.grouping_columns)
         logger.info("Registration group started: %s, series=%d", label, len(group))
-        directory = (
-            root / group_output_path(group.iloc[0], config.grouping_columns) / run_id
-        )
+        directory = root / group_output_path(group.iloc[0], config.grouping_columns)
+        reset_group_output(directory, root, source_paths, label)
         group_started = time.perf_counter()
         df.loc[group.index, "registration_started_at"] = datetime.now(
             timezone.utc
