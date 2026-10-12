@@ -100,7 +100,7 @@ def test_manifest_overrides_defaults_and_cli(tmp_path, cohort):
 
 
 def test_reference_output_space_is_published_by_runtime(cohort):
-    source = pd.read_csv(cohort)
+    source = pd.read_csv(cohort, dtype=str)
     register.main(args_for(cohort, "--output_space", "reference"))
 
     output, errors, _ = paths_for(cohort)
@@ -112,6 +112,17 @@ def test_reference_output_space_is_published_by_runtime(cohort):
     assert saved.mask_liver_tumor.equals(saved.reg_tumor_common_path)
     assert saved.reg_organ_native_path.isna().all()
     assert saved.reg_tumor_native_path.isna().all()
+    for index, row in saved.iterrows():
+        expected_group = (
+            cohort.parent
+            / "registration"
+            / "001"
+            / source.loc[index, "study_id"]
+            / "CT"
+        )
+        log_path = Path(row.registration_log_path)
+        assert log_path.parent.parent == expected_group
+        assert Path(row.reg_nifti_path).parent.parent == log_path.parent
 
     register.main(args_for(cohort, "--output_space", "reference"))
     resumed = pd.read_csv(output)

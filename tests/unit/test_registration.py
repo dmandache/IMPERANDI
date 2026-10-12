@@ -351,19 +351,34 @@ def test_reference_output_space_publishes_images_and_masks_on_common_grid(
             ) == expected_geometry
 
 
-def test_manifest_grouping_columns_control_cross_modality_registration(tmp_path):
+@pytest.mark.parametrize("output_space", ["moving", "reference"])
+@pytest.mark.parametrize(
+    "grouping_columns",
+    [
+        ["patient_key", "exam_stage"],
+        ["exam_stage", "patient_key"],
+        ["exam_stage"],
+    ],
+)
+def test_manifest_grouping_columns_control_cross_modality_registration(
+    tmp_path, grouping_columns, output_space
+):
     rows = [
-        {**save_scan(tmp_path, "ct", modality="CT"), "exam_stage": "baseline"},
-        {**save_scan(tmp_path, "mr", modality="MRI"), "exam_stage": "baseline"},
-        {**save_scan(tmp_path, "followup"), "exam_stage": "followup"},
+        {**save_scan(tmp_path, "ct", modality="CT"), "exam_stage": "BASELINE"},
+        {**save_scan(tmp_path, "mr", modality="MRI"), "exam_stage": "BASELINE"},
+        {**save_scan(tmp_path, "followup"), "exam_stage": "FOLLOWUP"},
     ]
+    for row in rows:
+        row["patient_key"] = "patient001"
     config = RegistrationConfig(
-        grouping_columns=["patient_key", "exam_stage"],
+        grouping_columns=grouping_columns,
+        output_space=output_space,
         reference_selection_priority=[{"Modality": ["MR", "CT"]}],
         maximum_optimizer_iterations=5,
     )
 
-    out, errors = register_cohort(pd.DataFrame(rows), tmp_path / "out", config)
+    output_dir = tmp_path / "out"
+    out, errors = register_cohort(pd.DataFrame(rows), output_dir, config)
 
     assert errors.empty
     assert out.registration_group_id.nunique() == 2
@@ -371,6 +386,18 @@ def test_manifest_grouping_columns_control_cross_modality_registration(tmp_path)
     assert out.loc[1, "registration_status"] == "reference"
     assert out.loc[0, "registration_reference_id"] == out.loc[1, "registration_scan_id"]
     assert out.loc[2, "registration_status"] == "reference"
+    for _, row in out.iterrows():
+        expected_group = output_dir.joinpath(*(row[c] for c in grouping_columns))
+        log_path = Path(row.registration_log_path)
+        assert log_path.is_file()
+        assert log_path.parent.parent == expected_group
+        for column in ("mask_liver", "mask_liver_tumor"):
+            artifact_path = Path(row[column])
+            assert artifact_path.is_file()
+            assert artifact_path.parent.parent == log_path.parent
+        if output_space == "reference":
+            assert Path(row.nifti_path).parent.parent == log_path.parent
+    assert out.loc[0, "registration_log_path"] == out.loc[1, "registration_log_path"]
 
 
 def test_modality_column_is_optional_when_not_configured(tmp_path):

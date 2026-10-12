@@ -7,6 +7,7 @@ import json
 import logging
 from pathlib import Path
 import time
+from urllib.parse import quote
 import uuid
 
 import numpy as np
@@ -80,6 +81,17 @@ def identity_value(column, value) -> str:
         label = normalize_label(value)
         return "MR" if label == "MRI" else label
     return label
+
+
+def group_output_path(row, grouping_columns) -> Path:
+    """Return ordered group values as safe, distinct directory components."""
+    components = []
+    for column in grouping_columns:
+        component = quote(identity_value(column, row[column]), safe="")
+        if component in {".", ".."}:
+            component = component.replace(".", "%2E")
+        components.append(component)
+    return Path(*components)
 
 
 def reference_rank(row, priorities) -> tuple[tuple, str]:
@@ -617,8 +629,9 @@ def register_cohort(
     sitk = backend()
     df = prepare_cohort(table, config)
     ids = df.registration_scan_id.tolist()
-    root = Path(output_dir).expanduser().resolve() / uuid.uuid4().hex
-    root.mkdir(parents=True)
+    root = Path(output_dir).expanduser().resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    run_id = uuid.uuid4().hex
     errors = []
 
     def error(index, stage, exc):
@@ -636,7 +649,9 @@ def register_cohort(
         group_id = group.iloc[0].registration_group_id
         label = group_label(group.iloc[0], config.grouping_columns)
         logger.info("Registration group started: %s, series=%d", label, len(group))
-        directory = root / group_id
+        directory = (
+            root / group_output_path(group.iloc[0], config.grouping_columns) / run_id
+        )
         group_started = time.perf_counter()
         df.loc[group.index, "registration_started_at"] = datetime.now(
             timezone.utc
