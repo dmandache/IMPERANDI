@@ -1,5 +1,5 @@
-Welcome to IMPERANDI’s documentation!
-=========
+IMPERANDI: DICOM Curation and CT/MRI Preprocessing
+==================================================
 
 .. figure:: https://raw.githubusercontent.com/dmandache/IMPERANDI/main/static/imperandi-banner.png
    :alt: Imperandi pipeline
