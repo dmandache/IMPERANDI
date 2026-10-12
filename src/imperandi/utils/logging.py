@@ -25,8 +25,10 @@ class _ConsoleHandler(logging.StreamHandler):
         return text
 
 
-def log_script_namespace(logger, script_file: str, args: argparse.Namespace) -> None:
-    """Log public execution settings without internal CLI handler attributes."""
+def log_script_namespace(
+    logger, script_file: str, args: argparse.Namespace, **settings
+) -> argparse.Namespace:
+    """Log resolved settings without mutating arguments or exposing CLI handlers."""
     namespace = argparse.Namespace(
         **{k: v for k, v in {**vars(args), **settings}.items() if not k.startswith("_")}
     )
