@@ -2335,17 +2335,10 @@ def select_best_candidates(
     # MIP/MPR reconstructions remain diagnostic candidates: their score penalty
     # prefers source images without leaving a phase slot empty when only a
     # reconstruction carries its phase. DERIVED alone is not an exclusion.
-    # Subtraction, quantitative maps and key/report products stay excluded.
+    # Only subtraction and quantitative/report flags exclude eligible products.
     excluded_products = (
         selectable["is_subtraction"]
         | selectable["is_quant_or_report"]
-        | selectable["dixon_component"].isin(["FAT_FRACTION", "R2STAR"])
-        # SECONDARY commonly accompanies MPR in ImageType; that combination
-        # describes a reconstruction, not a standalone key-image product.
-        | (
-            ~selectable["is_mip_mpr"]
-            & selectable.apply(lambda row: _product_text_flags(row)[3], axis=1)
-        )
     )
     selectable = selectable.loc[~excluded_products].copy()
     selectable = selectable[selectable["selection_score"].fillna(-9999) > -500].copy()

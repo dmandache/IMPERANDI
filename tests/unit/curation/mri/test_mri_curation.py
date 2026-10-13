@@ -1113,7 +1113,7 @@ def test_derived_mri_product_selection_depends_on_product(marker, phase_text, ph
     assert annotated["phase"] == phase
     assert annotated["rule_phase"] == phase
     assert len(selected_for_slot(result, f"T1_{phase}")) == (
-        1 if marker in {"MIP", "MPR"} else 0
+        1 if marker in {"MIP", "MPR", "SECONDARY", "R2S"} else 0
     )
 
 

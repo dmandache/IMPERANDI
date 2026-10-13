@@ -240,8 +240,10 @@ produce `NOT_APPLICABLE`; without phase evidence the row remains `UNRESOLVED`.
 MRI MIP/MPR reconstructions remain eligible for diagnostic selection, with score
 penalties that prefer source images when comparable candidates exist. They can
 fill a phase slot when its only resolved candidate is a reconstruction.
-Subtraction, secondary/key products and quantitative maps remain excluded from
-default diagnostic selection. `ImageType=DERIVED` alone does not exclude
+Within eligible sequence/phase slots, MRI selection excludes only rows flagged
+as subtraction or quantitative/report products. Dixon component labels and
+secondary/key-product markers do not independently exclude a candidate.
+`ImageType=DERIVED` alone does not exclude
 diagnostic CT reconstructions or MRI Dixon/GRE images from selection.
 Legacy `phase_applicability_reason=DERIVED` values are ignored by the resolver;
 rerun `clean` to regenerate metadata phase evidence suppressed by older rules.
