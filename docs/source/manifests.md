@@ -237,9 +237,12 @@ Perfusion phase and diagnostic selection eligibility are independent. Derived
 products, including subtraction, MIP/MPR, secondary/key images, and quantitative
 maps, can retain an evidenced acquisition phase. These product markers do not
 produce `NOT_APPLICABLE`; without phase evidence the row remains `UNRESOLVED`.
-Explicit derived-product markers still exclude the row from default diagnostic
-selection, even when its phase is `RESOLVED`. `ImageType=DERIVED` alone does not
-exclude diagnostic CT reconstructions or MRI Dixon/GRE images from selection.
+MRI MIP/MPR reconstructions remain eligible for diagnostic selection, with score
+penalties that prefer source images when comparable candidates exist. They can
+fill a phase slot when its only resolved candidate is a reconstruction.
+Subtraction, secondary/key products and quantitative maps remain excluded from
+default diagnostic selection. `ImageType=DERIVED` alone does not exclude
+diagnostic CT reconstructions or MRI Dixon/GRE images from selection.
 Legacy `phase_applicability_reason=DERIVED` values are ignored by the resolver;
 rerun `clean` to regenerate metadata phase evidence suppressed by older rules.
 

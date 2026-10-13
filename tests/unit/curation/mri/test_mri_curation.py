@@ -1102,7 +1102,7 @@ def test_diagnostic_derived_gre_remains_phaseable():
         ("delayed", "DELAYED"),
     ],
 )
-def test_derived_mri_product_keeps_phase_but_is_not_selected(marker, phase_text, phase):
+def test_derived_mri_product_selection_depends_on_product(marker, phase_text, phase):
     result = curate(
         [row(f"AX T1 DIXON {phase_text}", image_type=["DERIVED", "PRIMARY", marker])]
     )
@@ -1112,7 +1112,9 @@ def test_derived_mri_product_keeps_phase_but_is_not_selected(marker, phase_text,
     assert annotated["phase_status"] == "RESOLVED"
     assert annotated["phase"] == phase
     assert annotated["rule_phase"] == phase
-    assert result["selected_long"].empty
+    assert len(selected_for_slot(result, f"T1_{phase}")) == (
+        1 if marker in {"MIP", "MPR"} else 0
+    )
 
 
 @pytest.mark.parametrize(
@@ -1127,7 +1129,7 @@ def test_derived_mri_product_keeps_phase_but_is_not_selected(marker, phase_text,
         ("delayed", "DELAYED"),
     ],
 )
-def test_derived_mri_description_keeps_phase_but_is_not_selected(
+def test_derived_mri_description_selection_depends_on_product(
     marker, phase_text, phase
 ):
     result = curate(
@@ -1141,7 +1143,54 @@ def test_derived_mri_description_keeps_phase_but_is_not_selected(
 
     assert result["curated"].iloc[0]["phase_status"] == "RESOLVED"
     assert result["curated"].iloc[0]["phase"] == phase
-    assert result["selected_long"].empty
+    assert len(selected_for_slot(result, f"T1_{phase}")) == (1 if marker == "MIP" else 0)
+
+
+def test_explicit_mpr_phases_fill_slots_when_originals_are_unresolved():
+    phases = [
+        ("sans iv", "NATIVE"),
+        ("arteriel", "ARTERIAL"),
+        ("portal", "PORTAL_VENOUS"),
+        ("tardif", "DELAYED"),
+    ]
+    rows = []
+    for acquisition, (description, phase) in enumerate(phases, start=1):
+        rows.extend([
+            row(
+                "t1 vibe fs multi gado",
+                series_id=f"original_{acquisition}",
+                volume_id=f"original_{acquisition}",
+                protocol="T1 Vibe FS Multi Gado",
+                time=None,
+                AcquisitionNumber=acquisition,
+            ),
+            row(
+                description,
+                series_id=f"mpr_{acquisition}",
+                volume_id=f"mpr_{acquisition}",
+                protocol="T1 Vibe FS Multi Gado",
+                image_type=["DERIVED", "SECONDARY", "MPR", "CSA MPR THICK", "M"],
+                time=None,
+                RepetitionTime=4.65,
+                EchoTime=2.15,
+                AcquisitionNumber=acquisition,
+            ),
+        ])
+    result = curate(rows)
+
+    assert set(result["selected_long"]["volume_id"]) == {
+        f"mpr_{acquisition}" for acquisition in range(1, 5)
+    }
+    assert set(result["selected_long"]["phase"]) == {phase for _, phase in phases}
+
+
+def test_source_image_is_preferred_to_mpr_for_same_phase():
+    result = curate([
+        row("AX T1 VIBE arterial MPR", volume_id="mpr", series_id="mpr"),
+        row("AX T1 VIBE arterial", volume_id="original", series_id="original"),
+    ])
+
+    assert selected_for_slot(result, "T1_ARTERIAL")["volume_id"].tolist() == ["original"]
 
 
 @pytest.mark.parametrize(
