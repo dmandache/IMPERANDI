@@ -126,12 +126,26 @@ segmentation:
           extra:
             roi_subset: [liver]
             fastest: true
+      postprocess:
+          on_failure: warn_only
+          operations:
+            - op: close
+              input: liver
+              output: liver
+              radius_mm: 7.0
     MR:
       tasks:
         - task: total_mr
           extra:
             roi_subset: [liver]
             fastest: true
+      postprocess:
+          on_failure: warn_only
+          operations:
+            - op: close
+              input: liver
+              output: liver
+              radius_mm: 7.0
 
 radiomics:
   modalities:
