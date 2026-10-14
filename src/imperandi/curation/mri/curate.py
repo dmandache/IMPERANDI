@@ -1544,6 +1544,9 @@ def infer_generic_dynamic_phases_from_exam_context(
                     "fewer than three distinct acquisitions for a generic dynamic template",
                 )
             continue
+        # Longer runs may contain repeated postcontrast phases. Evaluate
+        # independent timing even at the position that order would call native.
+        timing_before_native = len(frames) > 4
         has_native = bool(len(ordered_native))
         pure_post = (
             candidates.loc[remaining].apply(has_pure_post_contrast_text, axis=1).any()
@@ -1647,7 +1650,7 @@ def infer_generic_dynamic_phases_from_exam_context(
                 else:
                     fits = []
                     if (
-                        expected != "NATIVE"
+                        (timing_before_native or expected != "NATIVE")
                         and calibrated
                         and evidence.loc[idx, "timing_reliable"]
                     ):
@@ -1662,6 +1665,12 @@ def infer_generic_dynamic_phases_from_exam_context(
                             )
                             is not None
                         ]
+                        if (
+                            timing_before_native
+                            and expected == "NATIVE"
+                            and delay_high < 0
+                        ):
+                            fits = ["NATIVE"]
                     if len(fits) == 1:
                         label = fits[0]
                         record(

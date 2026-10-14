@@ -501,6 +501,14 @@ fall back to order where that order is established. The fixed anchor interval is
 not narrowed by inferred target labels. A clock gap exceeding 900 seconds does
 not split an otherwise compatible ordered group.
 
+For generic runs longer than four distinct acquisitions, independent calibrated
+timing is checked before every order-based assignment, including the first
+position that would otherwise become native. Repeated arterial or portal
+acquisitions can therefore retain their measured or inferred phase. The count
+uses acquisition positions, not reconstruction rows. Without conclusive timing,
+the established order fallback remains available. Explicit Multiart and
+Mask+Multiart mappings keep their protocol-specific precedence.
+
 Assignments with explicit context record `dynamic_explicit_anchor`; other ordered
 dynamics use `volume_order` or `acquisition_order_dixon_component`. Unresolved
 dynamics retain `generic_dynamic_context_pending` with a reason, and do not veto
