@@ -135,7 +135,7 @@ def test_container_frame_clock_cannot_supply_distinct_volume_delays():
     assert not out.mri_dynamic_timing_reliable.any()
 
 
-def test_known_missing_first_numbered_phase_does_not_create_a_native():
+def test_missing_ph1_does_not_block_first_dynamic_native_fallback():
     frame = volumes(3)
     frame["SeriesDescription"] = [
         "AX T1 VIBE dynamic Ph2",
@@ -143,7 +143,7 @@ def test_known_missing_first_numbered_phase_does_not_create_a_native():
         "AX T1 VIBE dynamic Ph4",
     ]
     out = annotate(frame)
-    assert out.phase.tolist() == ["ARTERIAL", "PORTAL_VENOUS", "DELAYED"]
+    assert out.phase.tolist() == ["NATIVE", "ARTERIAL", "PORTAL_VENOUS"]
 
 
 @pytest.mark.parametrize("native_count", [1, 2])
@@ -334,7 +334,7 @@ def test_long_dynamic_without_calibrated_timing_retains_order_fallback():
 
 
 @pytest.mark.parametrize("extra_reconstructions", [False, True])
-def test_four_distinct_acquisitions_retain_established_native_fallback(
+def test_four_distinct_acquisitions_check_timing_before_native_fallback(
     extra_reconstructions,
 ):
     frame = volumes()
@@ -345,8 +345,8 @@ def test_four_distinct_acquisitions_retain_established_native_fallback(
         copies["volume_id"] = ["reconstruction1", "reconstruction2"]
         frame = pd.concat([frame, copies], ignore_index=True)
     out = annotate(frame)
-    assert out.loc["v0", "phase"] == "NATIVE"
-    assert not out.loc["v0", "mri_dynamic_timing_reliable"]
+    assert out.loc["v0", "phase"] == "ARTERIAL"
+    assert out.loc["v0", "mri_dynamic_timing_reliable"]
 
 
 def test_long_dynamic_measured_bolus_timing_already_precedes_phase_rank():

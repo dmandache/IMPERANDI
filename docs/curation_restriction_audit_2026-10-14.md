@@ -153,3 +153,34 @@ Reconciliation validation on the MRI-only branch based on `main`: 1,831 tests
 passed across curation, phase command, cleaning, DICOM timing/date utilities,
 parsing, ingest hooks, manifests, and semantic resume. The replacement branch
 does not include the separate registration feature work.
+
+
+## Follow-up: native context before phase numbering
+
+The Ph1 guard introduced during evidence reconciliation is removed. Generic
+phase inference uses explicit phases/usable timing, then native context in the
+compatible protocol group, then the ordered native/arterial/portal/delayed
+fallback. PhN prefixes no longer impose absolute phase labels or veto native
+fallback when Ph1 is absent. The secondary ordinal-to-phase resolver is removed,
+so it cannot bypass the generic minimum or invent chronology for isolated PhN.
+
+A bare contrast-agent mention and exam-level injection wording do not establish
+that each dynamic volume was acquired after injection. Explicit acquisition
+post-only wording (post/C+) remains stronger than native fallback. Native
+candidate selection is scoped to compatible protocols and always checks that a
+separate candidate precedes the dynamic/known-phase context; the legacy exam-wide
+shortcut is removed. Multiple protocol groups can resolve independently. A known
+water native can support unidentified reconstructions of the same protocol, but
+not known fat components. Compatible explicit natives with missing clocks still
+count once and prevent duplicate native fallback.
+
+Timing now precedes the generic native assumption at every run length, removing
+the separate more-than-four condition. The generic minimum of three distinct
+acquisitions, special protocol mappings, explicit labels, fixed timing windows,
+and absence of manifest-configurable profiles are retained.
+
+Validation for this follow-up: 1,745 tests passed across curation, the phase
+command, cleaning, and DICOM timing. Coverage includes missing/mixed phase
+numbers, contrast-agent wording, explicit/fallback/clockless native context,
+unrelated and multiple protocol groups, chronological candidate eligibility,
+and supported timing on plain T1 acquisitions.

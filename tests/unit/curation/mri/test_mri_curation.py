@@ -344,12 +344,12 @@ def test_explicit_portal_overrides_ordinal_phase_text():
     assert out.loc[0, "mri_perfusion_source"] == "explicit_text"
 
 
-def test_post_gado_ph1_is_never_native():
+def test_single_numbered_dynamic_does_not_bypass_generic_minimum():
     out = mc.annotate_mri(pd.DataFrame([row("Ph1/Ax LAVA Gado MPh Turbo")]))
 
-    assert out.loc[0, "mri_perfusion_label"] == "ARTERIAL"
-    assert out.loc[0, "mri_perfusion_confidence"] == "inferred"
-    assert out.loc[0, "mri_perfusion_source"] == "ordinal_context"
+    assert out.loc[0, "mri_perfusion_label"] == "OTHER"
+    assert out.loc[0, "mri_perfusion_confidence"] == "unknown"
+    assert out.loc[0, "mri_perfusion_source"] == mc.GENERIC_DYNAMIC_CONTEXT_PENDING
 
 
 def test_hepatobiliary_2h_takes_priority_over_delayed_tardif():
@@ -639,11 +639,20 @@ def test_art_port_late_multivolume_resolves_arterial_portal_delayed():
     assert set(cur["mri_perfusion_source"]) == {"volume_order_art_port_late"}
 
 
-def test_art_port_late_dynamic_context_enables_native_fallback():
+@pytest.mark.parametrize(
+    "native_description,expected",
+    [
+        ("WATER: Ax LAVA-Flex APNEE", "OTHER"),
+        ("T1 VIBE DIXON WATER", "NATIVE"),
+    ],
+)
+def test_art_port_late_native_fallback_requires_compatible_protocol(
+    native_description, expected
+):
     results = curate(
         [
             row(
-                "WATER: Ax LAVA-Flex APNEE",
+                native_description,
                 series_id="SER_PRE",
                 volume_id="VPRE",
                 time="115900",
@@ -670,8 +679,10 @@ def test_art_port_late_dynamic_context_enables_native_fallback():
     )
     cur = results["curated"].set_index("volume_id")
 
-    assert cur.loc["VPRE", "mri_perfusion_label"] == "NATIVE"
-    assert cur.loc["VPRE", "mri_perfusion_source"] == "exam_context"
+    assert cur.loc["VPRE", "mri_perfusion_label"] == expected
+    assert cur.loc["VPRE", "mri_perfusion_source"] == (
+        "exam_context" if expected == "NATIVE" else "none"
+    )
 
 
 def test_art_port_late_mixed_multivolume_and_single_volume_uses_acquisition_order():

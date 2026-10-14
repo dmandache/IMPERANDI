@@ -441,7 +441,12 @@ Standard `ContrastBolusAgentPhase` metadata is direct evidence; conflicting
 values within a volume remain unresolved instead of receiving an order-based
 phase. Strategies before `rules`, including ontology, contribute native and
 named phase context before generic dynamic progression. Repeated natives count
-once; a known missing `Ph1` is not recreated by renumbering `Ph2` as native.
+once. Vendor `PhN` prefixes do not define physiological phases or require a
+`Ph1`. Without compatible native context, the first ordered generic dynamic
+acquisition falls back to native, even if its prefix is `Ph2` or `Ph3`, unless
+stronger phase evidence establishes otherwise. Bare agent names such as `gado`
+and exam-level injection descriptions are protocol context; clear acquisition
+postcontrast wording such as `post` or `C+` still establishes post-only context.
 
 Raw acquisition/frame datetimes and bolus times retain their precision through
 CSV and cleaning. Measured injection delays require comparable clock domains
@@ -464,11 +469,17 @@ fixed and retain their positions. An explicit native followed by generic dynamic
 acquisitions starts the generic progression at arterial; a post-only group can
 use arterial/portal/delayed without an explicit anchor. Before generic inference,
 a separate unlabelled native candidate can be resolved when it precedes a
-compatible ordered dynamic sequence. This native counts once toward the minimum
+compatible ordered dynamic sequence. Supported bolus timing is evaluated on
+plain T1 candidates before they can be promoted to fallback native.
+This lookup runs independently for each protocol group: an unrelated native neither blocks another group's fallback nor
+turns an unrelated unlabelled T1 acquisition into native. Known phase acquisitions
+participate in the minimum count. This native counts once toward the minimum
 and shifts the subsequent progression to arterial. It retains fallback confidence
 and never supplies a measured injection-time bound. A native alone does not
-establish phase evidence for other acquisitions without dynamic context. Three distinct acquisitions,
-including explicit phases, are required for the generic template, as before the
+establish phase evidence for other acquisitions without dynamic context. A
+compatible explicit native without a usable clock still prevents a duplicate
+native fallback and counts once; unresolved dynamics still need comparable order.
+Three distinct acquisitions, including explicit phases, are required for the generic template, as before the
 October 10 restrictions. Later positions remain delayed.
 
 Explicit Multiart text assigns all acquisitions to arterial. Mask+Multiart uses
@@ -478,8 +489,10 @@ explicit timing retains priority, including repeated acquisitions of one phase.
 
 Compatibility preserves patient, date, study, sequence family, plane, and Dixon
 component. An unspecified native Dixon component can anchor a known component
-only within the same series. Subtraction and quantitative/report products do not
-anchor or shift diagnostic ranks; MPR/DERIVED alone does not erase acquisition
+only within the same series. A known water reconstruction can provide native
+context to an unidentified reconstruction of the same protocol across series;
+it cannot support a known fat component. Subtraction and quantitative/report
+products do not anchor or shift diagnostic ranks; MPR/DERIVED alone does not erase acquisition
 evidence. Within a known series, temporal positions distinguish frames with a
 shared container timestamp. Known reconstructions share one temporal position.
 Supplied `volume_order_in_series` is accepted as local ordering evidence and
@@ -501,13 +514,14 @@ fall back to order where that order is established. The fixed anchor interval is
 not narrowed by inferred target labels. A clock gap exceeding 900 seconds does
 not split an otherwise compatible ordered group.
 
-For generic runs longer than four distinct acquisitions, independent calibrated
-timing is checked before every order-based assignment, including the first
-position that would otherwise become native. Repeated arterial or portal
-acquisitions can therefore retain their measured or inferred phase. The count
-uses acquisition positions, not reconstruction rows. Without conclusive timing,
-the established order fallback remains available. Explicit Multiart and
-Mask+Multiart mappings keep their protocol-specific precedence.
+Independent calibrated timing is checked before every generic order-based
+assignment, including the first position that would otherwise become native,
+regardless of run length. Repeated arterial or portal acquisitions can retain
+their timing-supported phase. Without conclusive timing, the established order
+fallback remains available. Explicit Multiart and Mask+Multiart mappings retain
+their protocol-specific precedence over the generic template. There is one
+generic progression path; an unresolved `PhN` does not subsequently bypass the
+minimum count or missing chronology through a separate ordinal-to-phase mapping.
 
 Assignments with explicit context record `dynamic_explicit_anchor`; other ordered
 dynamics use `volume_order` or `acquisition_order_dixon_component`. Unresolved
