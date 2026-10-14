@@ -20,8 +20,11 @@ RX_BREATH_HOLD = shared.RX_BREATH_HOLD
 RX_RESP_TRIGGERED = shared.RX_RESP_TRIGGERED
 RX_PHASE_ARTERIAL = shared.RX_PHASE_ARTERIAL
 RX_PHASE_PORTAL = shared.RX_PHASE_PORTAL
-RX_PHASE_DELAYED = shared.RX_PHASE_DELAYED
 RX_PHASE_ORDINAL = shared.RX_PHASE_ORDINAL
+RX_PHASE_DELAYED = token(
+    rf"{shared.RX_PHASE_DELAYED}|transitionnel|transitional"
+)
+
 
 # Reusable MR families and contrast agents.
 GADOLINIUM = r"gd|gad|gado|gadopdc|gadolinium|eovist|primovist|gadoxetate|gadoxetic"
@@ -68,7 +71,7 @@ RX_PHASE_NATIVE = token(
 RX_PHASE_POST_CONTRAST = token(shared.RX_PHASE_POST_CONTRAST, GADOLINIUM)
 RX_PHASE_HEPATOBILIARY = token(
     rf"bili|hepato{SEP}(?:biliary|biliaire)|hbp|bhp"
-    rf"|voie{SEP}biliaire|transitionnel"
+    rf"|voie{SEP}biliaire"
 )
 PHASE_RULES = shared.phase_rules(
     native=RX_PHASE_NATIVE,
@@ -87,6 +90,7 @@ PHASE_RULES = shared.phase_rules(
 RX_PHASE_ART_PORT_DYNAMIC = token(
     rf"{shared.ARTERIAL}{SEP}port(?:al(?:e)?)?|art[eé]rio{SEP}portal(?:e)?"
 )
+transitionnel
 RX_PHASE_MASK_MULTIART_DYNAMIC = token(
     rf"mas(?:k|q(?:ue)?){SEP}(?:(?:multi|\d+){SEP})?{shared.ARTERIAL}"
 )
