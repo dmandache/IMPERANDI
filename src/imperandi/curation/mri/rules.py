@@ -90,7 +90,6 @@ PHASE_RULES = shared.phase_rules(
 RX_PHASE_ART_PORT_DYNAMIC = token(
     rf"{shared.ARTERIAL}{SEP}port(?:al(?:e)?)?|art[eé]rio{SEP}portal(?:e)?"
 )
-transitionnel
 RX_PHASE_MASK_MULTIART_DYNAMIC = token(
     rf"mas(?:k|q(?:ue)?){SEP}(?:(?:multi|\d+){SEP})?{shared.ARTERIAL}"
 )
