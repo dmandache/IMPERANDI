@@ -6,6 +6,7 @@ import logging
 from datetime import time
 from typing import Optional, Any
 import re
+from imperandi.utils.dicom_timing import DICOM_CLOCK_DTYPES
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +148,13 @@ def earliest_acquisition_datetime(tm_or_list) -> Optional[time]:
     return _parse_dicom_time(tm_or_list)
 
 
+def _earliest_precise_time(value):
+    tokens = _iter_time_tokens(value)
+    parsed = [_parse_dicom_time(token, include_ms=True) for token in tokens]
+    parsed = [clock for clock in parsed if clock is not None]
+    return min(parsed) if parsed else None
+
+
 def _iter_time_tokens(value):
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return []
@@ -237,7 +245,14 @@ def to_times(df: pd.DataFrame) -> pd.DataFrame:
     logger.info("Detected real-time columns: %s", time_cols)
 
     for c in time_cols:
-        df[c] = df[c].apply(earliest_acquisition_datetime)
+        if c.lower().endswith("datetime") or c in DICOM_CLOCK_DTYPES:
+            # Acquisition DT/TM must retain its original precision for inference.
+            continue
+        df[c] = df[c].apply(
+            lambda value: (
+                value if isinstance(value, time) else _earliest_precise_time(value)
+            )
+        )
 
     return df
 
@@ -288,7 +303,11 @@ def _infer_dayfirst(series, n_samples=50):
 
 
 def to_dates(df):
-    date_cols = [c for c in df.columns if "date" in c.lower()]
+    date_cols = [
+        c
+        for c in df.columns
+        if "date" in c.lower() and not c.lower().endswith(("datetime", "_source"))
+    ]
     logger.info("Detected date columns: %s", date_cols)
 
     for c in date_cols:

@@ -49,7 +49,7 @@ def _load_phase_extractor() -> Callable[..., Any]:
         from totalsegmentator.bin.totalseg_get_phase import get_ct_contrast_phase
     except ModuleNotFoundError as exc:
         raise RuntimeError(
-            "The 'phase' command requires optional dependencies. "
+            "TotalSegmentator phase prediction requires optional dependencies. "
             "Install with: pip install -e .[segment]"
         ) from exc
     return get_ct_contrast_phase
@@ -66,7 +66,10 @@ def add_phase_arguments(
         nargs="?",
         type=str,
         default=None,
-        help="Path to input CSV with a `nifti_path` column. Defaults to ./nifti_index.csv.",
+        help=(
+            "Path to input CSV. Only TotalSegmentator prediction requires "
+            "`nifti_path`; metadata curation does not. Defaults to ./nifti_index.csv."
+        ),
     )
     parser.add_argument(
         "csv_path_out_pos",
@@ -205,11 +208,22 @@ def _normalize_phase_extractor_output(output: Any) -> Dict[str, Any] | None:
     return phase_info
 
 
+def _validate_nifti_path(row: Mapping[str, Any]) -> Tuple[Path | None, str | None]:
+    """Validate image input only for rows requiring TotalSegmentator prediction."""
+    value = row.get("nifti_path")
+    if not isinstance(value, str) or not value.strip():
+        return None, "column 'nifti_path' missing or invalid"
+    path = Path(value)
+    if not path.is_file():
+        return None, f"file not found: {path}"
+    return path, None
+
+
 def process_single_volume(
     idx: int,
     row: Mapping[str, Any],
     *,
-    phase_extractor: Callable[..., Any],
+    phase_extractor: Callable[..., Any] | None,
     verbose: bool = False,
 ) -> Tuple[int, Dict[str, Any] | None, str | None]:
     """Extract phase metadata for one cohort row without raising row errors.
@@ -218,13 +232,9 @@ def process_single_volume(
         ``(row_index, metadata, error)``. Successful metadata keys are prefixed
         with ``totalseg_``; failures return an error string instead.
     """
-    nifti_path_value = row.get("nifti_path")
-    if not isinstance(nifti_path_value, str) or not nifti_path_value.strip():
-        return idx, None, "column 'nifti_path' missing or invalid"
-
-    nifti_path = Path(nifti_path_value)
-    if not nifti_path.exists():
-        return idx, None, f"file not found: {nifti_path}"
+    nifti_path, path_error = _validate_nifti_path(row)
+    if path_error is not None:
+        return idx, None, path_error
 
     try:
         nifti_image = nib.load(str(nifti_path))
@@ -479,15 +489,20 @@ def main(args: argparse.Namespace) -> None:
         if bool(needs_prediction.at[idx])
         and normalize_source_id(df.at[idx, "_source_idx"]) not in completed_indices
     ]
-    phase_extractor = _load_phase_extractor() if row_indices else None
+    phase_extractor = None
     processed_source_ids = {
         normalize_source_id(df.at[idx, "_source_idx"]) for idx in row_indices
     }
     for idx in tqdm(row_indices, total=len(row_indices), desc="Phase"):
         src_idx = normalize_source_id(df.at[idx, "_source_idx"])
+        row = df.loc[idx].to_dict()
+        if phase_extractor is None:
+            _, path_error = _validate_nifti_path(row)
+            if path_error is None:
+                phase_extractor = _load_phase_extractor()
         _, phase_info, err_msg = process_single_volume(
             idx,
-            df.loc[idx].to_dict(),
+            row,
             phase_extractor=phase_extractor,
             verbose=args.verbose,
         )

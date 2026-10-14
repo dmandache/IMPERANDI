@@ -38,6 +38,7 @@ from imperandi.utils.run_state import (
     now_epoch,
 )
 from imperandi.ingest.defaults import DEFAULT_DICOM_TAGS
+from imperandi.utils.dicom_timing import DICOM_CLOCK_DTYPES
 from imperandi.ingest.apply_hook_manifests import apply_id_standardization
 
 warnings.filterwarnings("ignore")
@@ -1305,7 +1306,7 @@ def process_with_checkpoint(
             resumed_rows=len(df),
         )
         if return_df:
-            return pd.read_csv(output_path)
+            return pd.read_csv(output_path, dtype=DICOM_CLOCK_DTYPES)
         return None
 
     if not can_resume:
@@ -1358,7 +1359,9 @@ def process_with_checkpoint(
             if extra_cols:
                 checkpoint_columns = [*checkpoint_columns, *extra_cols]
                 if paths.main_checkpoint_path.exists():
-                    existing = pd.read_csv(paths.main_checkpoint_path)
+                    existing = pd.read_csv(
+                        paths.main_checkpoint_path, dtype=DICOM_CLOCK_DTYPES
+                    )
                     existing = existing.reindex(
                         columns=checkpoint_columns, fill_value=None
                     )
@@ -1484,7 +1487,7 @@ def process_with_checkpoint(
     _flush_buffer(force_state=True)
 
     if paths.main_checkpoint_path.exists():
-        out = pd.read_csv(paths.main_checkpoint_path)
+        out = pd.read_csv(paths.main_checkpoint_path, dtype=DICOM_CLOCK_DTYPES)
     else:
         out = df.copy()
     if "_source_idx" in out.columns:

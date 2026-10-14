@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from typing import Any
 
 import pandas as pd
+from imperandi.curation.dynamic_mri import TIMING_INPUTS
 
 SUPPORTED_PHASE_STRATEGIES = {"ontology", "rules", "totalsegmentator"}
 DEFAULT_UNRESOLVED_LABELS = ["", "OTHER", "UNKNOWN", "UNCLASSIFIED", "NONE"]
@@ -71,6 +72,11 @@ def validate_phase_curation(config: Mapping[str, Any] | None) -> dict[str, Any]:
         config = DEFAULT_PHASE_CURATION
     if not isinstance(config, Mapping):
         raise ValueError("phase_curation must be a mapping.")
+
+    if any(key in config for key in ("mri_dynamic", "profiles", "phase_windows")):
+        raise ValueError(
+            "MRI phase profiles and timing delays are built-in rules, not manifest settings."
+        )
 
     strategies = config.get("strategies")
     if not isinstance(strategies, list) or not strategies:
@@ -216,6 +222,7 @@ def phase_curation_input_columns(config: Mapping[str, Any] | None) -> set[str]:
         if strategy["type"] == "ontology":
             columns.update(strategy["columns"])
         elif strategy["type"] == "rules":
+            columns.update(TIMING_INPUTS)
             columns.update(
                 {"rule_phase", "rule_phase_confidence", "rule_phase_reason"}
             )

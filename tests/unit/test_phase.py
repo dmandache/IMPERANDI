@@ -525,3 +525,77 @@ def test_main_does_not_run_ct_predictor_for_mri(tmp_path, monkeypatch):
     out_df = pd.read_csv(args.csv_path_out)
     assert out_df.loc[0, "phase"] == "OTHER"
     assert out_df.loc[0, "phase_source"] == "fallback"
+
+
+@pytest.mark.parametrize(
+    "image_input", ["absent", "null", "blank", "missing", "directory"]
+)
+def test_main_curates_without_usable_nifti_or_predictor(
+    tmp_path, monkeypatch, image_input
+):
+    rows = pd.DataFrame(
+        {
+            "volume_id": ["resolved_ct", "unresolved_ct", "mri"],
+            "Modality": ["CT", "CT", "MR"],
+            "rule_phase": ["ARTERIAL", "OTHER", "OTHER"],
+        }
+    )
+    if image_input != "absent":
+        rows["nifti_path"] = {
+            "null": None,
+            "blank": " ",
+            "missing": str(tmp_path / "missing.nii.gz"),
+            "directory": str(tmp_path),
+        }[image_input]
+    csv_path = tmp_path / "input.csv"
+    rows.to_csv(csv_path, index=False)
+    monkeypatch.setattr(
+        phase_module,
+        "_load_phase_extractor",
+        lambda: pytest.fail("Do not load TotalSegmentator without usable images"),
+    )
+    args = argparse.Namespace(
+        csv_path=str(csv_path),
+        csv_path_out=str(tmp_path / "out.csv"),
+        error_csv_path=str(tmp_path / "errors.csv"),
+        manifest="generic",
+        verbose=False,
+        force=False,
+        resume=False,
+        strict_resume=False,
+        checkpoint_every_rows=1,
+        checkpoint_every_sec=3600,
+    )
+
+    phase_module.main(args)
+
+    result = pd.read_csv(args.csv_path_out).set_index("volume_id")
+    assert result.loc["resolved_ct", "phase"] == "ARTERIAL"
+    assert result.loc["resolved_ct", "phase_source"] == "metadata_rules"
+    assert result.loc[["unresolved_ct", "mri"], "phase"].eq("OTHER").all()
+    errors = pd.read_csv(args.error_csv_path)
+    assert errors.volume_id.tolist() == ["unresolved_ct"]
+    expected = (
+        "file not found"
+        if image_input in {"missing", "directory"}
+        else "missing or invalid"
+    )
+    assert expected in errors.loc[0, "error_message"]
+
+    if image_input == "missing":
+        # A later conversion must let semantic resume retry the prediction.
+        (tmp_path / "missing.nii.gz").write_bytes(b"nifti")
+        loads = []
+
+        def load_predictor():
+            loads.append(True)
+            return lambda _, quiet=True: {"phase": "portal"}
+
+        monkeypatch.setattr(phase_module, "_load_phase_extractor", load_predictor)
+        monkeypatch.setattr(phase_module.nib, "load", lambda _: object())
+        args.resume = True
+        phase_module.main(args)
+        result = pd.read_csv(args.csv_path_out).set_index("volume_id")
+        assert result.loc["unresolved_ct", "phase"] == "PORTAL_VENOUS"
+        assert result.loc["resolved_ct", "phase"] == "ARTERIAL"
+        assert loads == [True]

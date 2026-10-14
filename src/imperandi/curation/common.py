@@ -14,6 +14,7 @@ from typing import Sequence
 
 import numpy as np
 import pandas as pd
+from imperandi.utils.dicom_timing import DICOM_CLOCK_DTYPES
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +90,9 @@ def with_manifest_text_columns(modality: str):
 
 
 def read_csv(path: str | Path, **kwargs) -> pd.DataFrame:
+    dtype = kwargs.get("dtype", {})
+    if isinstance(dtype, dict):
+        kwargs["dtype"] = {**DICOM_CLOCK_DTYPES, **dtype}
     return pd.read_csv(Path(path).expanduser(), low_memory=False, **kwargs)
 
 

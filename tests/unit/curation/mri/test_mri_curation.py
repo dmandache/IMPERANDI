@@ -288,7 +288,7 @@ def test_post_gado_ordinal_phases_with_explicit_native_are_context_inferred():
             ],
             "mri_perfusion_source",
         ]
-    ) == {"ordinal_context"}
+    ) == {"dynamic_explicit_anchor"}
 
 
 def test_missing_native_fallback_uses_water_lava_only_with_dynamic_context():
@@ -437,7 +437,7 @@ def test_art_port_two_independent_volumes_first_arterial_second_portal():
     ]
 
 
-def test_art_port_two_single_volume_series_use_acquisition_order():
+def test_art_port_uses_clock_over_cross_series_acquisition_numbers():
     results = curate(
         [
             row(
@@ -459,7 +459,7 @@ def test_art_port_two_single_volume_series_use_acquisition_order():
     cur = results["curated"].sort_values("AcquisitionNumber")
 
     assert cur["n_volumes_in_series"].tolist() == [1, 1]
-    assert cur["mri_perfusion_label"].tolist() == ["ARTERIAL", "PORTAL_VENOUS"]
+    assert cur["mri_perfusion_label"].tolist() == ["PORTAL_VENOUS", "ARTERIAL"]
     assert cur["mri_perfusion_source"].tolist() == [
         "acquisition_order_art_port",
         "acquisition_order_art_port",
@@ -503,11 +503,18 @@ def test_art_port_mixed_multivolume_and_single_volume_uses_acquisition_order():
 
     assert cur["mri_perfusion_label"].tolist() == [
         "ARTERIAL",
+        "OTHER",
+        "OTHER",
         "PORTAL_VENOUS",
-        "DELAYED",
-        "DELAYED",
     ]
     assert set(cur["mri_perfusion_source"]) == {"acquisition_order_art_port"}
+
+    assert cur["mri_perfusion_confidence"].tolist() == [
+        "inferred",
+        "unknown",
+        "unknown",
+        "inferred",
+    ]
 
 
 def test_single_volume_art_port_row_defers_to_exam_context():
@@ -592,10 +599,10 @@ def test_art_port_pairs_each_dixon_component_across_two_acquisitions():
     )
 
 
-def test_art_port_single_volume_falls_back_to_portal_transition():
+def test_art_port_single_volume_remains_unresolved():
     out = mc.annotate_mri(pd.DataFrame([row("T1 VIBE DIXON ART-PORT CAIPI_W")]))
-    assert out.loc[0, "mri_perfusion_label"] == "PORTAL_VENOUS"
-    assert out.loc[0, "mri_perfusion_source"] == "explicit_text_art_port_single"
+    assert out.loc[0, "mri_perfusion_label"] == "OTHER"
+    assert out.loc[0, "mri_perfusion_confidence"] == "unknown"
 
 
 def test_art_port_late_multivolume_resolves_arterial_portal_delayed():
@@ -704,11 +711,20 @@ def test_art_port_late_mixed_multivolume_and_single_volume_uses_acquisition_orde
 
     assert cur["mri_perfusion_label"].tolist() == [
         "ARTERIAL",
-        "PORTAL_VENOUS",
-        "DELAYED",
+        "OTHER",
+        "OTHER",
         "DELAYED",
     ]
-    assert set(cur["mri_perfusion_source"]) == {"acquisition_order_art_port_late"}
+    assert set(cur["mri_perfusion_source"]) == {
+        "acquisition_order_art_port_late",
+    }
+
+    assert cur["mri_perfusion_confidence"].tolist() == [
+        "inferred",
+        "unknown",
+        "unknown",
+        "inferred",
+    ]
 
 
 def test_art_port_late_single_volume_series_use_acquisition_order_per_component():
@@ -738,10 +754,10 @@ def test_art_port_late_single_volume_series_use_acquisition_order_per_component(
     assert set(cur["mri_perfusion_source"]) == {"acquisition_order_art_port_late"}
 
 
-def test_art_port_late_single_volume_falls_back_to_delayed():
+def test_art_port_late_single_volume_remains_unresolved():
     out = mc.annotate_mri(pd.DataFrame([row("T1 VIBE DIXON ART / PORT / LATE_W")]))
-    assert out.loc[0, "mri_perfusion_label"] == "DELAYED"
-    assert out.loc[0, "mri_perfusion_source"] == ("explicit_text_art_port_late_single")
+    assert out.loc[0, "mri_perfusion_label"] == "OTHER"
+    assert out.loc[0, "mri_perfusion_confidence"] == "unknown"
 
 
 def test_ssoustration_art_port_is_treated_as_subtraction():
@@ -856,11 +872,11 @@ def test_mask_multiart_mixed_multivolume_and_single_volume_uses_acquisition_orde
     assert set(cur["mri_perfusion_source"]) == {"acquisition_order_mask_multiart"}
 
 
-def test_mask_multiart_single_volume_falls_back_to_arterial():
+def test_mask_multiart_first_and_only_volume_is_native():
     out = mc.annotate_mri(pd.DataFrame([row("Ax LAVA Mask+Multiart Fluoro_W")]))
 
-    assert out.loc[0, "mri_perfusion_label"] == "ARTERIAL"
-    assert out.loc[0, "mri_perfusion_source"] == ("explicit_text_mask_multiart_single")
+    assert out.loc[0, "mri_perfusion_label"] == "NATIVE"
+    assert out.loc[0, "mri_perfusion_confidence"] == "inferred"
 
 
 def test_generic_4d_mdixon_volume_order_pre_art_port_delayed():
@@ -1102,7 +1118,7 @@ def test_diagnostic_derived_gre_remains_phaseable():
         ("delayed", "DELAYED"),
     ],
 )
-def test_derived_mri_product_keeps_phase_but_is_not_selected(marker, phase_text, phase):
+def test_derived_mri_product_selection_depends_on_product(marker, phase_text, phase):
     result = curate(
         [row(f"AX T1 DIXON {phase_text}", image_type=["DERIVED", "PRIMARY", marker])]
     )
@@ -1112,7 +1128,9 @@ def test_derived_mri_product_keeps_phase_but_is_not_selected(marker, phase_text,
     assert annotated["phase_status"] == "RESOLVED"
     assert annotated["phase"] == phase
     assert annotated["rule_phase"] == phase
-    assert result["selected_long"].empty
+    assert len(selected_for_slot(result, f"T1_{phase}")) == (
+        1 if marker in {"MIP", "MPR", "SECONDARY", "R2S"} else 0
+    )
 
 
 @pytest.mark.parametrize(
@@ -1127,7 +1145,7 @@ def test_derived_mri_product_keeps_phase_but_is_not_selected(marker, phase_text,
         ("delayed", "DELAYED"),
     ],
 )
-def test_derived_mri_description_keeps_phase_but_is_not_selected(
+def test_derived_mri_description_selection_depends_on_product(
     marker, phase_text, phase
 ):
     result = curate(
@@ -1141,7 +1159,54 @@ def test_derived_mri_description_keeps_phase_but_is_not_selected(
 
     assert result["curated"].iloc[0]["phase_status"] == "RESOLVED"
     assert result["curated"].iloc[0]["phase"] == phase
-    assert result["selected_long"].empty
+    assert len(selected_for_slot(result, f"T1_{phase}")) == (1 if marker == "MIP" else 0)
+
+
+def test_explicit_mpr_phases_fill_slots_when_originals_are_unresolved():
+    phases = [
+        ("sans iv", "NATIVE"),
+        ("arteriel", "ARTERIAL"),
+        ("portal", "PORTAL_VENOUS"),
+        ("tardif", "DELAYED"),
+    ]
+    rows = []
+    for acquisition, (description, phase) in enumerate(phases, start=1):
+        rows.extend([
+            row(
+                "t1 vibe fs multi gado",
+                series_id=f"original_{acquisition}",
+                volume_id=f"original_{acquisition}",
+                protocol="T1 Vibe FS Multi Gado",
+                time=None,
+                AcquisitionNumber=acquisition,
+            ),
+            row(
+                description,
+                series_id=f"mpr_{acquisition}",
+                volume_id=f"mpr_{acquisition}",
+                protocol="T1 Vibe FS Multi Gado",
+                image_type=["DERIVED", "SECONDARY", "MPR", "CSA MPR THICK", "M"],
+                time=None,
+                RepetitionTime=4.65,
+                EchoTime=2.15,
+                AcquisitionNumber=acquisition,
+            ),
+        ])
+    result = curate(rows)
+
+    assert set(result["selected_long"]["volume_id"]) == {
+        f"mpr_{acquisition}" for acquisition in range(1, 5)
+    }
+    assert set(result["selected_long"]["phase"]) == {phase for _, phase in phases}
+
+
+def test_source_image_is_preferred_to_mpr_for_same_phase():
+    result = curate([
+        row("AX T1 VIBE arterial MPR", volume_id="mpr", series_id="mpr"),
+        row("AX T1 VIBE arterial", volume_id="original", series_id="original"),
+    ])
+
+    assert selected_for_slot(result, "T1_ARTERIAL")["volume_id"].tolist() == ["original"]
 
 
 @pytest.mark.parametrize(
@@ -1162,18 +1227,21 @@ def test_derived_dynamic_product_does_not_shift_source_acquisition_phases():
                 series_id="S1",
                 volume_id="V1",
                 AcquisitionNumber=1,
+                time="120000",
             ),
             row(
                 "AX T1 DIXON ART-PORT_W_SUB",
                 series_id="SUB",
                 volume_id="VS",
                 AcquisitionNumber=1,
+                time="120000",
             ),
             row(
                 "AX T1 DIXON ART-PORT_W",
                 series_id="S2",
                 volume_id="V2",
                 AcquisitionNumber=2,
+                time="120100",
             ),
         ]
     )
@@ -1407,3 +1475,217 @@ def test_candidate_display_includes_volume_ordinal_out_of_series_total():
 
     assert "[vol=1/2, score=" in selected_wide.loc[0, "T2"]
     assert "[vol=2/2, score=" in selected_wide.loc[0, "T2_other_candidates"]
+
+
+@pytest.mark.parametrize("same_series", [False, True])
+def test_art_port_third_occurrence_does_not_imply_delayed(same_series):
+    out = mc.annotate_mri(
+        pd.DataFrame(
+            [
+                row(
+                    "T1 VIBE ART-PORT",
+                    series_id="S" if same_series else f"S{i}",
+                    volume_id=f"V{i}",
+                    time=f"120{i}00",
+                    acquisition_order=i,
+                )
+                for i in range(3)
+            ]
+        )
+    )
+    assert out.mri_perfusion_label.tolist() == ["ARTERIAL", "OTHER", "PORTAL_VENOUS"]
+    assert out.loc[1, "mri_perfusion_confidence"] == "unknown"
+
+
+@pytest.mark.parametrize("times", [(None, None), ("120000", "120000")])
+def test_dynamic_profile_does_not_use_series_number_or_row_order(times):
+    out = mc.annotate_mri(
+        pd.DataFrame(
+            [
+                row(
+                    "T1 VIBE ART-PORT",
+                    series_id=f"S{i}",
+                    volume_id=f"V{i}",
+                    time=time,
+                    SeriesNumber=i + 1,
+                    AcquisitionNumber=i + 1,
+                )
+                for i, time in enumerate(times)
+            ]
+        )
+    )
+    assert out.mri_perfusion_label.eq("OTHER").all()
+
+
+@pytest.mark.parametrize(
+    "field,values",
+    [
+        ("study_id", ["S1", "S2"]),
+        ("plane", ["AXIAL", "CORONAL"]),
+    ],
+)
+def test_dynamic_profile_does_not_join_incompatible_groups(field, values):
+    rows = pd.DataFrame(
+        [
+            row(
+                "T1 VIBE ART-PORT",
+                series_id=f"S{i}",
+                volume_id=f"V{i}",
+                time=f"120{i}00",
+                acquisition_order=i,
+            )
+            for i in range(2)
+        ]
+    )
+    rows["mri_perfusion_source"] = mc.ART_PORT_CONTEXT_PENDING
+    rows["n_volumes_in_series"] = 1
+    rows[field] = values
+    assignments = mc.infer_art_port_phases_by_acquisition_order(rows)
+    assert len(assignments) == 2
+    assert all(label == "OTHER" for _, label, _ in assignments)
+
+
+def test_explicit_delayed_evidence_survives_ambiguous_art_port_group():
+    rows = [
+        row(
+            "T1 VIBE ART-PORT",
+            series_id=f"S{i}",
+            volume_id=f"V{i}",
+            time=f"120{i}00",
+            acquisition_order=i,
+        )
+        for i in range(3)
+    ]
+    rows.append(row("T1 VIBE delayed 5 min", series_id="SD", volume_id="VD"))
+    out = mc.annotate_mri(pd.DataFrame(rows))
+    assert out.iloc[:3].mri_perfusion_label.tolist() == [
+        "ARTERIAL",
+        "OTHER",
+        "PORTAL_VENOUS",
+    ]
+    assert out.iloc[3].mri_perfusion_label == "DELAYED"
+    assert out.iloc[3].mri_perfusion_confidence == "explicit"
+
+
+@pytest.mark.parametrize("profile", ["ART-PORT", "ART/PORT/LATE"])
+@pytest.mark.parametrize("same_series", [False, True])
+def test_dynamic_profile_exact_text_timing_precedes_endpoints(profile, same_series):
+    out = mc.annotate_mri(
+        pd.DataFrame(
+            [
+                row(
+                    f"T1 VIBE {profile} {delay}s",
+                    series_id="S" if same_series else f"S{i}",
+                    volume_id=f"V{i}",
+                    time=f"120{i}00",
+                    acquisition_order=i,
+                )
+                for i, delay in enumerate([25, 32, 75, 240])
+            ]
+        )
+    )
+    assert out.mri_perfusion_label.tolist() == [
+        "ARTERIAL",
+        "ARTERIAL",
+        "PORTAL_VENOUS",
+        "DELAYED",
+    ]
+    assert out.mri_perfusion_source.eq("dynamic_profile_timing").all()
+
+
+@pytest.mark.parametrize("same_series", [False, True])
+def test_dynamic_profile_injection_clock_precedes_endpoints(same_series):
+    out = mc.annotate_mri(
+        pd.DataFrame(
+            [
+                row(
+                    "T1 VIBE ART-PORT",
+                    series_id="S" if same_series else f"S{i}",
+                    volume_id=f"V{i}",
+                    AcquisitionTime=clock,
+                    ContrastBolusStartTime="120000",
+                    acquisition_order=i,
+                )
+                for i, clock in enumerate(["120025", "120032", "120115", "120400"])
+            ]
+        )
+    )
+    assert out.mri_perfusion_label.tolist() == [
+        "ARTERIAL",
+        "ARTERIAL",
+        "PORTAL_VENOUS",
+        "DELAYED",
+    ]
+
+
+def test_profile_unsupported_exact_delay_blocks_endpoint_fallback():
+    out = mc.annotate_mri(
+        pd.DataFrame(
+            [
+                row(
+                    "T1 VIBE ART-PORT 45s",
+                    series_id="S1",
+                    volume_id="V1",
+                    time="120045",
+                ),
+                row("T1 VIBE ART-PORT", series_id="S2", volume_id="V2", time="120115"),
+            ]
+        )
+    )
+    assert out.mri_perfusion_label.tolist() == ["OTHER", "PORTAL_VENOUS"]
+    assert "fallback blocked" in out.loc[0, "mri_perfusion_reason"]
+
+
+def test_profile_timed_middle_retains_untimed_endpoint_positions():
+    out = mc.annotate_mri(
+        pd.DataFrame(
+            [
+                row(
+                    f"T1 VIBE ART-PORT{suffix}",
+                    series_id=f"S{i}",
+                    volume_id=f"V{i}",
+                    time=f"120{i}00",
+                    acquisition_order=i,
+                )
+                for i, suffix in enumerate(["", " 30s", ""])
+            ]
+        )
+    )
+    assert out.mri_perfusion_label.tolist() == ["ARTERIAL", "ARTERIAL", "PORTAL_VENOUS"]
+
+
+def test_profile_shared_multivolume_clock_is_not_per_frame_delay():
+    out = mc.annotate_mri(
+        pd.DataFrame(
+            [
+                row(
+                    "T1 VIBE ART-PORT",
+                    series_id="S",
+                    volume_id=f"V{i}",
+                    AcquisitionTime="120025",
+                    ContrastBolusStartTime="120000",
+                    acquisition_order=i,
+                    TemporalPositionIdentifier=i + 1,
+                )
+                for i in range(3)
+            ]
+        )
+    )
+    assert out.mri_perfusion_label.tolist() == ["ARTERIAL", "OTHER", "PORTAL_VENOUS"]
+    assert not out.mri_perfusion_source.eq("dynamic_profile_timing").any()
+
+
+def test_profile_conflicting_exact_timing_is_not_overridden_by_order():
+    out = mc.annotate_mri(
+        pd.DataFrame(
+            [
+                row(
+                    "T1 VIBE ART-PORT 25s",
+                    AcquisitionTime="120115",
+                    ContrastBolusStartTime="120000",
+                )
+            ]
+        )
+    )
+    assert out.loc[0, "mri_perfusion_label"] == "OTHER"
+    assert out.loc[0, "mri_perfusion_confidence"] == "unknown"

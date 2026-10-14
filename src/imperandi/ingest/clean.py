@@ -33,6 +33,11 @@ from imperandi.curation.phase import (
 from imperandi.utils.logging import log_task_summary, setup_logging
 from imperandi.utils.misc import print_args, report_volumes, report_change
 from imperandi.utils.datetime import to_dates, to_times
+from imperandi.utils.dicom_timing import (
+    DICOM_CLOCK_DTYPES,
+    dicom_datetime_interval,
+    dicom_time_interval,
+)
 from imperandi.ingest.defaults import (
     DEFAULT_DICOM_TAGS,
     DATE_CANDIDATES,
@@ -217,7 +222,7 @@ def read_csv_with_valid_columns(file, required_columns=None):
     if required_columns:
         requested.update(required_columns)
     valid_columns = [col for col in available_columns if col in requested]
-    return pd.read_csv(file, usecols=valid_columns)
+    return pd.read_csv(file, usecols=valid_columns, dtype=DICOM_CLOCK_DTYPES)
 
 
 def load_data(csv_path, required_columns=None):
@@ -316,9 +321,18 @@ def add_time(df, candidate_columns=None):
     if not candidate_cols:
         return df
 
-    parsed_by_candidate = {
-        col: df[col].apply(_normalize_instance_creation_time) for col in candidate_cols
-    }
+    parsed_by_candidate = {}
+    for col in candidate_cols:
+        if col.lower().endswith("datetime"):
+            parsed_by_candidate[col] = df[col].map(
+                lambda value: (
+                    interval.start.timetz()
+                    if (interval := dicom_datetime_interval(value))
+                    else None
+                )
+            )
+        else:
+            parsed_by_candidate[col] = df[col].apply(_normalize_instance_creation_time)
     # Ordered fallback: first candidate has highest priority, next ones fill gaps.
     time = parsed_by_candidate[candidate_cols[0]].copy()
     source = pd.Series(None, index=df.index, dtype=object)
@@ -333,6 +347,35 @@ def add_time(df, candidate_columns=None):
 
     df["time"] = time
     df["time_source"] = source
+
+    def acquisition_stamp(row):
+        for col in (
+            "FrameReferenceDateTime",
+            "FrameAcquisitionDateTime",
+            "AcquisitionDateTime",
+        ):
+            if interval := dicom_datetime_interval(row.get(col)):
+                return interval.start.isoformat(), col
+        day = next(
+            (
+                row.get(column)
+                for column in ("AcquisitionDate", "date", "StudyDate")
+                if row.get(column) is not None and not pd.isna(row.get(column))
+            ),
+            None,
+        )
+        interval = dicom_time_interval(row.get("AcquisitionTime"), day)
+        return (
+            (interval.start.isoformat(), "AcquisitionTime")
+            if interval
+            else (None, None)
+        )
+
+    stamps = df.apply(acquisition_stamp, axis=1)
+    if len(df):
+        df[["acquisition_datetime", "acquisition_datetime_source"]] = pd.DataFrame(
+            stamps.tolist(), index=df.index
+        )
     total_valid = int(df["time"].notna().sum())
     logger.info(
         "Time candidates (priority order) %s -> %d/%d valid%s",
@@ -1487,6 +1530,36 @@ def compute_acquisition_order(df: pd.DataFrame) -> pd.DataFrame:
         )
 
     df["_acq_timestamp"] = date_values + time_delta
+    # DT clocks carry their own date, including acquisitions across midnight.
+    precise = pd.Series(None, index=df.index, dtype=object)
+    domains = pd.Series(None, index=df.index, dtype=object)
+    for column in (
+        "FrameReferenceDateTime",
+        "FrameAcquisitionDateTime",
+        "AcquisitionDateTime",
+        "acquisition_datetime",
+    ):
+        if column in df:
+            parsed = df[column].map(dicom_datetime_interval)
+            use = precise.isna() & parsed.notna()
+            precise.loc[use] = parsed.loc[use].map(lambda interval: interval.start)
+            domains.loc[use] = parsed.loc[use].map(lambda interval: interval.domain)
+    domains = domains.where(
+        domains.notna(), df["_acq_timestamp"].notna().map({True: "LOCAL", False: None})
+    )
+    df["_acq_clock_domain"] = domains
+    # UTC and scanner-local clocks are incomparable without offset evidence.
+    # Numeric seconds are stored on a naive axis only after separating domains.
+    present = precise.notna()
+    if present.any():
+        df.loc[present, "_acq_timestamp"] = precise.loc[present].map(
+            lambda value: value.replace(tzinfo=None)
+        )
+    domain_count = df.groupby(study_cols, dropna=False)["_acq_clock_domain"].transform(
+        "nunique"
+    )
+    df["_mixed_clock_domains"] = domain_count.gt(1)
+    df.loc[df["_mixed_clock_domains"], "_acq_timestamp"] = pd.NaT
 
     # ------------------------------------------------------------------
     # DICOM numeric ordering fields
@@ -1508,6 +1581,7 @@ def compute_acquisition_order(df: pd.DataFrame) -> pd.DataFrame:
     agg_map = {
         "_acq_timestamp": ("_acq_timestamp", "min"),
         "_input_order_sort": ("_input_order_sort", "min"),
+        "_mixed_clock_domains": ("_mixed_clock_domains", "max"),
     }
 
     for sort_col in dicom_sort_columns.values():
@@ -1574,6 +1648,10 @@ def compute_acquisition_order(df: pd.DataFrame) -> pd.DataFrame:
     ).dt.total_seconds()
 
     df_study["acquisition_order"] = grouped.cumcount()
+    df_study.loc[
+        df_study["_mixed_clock_domains"],
+        ["acquisition_order", "delay_since_prev_acq_sec", "delay_since_first_acq_sec"],
+    ] = np.nan
 
     # ------------------------------------------------------------------
     # Merge volume-level annotations back
@@ -1596,6 +1674,8 @@ def compute_acquisition_order(df: pd.DataFrame) -> pd.DataFrame:
     helper_cols = [
         "_input_order_sort",
         "_acq_timestamp",
+        "_acq_clock_domain",
+        "_mixed_clock_domains",
         *dicom_sort_columns.values(),
     ]
 
@@ -1808,7 +1888,12 @@ def _get_step_outputs(step: dict) -> set[str]:
     if step_type == "coalesce_date":
         return {"date"}
     if step_type == "coalesce_time":
-        return {"time", "time_source"}
+        return {
+            "time",
+            "time_source",
+            "acquisition_datetime",
+            "acquisition_datetime_source",
+        }
     if step_type == "sop_class":
         return {"sop_class"}
     if step_type == "normalize_string":
