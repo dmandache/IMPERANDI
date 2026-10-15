@@ -18,11 +18,22 @@ import pandas as pd
 DICOM_CLOCK_DTYPES = {
     column: "string"
     for column in (
+        "StudyDate",
+        "SeriesDate",
+        "AcquisitionDate",
+        "ContentDate",
+        "InstanceCreationDate",
+        "StudyTime",
+        "SeriesTime",
         "AcquisitionDateTime",
         "FrameReferenceDateTime",
         "FrameAcquisitionDateTime",
         "AcquisitionTime",
+        "ContentTime",
+        "InstanceCreationTime",
         "ContrastBolusStartTime",
+        "ContrastBolusStopTime",
+        "TimezoneOffsetFromUTC",
         "acquisition_datetime",
     )
 }
@@ -67,15 +78,42 @@ def _combine(intervals):
     return ClockInterval(min(i.start for i in intervals), max(i.end for i in intervals))
 
 
-def dicom_datetime_interval(value):
+def _timezone_from_offset(value):
+    """Parse one unambiguous DICOM Timezone Offset From UTC value."""
+    values = [
+        str(item).strip()
+        for item in scalar_values(value)
+        if item is not None and item is not pd.NA and str(item).strip()
+    ]
+    values = list(dict.fromkeys(values))
+    if len(values) != 1 or not re.fullmatch(r"[+-]\d{4}", values[0]):
+        return None
+    offset = values[0]
+    hours, minutes = int(offset[1:3]), int(offset[3:5])
+    if minutes > 59 or hours > 14 or (hours == 14 and minutes):
+        return None
+    if offset[0] == "-" and (hours > 12 or (hours == 12 and minutes)):
+        return None
+    return timezone(
+        timedelta(
+            minutes=(hours * 60 + minutes) * (1 if offset[0] == "+" else -1)
+        )
+    )
+
+
+def dicom_datetime_interval(value, timezone_offset=None):
     """Parse DICOM DT (including partial precision and optional UTC offset)."""
     values = scalar_values(value)
     if len(values) != 1:
-        return _combine(dicom_datetime_interval(item) for item in values)
+        return _combine(
+            dicom_datetime_interval(item, timezone_offset) for item in values
+        )
     value = values[0]
     if value is pd.NaT or value is pd.NA:
         return None
     if isinstance(value, datetime):
+        if value.tzinfo is None and (tz := _timezone_from_offset(timezone_offset)):
+            value = value.replace(tzinfo=tz).astimezone(timezone.utc)
         return ClockInterval(value, value)
     if value is None or isinstance(value, float):
         return None  # Float conversion may already have destroyed DT precision.
@@ -86,6 +124,10 @@ def dicom_datetime_interval(value):
         if re.match(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}", text):
             try:
                 parsed = datetime.fromisoformat(text)
+                if parsed.tzinfo is None and (
+                    tz := _timezone_from_offset(timezone_offset)
+                ):
+                    parsed = parsed.replace(tzinfo=tz).astimezone(timezone.utc)
                 return ClockInterval(parsed, parsed)
             except ValueError:
                 pass
@@ -99,7 +141,7 @@ def dicom_datetime_interval(value):
     defaults = [1, 1, 0, 0, 0]
     parts += defaults[len(parts) - 1 :]
     try:
-        tz = None
+        tz = _timezone_from_offset(timezone_offset)
         if offset:
             hours, minutes = int(offset[1:3]), int(offset[3:5])
             if minutes > 59 or hours > 14 or (hours == 14 and minutes):
@@ -136,11 +178,13 @@ def dicom_datetime_interval(value):
         return None
 
 
-def dicom_time_interval(value, day):
+def dicom_time_interval(value, day, timezone_offset=None):
     """Attach a TM to an acquisition date without inventing missing precision."""
     values = scalar_values(value)
     if len(values) != 1:
-        return _combine(dicom_time_interval(item, day) for item in values)
+        return _combine(
+            dicom_time_interval(item, day, timezone_offset) for item in values
+        )
     value = values[0]
     if value is pd.NaT or value is pd.NA or day is pd.NaT or day is pd.NA:
         return None
@@ -154,6 +198,8 @@ def dicom_time_interval(value, day):
         return None
     if isinstance(value, time):
         instant = datetime.combine(parsed_day, value)
+        if instant.tzinfo is None and (tz := _timezone_from_offset(timezone_offset)):
+            instant = instant.replace(tzinfo=tz).astimezone(timezone.utc)
         return ClockInterval(instant, instant)
     if value is None:
         return None
@@ -170,5 +216,6 @@ def dicom_time_interval(value, day):
     if len(main) not in {2, 4, 6} or not main.isdigit():
         return None
     return dicom_datetime_interval(
-        parsed_day.strftime("%Y%m%d") + main + ("." + fraction if fraction else "")
+        parsed_day.strftime("%Y%m%d") + main + ("." + fraction if fraction else ""),
+        timezone_offset,
     )

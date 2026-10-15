@@ -10,12 +10,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 import pandas as pd
 import pytest
+from pydicom.datadict import tag_for_keyword
 from pydicom.dataset import Dataset, FileDataset, FileMetaDataset
 from pydicom.sequence import Sequence
 from pydicom.uid import ExplicitVRLittleEndian, MediaStorageDirectoryStorage, generate_uid
 
 from imperandi.ingest import parse
 from imperandi.ingest import apply_hook_manifests
+from imperandi.ingest.defaults import DEFAULT_DICOM_TAGS
 
 
 def _make_archive_dataset(root: Path) -> Path:
@@ -533,6 +535,75 @@ def test_build_effective_tags_includes_defaults_user_and_id_tags():
         "PatientID",
         "SeriesInstanceUID",
     ]
+
+
+def test_default_dicom_tags_are_unique_valid_keywords_with_timing_evidence():
+    assert len(DEFAULT_DICOM_TAGS) == len(set(DEFAULT_DICOM_TAGS))
+    assert all(tag_for_keyword(keyword) is not None for keyword in DEFAULT_DICOM_TAGS)
+    assert {
+        "StudyDate",
+        "SeriesDate",
+        "AcquisitionDate",
+        "ContentDate",
+        "InstanceCreationDate",
+        "StudyTime",
+        "SeriesTime",
+        "AcquisitionTime",
+        "ContentTime",
+        "InstanceCreationTime",
+        "AcquisitionDateTime",
+        "FrameReferenceDateTime",
+        "FrameAcquisitionDateTime",
+        "TimezoneOffsetFromUTC",
+        "AcquisitionDuration",
+        "FrameAcquisitionDuration",
+        "FrameTime",
+        "FrameTimeVector",
+        "ContrastBolusStartTime",
+        "ContrastBolusStopTime",
+        "ContrastBolusInjectionDelay",
+        "TemporalPositionIdentifier",
+        "TemporalPositionIndex",
+        "NumberOfTemporalPositions",
+        "TemporalResolution",
+        "TemporalPositionTimeOffset",
+    }.issubset(DEFAULT_DICOM_TAGS)
+
+
+def test_selected_reader_promotes_enhanced_frame_metadata(tmp_path):
+    path = tmp_path / "enhanced.dcm"
+    file_meta = FileMetaDataset()
+    file_meta.TransferSyntaxUID = ExplicitVRLittleEndian
+    file_meta.MediaStorageSOPClassUID = generate_uid()
+    file_meta.MediaStorageSOPInstanceUID = generate_uid()
+    ds = FileDataset(str(path), {}, file_meta=file_meta, preamble=b"\0" * 128)
+    ds.is_little_endian = True
+    ds.is_implicit_VR = False
+    ds.SOPClassUID = file_meta.MediaStorageSOPClassUID
+    ds.SOPInstanceUID = file_meta.MediaStorageSOPInstanceUID
+    frames = []
+    for position, stamp in enumerate(
+        ["20240101235959.123456", "20240102000000.654321"], start=1
+    ):
+        frame_content = Dataset()
+        frame_content.FrameAcquisitionDateTime = stamp
+        frame_content.TemporalPositionIndex = position
+        frame = Dataset()
+        frame.FrameContentSequence = Sequence([frame_content])
+        frames.append(frame)
+    ds.PerFrameFunctionalGroupsSequence = Sequence(frames)
+    ds.save_as(path)
+
+    out = parse.read_dicom_header_selected_standard(
+        path,
+        tags=["FrameAcquisitionDateTime", "TemporalPositionIndex"],
+    )
+
+    assert out["FrameAcquisitionDateTime"] == [
+        "20240101235959.123456",
+        "20240102000000.654321",
+    ]
+    assert out["TemporalPositionIndex"] == ["1", "2"]
 
 
 def test_read_dicom_header_selected_returns_only_requested(monkeypatch):
