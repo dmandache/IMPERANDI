@@ -70,7 +70,7 @@ def _ensure_modality_curation(df: pd.DataFrame, config: dict) -> pd.DataFrame:
             if "rule_phase" in data
             else pd.Series(True, index=data.index)
         )
-        if not needs_curation.any():
+        if not needs_curation.any() and (modality != "MR" or "time_delta" in data):
             parts.append(data)
             continue
         with manifest_text_columns(modality, config):
@@ -82,6 +82,8 @@ def _ensure_modality_curation(df: pd.DataFrame, config: dict) -> pd.DataFrame:
                 if modality == "CT"
                 else annotate_mri(data, phase_curation=config, resolve_phase=False)
             )
+        if modality == "MR":
+            data = data.assign(time_delta=annotated["time_delta"])
         parts.extend([data.loc[~needs_curation], annotated.loc[needs_curation]])
         logger.info(
             "Applied %s modality curation to %d row(s)", modality, needs_curation.sum()
@@ -339,7 +341,7 @@ def main(args: argparse.Namespace) -> None:
     resume_values = {
         **vars(args),
         "checkpoint_phase_curation": phase_curation,
-        "checkpoint_modality_curation": 2,
+        "checkpoint_modality_curation": 3,
     }
     if source_id_signature:
         resume_values["checkpoint_source_id"] = source_id_signature

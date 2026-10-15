@@ -1202,6 +1202,40 @@ def _generic_dynamic_chronology(rows: pd.DataFrame):
     return evidence, ""
 
 
+def _dynamic_time_deltas(rows: pd.DataFrame) -> pd.Series:
+    """Measure seconds from the first volume in each compatible dynamic group."""
+    delta = pd.Series(np.nan, index=rows.index, dtype=float)
+    if "time" not in rows:
+        return delta
+    eligible = rows.loc[rows.mri_sequence.eq("T1")].copy()
+    for column in ("is_subtraction", "is_quant_or_report"):
+        if column in eligible:
+            eligible = eligible.loc[~eligible[column].fillna(False)]
+    if eligible.empty:
+        return delta
+    seconds = eligible.time.map(parse_time_to_seconds)
+    for _, group in eligible.groupby(
+        eligible.apply(_generic_dynamic_key, axis=1), sort=False
+    ):
+        if not group.apply(
+            lambda row: _phase_matches_pattern(row, rules.RX_PHASE_GENERIC_DYNAMIC)
+            or _phase_matches_pattern(row, rules.RX_PHASE_MULTIART_DYNAMIC),
+            axis=1,
+        ).any():
+            continue
+        chronology, _ = _generic_dynamic_chronology(group)
+        if chronology is None:
+            # A shared populated time still gives an unambiguous zero delta.
+            reference = seconds.loc[group.index]
+        else:
+            first = chronology.index[chronology.order.eq(chronology.order.min())]
+            reference = seconds.loc[first]
+        if reference.empty or reference.isna().any() or reference.nunique() != 1:
+            continue
+        delta.loc[group.index] = seconds.loc[group.index] - reference.iloc[0]
+    return delta
+
+
 def infer_generic_dynamic_phases_from_exam_context(
     exam_rows: pd.DataFrame,
 ) -> list[tuple[object, str, str, str, str]]:
@@ -1660,6 +1694,7 @@ def add_mri_perfusion_columns(
         ]
     ] = pd.DataFrame(result.tolist(), index=out.index)
     out["mri_dynamic_order_source"] = ""
+    out["time_delta"] = np.nan
 
     group_cols = [c for c in (exam_group_cols or []) if c in out.columns]
     if group_cols:
@@ -1699,6 +1734,7 @@ def add_mri_perfusion_columns(
         return context
 
     for idx in grouped:
+        out.loc[idx, "time_delta"] = _dynamic_time_deltas(out.loc[idx])
         shared = _share_acquisition_phase_evidence(context_rows(idx))
         propagated = shared.index[shared.mri_perfusion_source.eq("acquisition_phase")]
         for column in (

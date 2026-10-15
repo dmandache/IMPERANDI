@@ -544,6 +544,12 @@ Assignments with explicit context record `dynamic_explicit_anchor`; other ordere
 dynamics use `volume_order` or `acquisition_order_dixon_component`. Unresolved
 dynamics retain `generic_dynamic_context_pending` with a reason.
 `mri_dynamic_order_source` records the canonical columns used to order them.
+Dynamic groups also receive `time_delta`, measured in seconds as the volume's
+canonical `time` minus the first volume's `time` in that group. Compatible native
+and explicitly labelled acquisitions participate in the reference group. Missing
+or invalid current/reference times leave the value empty; acquisition or volume
+ranks do not supply elapsed seconds. Groups with a shared populated time have
+zero deltas. This column records elapsed time without changing phase assignments.
 
 CT adds angiography/CTA terms. MR adds gadolinium-related terms, hepatobiliary
 labels and timing (20 minutes or 2 hours through 2h59m59s), sequence families,

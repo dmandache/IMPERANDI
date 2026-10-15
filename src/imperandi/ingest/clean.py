@@ -66,6 +66,7 @@ CANONICAL_TIMING_COLUMNS = {
     "date_source",
     "time",
     "time_source",
+    "time_delta",
 }
 
 
@@ -1953,6 +1954,7 @@ def _get_step_outputs(step: dict) -> set[str]:
             "mri_perfusion_confidence",
             "mri_perfusion_source",
             "mri_dynamic_order_source",
+            "time_delta",
             "volume_order_in_series",
             "volume_order_source",
             "n_volumes_in_series",
