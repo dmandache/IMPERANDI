@@ -325,7 +325,7 @@ def test_explicit_candidates_are_ordered_per_row_and_replace_defaults():
     assert pd.isna(timed.loc[2, "time_source"])
 
 
-def test_coalesce_date_preserves_normalized_values_for_ordered_fallback():
+def test_coalesce_date_preserves_raw_values_for_ordered_fallback():
     candidates = [
         "AcquisitionDate",
         "AcquisitionDateTime",
@@ -352,6 +352,7 @@ def test_coalesce_date_preserves_normalized_values_for_ordered_fallback():
         }
     )
 
+    raw_dates = df[candidates].copy(deep=True)
     out = clean._run_coalesce_date_step(
         df, {"type": "coalesce_date", "candidates": candidates}
     )
@@ -365,7 +366,7 @@ def test_coalesce_date_preserves_normalized_values_for_ordered_fallback():
         pd.Timestamp("2024-06-06"),
     ]
     assert out["date_source"].tolist() == candidates
-    assert out.loc[0, "AcquisitionDate"] == pd.Timestamp("2024-01-01")
+    pd.testing.assert_frame_equal(out[candidates], raw_dates)
 
 
 def test_datetime_candidates_supply_date_and_time_components_with_provenance():
