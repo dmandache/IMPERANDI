@@ -170,6 +170,60 @@ Copy a built-in YAML manifest as the starting point because the full built-in
 cleaning pipeline contains the geometry, modality, volume, and quality-control
 steps omitted from this abbreviated skeleton.
 
+## Date and time coalescing
+
+`coalesce_date` and `coalesce_time` accept an ordered `candidates` list. Each
+row uses the first candidate that parses successfully; blank, malformed, and
+absent columns fall through to the next candidate. An explicit list replaces
+the defaults completely and may name site-specific CSV columns:
+
+```yaml
+cleaning:
+  steps:
+    - type: coalesce_date
+      candidates:
+        - StudyDate
+        - AcquisitionDate
+        - SeriesDate
+
+    - type: coalesce_time
+      candidates:
+        - FrameAcquisitionDateTime
+        - AcquisitionDateTime
+        - AcquisitionTime
+```
+
+Without `candidates`, the date order is `StudyDate`, `AcquisitionDate`, then
+`SeriesDate`. The time order is `FrameReferenceDateTime`,
+`FrameAcquisitionDateTime`, `AcquisitionDateTime`, then `AcquisitionTime`.
+The resulting `date_source` and `time_source` columns contain the exact source
+column name and survive volume aggregation and CSV export. Candidate lists must
+be nonempty lists of nonempty column names. DICOM DA, TM, and DT values,
+including fractional seconds and DT UTC offsets, are supported. A configured
+datetime contributes its represented date or time component while the raw
+datetime remains available.
+
+The canonical `date` is the examination date by default because `StudyDate`
+has first priority and is used for visit grouping. An acquisition just after
+midnight may therefore have the prior examination date in `date`; its actual
+date and timezone remain in `AcquisitionDateTime`,
+`FrameAcquisitionDateTime`, and `acquisition_datetime` for acquisition
+chronology. This avoids silently splitting one examination at midnight.
+
+`ContentTime` and `InstanceCreationTime` describe content or object creation,
+and `StudyTime` cannot order acquisitions within a study. `SeriesTime` can also
+be too coarse for individual acquisitions. All remain available as raw tags
+and may be named explicitly for datasets that need them, but they are excluded
+from the default acquisition-time candidates. Their literal column names are
+retained in `time_source`, so downstream acquisition-evidence checks do not
+relabel them as acquisition clocks.
+
+Enhanced DICOM values found under shared or per-frame functional groups are
+promoted to their canonical keyword columns during selected-tag parsing.
+Multiple per-frame values remain lists until volume aggregation. Private tags,
+vendor-specific timing sequences, and conflicting frame clock domains are not
+interpreted automatically.
+
 ## Cleaning filters
 
 Add `type: filter` steps to `cleaning.steps` to keep or discard records that
