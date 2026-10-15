@@ -1401,7 +1401,6 @@ def compute_visit_order(df):
     )
     df_study["delay_since_first_exam"] = df_study["date"] - first_date
     df_study["visit_order"] = df_study.groupby("patient_key")["date"].cumcount()
-    logger.info("%s %s", df.shape, df_study.shape)
 
     df = df.merge(
         df_study[["delay_since_prev_exam", "delay_since_first_exam", "visit_order"]],
