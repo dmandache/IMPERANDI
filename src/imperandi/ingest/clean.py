@@ -2506,13 +2506,13 @@ def _safe_uid_keyword(value):
 
 def _run_coalesce_date_step(df: pd.DataFrame, step: dict) -> pd.DataFrame:
     """Normalize candidate date columns and populate the canonical ``date``."""
-    df = to_dates(df.copy())
+    #df = to_dates(df.copy())
     return add_date(df, candidate_columns=step.get("candidates"))
 
 
 def _run_coalesce_time_step(df: pd.DataFrame, step: dict) -> pd.DataFrame:
     """Normalize candidate time columns and populate the canonical ``time``."""
-    df = to_times(df.copy())
+    #df = to_times(df.copy())
     return add_time(df, candidate_columns=step.get("candidates"))
 
 
