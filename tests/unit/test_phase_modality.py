@@ -1,3 +1,4 @@
+import logging
 import sys
 from pathlib import Path
 
@@ -13,13 +14,14 @@ from imperandi.extract import phase as phase_module
 @pytest.mark.parametrize("curation_state", ["raw", "cleaned", "partial"])
 @pytest.mark.parametrize("custom_text", [False, True])
 def test_phase_cli_applies_missing_modality_curation(
-    tmp_path, monkeypatch, curation_state, custom_text
+    tmp_path, monkeypatch, curation_state, custom_text, caplog
 ):
     import yaml
 
     from imperandi import cli
     from imperandi.ingest.clean import run_clean_pipeline
 
+    caplog.set_level(logging.INFO, logger=phase_module.__name__)
     config = {
         "strategies": [{"type": "rules"}, {"type": "totalsegmentator"}],
         "best_candidate_group_columns": ["patient_key", "study_id"],
@@ -107,6 +109,13 @@ def test_phase_cli_applies_missing_modality_curation(
     selected = pd.read_csv(tmp_path / "input_curated.csv").set_index("volume_id")
     assert selected.loc["ct", "phase"] == "ARTERIAL"
     assert selected.loc["mr", "phase"] == "PORTAL_VENOUS"
+    assert (
+        "2 phase not applicable, 1 unresolved outside allowed modalities" in caplog.text
+    )
+    assert (
+        "Phase curation summary: 5 total, 2 resolved, 1 unresolved, 2 not applicable"
+        in caplog.text
+    )
 
 
 @pytest.mark.parametrize("change", ["CustomText", "Modality"])

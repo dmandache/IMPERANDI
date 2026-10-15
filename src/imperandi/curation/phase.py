@@ -440,10 +440,13 @@ def apply_phase_curation(
             )
     return out
 
+
 def phase_needs_strategy(
     df: pd.DataFrame,
     config: Mapping[str, Any] | None,
     strategy_type: str,
+    *,
+    progress_logger: logging.Logger | None = None,
 ) -> pd.Series:
     """Return eligible rows unresolved before ``strategy_type`` is reached."""
     normalized = validate_phase_curation(config)
@@ -464,7 +467,7 @@ def phase_needs_strategy(
     eligible = [
         _strategy_applies(df.iloc[position], strategy) for position in range(len(df))
     ]
-    return pd.Series(
+    needs_strategy = pd.Series(
         [
             prior["phase_status"].iloc[position] == PHASE_STATUS_UNRESOLVED
             and eligible[position]
@@ -472,6 +475,26 @@ def phase_needs_strategy(
         ],
         index=df.index,
     )
+    if progress_logger is not None:
+        statuses = prior["phase_status"]
+        outside_modalities = sum(
+            statuses.iloc[position] == PHASE_STATUS_UNRESOLVED and not applies
+            for position, applies in enumerate(eligible)
+        )
+        progress_logger.info(
+            "Phase prediction eligibility: %s (%s), allowed modalities: %s; "
+            "%d/%d volume(s) eligible, %d resolved by earlier strategies, "
+            "%d phase not applicable, %d unresolved outside allowed modalities",
+            strategy["name"],
+            strategy["type"],
+            ", ".join(strategy.get("modalities") or []) or "all",
+            int(needs_strategy.sum()),
+            len(df),
+            int(statuses.eq(PHASE_STATUS_RESOLVED).sum()),
+            int(statuses.eq(PHASE_STATUS_NOT_APPLICABLE).sum()),
+            outside_modalities,
+        )
+    return needs_strategy
 
 
 __all__ = [

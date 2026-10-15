@@ -19,6 +19,9 @@ from imperandi.curation.common import (
 from imperandi.curation.ct.curate import annotate_ct
 from imperandi.curation.mri.curate import annotate_mri
 from imperandi.curation.phase import (
+    PHASE_STATUS_NOT_APPLICABLE,
+    PHASE_STATUS_RESOLVED,
+    PHASE_STATUS_UNRESOLVED,
     apply_phase_curation,
     phase_curation_input_columns,
     phase_needs_strategy,
@@ -30,7 +33,7 @@ from imperandi.curation.export import (
     selected_output_path,
 )
 from imperandi.utils.manifest import load_manifest
-from imperandi.utils.logging import log_task_summary, setup_logging
+from imperandi.utils.logging import setup_logging
 from imperandi.utils.misc import print_args
 from imperandi.utils.checkpoint_cli import add_checkpoint_arguments
 from imperandi.utils.run_state import (
@@ -399,10 +402,11 @@ def main(args: argparse.Namespace) -> None:
             )
             logger.info("Saved %d selected series -> %s", selected_count, selected_path)
         logger.info(
-            "Resume enabled and matching phase run already finished; skipping execution."
+            "Matching phase curation run already finished; reusing saved results "
+            "without rerunning phase curation or TotalSegmentator prediction."
         )
         log_finished_resume_summary(
-            logger, "Phase extraction", state, paths.error_checkpoint_path
+            logger, "Phase curation", state, paths.error_checkpoint_path
         )
         return
 
@@ -473,6 +477,7 @@ def main(args: argparse.Namespace) -> None:
         df,
         phase_curation,
         "totalsegmentator",
+        progress_logger=logger,
     )
     prediction_strategy = next(
         (
@@ -495,12 +500,10 @@ def main(args: argparse.Namespace) -> None:
         }
         for column in prediction_columns.intersection(df.columns):
             df.loc[invalidated, column] = pd.NA
-    if prediction_strategy is not None:
+    if prediction_strategy is None:
         logger.info(
-            "Phase extraction step: %s (totalsegmentator) selected %d/%d volume(s)",
-            prediction_strategy["name"],
-            int(needs_prediction.sum()),
-            len(df),
+            "TotalSegmentator prediction is not configured; "
+            "phase curation will use the configured metadata strategies."
         )
     prediction_skipped_indices = {
         normalize_source_id(df.at[idx, "_source_idx"])
@@ -530,7 +533,8 @@ def main(args: argparse.Namespace) -> None:
             for source_idx in newly_completed:
                 errors_by_idx.pop(source_idx, None)
             logger.info(
-                "Skipping %d row(s) with existing totalseg_phase (use --force to recompute)",
+                "Keeping %d existing TotalSegmentator prediction(s) "
+                "(use --force to recompute); phase curation will still run",
                 len(newly_completed),
             )
 
@@ -557,7 +561,7 @@ def main(args: argparse.Namespace) -> None:
     processed_source_ids = {
         normalize_source_id(df.at[idx, "_source_idx"]) for idx in row_indices
     }
-    for idx in tqdm(row_indices, total=len(row_indices), desc="Phase"):
+    for idx in tqdm(row_indices, total=len(row_indices), desc="TotalSegmentator phase"):
         src_idx = normalize_source_id(df.at[idx, "_source_idx"])
         row = df.loc[idx].to_dict()
         if phase_extractor is None:
@@ -629,27 +633,27 @@ def main(args: argparse.Namespace) -> None:
     )
 
     run_failed_count = len(processed_source_ids & set(errors_by_idx))
-    log_task_summary(
-        logger,
-        "Phase extraction",
-        total_rows=len(df),
-        processed_rows=len(row_indices),
-        succeeded_rows=max(0, len(row_indices) - run_failed_count),
-        skipped_rows=(
-            resume_skipped_count + prefilled_skipped_count + prediction_skipped_count
-        ),
-        failed_rows=run_failed_count,
-        success_label="phase extracted",
-        resumed_rows=(
-            resume_skipped_count - resume_failed_count + prefilled_skipped_count
-        ),
-        extra_counts={
-            "skipped by resume after prior failure": resume_failed_count,
-            "skipped with existing phase": prefilled_skipped_count,
-            "not sent to TotalSegmentator": prediction_skipped_count,
-        },
+    status_counts = df["phase_status"].value_counts()
+    logger.info(
+        "Phase curation summary: %d total, %d resolved, %d unresolved, %d not applicable",
+        len(df),
+        status_counts.get(PHASE_STATUS_RESOLVED, 0),
+        status_counts.get(PHASE_STATUS_UNRESOLVED, 0),
+        status_counts.get(PHASE_STATUS_NOT_APPLICABLE, 0),
     )
-    logger.info("Phase extraction done ✔")
+    logger.info(
+        "TotalSegmentator prediction summary: %d attempted, %d predicted, %d failed, "
+        "%d existing predictions kept, %d rows restored from checkpoint "
+        "(%d prior failures), %d not requested",
+        len(row_indices),
+        max(0, len(row_indices) - run_failed_count),
+        run_failed_count,
+        prefilled_skipped_count,
+        resume_skipped_count,
+        resume_failed_count,
+        prediction_skipped_count,
+    )
+    logger.info("Phase curation done ✔")
 
 
 if __name__ == "__main__":
