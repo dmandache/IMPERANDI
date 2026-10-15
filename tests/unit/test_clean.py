@@ -322,6 +322,49 @@ def test_explicit_candidates_are_ordered_per_row_and_replace_defaults():
     assert pd.isna(timed.loc[2, "time_source"])
 
 
+def test_coalesce_date_preserves_normalized_values_for_ordered_fallback():
+    candidates = [
+        "AcquisitionDate",
+        "AcquisitionDateTime",
+        "SeriesDate",
+        "StudyDate",
+        "ContentDate",
+        "InstanceCreationDate",
+    ]
+    df = pd.DataFrame(
+        {
+            "AcquisitionDate": ["2024-01-01", None, None, None, None, None],
+            "AcquisitionDateTime": [None, "20240202030405", None, None, None, None],
+            "SeriesDate": [None, None, "2024/03/03", None, None, None],
+            "StudyDate": [None, None, None, pd.Timestamp("2024-04-04"), None, None],
+            "ContentDate": [None, None, None, None, "2024-05-05", None],
+            "InstanceCreationDate": [
+                None,
+                None,
+                None,
+                None,
+                None,
+                "2024-06-06 00:00:00",
+            ],
+        }
+    )
+
+    out = clean._run_coalesce_date_step(
+        df, {"type": "coalesce_date", "candidates": candidates}
+    )
+
+    assert out["date"].tolist() == [
+        pd.Timestamp("2024-01-01"),
+        pd.Timestamp("2024-02-02"),
+        pd.Timestamp("2024-03-03"),
+        pd.Timestamp("2024-04-04"),
+        pd.Timestamp("2024-05-05"),
+        pd.Timestamp("2024-06-06"),
+    ]
+    assert out["date_source"].tolist() == candidates
+    assert out.loc[0, "AcquisitionDate"] == pd.Timestamp("2024-01-01")
+
+
 def test_datetime_candidates_supply_date_and_time_components_with_provenance():
     df = pd.DataFrame(
         {

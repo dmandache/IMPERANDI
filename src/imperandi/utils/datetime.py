@@ -311,18 +311,38 @@ def to_dates(df):
     logger.info("Detected date columns: %s", date_cols)
 
     for c in date_cols:
-        if _is_iso_like(df[c]):
-            # ISO dates: dayfirst irrelevant → silence warnings
-            dayfirst = False
-            logger.info("%s: ISO format detected -> dayfirst=False", c)
-            df[c] = pd.to_datetime(
-                df[c], dayfirst=False, format="%Y%m%d", errors="coerce"
+        values = df[c]
+        text = values.astype("string").str.strip()
+        parsed = pd.Series(pd.NaT, index=values.index, dtype="datetime64[ns]")
+
+        format_masks = (
+            (text.str.fullmatch(r"\d{8}", na=False), "%Y%m%d"),
+            (text.str.fullmatch(r"\d{4}-\d{2}-\d{2}", na=False), "%Y-%m-%d"),
+            (text.str.fullmatch(r"\d{4}/\d{2}/\d{2}", na=False), "%Y/%m/%d"),
+        )
+        recognized = pd.Series(False, index=values.index)
+        for mask, date_format in format_masks:
+            recognized |= mask
+            parsed.loc[mask] = pd.to_datetime(
+                text.loc[mask], format=date_format, errors="coerce"
             )
-        else:
-            dayfirst = _infer_dayfirst(df[c])
+
+        remaining = values.notna() & ~recognized
+        if remaining.any():
+            dayfirst = _infer_dayfirst(values.loc[remaining])
             logger.info("%s: dayfirst = %s", c, dayfirst)
-            df[c] = pd.to_datetime(
-                df[c], dayfirst=dayfirst, format="%Y%m%d", errors="coerce"
-            )
+
+            def parse_normalized(value):
+                result = pd.to_datetime(value, dayfirst=dayfirst, errors="coerce")
+                if pd.isna(result):
+                    return pd.NaT
+                result = pd.Timestamp(result)
+                if result.tzinfo is not None:
+                    result = result.tz_localize(None)
+                return result.normalize()
+
+            parsed.loc[remaining] = values.loc[remaining].map(parse_normalized)
+
+        df[c] = parsed
 
     return df
