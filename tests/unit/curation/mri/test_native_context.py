@@ -44,7 +44,6 @@ def test_numbering_and_agent_alone_do_not_block_native_fallback(numbers, agent):
     )
     out = annotate(rows.sample(frac=1, random_state=4)).loc[[f"v{i}" for i in range(4)]]
     assert out.phase.tolist() == ["NATIVE", "ARTERIAL", "PORTAL_VENOUS", "DELAYED"]
-    assert not out.mri_dynamic_timing_reliable.any()
 
 
 @pytest.mark.parametrize(
@@ -137,17 +136,16 @@ def test_explicit_native_without_clock_is_still_counted_once():
     rows["AcquisitionTime"] = [None, "120030", "120115"]
     out = annotate(rows)
     assert out.phase.tolist() == ["NATIVE", "ARTERIAL", "PORTAL_VENOUS"]
-    assert not out.mri_dynamic_timing_reliable.any()
 
 
-def test_known_named_phases_and_measured_timing_override_native_fallback():
+def test_named_phases_override_order_while_raw_bolus_clocks_do_not():
     rows = frame(
         ["Ph2/AX LAVA dyn gado", "Ph3/AX LAVA dyn gado", "Ph4/AX LAVA dyn gado"]
     )
     rows["AcquisitionTime"] = ["120025.000000", "120115.000000", "120400.000000"]
     rows["ContrastBolusStartTime"] = "120000.000000"
     out = annotate(rows)
-    assert out.phase.tolist() == ["ARTERIAL", "PORTAL_VENOUS", "DELAYED"]
+    assert out.phase.tolist() == ["NATIVE", "ARTERIAL", "PORTAL_VENOUS"]
     rows = frame(["AX LAVA arterial", "Ph1/AX LAVA dyn gado", "Ph2/AX LAVA dyn gado"])
     assert annotate(rows).phase.tolist() == ["ARTERIAL", "PORTAL_VENOUS", "DELAYED"]
 
@@ -170,13 +168,3 @@ def test_separate_native_and_one_dynamic_with_known_delayed_anchor_meet_minimum(
     out = annotate(rows)
     assert out.phase.tolist() == ["NATIVE", "ARTERIAL", "DELAYED"]
     assert out.loc["v0", "mri_perfusion_source"] == "exam_context"
-
-
-def test_supported_bolus_timing_resolves_a_plain_t1_before_native_candidate_selection():
-    rows = frame(["AX LAVA", "Ph2/AX LAVA dyn gado", "Ph3/AX LAVA dyn gado"])
-    rows["AcquisitionTime"] = ["120025.000000", "120115.000000", "120400.000000"]
-    rows["ContrastBolusStartTime"] = "120000.000000"
-    out = annotate(rows)
-    assert out.phase.tolist() == ["ARTERIAL", "PORTAL_VENOUS", "DELAYED"]
-    assert out.loc["v0", "mri_perfusion_source"] == "dynamic_profile_timing"
-    assert out.mri_dynamic_timing_reliable.all()

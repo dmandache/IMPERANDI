@@ -1601,11 +1601,11 @@ def test_dynamic_profile_exact_text_timing_precedes_endpoints(profile, same_seri
         "PORTAL_VENOUS",
         "DELAYED",
     ]
-    assert out.mri_perfusion_source.eq("dynamic_profile_timing").all()
+    assert out.mri_perfusion_source.eq("explicit_duration").all()
 
 
 @pytest.mark.parametrize("same_series", [False, True])
-def test_dynamic_profile_injection_clock_precedes_endpoints(same_series):
+def test_dynamic_profile_uses_order_instead_of_raw_injection_clocks(same_series):
     out = mc.annotate_mri(
         pd.DataFrame(
             [
@@ -1623,9 +1623,9 @@ def test_dynamic_profile_injection_clock_precedes_endpoints(same_series):
     )
     assert out.mri_perfusion_label.tolist() == [
         "ARTERIAL",
-        "ARTERIAL",
+        "OTHER",
+        "OTHER",
         "PORTAL_VENOUS",
-        "DELAYED",
     ]
 
 
@@ -1683,10 +1683,10 @@ def test_profile_shared_multivolume_clock_is_not_per_frame_delay():
         )
     )
     assert out.mri_perfusion_label.tolist() == ["ARTERIAL", "OTHER", "PORTAL_VENOUS"]
-    assert not out.mri_perfusion_source.eq("dynamic_profile_timing").any()
+    assert not out.mri_perfusion_source.eq("explicit_duration").any()
 
 
-def test_profile_conflicting_exact_timing_is_not_overridden_by_order():
+def test_profile_text_duration_is_not_overridden_by_raw_bolus_clocks():
     out = mc.annotate_mri(
         pd.DataFrame(
             [
@@ -1698,5 +1698,5 @@ def test_profile_conflicting_exact_timing_is_not_overridden_by_order():
             ]
         )
     )
-    assert out.loc[0, "mri_perfusion_label"] == "OTHER"
-    assert out.loc[0, "mri_perfusion_confidence"] == "unknown"
+    assert out.loc[0, "mri_perfusion_label"] == "ARTERIAL"
+    assert out.loc[0, "mri_perfusion_confidence"] == "explicit"

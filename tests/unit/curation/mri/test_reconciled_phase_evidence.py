@@ -1,4 +1,4 @@
-"""Independent evidence supplements the established dynamic order templates."""
+"""Explicit evidence and canonical ordering drive dynamic phase templates."""
 
 import pandas as pd
 import pytest
@@ -32,6 +32,33 @@ def volumes(count=4, description="AX T1 VIBE dynamic"):
 
 def annotate(frame, config=None):
     return mc.annotate_mri(frame, phase_curation=config).set_index("volume_id")
+
+
+@pytest.mark.parametrize(
+    "column",
+    [
+        "AcquisitionDateTime",
+        "FrameAcquisitionDateTime",
+        "FrameReferenceDateTime",
+        "AcquisitionTime",
+        "ContrastBolusStartTime",
+        "TriggerTime",
+        "TemporalPositionIdentifier",
+        "TemporalPositionIndex",
+        "acquisition_datetime",
+    ],
+)
+def test_raw_timing_metadata_cannot_change_canonical_volume_progression(column):
+    frame = volumes()
+    expected = annotate(frame)
+    frame[column] = ["120400", "120115", "120025", "invalid"]
+
+    result = annotate(frame.sample(frac=1, random_state=4)).loc[expected.index]
+
+    pd.testing.assert_series_equal(result.phase, expected.phase)
+    pd.testing.assert_series_equal(result.rule_phase, expected.rule_phase)
+    assert "mri_dynamic_timing_source" not in result
+    assert "mri_dynamic_timing_reliable" not in result
 
 
 @pytest.mark.parametrize("setting", ["mri_dynamic", "phase_windows", "profiles"])
@@ -73,49 +100,6 @@ def test_conflicting_standard_phase_is_not_replaced_by_order_or_native_fallback(
     assert out.loc["v0", "mri_perfusion_source"] == "dicom_phase_conflict"
 
 
-def test_frame_datetimes_order_dynamics_across_midnight():
-    frame = volumes().drop(
-        columns=[
-            "TemporalPositionIdentifier",
-            "volume_order_in_series",
-            "n_volumes_in_series",
-        ]
-    )
-    frame["FrameAcquisitionDateTime"] = [
-        "20200101235950.000000",
-        "20200102000025.000000",
-        "20200102000110.000000",
-        "20200102000400.000000",
-    ]
-    out = annotate(frame.sample(frac=1, random_state=1)).loc[["v0", "v1", "v2", "v3"]]
-    assert out.phase.tolist() == ["NATIVE", "ARTERIAL", "PORTAL_VENOUS", "DELAYED"]
-    assert out.mri_perfusion_reason.str.contains("FrameAcquisitionDateTime").all()
-
-
-def test_measured_bolus_delays_override_dynamic_rank_and_support_repeated_phases():
-    frame = volumes()
-    frame["AcquisitionDateTime"] = [
-        "20200101120025.000000",
-        "20200101120030.000000",
-        "20200101120110.000000",
-        "20200101120400.000000",
-    ]
-    frame["ContrastBolusStartTime"] = "120000.000000"
-    out = annotate(frame)
-    assert out.phase.tolist() == ["ARTERIAL", "ARTERIAL", "PORTAL_VENOUS", "DELAYED"]
-    assert out.mri_dynamic_timing_reliable.all()
-
-
-def test_injection_delay_across_midnight_uses_study_date():
-    frame = volumes(1)
-    frame["AcquisitionDateTime"] = "20200102000025.000000"
-    frame["AcquisitionDate"] = "20200102"
-    frame["StudyDate"] = "20200101"
-    frame["ContrastBolusStartTime"] = "235955.000000"
-    out = annotate(frame)
-    assert out.loc["v0", "phase"] == "ARTERIAL"
-
-
 @pytest.mark.parametrize("clock", ["202001011200", "20200101120025.000000+0000"])
 def test_ambiguous_precision_or_unaligned_local_bolus_uses_generic_order(clock):
     frame = volumes()
@@ -123,7 +107,6 @@ def test_ambiguous_precision_or_unaligned_local_bolus_uses_generic_order(clock):
     frame["ContrastBolusStartTime"] = "120000.000000"
     out = annotate(frame)
     assert out.phase.tolist() == ["NATIVE", "ARTERIAL", "PORTAL_VENOUS", "DELAYED"]
-    assert not out.mri_dynamic_timing_reliable.any()
 
 
 def test_container_frame_clock_cannot_supply_distinct_volume_delays():
@@ -132,7 +115,6 @@ def test_container_frame_clock_cannot_supply_distinct_volume_delays():
     frame["ContrastBolusStartTime"] = "120000.000000"
     out = annotate(frame)
     assert out.phase.tolist() == ["NATIVE", "ARTERIAL", "PORTAL_VENOUS", "DELAYED"]
-    assert not out.mri_dynamic_timing_reliable.any()
 
 
 def test_missing_ph1_does_not_block_first_dynamic_native_fallback():
@@ -166,7 +148,6 @@ def test_ontology_natives_are_counted_once_before_generic_progression(native_cou
         "PORTAL_VENOUS",
         "DELAYED",
     ]
-    assert not out.iloc[native_count:].mri_dynamic_timing_reliable.any()
 
 
 def test_ontology_first_arterial_prevents_generic_native():
@@ -203,11 +184,11 @@ def test_phase_sharing_requires_compatible_supplied_acquisition_identity(bad_evi
     frame["TemporalPositionIdentifier"] = 1
     frame["acquisition_id"] = "validated-acquisition"
     if bad_evidence == "position":
-        frame.loc[1, "TemporalPositionIdentifier"] = 2
+        frame.loc[1, "volume_order_in_series"] = 2
     elif bad_evidence == "geometry":
         frame["FrameOfReferenceUID"] = ["space1", "space2"]
     elif bad_evidence == "clock":
-        frame["AcquisitionTime"] = ["120000", "120100"]
+        frame["time"] = ["120000", "120100"]
     elif bad_evidence == "phase_conflict":
         frame["ContrastBolusAgentPhase"] = pd.Series(
             [None, ["PRE_CONTRAST", "ARTERIAL"]]
@@ -251,66 +232,6 @@ def test_duration_over_generic_late_keeps_existing_hepatobiliary_window(text, ex
     assert annotate(volumes(1, text)).loc["v0", "phase"] == expected
 
 
-@pytest.mark.parametrize(
-    "clock,expected",
-    [
-        ("122000.000000", "HEPATOBILIARY"),
-        ("140000.000000", "HEPATOBILIARY"),
-        ("145959.000000", "HEPATOBILIARY"),
-        ("150000.000000", "OTHER"),
-    ],
-)
-def test_measured_bolus_preserves_existing_hepatobiliary_policy(clock, expected):
-    frame = volumes(1)
-    frame["AcquisitionTime"] = clock
-    frame["ContrastBolusStartTime"] = "120000.000000"
-    assert annotate(frame).loc["v0", "phase"] == expected
-
-
-@pytest.mark.parametrize(
-    "first_clock,first_phase",
-    [
-        ("120025.000000", "ARTERIAL"),
-        ("115900.000000", "NATIVE"),
-    ],
-)
-@pytest.mark.parametrize("same_series", [True, False])
-def test_long_dynamic_checks_independent_timing_before_first_native_assumption(
-    first_clock, first_phase, same_series
-):
-    frame = volumes(6)
-    frame["AcquisitionTime"] = [
-        first_clock,
-        "120030.000000",
-        "120032.000000",
-        "120115.000000",
-        "120400.000000",
-        "120410.000000",
-    ]
-    frame.loc[1, "SeriesDescription"] = "AX T1 VIBE arterial"
-    frame.loc[3, "SeriesDescription"] = "AX T1 VIBE portal"
-    if not same_series:
-        frame["series_id"] = [f"series{i}" for i in range(6)]
-        frame["n_volumes_in_series"] = 1
-        frame["volume_order_in_series"] = 1
-    out = annotate(frame.sample(frac=1, random_state=3)).loc[
-        [f"v{i}" for i in range(6)]
-    ]
-    assert out.phase.tolist() == [
-        first_phase,
-        "ARTERIAL",
-        "ARTERIAL",
-        "PORTAL_VENOUS",
-        "DELAYED",
-        "DELAYED",
-    ]
-    assert out.loc["v0", "mri_dynamic_timing_reliable"]
-    assert (
-        "independent explicit postcontrast acquisition clocks"
-        in out.loc["v0", "mri_perfusion_reason"]
-    )
-
-
 def test_long_dynamic_without_calibrated_timing_retains_order_fallback():
     frame = volumes(6)
     frame["AcquisitionTime"] = [
@@ -330,43 +251,3 @@ def test_long_dynamic_without_calibrated_timing_retains_order_fallback():
         "DELAYED",
         "DELAYED",
     ]
-    assert not out.mri_dynamic_timing_reliable.any()
-
-
-@pytest.mark.parametrize("extra_reconstructions", [False, True])
-def test_four_distinct_acquisitions_check_timing_before_native_fallback(
-    extra_reconstructions,
-):
-    frame = volumes()
-    frame["AcquisitionTime"] = ["120025", "120030", "120115", "120400"]
-    frame.loc[1, "SeriesDescription"] = "AX T1 VIBE arterial"
-    if extra_reconstructions:
-        copies = frame.iloc[[0, 0]].copy()
-        copies["volume_id"] = ["reconstruction1", "reconstruction2"]
-        frame = pd.concat([frame, copies], ignore_index=True)
-    out = annotate(frame)
-    assert out.loc["v0", "phase"] == "ARTERIAL"
-    assert out.loc["v0", "mri_dynamic_timing_reliable"]
-
-
-def test_long_dynamic_measured_bolus_timing_already_precedes_phase_rank():
-    frame = volumes(6)
-    frame["AcquisitionTime"] = [
-        "120025.000000",
-        "120030.000000",
-        "120032.000000",
-        "120115.000000",
-        "120400.000000",
-        "120410.000000",
-    ]
-    frame["ContrastBolusStartTime"] = "120000.000000"
-    out = annotate(frame)
-    assert out.phase.tolist() == [
-        "ARTERIAL",
-        "ARTERIAL",
-        "ARTERIAL",
-        "PORTAL_VENOUS",
-        "DELAYED",
-        "DELAYED",
-    ]
-    assert out.mri_dynamic_timing_reliable.all()

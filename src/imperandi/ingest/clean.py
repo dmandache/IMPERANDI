@@ -38,11 +38,7 @@ from imperandi.curation.phase import (
 )
 from imperandi.utils.logging import log_task_summary, setup_logging
 from imperandi.utils.misc import print_args, report_volumes, report_change
-from imperandi.utils.dicom_timing import (
-    DICOM_CLOCK_DTYPES,
-    dicom_datetime_interval,
-    dicom_time_interval,
-)
+from imperandi.utils.dicom_timing import DICOM_CLOCK_DTYPES
 from imperandi.ingest.defaults import (
     DEFAULT_DICOM_TAGS,
     DATE_CANDIDATES,
@@ -70,8 +66,6 @@ CANONICAL_TIMING_COLUMNS = {
     "date_source",
     "time",
     "time_source",
-    "acquisition_datetime",
-    "acquisition_datetime_source",
 }
 
 
@@ -363,40 +357,6 @@ def add_time(df, candidate_columns=None):
     df["time"] = time
     df["time_source"] = source
 
-    def acquisition_stamp(row):
-        timezone_offset = row.get("TimezoneOffsetFromUTC")
-        for col in (
-            "FrameReferenceDateTime",
-            "FrameAcquisitionDateTime",
-            "AcquisitionDateTime",
-        ):
-            if interval := dicom_datetime_interval(row.get(col), timezone_offset):
-                return interval.start.isoformat(), col
-        day = next(
-            (
-                row.get(column)
-                for column in ("AcquisitionDate", "date", "StudyDate")
-                if row.get(column) is not None and not pd.isna(row.get(column))
-            ),
-            None,
-        )
-        interval = dicom_time_interval(
-            row.get("AcquisitionTime"), day, timezone_offset
-        )
-        return (
-            (interval.start.isoformat(), "AcquisitionTime")
-            if interval
-            else (None, None)
-        )
-
-    stamps = df.apply(acquisition_stamp, axis=1)
-    if len(df):
-        df[["acquisition_datetime", "acquisition_datetime_source"]] = pd.DataFrame(
-            stamps.tolist(), index=df.index
-        )
-    else:
-        df["acquisition_datetime"] = pd.Series(dtype=object)
-        df["acquisition_datetime_source"] = pd.Series(dtype=object)
     total_valid = int(df["time"].notna().sum())
     logger.info(
         "Time candidates (priority order) %s -> %d/%d (%.2f%%) valid%s",
@@ -1241,12 +1201,11 @@ def _sorted_unique(values, col_name):
 def group_volumes(df):
     """Aggregate instance metadata into one row per volume.
 
-    The canonical ``time`` and ``acquisition_datetime`` columns represent the
-    volume acquisition start, so resolve varying per-instance values to the
-    earliest valid value instead of carrying a list into downstream processing.
+    The canonical ``time`` column represents the volume acquisition start, so
+    varying per-instance times resolve to the earliest valid value.
     """
 
-    def selected_pair(group, value_column, source_column, parser, formatter=None):
+    def selected_pair(group, value_column, source_column, parser):
         candidates = []
         if value_column not in group:
             return float("NaN"), float("NaN")
@@ -1262,7 +1221,7 @@ def group_volumes(df):
             # Mixed local/offset-aware values are deliberately not compared.
             parsed, idx = candidates[0]
         source = group.at[idx, source_column] if source_column in group else float("NaN")
-        return (formatter(parsed) if formatter else parsed), source
+        return parsed, source
 
     selected_provenance = {}
     for volume_id, group in df.groupby("volume_id"):
@@ -1279,13 +1238,6 @@ def group_volumes(df):
                 "time_source",
                 _normalize_instance_creation_time,
             ),
-            "acquisition_datetime": selected_pair(
-                group,
-                "acquisition_datetime",
-                "acquisition_datetime_source",
-                _normalize_acquisition_datetime,
-                lambda value: value.isoformat(),
-            ),
         }
 
     def agg_fun(col):
@@ -1295,9 +1247,6 @@ def group_volumes(df):
         if col.name == "time":
             earliest = _normalize_instance_creation_time(vals)
             return earliest if earliest is not None else float("NaN")
-        if col.name == "acquisition_datetime":
-            earliest = _normalize_acquisition_datetime(vals)
-            return earliest.isoformat() if earliest is not None else float("NaN")
         unique_vals = _sorted_unique(vals, col.name)
         if len(unique_vals) == 1:
             return unique_vals[0]
@@ -1308,7 +1257,6 @@ def group_volumes(df):
     for canonical, source in (
         ("date", "date_source"),
         ("time", "time_source"),
-        ("acquisition_datetime", "acquisition_datetime_source"),
     ):
         if canonical not in df and source not in df:
             continue
@@ -1492,12 +1440,6 @@ def _normalize_instance_creation_time(value):
     return None
 
 
-def _normalize_acquisition_datetime(value):
-    """Return the earliest valid instant from one DT value or a value list."""
-    interval = dicom_datetime_interval(value)
-    return interval.start if interval else None
-
-
 def _normalize_acquisition_sort_number(value):
     value = _as_python_scalar(value)
 
@@ -1628,42 +1570,6 @@ def compute_acquisition_order(df: pd.DataFrame) -> pd.DataFrame:
         )
 
     df["_acq_timestamp"] = date_values + time_delta
-    # DT clocks carry their own date, including acquisitions across midnight.
-    precise = pd.Series(None, index=df.index, dtype=object)
-    domains = pd.Series(None, index=df.index, dtype=object)
-    for column in (
-        "FrameReferenceDateTime",
-        "FrameAcquisitionDateTime",
-        "AcquisitionDateTime",
-        "acquisition_datetime",
-    ):
-        if column in df:
-            parsed = df.apply(
-                lambda row: dicom_datetime_interval(
-                    row.get(column), row.get("TimezoneOffsetFromUTC")
-                ),
-                axis=1,
-            )
-            use = precise.isna() & parsed.notna()
-            precise.loc[use] = parsed.loc[use].map(lambda interval: interval.start)
-            domains.loc[use] = parsed.loc[use].map(lambda interval: interval.domain)
-    domains = domains.where(
-        domains.notna(), df["_acq_timestamp"].notna().map({True: "LOCAL", False: None})
-    )
-    df["_acq_clock_domain"] = domains
-    # UTC and scanner-local clocks are incomparable without offset evidence.
-    # Numeric seconds are stored on a naive axis only after separating domains.
-    present = precise.notna()
-    if present.any():
-        df.loc[present, "_acq_timestamp"] = precise.loc[present].map(
-            lambda value: value.replace(tzinfo=None)
-        )
-    domain_count = df.groupby(study_cols, dropna=False)["_acq_clock_domain"].transform(
-        "nunique"
-    )
-    df["_mixed_clock_domains"] = domain_count.gt(1)
-    df.loc[df["_mixed_clock_domains"], "_acq_timestamp"] = pd.NaT
-
     # ------------------------------------------------------------------
     # DICOM numeric ordering fields
     # ------------------------------------------------------------------
@@ -1684,7 +1590,6 @@ def compute_acquisition_order(df: pd.DataFrame) -> pd.DataFrame:
     agg_map = {
         "_acq_timestamp": ("_acq_timestamp", "min"),
         "_input_order_sort": ("_input_order_sort", "min"),
-        "_mixed_clock_domains": ("_mixed_clock_domains", "max"),
     }
 
     for sort_col in dicom_sort_columns.values():
@@ -1751,11 +1656,6 @@ def compute_acquisition_order(df: pd.DataFrame) -> pd.DataFrame:
     ).dt.total_seconds()
 
     df_study["acquisition_order"] = grouped.cumcount()
-    df_study.loc[
-        df_study["_mixed_clock_domains"],
-        ["acquisition_order", "delay_since_prev_acq_sec", "delay_since_first_acq_sec"],
-    ] = np.nan
-
     # ------------------------------------------------------------------
     # Merge volume-level annotations back
     # ------------------------------------------------------------------
@@ -1777,8 +1677,6 @@ def compute_acquisition_order(df: pd.DataFrame) -> pd.DataFrame:
     helper_cols = [
         "_input_order_sort",
         "_acq_timestamp",
-        "_acq_clock_domain",
-        "_mixed_clock_domains",
         *dicom_sort_columns.values(),
     ]
 
@@ -1999,8 +1897,6 @@ def _get_step_outputs(step: dict) -> set[str]:
         return {
             "time",
             "time_source",
-            "acquisition_datetime",
-            "acquisition_datetime_source",
         }
     if step_type == "sop_class":
         return {"sop_class"}
@@ -2057,8 +1953,6 @@ def _get_step_outputs(step: dict) -> set[str]:
             "mri_perfusion_confidence",
             "mri_perfusion_source",
             "mri_dynamic_order_source",
-            "mri_dynamic_timing_source",
-            "mri_dynamic_timing_reliable",
             "volume_order_in_series",
             "volume_order_source",
             "n_volumes_in_series",

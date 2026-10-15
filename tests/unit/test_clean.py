@@ -513,8 +513,8 @@ def test_study_date_remains_exam_date_across_midnight_acquisition():
     assert out.loc[0, "date_source"] == "StudyDate"
     assert out.loc[0, "AcquisitionDateTime"] == raw_dt
     assert out.loc[0, "TimezoneOffsetFromUTC"] == "+0100"
-    assert out.loc[0, "acquisition_datetime"] == "2024-01-01T23:00:00.123456+00:00"
-    assert out.loc[0, "acquisition_datetime_source"] == "AcquisitionDateTime"
+    assert "acquisition_datetime" not in out
+    assert "acquisition_datetime_source" not in out
 
 
 def test_generic_manifest_filters_pixel_spacing_declaratively():
@@ -715,37 +715,12 @@ def test_group_volumes_resolves_time_lists_to_earliest_scalar():
     assert pd.isna(by_volume.loc["v2", "time"])
 
 
-def test_group_volumes_resolves_acquisition_datetime_lists_to_earliest_scalar():
-    df = pd.DataFrame(
-        {
-            "volume_id": ["v1", "v1", "v2"],
-            "acquisition_datetime": [
-                ["20240102143923.123456", "20240102143921.654321"],
-                "['20240102143924.000001', 'malformed']",
-                None,
-            ],
-            "acquisition_datetime_source": [
-                "FrameAcquisitionDateTime",
-                "AcquisitionDateTime",
-                None,
-            ],
-        }
-    )
-
-    grouped = clean.group_volumes(df)
-    by_volume = grouped.set_index("volume_id")
-
-    assert (
-        by_volume.loc["v1", "acquisition_datetime"]
-        == "2024-01-02T14:39:21.654321"
-    )
-    assert not isinstance(by_volume.loc["v1", "acquisition_datetime"], list)
-    assert (
-        by_volume.loc["v1", "acquisition_datetime_source"]
-        == "FrameAcquisitionDateTime"
-    )
-    assert pd.isna(by_volume.loc["v2", "acquisition_datetime"])
-    assert pd.isna(by_volume.loc["v2", "acquisition_datetime_source"])
+def test_group_volumes_retains_raw_datetimes_without_building_a_second_clock():
+    values = ["20240102143923.123456", "20240102143921.654321"]
+    frame = pd.DataFrame({"volume_id": ["v1", "v1"], "AcquisitionDateTime": values})
+    grouped = clean.group_volumes(frame)
+    assert grouped.loc[0, "AcquisitionDateTime"] == sorted(values)
+    assert "acquisition_datetime" not in grouped
 
 
 def test_generic_manifest_filters_volume_length_declaratively():

@@ -29,6 +29,35 @@ TEXT_COLS_DEFAULT = [
     "SequenceName",
 ]
 
+# Phase inference uses the canonical cleaning outputs, not raw DICOM clocks.
+DYNAMIC_ORDER_INPUTS = {
+    "patient_key",
+    "study_id",
+    "StudyInstanceUID",
+    "series_id",
+    "SeriesInstanceUID",
+    "date",
+    "time",
+    "acquisition_order",
+    "volume_order_in_series",
+    "n_volumes_in_series",
+    "volume_order_source",
+    "Modality",
+    *TEXT_COLS_DEFAULT,
+    "acquisition_plane",
+    "RepetitionTime",
+    "EchoTime",
+    "ContrastBolusAgentPhase",
+    "acquisition_id",
+    "FrameOfReferenceUID",
+    "ImagePositionPatient",
+    "ImageOrientationPatient",
+    "PixelSpacing",
+    "Rows",
+    "Columns",
+}
+
+
 _TEXT_COLUMNS: ContextVar[tuple[str, ...] | None] = ContextVar(
     "curation_text_columns", default=None
 )

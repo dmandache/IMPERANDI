@@ -63,8 +63,6 @@ def test_four_dynamic_acquisitions_restore_full_phase_sequence(
         "DELAYED",
     ]
     assert out.mri_perfusion_confidence.eq("inferred").all()
-    assert not out.mri_dynamic_timing_reliable.any()
-    assert out.mri_dynamic_timing_source.eq("").all()
 
 
 @pytest.mark.parametrize(
@@ -90,18 +88,17 @@ def test_mask_multiart_starts_native_then_remains_arterial(same_series):
     ]
 
 
-def test_independent_injection_timing_can_resolve_repeated_phases():
+def test_raw_injection_clocks_do_not_override_canonical_order():
     rows = acquisitions("AX T1 LAVA dynamic")
     rows["AcquisitionTime"] = ["120025", "120032", "120115", "120400"]
     rows["ContrastBolusStartTime"] = "120000"
     out = annotate(rows)
     assert out.mri_perfusion_label.tolist() == [
-        "ARTERIAL",
+        "NATIVE",
         "ARTERIAL",
         "PORTAL_VENOUS",
         "DELAYED",
     ]
-    assert out.mri_dynamic_timing_reliable.all()
 
 
 def test_timing_outside_windows_falls_back_to_known_dynamic_order():
@@ -115,7 +112,6 @@ def test_timing_outside_windows_falls_back_to_known_dynamic_order():
         "PORTAL_VENOUS",
         "DELAYED",
     ]
-    assert not out.mri_dynamic_timing_reliable.any()
 
 
 def test_long_gaps_do_not_delete_an_ordered_four_acquisition_template():
@@ -212,7 +208,6 @@ def test_separate_native_counts_before_unlabelled_dynamic_progression(
     assert out.mri_perfusion_label.eq("NATIVE").sum() == 1
     if native_source == "exam_context":
         assert out.loc["native", "mri_perfusion_confidence"] == "fallback"
-        assert not out.mri_dynamic_timing_reliable.any()
         assert (
             out.loc[[f"v{i}" for i in range(count)], "mri_perfusion_reason"]
             .str.contains("native context=native")
@@ -233,7 +228,9 @@ def test_native_alone_does_not_supply_dynamic_evidence_to_other_t1_volumes():
 
 
 @pytest.mark.parametrize("same_series", [False, True])
-def test_extra_dynamic_acquisitions_keep_portal_and_delayed_at_the_end(same_series):
+def test_extra_dynamic_acquisitions_remain_delayed_after_standard_progression(
+    same_series,
+):
     rows = acquisitions("AX T1 LAVA dynamic", same_series=same_series, clocks=False)
     extra = rows.iloc[-1].copy()
     extra.update(
@@ -252,8 +249,8 @@ def test_extra_dynamic_acquisitions_keep_portal_and_delayed_at_the_end(same_seri
     assert out.loc[[f"v{i}" for i in range(5)], "mri_perfusion_label"].tolist() == [
         "NATIVE",
         "ARTERIAL",
-        "ARTERIAL",
         "PORTAL_VENOUS",
+        "DELAYED",
         "DELAYED",
     ]
 

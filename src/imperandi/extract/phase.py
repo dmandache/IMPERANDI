@@ -11,9 +11,12 @@ import pandas as pd
 from tqdm import tqdm
 
 from imperandi.curation import split_by_modality
-from imperandi.curation.common import TEXT_COLS_DEFAULT, manifest_text_columns
+from imperandi.curation.common import (
+    DYNAMIC_ORDER_INPUTS,
+    TEXT_COLS_DEFAULT,
+    manifest_text_columns,
+)
 from imperandi.curation.ct.curate import annotate_ct
-from imperandi.curation.dynamic_mri import TIMING_INPUTS
 from imperandi.curation.mri.curate import annotate_mri
 from imperandi.curation.phase import (
     apply_phase_curation,
@@ -336,14 +339,14 @@ def main(args: argparse.Namespace) -> None:
     resume_values = {
         **vars(args),
         "checkpoint_phase_curation": phase_curation,
-        "checkpoint_modality_curation": 1,
+        "checkpoint_modality_curation": 2,
     }
     if source_id_signature:
         resume_values["checkpoint_source_id"] = source_id_signature
     resume_args = argparse.Namespace(**resume_values)
     semantic_columns = sorted(
         phase_curation_input_columns(phase_curation)
-        | TIMING_INPUTS
+        | DYNAMIC_ORDER_INPUTS
         | set(TEXT_COLS_DEFAULT)
         | {
             "patient_key",

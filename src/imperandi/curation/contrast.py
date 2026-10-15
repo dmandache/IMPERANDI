@@ -24,18 +24,11 @@ def _first_acquisition(rows: pd.DataFrame) -> list:
     """Use a complete chronology; ties are reconstructions of one acquisition."""
     for column in (
         "time",
-        "AcquisitionTime",
         "acquisition_order",
-        "TemporalPositionIdentifier",
-        "AcquisitionNumber",
     ):
         if column not in rows:
             continue
-        parser = (
-            _time_seconds
-            if column in {"time", "AcquisitionTime"}
-            else common.safe_float
-        )
+        parser = _time_seconds if column == "time" else common.safe_float
         values = rows[column].map(parser)
         if values.notna().all() and values.nunique() > 1:
             return list(rows.index[values.eq(values.min())])

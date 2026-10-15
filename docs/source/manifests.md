@@ -213,19 +213,20 @@ datetime contributes its represented date or time component while the raw
 datetime remains available.
 
 The canonical `date` is the examination date by default because `StudyDate`
-has first priority and is used for visit grouping. An acquisition just after
-midnight may therefore have the prior examination date in `date`; its actual
-date and timezone remain in `AcquisitionDateTime`,
-`FrameAcquisitionDateTime`, and `acquisition_datetime` for acquisition
-chronology. This avoids silently splitting one examination at midnight.
+has first priority and is used for visit grouping. Ordering and phase inference
+use the canonical `time`, `acquisition_order`, and series-local
+`volume_order_in_series` / `n_volumes_in_series` columns. Raw DICOM datetime
+and bolus fields remain metadata; they do not calibrate contrast delays or
+override this ordering. Phase curation compares canonical time-of-day values
+without reconstructing cross-midnight timestamps.
 
 `ContentTime` and `InstanceCreationTime` describe content or object creation,
 and `StudyTime` cannot order acquisitions within a study. `SeriesTime` can also
 be too coarse for individual acquisitions. All remain available as raw tags
 and may be named explicitly for datasets that need them, but they are excluded
 from the default acquisition-time candidates. Their literal column names are
-retained in `time_source`, so downstream acquisition-evidence checks do not
-relabel them as acquisition clocks.
+retained in `time_source` for provenance. Once coalesced, `time` is the
+canonical clock used by curation regardless of the selected source.
 
 Enhanced DICOM values found under shared or per-frame functional groups are
 promoted to their canonical keyword columns during selected-tag parsing.
@@ -511,88 +512,38 @@ stronger phase evidence establishes otherwise. Bare agent names such as `gado`
 and exam-level injection descriptions are protocol context; clear acquisition
 postcontrast wording such as `post` or `C+` still establishes post-only context.
 
-Raw acquisition/frame datetimes and bolus times retain their precision through
-CSV and cleaning. Measured injection delays require comparable clock domains
-and a unique phase window containing the entire possible delay interval.
-Scanner-local bolus times cannot be subtracted from UTC clocks without offset
-evidence. Shared container clocks cannot provide individual volume delays.
-Independent explicit anchors retain the established unique-compatible-window
-inference, with clock precision included in their fixed injection interval.
-Raw clocks, temporal identity, and their provenance participate in resume
-fingerprints. GRASP and conventional VIBE remain separate sequence families.
-Phase sharing across reconstructions requires a supplied acquisition identity
-with compatible temporal, clock, and geometry evidence; equal timestamps alone
-do not establish identity across Dixon components.
+Generic MR dynamics use compatible acquisitions ordered by canonical `time`,
+then `acquisition_order` to refine ties or replace missing times. Supplied
+`volume_order_in_series` and `n_volumes_in_series` provide local order within
+one series; local ranks are never compared across unrelated series. A shared
+series time can be refined by its local volume rank. Incomplete or ambiguous
+order leaves the affected acquisitions unresolved; lexical volume IDs never
+establish chronology. Computed volume ranks record `volume_order_source=computed`
+when time/order evidence is available, or `input_order` for a neutral input-order
+fallback, which does not establish dynamic chronology.
 
-Generic MR dynamic inference includes compatible explicit phase acquisitions
-in its chronology. Four ordered full-dynamic acquisitions map to `NATIVE`,
-`ARTERIAL`, `PORTAL_VENOUS`, `DELAYED`. Without a supported delay, rapid or widely
-spaced acquisition clocks do not veto that order template. Explicit phases stay
-fixed and retain their positions. An explicit native followed by generic dynamic
-acquisitions starts the generic progression at arterial; a post-only group can
-use arterial/portal/delayed without an explicit anchor. Before generic inference,
-a separate unlabelled native candidate can be resolved when it precedes a
-compatible ordered dynamic sequence. Supported bolus timing is evaluated on
-plain T1 candidates before they can be promoted to fallback native.
-This lookup runs independently for each protocol group: an unrelated native neither blocks another group's fallback nor
-turns an unrelated unlabelled T1 acquisition into native. Known phase acquisitions
-participate in the minimum count. This native counts once toward the minimum
-and shifts the subsequent progression to arterial. It retains fallback confidence
-and never supplies a measured injection-time bound. A native alone does not
-establish phase evidence for other acquisitions without dynamic context. A
-compatible explicit native without a usable clock still prevents a duplicate
-native fallback and counts once; unresolved dynamics still need comparable order.
-Three distinct acquisitions, including explicit phases, are required for the generic template, as before the
-October 10 restrictions. Later positions remain delayed.
+Three distinct acquisitions, including compatible explicitly named phases,
+are required for generic inference. Full dynamics follow `NATIVE`, `ARTERIAL`,
+`PORTAL_VENOUS`, then `DELAYED` for later acquisitions. Post-only groups start
+at arterial. A compatible native anchors the progression and counts once;
+repeated native acquisitions do not consume postcontrast positions. Explicit
+phase labels retain their positions and provenance. A separate unlabelled
+native can be inferred when it precedes compatible dynamics. Patient, study,
+sequence family, plane, and Dixon component boundaries remain intact.
 
-Explicit Multiart text assigns all acquisitions to arterial. Mask+Multiart uses
-native for its first acquisition and arterial for the remaining acquisitions.
-These profiles take precedence over the generic full-dynamic template. Usable
-explicit timing retains priority, including repeated acquisitions of one phase.
-
-Compatibility preserves patient, date, study, sequence family, plane, and Dixon
-component. An unspecified native Dixon component can anchor a known component
-only within the same series. A known water reconstruction can provide native
-context to an unidentified reconstruction of the same protocol across series;
-it cannot support a known fat component. Subtraction and quantitative/report
-products do not anchor or shift diagnostic ranks; MPR/DERIVED alone does not erase acquisition
-evidence. Within a known series, temporal positions distinguish frames with a
-shared container timestamp. Known reconstructions share one temporal position.
-Supplied `volume_order_in_series` is accepted as local ordering evidence and
-records `volume_order_source=provided`. Automatically computed ranks record
-`computed` and cannot provide chronology solely from lexical volume IDs.
-Identifiers local to a series are not compared across unrelated series.
-
-Acquisition clocks, temporal identifiers, and complete `acquisition_order` provide
-order. Clocks from series/content/creation/study metadata supply no injection
-delay. A malformed clock can use another established ordering field. Missing or
-ambiguous chronology leaves only the affected acquisitions unresolved; this is
-not a permanent exclusion from later context fallback.
-
-Timing is optional evidence, not a gate on the dynamic template. Exact supported
-delays are used first. An estimated injection interval uses independent explicit
-postcontrast anchors only; the target is not assumed arterial to calibrate its
-own delay. Conflicting anchor clocks, ambiguous windows, or unsupported delays
-fall back to order where that order is established. The fixed anchor interval is
-not narrowed by inferred target labels. A clock gap exceeding 900 seconds does
-not split an otherwise compatible ordered group.
-
-Independent calibrated timing is checked before every generic order-based
-assignment, including the first position that would otherwise become native,
-regardless of run length. Repeated arterial or portal acquisitions can retain
-their timing-supported phase. Without conclusive timing, the established order
-fallback remains available. Explicit Multiart and Mask+Multiart mappings retain
-their protocol-specific precedence over the generic template. There is one
-generic progression path; an unresolved `PhN` does not subsequently bypass the
-minimum count or missing chronology through a separate ordinal-to-phase mapping.
+ART-PORT profiles use arterial at the first volume and portal at the last.
+ART/PORT/LATE profiles use arterial first and delayed last; the middle of a
+three-volume profile is portal. Other intermediate positions remain unresolved
+unless explicit text supplies a phase. Multiart assigns arterial throughout;
+Mask+Multiart assigns native first and arterial thereafter. These mappings use
+volume rank/count or exam acquisition order. Textual phase names and durations
+remain explicit rule evidence. Raw injection times, frame windows, clock domains,
+and estimated injection intervals are not used.
 
 Assignments with explicit context record `dynamic_explicit_anchor`; other ordered
 dynamics use `volume_order` or `acquisition_order_dixon_component`. Unresolved
-dynamics retain `generic_dynamic_context_pending` with a reason, and do not veto
-later native/context fallback. `mri_dynamic_order_source`,
-`mri_dynamic_timing_source`, and `mri_dynamic_timing_reliable` distinguish ordering
-from timing actually used to assign a phase. Order-only assignments have empty
-timing source and reliability false.
+dynamics retain `generic_dynamic_context_pending` with a reason.
+`mri_dynamic_order_source` records the canonical columns used to order them.
 
 CT adds angiography/CTA terms. MR adds gadolinium-related terms, hepatobiliary
 labels and timing (20 minutes or 2 hours through 2h59m59s), sequence families,

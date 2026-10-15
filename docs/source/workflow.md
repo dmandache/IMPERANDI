@@ -113,11 +113,10 @@ reevaluation so that a failed prediction cannot reuse a stale phase.
 Curation exports retain the original rule evidence and use the manifest's text
 column precedence for selection. `phase_text_column` and `phase_text_value`
 identify the selected metadata evidence; unresolved `phase_reason` includes the
-rule's unresolved explanation. MRI dynamic reasons distinguish ordered template
-fallback from independent phase-timing evidence. Estimated injection intervals
-use explicit postcontrast anchors; they are inferred constraints, not recorded
-injection times. Missing or unsupported timing does not permanently block an
-ordered dynamic acquisition. Wide QC cells include volume identifiers and phase provenance.
+rule's unresolved explanation. MRI dynamic reasons identify the order template
+and its canonical `time`, `acquisition_order`, or series-local volume rank.
+Raw DICOM clocks and bolus metadata do not calibrate phase delays. Wide QC cells
+include volume identifiers and phase provenance.
 Selection scores rank candidates; they are not calibrated phase confidence.
 
 ## Example Slurm batch script

@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from typing import Any
 
 import pandas as pd
-from imperandi.curation.dynamic_mri import TIMING_INPUTS
+from imperandi.curation.common import DYNAMIC_ORDER_INPUTS
 
 SUPPORTED_PHASE_STRATEGIES = {"ontology", "rules", "totalsegmentator"}
 DEFAULT_UNRESOLVED_LABELS = ["", "OTHER", "UNKNOWN", "UNCLASSIFIED", "NONE"]
@@ -222,7 +222,7 @@ def phase_curation_input_columns(config: Mapping[str, Any] | None) -> set[str]:
         if strategy["type"] == "ontology":
             columns.update(strategy["columns"])
         elif strategy["type"] == "rules":
-            columns.update(TIMING_INPUTS)
+            columns.update(DYNAMIC_ORDER_INPUTS)
             columns.update(
                 {"rule_phase", "rule_phase_confidence", "rule_phase_reason"}
             )
