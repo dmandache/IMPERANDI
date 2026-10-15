@@ -22,7 +22,8 @@ RX_PHASE_ARTERIAL = shared.RX_PHASE_ARTERIAL
 RX_PHASE_PORTAL = shared.RX_PHASE_PORTAL
 RX_PHASE_ORDINAL = shared.RX_PHASE_ORDINAL
 RX_PHASE_DELAYED = token(
-    rf"{shared.RX_PHASE_DELAYED}|transitionnel|transitional"
+    r"transitionnel|transitional",
+    shared.RX_PHASE_DELAYED
 )
 
 

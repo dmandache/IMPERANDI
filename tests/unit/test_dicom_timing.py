@@ -14,7 +14,6 @@ from imperandi.ingest.clean import (
 from imperandi.utils.datetime import to_dates, to_times
 from imperandi.utils.dicom_timing import dicom_datetime_interval
 from imperandi.curation.phase import (
-    validate_phase_curation,
     phase_curation_input_columns,
 )
 
