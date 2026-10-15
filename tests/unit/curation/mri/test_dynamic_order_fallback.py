@@ -181,7 +181,7 @@ def test_separate_native_counts_before_unlabelled_dynamic_progression(
     count, expected, native_description, native_source
 ):
     rows = acquisitions("AX T1 LAVA dynamic", same_series=False).iloc[:count].copy()
-    rows["time"] = ["120000", "120100", "120500"][:count]
+    rows["time"] = ["120000", "120001", "120002"][:count]
     rows["acquisition_order"] += 1
     native = rows.iloc[0].copy()
     native.update(
@@ -189,7 +189,7 @@ def test_separate_native_counts_before_unlabelled_dynamic_progression(
             "volume_id": "native",
             "series_id": "PRE",
             "SeriesDescription": native_description,
-            "time": "115900",
+            "time": "115959",
             "acquisition_order": 0,
         }
     )

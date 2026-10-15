@@ -341,7 +341,7 @@ def main(args: argparse.Namespace) -> None:
     resume_values = {
         **vars(args),
         "checkpoint_phase_curation": phase_curation,
-        "checkpoint_modality_curation": 3,
+        "checkpoint_modality_curation": 4,
     }
     if source_id_signature:
         resume_values["checkpoint_source_id"] = source_id_signature

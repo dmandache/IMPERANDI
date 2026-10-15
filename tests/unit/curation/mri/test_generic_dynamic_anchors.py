@@ -40,11 +40,12 @@ def curate(rows, **config):
 
 
 def anchored_rows(description="dynamic", same_series=False):
+    # Keep this chronology fixture outside delay windows to exercise order fallback.
     return [
-        volume("pre", "pre", "115900", series_id="DYNAMIC" if same_series else "PRE"),
+        volume("pre", "pre", "115959", series_id="DYNAMIC" if same_series else "PRE"),
         volume("d1", description, "120000"),
-        volume("d2", description, "120100"),
-        volume("d3", description, "120500"),
+        volume("d2", description, "120001"),
+        volume("d3", description, "120002"),
     ]
 
 
@@ -288,29 +289,40 @@ def test_second_complete_clock_can_fill_a_partial_clock():
     assert "ordered by time" in out.loc["d1", "mri_perfusion_reason"]
 
 
-def test_native_anchor_does_not_supply_injection_delay_windows():
+def test_native_relative_deltas_use_default_windows_without_bolus_calibration():
     rows = anchored_rows("dynamic post")
     for row, clock in zip(rows, ["115000", "120000", "120100", "120500"]):
         row["time"] = clock
     out = curate(rows)
-    # Native acquisition started ten minutes before the postcontrast series;
-    # these offsets are chronology evidence, not ten-minute injection delays.
-    assert out.loc[["d1", "d2", "d3"], "phase"].tolist() == [
-        "ARTERIAL",
-        "PORTAL_VENOUS",
-        "DELAYED",
-    ]
+    assert out.loc[["d1", "d2", "d3"], "time_delta"].tolist() == [600, 660, 900]
+    assert out.loc[["d1", "d2", "d3"], "phase"].eq("DELAYED").all()
+    assert out.loc[["d1", "d2", "d3"], "mri_perfusion_source"].eq("time_delta").all()
 
 
 @pytest.mark.parametrize(
-    "clocks",
+    "clocks,expected",
     [
-        ["115900", "120000", "120001", "120002"],
-        ["115959", "120000", "120100", "120500"],
-        ["115900", "120000", "120010", "120500"],
-        ["115900", "120000", "120200", "120500"],
-        ["115900", "120000", "120100", "120200"],
-        ["115900", "120000", "120100", "121501"],
+        (["115900", "120000", "120001", "120002"], ["PORTAL_VENOUS"] * 3),
+        (
+            ["115959", "120000", "120100", "120500"],
+            ["ARTERIAL", "PORTAL_VENOUS", "DELAYED"],
+        ),
+        (
+            ["115900", "120000", "120010", "120500"],
+            ["PORTAL_VENOUS", "PORTAL_VENOUS", "DELAYED"],
+        ),
+        (
+            ["115900", "120000", "120200", "120500"],
+            ["PORTAL_VENOUS", "DELAYED", "DELAYED"],
+        ),
+        (
+            ["115900", "120000", "120100", "120200"],
+            ["PORTAL_VENOUS", "DELAYED", "DELAYED"],
+        ),
+        (
+            ["115900", "120000", "120100", "121501"],
+            ["PORTAL_VENOUS", "DELAYED", "DELAYED"],
+        ),
     ],
     ids=[
         "rapid-repeated-frames",
@@ -321,24 +333,20 @@ def test_native_anchor_does_not_supply_injection_delay_windows():
         "delayed-too-late",
     ],
 )
-def test_unanchored_acquisition_clocks_do_not_veto_order_template(clocks):
+def test_elapsed_windows_take_precedence_before_order_fallback(clocks, expected):
     rows = anchored_rows("dynamic post")
     for row, clock in zip(rows, clocks):
         row["time"] = clock
     out = curate(rows)
     assert out.loc["pre", "phase"] == "NATIVE"
-    assert out.loc[["d1", "d2", "d3"], "phase"].tolist() == [
-        "ARTERIAL",
-        "PORTAL_VENOUS",
-        "DELAYED",
-    ]
+    assert out.loc[["d1", "d2", "d3"], "phase"].tolist() == expected
 
 
 @pytest.mark.parametrize(
     "clocks",
     [
-        ["115959", "120035", "120100", "120300"],
-        ["115959", "120020", "120130", "121500"],
+        ["120000", "120035", "120100", "120300"],
+        ["120000", "120020", "120130", "121500"],
     ],
 )
 def test_shared_timing_windows_include_their_boundaries(clocks):
@@ -373,7 +381,7 @@ def test_no_chronology_does_not_infer_from_lexical_volume_ids():
 
 def test_acquisitions_before_or_tied_with_native_are_not_shifted_to_postcontrast():
     rows = anchored_rows("dynamic post")
-    rows[1]["time"] = "115900"
+    rows[1]["time"] = "115959"
     out = curate(rows)
     assert out.loc[["d1", "d2", "d3"], "phase"].tolist() == [
         "OTHER",
@@ -397,7 +405,7 @@ def test_tied_reconstructions_share_phase_without_consuming_another_rank():
     "clock_changes",
     [
         ["110000", "120000", "120100", "120200"],
-        ["115900", "120000", "120100", "121701"],
+        ["115959", "120000", "120010", "121701"],
     ],
 )
 def test_long_clock_gaps_do_not_block_ordered_dynamic_acquisitions(clock_changes):
@@ -466,14 +474,14 @@ def test_same_series_canonical_ranks_preserve_volumes_with_one_clock(identifier)
             n_volumes_in_series=3,
             **{identifier: position},
         )
-    rows[0]["time"] = "134148"
+    rows[0]["time"] = "134617"
     rows.append(volume("late", "delayed", "135444", series_id="LATE"))
     out = curate(rows[::-1])
     assert out.loc[["pre", "d1", "d2", "d3", "late"], "phase"].tolist() == [
         "NATIVE",
-        "ARTERIAL",
         "PORTAL_VENOUS",
-        "DELAYED",
+        "PORTAL_VENOUS",
+        "PORTAL_VENOUS",
         "DELAYED",
     ]
     assert (
@@ -483,7 +491,7 @@ def test_same_series_canonical_ranks_preserve_volumes_with_one_clock(identifier)
     )
     assert (
         out.loc[["d1", "d2", "d3"], "mri_perfusion_reason"]
-        .str.contains("phase evidence=order only")
+        .str.contains("time_delta=60s")
         .all()
     )
     assert out.loc["late", "mri_perfusion_source"] == "explicit_text"
@@ -518,17 +526,14 @@ def test_full_dynamic_resolves_supported_frames_around_incompatible_transition()
 @pytest.mark.parametrize(
     "source", [None, "SeriesTime", "ContentTime", "InstanceCreationTime", "StudyTime"]
 )
-def test_non_acquisition_clocks_supply_order_without_phase_timing(source):
+def test_canonical_time_supplies_elapsed_windows_regardless_of_source(source):
     rows = anchored_rows("dynamic post")
     for row, clock in zip(rows, ["115900", "120000", "120001", "120002"]):
         row["time"] = clock
         row["time_source"] = source
     out = curate(rows)
-    assert out.loc[["d1", "d2", "d3"], "phase"].tolist() == [
-        "ARTERIAL",
-        "PORTAL_VENOUS",
-        "DELAYED",
-    ]
+    assert out.loc[["d1", "d2", "d3"], "phase"].eq("PORTAL_VENOUS").all()
+    assert out.loc[["d1", "d2", "d3"], "mri_perfusion_source"].eq("time_delta").all()
 
 
 @pytest.mark.parametrize("marker", ["C+", "+C"])
@@ -568,7 +573,7 @@ def test_temporal_position_values_are_not_compared_between_series():
 
 
 def test_simultaneous_series_temporal_positions_are_not_aligned():
-    rows = [volume("pre", "pre", "115900", series_id="PRE")]
+    rows = [volume("pre", "pre", "115959", series_id="PRE")]
     for sid in ["A", "B"]:
         for position in range(1, 4):
             rows.append(
@@ -619,7 +624,7 @@ def test_shared_native_clock_can_be_ordered_with_supplied_series_volume_ranks():
 
 def test_unusable_early_generic_volume_does_not_block_explicitly_calibrated_later_volumes():
     rows = anchored_rows("dynamic post")
-    rows[1]["time"] = "115900"
+    rows[1]["time"] = "115959"
     rows[2]["SeriesDescription"] = "AX T1 LAVA portal"
     out = curate(rows)
     assert out.loc[["pre", "d1", "d2", "d3"], "phase"].tolist() == [
@@ -656,5 +661,10 @@ def test_canonical_time_is_used_regardless_of_original_clock_source():
         )
     out = curate(rows[::-1])
     assert out.loc["pre", "phase"] == "NATIVE"
-    assert out.loc[["d1", "d2", "d3"], "phase"].eq("OTHER").all()
+    assert out.loc[["d1", "d2", "d3"], "phase"].tolist() == [
+        "OTHER",
+        "PORTAL_VENOUS",
+        "OTHER",
+    ]
+    assert out.loc["d2", "mri_perfusion_source"] == "time_delta"
     assert out.loc[["d1", "d2", "d3"], "mri_dynamic_order_source"].eq("time").all()

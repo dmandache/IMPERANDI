@@ -239,7 +239,7 @@ def test_water_lava_alone_is_not_native():
 def test_post_gado_ordinal_phases_with_explicit_native_are_context_inferred():
     results = curate(
         [
-            row("Ax LAVA pre", series_id="SER_PRE", volume_id="VPRE", time="115900"),
+            row("Ax LAVA pre", series_id="SER_PRE", volume_id="VPRE", time="115959"),
             row(
                 "Ph1/Ax LAVA Gado MPh Turbo",
                 series_id="SER_PH1",
@@ -250,13 +250,13 @@ def test_post_gado_ordinal_phases_with_explicit_native_are_context_inferred():
                 "Ph2/Ax LAVA Gado MPh Turbo",
                 series_id="SER_PH2",
                 volume_id="V2",
-                time="120100",
+                time="120001",
             ),
             row(
                 "Ph3/Ax LAVA Gado MPh Turbo",
                 series_id="SER_PH3",
                 volume_id="V3",
-                time="120200",
+                time="120002",
             ),
         ]
     )
@@ -894,9 +894,9 @@ def test_generic_4d_mdixon_volume_order_pre_art_port_delayed():
     results = curate(
         [
             row("4D mDIXON-W", series_id="SER_4D", volume_id="V1", time="120000"),
-            row("4D mDIXON-W", series_id="SER_4D", volume_id="V2", time="120100"),
-            row("4D mDIXON-W", series_id="SER_4D", volume_id="V3", time="120200"),
-            row("4D mDIXON-W", series_id="SER_4D", volume_id="V4", time="120400"),
+            row("4D mDIXON-W", series_id="SER_4D", volume_id="V2", time="120001"),
+            row("4D mDIXON-W", series_id="SER_4D", volume_id="V3", time="120002"),
+            row("4D mDIXON-W", series_id="SER_4D", volume_id="V4", time="120003"),
         ]
     )
     cur = results["curated"].sort_values("volume_order_in_series")
@@ -924,28 +924,28 @@ def test_generic_4d_mdixon_mixed_multivolume_and_single_volume_uses_acquisition_
                 "4D mDIXON-W",
                 series_id="SER_MULTI",
                 volume_id="VM1",
-                time="120100",
+                time="120001",
                 acquisition_order=1,
             ),
             row(
                 "4D mDIXON-W",
                 series_id="SER_SINGLE_PORT",
                 volume_id="VS2",
-                time="120200",
+                time="120002",
                 acquisition_order=2,
             ),
             row(
                 "4D mDIXON-W",
                 series_id="SER_MULTI",
                 volume_id="VM2",
-                time="120400",
+                time="120003",
                 acquisition_order=3,
             ),
             row(
                 "4D mDIXON-W",
                 series_id="SER_MULTI",
                 volume_id="VM3",
-                time="120500",
+                time="120004",
                 acquisition_order=4,
             ),
         ]

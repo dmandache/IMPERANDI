@@ -95,7 +95,7 @@ def test_earlier_dynamic_controls_all_volumes_despite_later_named_phase():
     df = dataset("MR", "dynamic", "portal")
     df.loc[df.volume_id.eq("v3"), "time"] = "120400"
     out = curate(df)
-    assert out.phase.tolist() == ["NATIVE", "ARTERIAL", "PORTAL_VENOUS", "DELAYED"]
+    assert out.phase.tolist() == ["NATIVE", "PORTAL_VENOUS", "DELAYED", "DELAYED"]
     assert out.phase_text_column.eq("SeriesDescription").all()
 
 

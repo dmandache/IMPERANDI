@@ -1239,11 +1239,12 @@ def _dynamic_time_deltas(rows: pd.DataFrame) -> pd.Series:
 def infer_generic_dynamic_phases_from_exam_context(
     exam_rows: pd.DataFrame,
 ) -> list[tuple[object, str, str, str, str]]:
-    """Apply the established dynamic template to ordered compatible acquisitions.
+    """Prefer default delay windows before the ordered dynamic template.
 
-    Explicit labels keep their positions. No injection-time calibration or raw
-    DICOM clock is needed to infer the remaining phases.
+    Explicit labels keep their positions. Elapsed seconds come from time_delta;
+    missing or unmatched deltas retain the established order fallback.
     """
+
     eligible = exam_rows.loc[exam_rows.mri_sequence.map(norm_label).eq("T1")].copy()
     for column in ("is_subtraction", "is_quant_or_report"):
         if column in eligible:
@@ -1334,7 +1335,18 @@ def infer_generic_dynamic_phases_from_exam_context(
             str(row.get("volume_id", idx)) for idx, row in native_context.iterrows()
         )
 
-        def record(idx, label, reason):
+        def assign(idx, label, reason, *, use_delta=True):
+            decision_source = source
+            seconds = safe_float(candidates.loc[idx].get("time_delta"))
+            matches = {
+                rule.label
+                for rule in rules.PHASE_RULES
+                if use_delta and rule.accepts_time(seconds)
+            }
+            if len(matches) == 1:
+                label = matches.pop()
+                reason = f"matched default {label} delay window from time_delta={seconds:g}s since first volume in group"
+                decision_source = "time_delta"
             order_source = (
                 evidence.loc[idx, "order_source"] if evidence is not None else ""
             )
@@ -1355,17 +1367,22 @@ def infer_generic_dynamic_phases_from_exam_context(
                         if native_context_ids
                         else ""
                     ),
-                    GENERIC_DYNAMIC_CONTEXT_PENDING if label == "OTHER" else source,
+                    (
+                        GENERIC_DYNAMIC_CONTEXT_PENDING
+                        if label == "OTHER"
+                        else decision_source
+                    ),
                     order_source,
                 )
             )
+            return label
 
         if evidence is None:
             for idx in indices:
-                record(idx, "OTHER", failure)
+                assign(idx, "OTHER", failure)
             continue
         for idx in candidates.index[evidence.loc[candidates.index, "order"].isna()]:
-            record(idx, "OTHER", "missing or ambiguous acquisition order")
+            assign(idx, "OTHER", "missing or ambiguous acquisition order")
         usable = evidence.loc[evidence.order.notna()]
         native_indices = matched_anchors.index[
             matched_anchors.mri_perfusion_label.eq("NATIVE")
@@ -1377,7 +1394,7 @@ def infer_generic_dynamic_phases_from_exam_context(
                 usable.index[usable.order.le(latest_native)]
             )
             for idx in early:
-                record(
+                assign(
                     idx,
                     "OTHER",
                     "acquisition does not occur strictly after the resolved native context",
@@ -1397,7 +1414,7 @@ def infer_generic_dynamic_phases_from_exam_context(
         acquisition_count = len(frames) + int(has_native and not len(ordered_native))
         if acquisition_count < 3:
             for idx in remaining:
-                record(
+                assign(
                     idx,
                     "OTHER",
                     "fewer than three distinct acquisitions for a generic dynamic template",
@@ -1417,10 +1434,11 @@ def infer_generic_dynamic_phases_from_exam_context(
             ]
             if named.nunique() > 1:
                 for idx in remaining.intersection(frame):
-                    record(
+                    assign(
                         idx,
                         "OTHER",
                         "conflicting explicit phases at one acquisition position",
+                        use_delta=False,
                     )
                 continue
             if not named.empty:
@@ -1443,11 +1461,24 @@ def infer_generic_dynamic_phases_from_exam_context(
                 ]
                 if later_ranks:
                     label = phases[min(phases.index(label), min(later_ranks))]
+            assigned = list(named)
             for idx in remaining.intersection(frame):
-                record(
-                    idx, label, "phase evidence=order only; ordered dynamic template"
+                assigned.append(
+                    assign(
+                        idx,
+                        label,
+                        "phase evidence=order only; ordered dynamic template",
+                        use_delta=named.empty,
+                    )
                 )
-            previous_phase = max(previous_phase, phases.index(label))
+            if assigned:
+                previous_phase = max(
+                    previous_phase,
+                    *(
+                        phases.index(value) if value in phases else len(phases) - 1
+                        for value in assigned
+                    ),
+                )
     return assignments
 
 

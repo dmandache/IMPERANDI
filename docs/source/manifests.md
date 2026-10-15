@@ -523,8 +523,8 @@ when time/order evidence is available, or `input_order` for a neutral input-orde
 fallback, which does not establish dynamic chronology.
 
 Three distinct acquisitions, including compatible explicitly named phases,
-are required for generic inference. Full dynamics follow `NATIVE`, `ARTERIAL`,
-`PORTAL_VENOUS`, then `DELAYED` for later acquisitions. Post-only groups start
+are required for the generic order template. Full dynamics follow `NATIVE`,
+`ARTERIAL`, `PORTAL_VENOUS`, then `DELAYED` for later acquisitions. Post-only groups start
 at arterial. A compatible native anchors the progression and counts once;
 repeated native acquisitions do not consume postcontrast positions. Explicit
 phase labels retain their positions and provenance. A separate unlabelled
@@ -549,7 +549,17 @@ canonical `time` minus the first volume's `time` in that group. Compatible nativ
 and explicitly labelled acquisitions participate in the reference group. Missing
 or invalid current/reference times leave the value empty; acquisition or volume
 ranks do not supply elapsed seconds. Groups with a shared populated time have
-zero deltas. This column records elapsed time without changing phase assignments.
+zero deltas. For generic dynamics, a valid `time_delta` matching one default
+phase-delay window takes precedence over the order template: arterial at
+20–35 seconds, portal at 60–90 seconds, delayed at 180–900 seconds, and the
+existing MR hepatobiliary windows. Boundaries are inclusive. Missing, invalid,
+negative, non-finite, or out-of-window deltas use the existing order fallback.
+Explicit phase labels and the special dynamic profiles keep their precedence.
+Matching elapsed-time evidence can resolve a phase even when fewer than three
+acquisitions prevent the generic order template from resolving it.
+These deltas remain relative to the first volume in the group; bolus-time
+calibration is not used. Reasons record the matched delta and
+`mri_perfusion_source=time_delta` identifies assignments made from these windows.
 
 CT adds angiography/CTA terms. MR adds gadolinium-related terms, hepatobiliary
 labels and timing (20 minutes or 2 hours through 2h59m59s), sequence families,
