@@ -232,6 +232,32 @@ def test_native_alone_does_not_supply_dynamic_evidence_to_other_t1_volumes():
     assert out.mri_perfusion_label.tolist() == ["NATIVE", "OTHER", "OTHER"]
 
 
+@pytest.mark.parametrize("same_series", [False, True])
+def test_extra_dynamic_acquisitions_keep_portal_and_delayed_at_the_end(same_series):
+    rows = acquisitions("AX T1 LAVA dynamic", same_series=same_series, clocks=False)
+    extra = rows.iloc[-1].copy()
+    extra.update(
+        {
+            "volume_id": "v4",
+            "series_id": "DYN" if same_series else "SER4",
+            "acquisition_order": 4,
+            "TemporalPositionIdentifier": 5,
+        }
+    )
+    out = mc.annotate_mri(
+        pd.concat([rows, pd.DataFrame([extra])], ignore_index=True).sample(
+            frac=1, random_state=17
+        )
+    ).set_index("volume_id")
+    assert out.loc[[f"v{i}" for i in range(5)], "mri_perfusion_label"].tolist() == [
+        "NATIVE",
+        "ARTERIAL",
+        "ARTERIAL",
+        "PORTAL_VENOUS",
+        "DELAYED",
+    ]
+
+
 def test_late_unlabelled_candidate_does_not_steal_native_from_dynamic_start():
     rows = acquisitions("AX T1 LAVA dynamic", same_series=False).iloc[:3].copy()
     late = rows.iloc[-1].copy()

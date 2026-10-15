@@ -1323,7 +1323,7 @@ def _intersect_dynamic_interval(interval, other):
 def infer_generic_dynamic_phases_from_exam_context(
     exam_rows: pd.DataFrame,
 ) -> list[tuple[object, str, str, str, str, str, bool]]:
-    """Prefer supported timing, otherwise restore the ordered dynamic template.
+    """Prefer supported timing, otherwise assign phases from the template ends.
 
     Missing or incompatible timing does not veto an established acquisition
     order. Explicit labels participate in that order and remain unchanged.
@@ -1499,6 +1499,8 @@ def infer_generic_dynamic_phases_from_exam_context(
         ]
         # Phase numbers identify positions; no absolute Ph1/Ph2 phase mapping.
         infer_native = not has_native and not pure_post and first_labels.empty
+        expected_phase_count = 4 if has_native or infer_native else 3
+        complete_template = acquisition_count >= expected_phase_count
         # Only independent named postcontrast acquisitions calibrate injection.
         # No arterial self-seeding, 900-second split or permanent blocked state.
         # Fallback native establishes order, never a measured injection bound.
@@ -1551,10 +1553,21 @@ def infer_generic_dynamic_phases_from_exam_context(
                 continue
             if not named.empty:
                 previous_phase = max(previous_phase, phases.index(named.iloc[0]))
+            # Once every expected phase fits, pin portal and delayed to the
+            # last two eligible positions. Short templates remain a contiguous
+            # prefix so an intermediate phase is never skipped.
             expected = (
                 "NATIVE"
                 if infer_native and rank == 1
-                else phases[min(max(previous_phase + 1, 1), 3)]
+                else (
+                    "DELAYED"
+                    if complete_template and rank == len(frames)
+                    else (
+                        "PORTAL_VENOUS"
+                        if complete_template and rank == len(frames) - 1
+                        else phases[min(max(previous_phase + 1, 1), 3)]
+                    )
+                )
             )
             later = matched_anchors.loc[
                 matched_anchors.index.intersection(
