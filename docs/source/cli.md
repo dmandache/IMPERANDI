@@ -41,7 +41,10 @@ imperandi clean [CSV_PATH] [CSV_PATH_OUT] [OPTIONS]
 
 Curates parsed instance metadata into a volume-level table. `--csv_path`
 accepts one or more CSVs. Cleaning filters and phase-curation precedence come
-from the YAML manifest.
+from the YAML manifest. Use separate `modality_curation` and `phase_curation`
+cleaning steps, in that order, to generate modality evidence and then resolve
+canonical phases. Modality curation alone does not resolve phase or export
+selected series.
 
 ## `ingest`
 
@@ -92,9 +95,11 @@ imperandi phase [CSV_PATH] [CSV_PATH_OUT] [OPTIONS]
 ```
 
 Uses `--manifest NAME_OR_YAML` to resolve the ordered `phase_curation`
-strategies. Rows matched by ontology or metadata rules do not invoke
-TotalSegmentator when prediction is a later fallback. Prediction requires
-`imperandi[segment]` and `nifti_path`; it defaults to CT rows only, and
+strategies. The command applies CT/MR modality curation to rows without
+`rule_phase` evidence, so cleaning does not need a `modality_curation` step.
+Existing rule evidence is retained. Rows matched by ontology or metadata rules
+do not invoke TotalSegmentator when prediction is a later fallback. Prediction
+requires `imperandi[segment]` and `nifti_path`; it defaults to CT rows only, and
 `--force` recomputes existing predictions. The command writes canonical
 `phase` and provenance columns. Failures default to `phase_errors.csv`.
 
@@ -107,7 +112,7 @@ unresolved before fallback, retaining their raw rule/model evidence.
 The full output remains intact. The columns that group rows for best-candidate
 selection are configured by `phase_curation.best_candidate_group_columns` in
 the manifest. `clean` and `ingest` also save these tables with a
-`modality_curation` step, always using the input-derived default paths. The
+`phase_curation` cleaning step, always using the input-derived default paths. The
 override is available only on `phase`.
 
 ## `radiomics`

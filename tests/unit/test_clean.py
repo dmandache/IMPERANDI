@@ -206,6 +206,9 @@ def test_run_modality_curation_step_keeps_ct_and_mri_annotations():
     assert "ct_phase" in out.columns
     assert "mri_sequence" in out.columns
     assert set(out["selection_slot"]) == {"CT_PORTAL_VENOUS", "T1_PORTAL_VENOUS"}
+    assert "rule_phase" in out.columns
+    assert "phase" not in out.columns
+    assert "phase_source" not in out.columns
 
 
 def test_add_date_and_filter_image_type_and_remove_localizers_mpr():
@@ -1090,10 +1093,10 @@ def test_validate_cleaning_manifest_uses_hook_output_metadata():
     assert "center" not in required
 
 
-def test_validate_cleaning_manifest_requires_phase_curation_for_modality_step():
+def test_validate_cleaning_manifest_requires_phase_config_for_phase_step():
     manifest = {
         "cleaning": {
-            "steps": [{"type": "modality_curation"}],
+            "steps": [{"type": "phase_curation"}],
         }
     }
 

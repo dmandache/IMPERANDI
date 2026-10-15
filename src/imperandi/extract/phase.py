@@ -10,6 +10,11 @@ import nibabel as nib
 import pandas as pd
 from tqdm import tqdm
 
+from imperandi.curation import split_by_modality
+from imperandi.curation.common import TEXT_COLS_DEFAULT, manifest_text_columns
+from imperandi.curation.ct.curate import annotate_ct
+from imperandi.curation.dynamic_mri import TIMING_INPUTS
+from imperandi.curation.mri.curate import annotate_mri
 from imperandi.curation.phase import (
     apply_phase_curation,
     phase_curation_input_columns,
@@ -42,6 +47,43 @@ from imperandi.utils.run_state import (
 logger = logging.getLogger(__name__)
 DEFAULT_CHECKPOINT_EVERY_ROWS = 50
 DEFAULT_CHECKPOINT_EVERY_SEC = 5 * 60
+
+
+def _ensure_modality_curation(df: pd.DataFrame, config: dict) -> pd.DataFrame:
+    """Supply missing CT/MR rule evidence before choosing prediction rows.
+
+    Annotate each complete modality cohort so exam/series context is available,
+    retaining supplied rule evidence and the original row order.
+    """
+    if "Modality" not in df:
+        return df
+    ct, mr, other = split_by_modality(df)
+    parts = [other]
+    for modality, data in (("CT", ct), ("MR", mr)):
+        if data.empty:
+            continue
+        needs_curation = (
+            ~data["rule_phase"].map(_has_populated_value)
+            if "rule_phase" in data
+            else pd.Series(True, index=data.index)
+        )
+        if not needs_curation.any():
+            parts.append(data)
+            continue
+        with manifest_text_columns(modality, config):
+            annotated = (
+                annotate_ct(
+                    data,
+                    exam_group_columns=config["best_candidate_group_columns"],
+                )
+                if modality == "CT"
+                else annotate_mri(data, phase_curation=config, resolve_phase=False)
+            )
+        parts.extend([data.loc[~needs_curation], annotated.loc[needs_curation]])
+        logger.info(
+            "Applied %s modality curation to %d row(s)", modality, needs_curation.sum()
+        )
+    return pd.concat(parts, sort=False).reindex(df.index)
 
 
 def _load_phase_extractor() -> Callable[..., Any]:
@@ -294,11 +336,28 @@ def main(args: argparse.Namespace) -> None:
     resume_values = {
         **vars(args),
         "checkpoint_phase_curation": phase_curation,
+        "checkpoint_modality_curation": 1,
     }
     if source_id_signature:
         resume_values["checkpoint_source_id"] = source_id_signature
     resume_args = argparse.Namespace(**resume_values)
-    semantic_columns = ["volume_id", *sorted(phase_curation_input_columns(phase_curation))]
+    semantic_columns = sorted(
+        phase_curation_input_columns(phase_curation)
+        | TIMING_INPUTS
+        | set(TEXT_COLS_DEFAULT)
+        | {
+            "patient_key",
+            "volume_id",
+            "SeriesNumber",
+            "AcquisitionNumber",
+            "InstanceNumber",
+            "SliceThickness",
+            "n_files",
+            "n_rows_in_volume",
+            "n_sop_instances_in_volume",
+            "n_rows_in_series",
+        }
+    )
     has_totalseg_strategy = any(
         strategy["type"] == "totalsegmentator"
         for strategy in phase_curation["strategies"]
@@ -346,7 +405,7 @@ def main(args: argparse.Namespace) -> None:
         logger.info("Resuming phase from checkpoint: %s", paths.main_checkpoint_path)
         df = pd.read_csv(paths.main_checkpoint_path).copy()
     else:
-        df = pd.read_csv(args.csv_path).copy()
+        df = _ensure_modality_curation(pd.read_csv(args.csv_path), phase_curation)
         if can_partial_resume:
             df = merge_with_existing_output(
                 df,
@@ -421,8 +480,8 @@ def main(args: argparse.Namespace) -> None:
     if semantic_reprocess_ids and prediction_strategy is not None:
         # Imported predictions belong to the old inputs. A failed rerun must
         # not silently resolve from the stale prediction or confidence.
-        invalidated = df["_source_idx"].map(normalize_source_id).isin(
-            semantic_reprocess_ids
+        invalidated = (
+            df["_source_idx"].map(normalize_source_id).isin(semantic_reprocess_ids)
         )
         prediction_columns = {
             prediction_strategy["column"],

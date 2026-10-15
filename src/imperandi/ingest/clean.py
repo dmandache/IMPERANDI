@@ -23,18 +23,21 @@ from imperandi.ingest.hooks import (
     apply_patient_key_standardization,
     get_clean_hook_outputs,
 )
-from imperandi.curation import curate_by_modality
+from imperandi.curation import split_by_modality
+from imperandi.curation.common import manifest_text_columns, norm_label
+from imperandi.curation.ct.curate import annotate_ct, score_ct
+from imperandi.curation.mri.curate import annotate_mri, add_scores
 from imperandi.curation.export import (
     save_selected_candidates,
     selected_output_path,
 )
 from imperandi.curation.phase import (
+    apply_phase_curation,
     phase_curation_input_columns,
     validate_phase_curation,
 )
 from imperandi.utils.logging import log_task_summary, setup_logging
 from imperandi.utils.misc import print_args, report_volumes, report_change
-from imperandi.utils.datetime import to_dates, to_times
 from imperandi.utils.dicom_timing import (
     DICOM_CLOCK_DTYPES,
     dicom_datetime_interval,
@@ -1974,6 +1977,11 @@ def _get_step_inputs(step: dict) -> set[str]:
             "Rows",
             "Columns",
         }
+    if step_type == "phase_curation":
+        # Phase-only cleaning can consume a previously annotated modality CSV.
+        return _get_step_inputs({"type": "modality_curation"}) | _get_step_outputs(
+            {"type": "modality_curation"}
+        )
     return set()
 
 
@@ -2036,18 +2044,66 @@ def _get_step_outputs(step: dict) -> set[str]:
             "curation_modality",
             "selection_slot",
             "selection_score",
+            "selection_modality",
+            "ct_selection_score",
             "ct_phase",
+            "ct_phase_reason",
+            "ct_phase_confidence",
             "mri_sequence",
+            "mri_sequence_reason",
+            "mri_sequence_confidence",
             "mri_perfusion_label",
+            "mri_perfusion_reason",
+            "mri_perfusion_confidence",
+            "mri_perfusion_source",
+            "mri_dynamic_order_source",
+            "mri_dynamic_timing_source",
+            "mri_dynamic_timing_reliable",
+            "volume_order_in_series",
+            "volume_order_source",
+            "n_volumes_in_series",
+            "is_multivolume_series",
+            "series_text",
+            "plane",
+            "dixon_component",
+            "dixon_component_reason",
+            "dixon_component_source",
+            "is_subtraction",
+            "is_mip_mpr",
+            "is_quant_or_report",
+            "is_derived_low_value",
+            "is_3d_gre",
+            "is_dynamic_t1_text",
+            "is_breath_hold",
+            "is_resp_triggered",
+            "is_t2_fatsat",
+            "is_t2_motion_robust",
+            "is_t2_haste_ssfse",
+            "is_t2_tse_fse",
+            "is_t2_mrcp_biliary",
+            "t1_score",
+            "t2_score",
+            "dwi_score",
             "rule_phase",
             "rule_phase_reason",
             "rule_phase_confidence",
+            "phase_applicability_reason",
+            "phase_text_column",
+            "phase_text_value",
+        }
+    if step_type == "phase_curation":
+        return {
             "phase",
             "phase_status",
-            "phase_applicability_reason",
             "phase_source",
             "phase_reason",
             "phase_confidence",
+            "selection_slot",
+            "selection_score",
+            "ct_selection_score",
+            "t1_score",
+            "t2_score",
+            "dwi_score",
         }
     return set()
 
@@ -2246,12 +2302,16 @@ def validate_cleaning_manifest(manifest: dict) -> list[dict]:
 
         validated_steps.append(step)
 
-    if any(step["type"] == "modality_curation" for step in validated_steps):
+    if any(step["type"] == "phase_curation" for step in validated_steps):
         if "phase_curation" not in manifest:
             raise ValueError(
                 "Manifest must define phase_curation when cleaning uses "
-                "modality_curation."
+                "phase_curation."
             )
+    if "phase_curation" in manifest and any(
+        step["type"] in {"modality_curation", "phase_curation"}
+        for step in validated_steps
+    ):
         validate_phase_curation(manifest["phase_curation"])
 
     return validated_steps
@@ -2269,7 +2329,7 @@ def _collect_required_input_columns(
             if col not in produced:
                 required.add(col)
         produced.update(_get_step_outputs(step))
-    if any(step["type"] == "modality_curation" for step in steps):
+    if any(step["type"] in {"modality_curation", "phase_curation"} for step in steps):
         required.update(phase_curation_input_columns(phase_curation))
     return sorted(required)
 
@@ -2666,15 +2726,54 @@ def _run_modality_curation_step(
     *,
     phase_curation: dict | None = None,
 ) -> pd.DataFrame:
-    """Annotate volume-level rows with CT/MR-specific curation labels and scores."""
+    """Generate CT/MR features and rule evidence without resolving phase."""
     if "Modality" not in df.columns:
         return df
 
-    results = curate_by_modality(df, phase_curation=phase_curation)
-    curated = results["curated_all"]
-    if curated.empty:
-        return df.iloc[0:0].copy()
-    return curated
+    config = validate_phase_curation(phase_curation)
+    ct, mr, _ = split_by_modality(df)
+    parts = []
+    for modality, data in (("CT", ct), ("MR", mr)):
+        if data.empty:
+            continue
+        with manifest_text_columns(modality, config):
+            annotated = (
+                annotate_ct(
+                    data, exam_group_columns=config["best_candidate_group_columns"]
+                )
+                if modality == "CT"
+                else annotate_mri(data, phase_curation=config, resolve_phase=False)
+            )
+        parts.append(annotated.assign(curation_modality=modality))
+    return (
+        pd.concat(parts, ignore_index=True, sort=False)
+        if parts
+        else df.iloc[0:0].copy()
+    )
+
+
+def _run_phase_curation_step(
+    df: pd.DataFrame,
+    step: dict,
+    *,
+    phase_curation: dict | None = None,
+) -> pd.DataFrame:
+    """Resolve existing phase evidence and refresh phase-dependent scores."""
+    out = apply_phase_curation(df, phase_curation, progress_logger=logger)
+    ct, mr, other = split_by_modality(out.reset_index(drop=True))
+    if not ct.empty and "ct_phase" in ct:
+        with manifest_text_columns("CT", phase_curation):
+            ct["ct_selection_score"] = ct.apply(score_ct, axis=1)
+        ct["selection_score"] = ct["ct_selection_score"]
+        ct["selection_slot"] = ct["phase"].map(lambda phase: f"CT_{norm_label(phase)}")
+    if not mr.empty and "mri_sequence" in mr:
+        with manifest_text_columns("MR", phase_curation):
+            mr = add_scores(mr)
+    return (
+        pd.concat([ct, mr, other], sort=False)
+        .reindex(range(len(out)))
+        .set_axis(out.index)
+    )
 
 
 def _run_finalize_step(df: pd.DataFrame, step: dict) -> pd.DataFrame:
@@ -2709,6 +2808,7 @@ STEP_REGISTRY: dict[str, Callable[[pd.DataFrame, dict], pd.DataFrame]] = {
     "compute_visit_order": _run_compute_visit_order_step,
     "compute_acquisition_order": _run_compute_acquisition_order_step,
     "modality_curation": _run_modality_curation_step,
+    "phase_curation": _run_phase_curation_step,
     "finalize": _run_finalize_step,
 }
 
@@ -2724,8 +2824,8 @@ def run_clean_pipeline(
 
     for step in steps:
         df_prev = df.copy()
-        if step["type"] == "modality_curation":
-            df = _run_modality_curation_step(
+        if step["type"] in {"modality_curation", "phase_curation"}:
+            df = STEP_REGISTRY[step["type"]](
                 df,
                 step,
                 phase_curation=phase_curation,
@@ -2755,12 +2855,12 @@ def clean_and_save_data(
     """Run the manifest-defined metadata-curation pipeline and write its CSV output."""
     steps = validate_cleaning_manifest(manifest)
     phase_curation = manifest.get("phase_curation")
-    has_curation = any(step["type"] == "modality_curation" for step in steps)
+    has_phase_curation = any(step["type"] == "phase_curation" for step in steps)
     first_input = csv_path[0] if isinstance(csv_path, (list, tuple)) else csv_path
     selected_path = selected_output_path(
         None,
         csv_path_out or first_input,
-        input_path=first_input if has_curation else None,
+        input_path=first_input if has_phase_curation else None,
         protected_paths=csv_path if isinstance(csv_path, (list, tuple)) else [csv_path],
     )
     required_columns = _collect_required_input_columns(steps, phase_curation)

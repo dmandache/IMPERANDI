@@ -243,7 +243,9 @@ def test_clean_cli_exports_selected_and_loads_custom_exam_columns(tmp_path):
         yaml.safe_dump(
             {
                 "phase_curation": config(),
-                "cleaning": {"steps": [{"type": "modality_curation"}]},
+                "cleaning": {
+                    "steps": [{"type": "modality_curation"}, {"type": "phase_curation"}]
+                },
             }
         )
     )
@@ -429,10 +431,16 @@ def test_cli_exports_unresolved_cases_excluded_from_selection(tmp_path, command)
     source, main = tmp_path / "input.csv", tmp_path / "output.csv"
     df.to_csv(source, index=False)
     manifest = tmp_path / "site.yaml"
-    manifest.write_text(yaml.safe_dump({
-        "phase_curation": config(),
-        "cleaning": {"steps": [{"type": "modality_curation"}]},
-    }))
+    manifest.write_text(
+        yaml.safe_dump(
+            {
+                "phase_curation": config(),
+                "cleaning": {
+                    "steps": [{"type": "modality_curation"}, {"type": "phase_curation"}]
+                },
+            }
+        )
+    )
     args = [command, str(source), str(main), "--manifest", str(manifest)]
     assert cli.main(args) == 0
     report_path = tmp_path / "qc_unresolved_phase.csv"

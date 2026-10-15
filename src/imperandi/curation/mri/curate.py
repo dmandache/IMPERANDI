@@ -2667,8 +2667,13 @@ def annotate_mri(
     volume_col: str = "volume_id",
     date_col: str = "date",
     phase_curation: dict | None = None,
+    resolve_phase: bool = True,
 ) -> pd.DataFrame:
-    """Add labels, features, and scores to a volume/series-level dataframe."""
+    """Add labels, features, and scores to a volume/series-level dataframe.
+
+    Set ``resolve_phase=False`` to leave canonical phase resolution to a later
+    cleaning step while still producing the modality's rule evidence.
+    """
     out = df.copy()
     if date_col in out.columns:
         out[date_col] = pd.to_datetime(out[date_col], errors="coerce").dt.date
@@ -2700,7 +2705,8 @@ def annotate_mri(
     out["rule_phase"] = out["mri_perfusion_label"]
     out["rule_phase_reason"] = out["mri_perfusion_reason"]
     out["rule_phase_confidence"] = out["mri_perfusion_confidence"]
-    out = apply_phase_curation(out, phase_curation)
+    if resolve_phase:
+        out = apply_phase_curation(out, phase_curation)
     out = add_scores(out)
     return out
 

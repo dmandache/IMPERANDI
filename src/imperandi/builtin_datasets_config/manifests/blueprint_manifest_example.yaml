@@ -244,8 +244,10 @@ cleaning:
 
     - type: compute_visit_order
     - type: compute_acquisition_order
-    # Requires the top-level phase_curation block.
+    # Generate modality labels, features, and rule evidence.
     - type: modality_curation
+    # Resolve canonical phase using the top-level phase_curation block.
+    - type: phase_curation
     # Keep finalize last to drop empty helpers and restore canonical ordering.
     - type: finalize
 

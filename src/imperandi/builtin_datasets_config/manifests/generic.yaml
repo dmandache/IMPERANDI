@@ -195,6 +195,7 @@ cleaning:
     - type: compute_visit_order
     - type: compute_acquisition_order
     - type: modality_curation
+    - type: phase_curation
     - type: finalize
 
 # TotalSegmentator is currently the only backend. CT and MR have independent

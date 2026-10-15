@@ -31,7 +31,15 @@ One manifest configures the main data path:
 
 The `cleaning.steps` order is executable configuration. In particular,
 `modality_curation` should run after volume grouping and acquisition ordering,
-and `finalize` should remain last.
+followed by `phase_curation`, and `finalize` should remain last.
+`modality_curation` generates CT/MR features, sequence labels, and raw rule
+evidence. It can run without a top-level `phase_curation` block and does not
+resolve canonical phases or write selection exports. The separate
+`phase_curation` step requires that block, resolves the ordered strategies from
+existing evidence, and refreshes phase-dependent selection scores. It can also
+run alone on a table that already contains rule, ontology, or model evidence.
+Cleaning consumes existing model predictions; use `imperandi phase` to run
+TotalSegmentator when prediction is needed.
 
 ## YAML manifest skeleton
 
@@ -87,6 +95,7 @@ cleaning:
     - type: compute_visit_order
     - type: compute_acquisition_order
     - type: modality_curation
+    - type: phase_curation
     - type: finalize
 
 segmentation:
@@ -372,7 +381,7 @@ phase_curation:
 
 `--selected_csv_path` applies only to `phase`. Relative paths resolve from the working
 directory. Omitting the option uses the input-derived defaults; it is not a
-manifest setting. Cleaning pipelines without `modality_curation` do not
+manifest setting. Cleaning pipelines without a `phase_curation` step do not
 produce selection exports.
 The main output retains all its rows.
 The selected CSV saves `selected_long`: one best eligible CT volume per phase
