@@ -169,6 +169,41 @@ def test_ontology_first_arterial_prevents_generic_native():
     assert out.phase.tolist() == ["ARTERIAL", "PORTAL_VENOUS", "DELAYED", "DELAYED"]
 
 
+@pytest.mark.parametrize("source", ["dicom", "ontology"])
+def test_succeeding_authoritative_portal_reserves_its_phase(source):
+    frame = volumes()
+    frame.loc[0, "SeriesDescription"] = "AX T1 VIBE pre"
+    config = None
+    if source == "dicom":
+        frame["ContrastBolusAgentPhase"] = [None, None, None, "PORTAL_VENOUS"]
+    else:
+        frame["site_phase"] = [None, None, None, "portal"]
+        config = {
+            "strategies": [
+                {
+                    "type": "ontology",
+                    "columns": ["site_phase"],
+                    "mapping": {"portal": "PORTAL_VENOUS"},
+                },
+                {"type": "rules"},
+            ]
+        }
+
+    out = annotate(frame, config)
+
+    assert out.phase.tolist() == [
+        "NATIVE",
+        "ARTERIAL",
+        "ARTERIAL",
+        "PORTAL_VENOUS",
+    ]
+    assert (
+        out.loc[["v1", "v2"], "mri_perfusion_source"]
+        .eq("dynamic_explicit_anchor")
+        .all()
+    )
+
+
 @pytest.mark.parametrize(
     "bad_evidence", [None, "position", "geometry", "clock", "phase_conflict"]
 )

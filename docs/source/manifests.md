@@ -527,7 +527,12 @@ are required for the generic order template. Full dynamics follow `NATIVE`,
 `ARTERIAL`, `PORTAL_VENOUS`, then `DELAYED` for later acquisitions. Post-only groups start
 at arterial. A compatible native anchors the progression and counts once;
 repeated native acquisitions do not consume postcontrast positions. Explicit
-phase labels retain their positions and provenance. A separate unlabelled
+phase labels retain their positions and provenance. A succeeding explicit phase
+in the compatible group is reserved for its named acquisition. Earlier generic
+volumes must remain below that phase, including when a `time_delta` window matches
+the reserved phase. Order fallback can repeat a preceding phase, or stay unresolved
+when no compatible postcontrast phase remains. Without a succeeding explicit
+phase, the existing timing and order progression applies. A separate unlabelled
 native can be inferred when it precedes compatible dynamics. Groups match on
 `patient_key`, `date`, `study_id`, `StudyInstanceUID`, `ImageType`, sequence family,
 plane, and Dixon component. `ImageType` uses its full ordered token sequence,
@@ -558,7 +563,8 @@ zero deltas. For generic dynamics, a valid `time_delta` matching one default
 phase-delay window takes precedence over the order template: arterial at
 20–35 seconds, portal at 60–90 seconds, delayed at 180–900 seconds, and the
 existing MR hepatobiliary windows. Boundaries are inclusive. Missing, invalid,
-negative, non-finite, or out-of-window deltas use the existing order fallback.
+negative, non-finite, out-of-window deltas, or matches at/above a succeeding
+explicit phase use the existing order fallback within the explicit bounds.
 Explicit phase labels and the special dynamic profiles keep their precedence.
 Matching elapsed-time evidence can resolve a phase even when fewer than three
 acquisitions prevent the generic order template from resolving it.

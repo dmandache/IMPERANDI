@@ -93,6 +93,135 @@ def test_named_portal_stays_in_chronology_instead_of_restarting_generic_ranks():
     assert out.loc["d2", "mri_perfusion_source"] == "explicit_text"
 
 
+@pytest.mark.parametrize(
+    "next_phase,expected",
+    [
+        (None, ["ARTERIAL", "PORTAL_VENOUS", "DELAYED"]),
+        ("arterial", ["OTHER", "OTHER", "OTHER"]),
+        ("portal", ["ARTERIAL", "ARTERIAL", "ARTERIAL"]),
+        ("delayed", ["ARTERIAL", "PORTAL_VENOUS", "PORTAL_VENOUS"]),
+    ],
+)
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("clocks", [False, True])
+def test_order_inference_reserves_succeeding_explicit_phase_only_when_available(
+    next_phase, expected, native, clocks
+):
+    rows = anchored_rows("dynamic post")
+    if not native:
+        rows = rows[1:]
+    if next_phase:
+        rows.append(volume("next", next_phase, "120003", series_id="NEXT"))
+    for rank, row in enumerate(rows):
+        row["acquisition_order"] = rank
+        if not clocks:
+            row["time"] = None
+
+    out = curate(rows[::-1])
+
+    assert out.loc[["d1", "d2", "d3"], "phase"].tolist() == expected
+    if next_phase:
+        assert out.loc["next", "mri_perfusion_source"] == "explicit_text"
+        assert (
+            not out.loc[["d1", "d2", "d3"], "phase"].eq(out.loc["next", "phase"]).any()
+        )
+    expected_source = (
+        "dynamic_explicit_anchor"
+        if native or next_phase
+        else "acquisition_order_dixon_component"
+    )
+    resolved = out.loc[["d1", "d2", "d3"]].loc[lambda frame: frame.phase.ne("OTHER")]
+    assert resolved.mri_perfusion_source.eq(expected_source).all()
+    if "OTHER" in expected:
+        assert (
+            out.loc[["d1", "d2", "d3"], "mri_perfusion_reason"]
+            .str.contains("no compatible postcontrast phase remains")
+            .all()
+        )
+
+
+def test_full_dynamic_keeps_initial_native_before_succeeding_portal():
+    rows = anchored_rows()[1:]
+    rows.append(volume("next", "portal", "120003", series_id="NEXT"))
+
+    out = curate(rows)
+
+    assert out.loc[["d1", "d2", "d3", "next"], "phase"].tolist() == [
+        "NATIVE",
+        "ARTERIAL",
+        "ARTERIAL",
+        "PORTAL_VENOUS",
+    ]
+
+
+def test_repeated_explicit_phase_does_not_advance_unresolved_interval():
+    rows = [
+        volume("pre", "pre", "115959"),
+        volume("art", "arterial", "120000"),
+        volume("between", "dynamic post", "120001"),
+        volume("art_again", "arterial", "120002"),
+        volume("after", "dynamic post", "120003"),
+        volume("portal", "portal", "120004"),
+    ]
+
+    out = curate(rows)
+
+    assert out.loc[["between", "after"], "phase"].tolist() == [
+        "OTHER",
+        "ARTERIAL",
+    ]
+    assert out.loc[["art", "art_again"], "phase"].eq("ARTERIAL").all()
+    assert out.loc["portal", "phase"] == "PORTAL_VENOUS"
+
+
+def test_succeeding_anchor_in_different_image_type_does_not_bound_phases():
+    rows = anchored_rows()
+    rows.append(
+        volume(
+            "next", "portal", "120003", series_id="NEXT", ImageType="DERIVED PRIMARY"
+        )
+    )
+
+    out = curate(rows)
+
+    assert out.loc[["d1", "d2", "d3"], "phase"].tolist() == [
+        "ARTERIAL",
+        "PORTAL_VENOUS",
+        "DELAYED",
+    ]
+
+
+def test_explicit_phase_at_same_acquisition_position_can_still_be_shared():
+    rows = anchored_rows()
+    rows.append(volume("portal", "portal", "120001", series_id="PORTAL"))
+
+    out = curate(rows)
+
+    assert out.loc[["d2", "portal"], "phase"].eq("PORTAL_VENOUS").all()
+    assert out.loc["d1", "phase"] == "ARTERIAL"
+    assert out.loc["d3", "phase"] == "DELAYED"
+
+
+def test_succeeding_explicit_phase_bounds_matching_time_delta():
+    rows = [
+        volume("pre", "pre", "120000"),
+        volume("d1", "dynamic post", "120025"),
+        volume("d2", "dynamic post", "120115"),
+        volume("portal", "portal", "120130"),
+    ]
+
+    out = curate(rows)
+
+    assert out.loc["d1", "mri_perfusion_source"] == "time_delta"
+    assert out.loc["d2", "phase"] == "ARTERIAL"
+    assert out.loc["d2", "mri_perfusion_source"] == "dynamic_explicit_anchor"
+    assert (
+        "reserved succeeding explicit PORTAL_VENOUS phase"
+        in out.loc["d2", "mri_perfusion_reason"]
+    )
+    assert out.loc["portal", "mri_perfusion_source"] == "explicit_text"
+
+
 def test_explicit_arterial_can_anchor_postcontrast_sequence_without_native():
     rows = anchored_rows()[1:]
     rows[0]["SeriesDescription"] = "AX T1 LAVA arterial"
@@ -517,7 +646,7 @@ def test_full_dynamic_resolves_supported_frames_around_incompatible_transition()
         "NATIVE",
         "ARTERIAL",
         "PORTAL_VENOUS",
-        "DELAYED",
+        "PORTAL_VENOUS",
         "DELAYED",
     ]
     assert "phase evidence=order only" in out.loc["v4", "mri_perfusion_reason"]
@@ -556,8 +685,8 @@ def test_postcontrast_marker_cannot_supply_an_inferred_native(marker):
     assert not out.phase.eq("NATIVE").any()
     assert out.loc[["v1", "v2", "v3"], "phase"].tolist() == [
         "ARTERIAL",
-        "PORTAL_VENOUS",
-        "PORTAL_VENOUS",
+        "ARTERIAL",
+        "ARTERIAL",
     ]
 
 
@@ -636,7 +765,7 @@ def test_unusable_early_generic_volume_does_not_block_explicitly_calibrated_late
     ]
 
 
-def test_far_delayed_anchor_does_not_block_a_complete_prefix_of_supported_acquisitions():
+def test_succeeding_delayed_anchor_reserves_its_phase_even_after_a_long_gap():
     rows = anchored_rows("dynamic post")
     rows.append(volume("far_late", "delayed", "123000", series_id="FAR"))
     out = curate(rows)
@@ -644,7 +773,7 @@ def test_far_delayed_anchor_does_not_block_a_complete_prefix_of_supported_acquis
         "NATIVE",
         "ARTERIAL",
         "PORTAL_VENOUS",
-        "DELAYED",
+        "PORTAL_VENOUS",
         "DELAYED",
     ]
 

@@ -1242,8 +1242,8 @@ def infer_generic_dynamic_phases_from_exam_context(
 ) -> list[tuple[object, str, str, str, str]]:
     """Prefer default delay windows before the ordered dynamic template.
 
-    Explicit labels keep their positions. Elapsed seconds come from time_delta;
-    missing or unmatched deltas retain the established order fallback.
+    Succeeding explicit phases bound generic inference. Within those bounds,
+    elapsed seconds from time_delta precede the established order fallback.
     """
 
     eligible = exam_rows.loc[exam_rows.mri_sequence.map(norm_label).eq("T1")].copy()
@@ -1299,6 +1299,7 @@ def infer_generic_dynamic_phases_from_exam_context(
         groups.setdefault(keys.loc[idx], []).append(idx)
     assignments = []
     phases = ["NATIVE", "ARTERIAL", "PORTAL_VENOUS", "DELAYED"]
+    phase_ranks = {phase: rank for rank, phase in enumerate(phases)}
     for key, indices in groups.items():
         candidates = generic.loc[indices]
         series_ids = set(candidates.apply(_dynamic_series_id, axis=1)) - {""}
@@ -1335,19 +1336,48 @@ def infer_generic_dynamic_phases_from_exam_context(
         native_context_ids = ", ".join(
             str(row.get("volume_id", idx)) for idx, row in native_context.iterrows()
         )
+        upper_bounds = {}
+        if evidence is not None:
+            anchor_ranks = explicit_anchors.mri_perfusion_label.map(phase_ranks)
+            anchor_ranks = anchor_ranks.loc[anchor_ranks.gt(0)]
+            time_order = (
+                context.time.map(parse_time_to_seconds)
+                if "time" in context
+                else pd.Series(np.nan, index=context.index)
+            )
+            for idx in indices:
+                # Ambiguous local ranks can still precede an anchor by canonical time.
+                order = (
+                    evidence.order
+                    if pd.notna(evidence.loc[idx, "order"])
+                    else time_order
+                )
+                later = order.index[order.gt(order.loc[idx])]
+                upper = anchor_ranks.reindex(later).min()
+                if pd.notna(upper):
+                    upper_bounds[idx] = int(upper)
 
-        def assign(idx, label, reason, *, use_delta=True):
+        def assign(idx, label, reason, *, use_delta=True, minimum_phase=1):
             decision_source = source
+            upper = upper_bounds.get(idx) if use_delta else None
             seconds = safe_float(candidates.loc[idx].get("time_delta"))
             matches = {
                 rule.label
                 for rule in rules.PHASE_RULES
-                if use_delta and rule.accepts_time(seconds)
+                if use_delta
+                and rule.accepts_time(seconds)
+                and (upper is None or phase_ranks.get(rule.label, len(phases)) < upper)
             }
             if len(matches) == 1:
                 label = matches.pop()
                 reason = f"matched default {label} delay window from time_delta={seconds:g}s since first volume in group"
                 decision_source = "time_delta"
+            if upper is not None:
+                if phase_ranks.get(label, -1) >= upper:
+                    label = phases[upper - 1] if upper - 1 >= minimum_phase else "OTHER"
+                reason += f"; reserved succeeding explicit {phases[upper]} phase"
+                if label == "OTHER":
+                    reason += "; no compatible postcontrast phase remains"
             order_source = (
                 evidence.loc[idx, "order_source"] if evidence is not None else ""
             )
@@ -1442,44 +1472,26 @@ def infer_generic_dynamic_phases_from_exam_context(
                         use_delta=False,
                     )
                 continue
+            reason = "phase evidence=order only; ordered dynamic template"
             if not named.empty:
                 label = named.iloc[0]
             else:
                 label = phases[min(previous_phase + 1, len(phases) - 1)]
-            if named.empty and label != "NATIVE":
-                later = matched_anchors.loc[
-                    matched_anchors.index.intersection(
-                        usable.index[
-                            usable.order.gt(usable.loc[frame, "order"].iloc[0])
-                        ]
-                    ),
-                    "mri_perfusion_label",
-                ]
-                later_ranks = [
-                    phases.index(phase)
-                    for phase in later
-                    if phase in phases and phase != "NATIVE"
-                ]
-                if later_ranks:
-                    label = phases[min(phases.index(label), min(later_ranks))]
-            assigned = list(named)
+            if not named.empty:
+                previous_phase = max(previous_phase, phase_ranks[label])
             for idx in remaining.intersection(frame):
-                assigned.append(
-                    assign(
-                        idx,
-                        label,
-                        "phase evidence=order only; ordered dynamic template",
-                        use_delta=named.empty,
+                assigned = assign(
+                    idx,
+                    label,
+                    reason,
+                    use_delta=named.empty,
+                    minimum_phase=max(previous_phase, 1),
+                )
+                if assigned != "OTHER":
+                    previous_phase = max(
+                        previous_phase,
+                        phase_ranks.get(assigned, len(phases) - 1),
                     )
-                )
-            if assigned:
-                previous_phase = max(
-                    previous_phase,
-                    *(
-                        phases.index(value) if value in phases else len(phases) - 1
-                        for value in assigned
-                    ),
-                )
     return assignments
 
 

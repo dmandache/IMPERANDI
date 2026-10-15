@@ -44,6 +44,35 @@ def test_matching_deltas_allow_repeated_phases_before_order_fallback():
     assert "phase evidence=order only" in out.loc["v3", "mri_perfusion_reason"]
 
 
+def test_time_delta_below_succeeding_explicit_phase_retains_priority():
+    rows = dynamic_rows([0, 25, 30, 45, 240])
+    rows.loc[4, "SeriesDescription"] = "AX T1 LAVA delayed"
+
+    out = mc.annotate_mri(rows)
+
+    assert out.phase.tolist() == [
+        "NATIVE",
+        "ARTERIAL",
+        "ARTERIAL",
+        "PORTAL_VENOUS",
+        "DELAYED",
+    ]
+    assert out.loc[[1, 2], "mri_perfusion_source"].eq("time_delta").all()
+    assert out.loc[4, "mri_perfusion_source"] == "explicit_text"
+
+
+def test_upper_anchor_applies_to_time_delta_before_minimum_order_count():
+    rows = dynamic_rows([0, 90])
+    rows.loc[1, "SeriesDescription"] = "AX T1 LAVA portal"
+    annotated = mc.annotate_mri(rows, resolve_phase=False)
+    annotated.loc[0, "time_delta"] = 75
+
+    assignments = mc.infer_generic_dynamic_phases_from_exam_context(annotated)
+
+    assert assignments[0][1] == "OTHER"
+    assert "reserved succeeding explicit PORTAL_VENOUS phase" in assignments[0][2]
+
+
 @pytest.mark.parametrize(
     "seconds,phase",
     [
@@ -117,7 +146,8 @@ def test_unresolved_current_or_reference_time_uses_order_fallback(position, miss
     assert pd.isna(out.loc[position, "time_delta"])
 
 
-def test_matching_deltas_resolve_when_local_order_is_ambiguous_across_series():
+@pytest.mark.parametrize("upper_anchor", [False, True])
+def test_matching_deltas_with_ambiguous_local_order_respect_upper_anchor(upper_anchor):
     native = dynamic_rows([0], "AX T1 LAVA pre")
     series = []
     for sid in ["A", "B"]:
@@ -127,16 +157,25 @@ def test_matching_deltas_resolve_when_local_order_is_ambiguous_across_series():
         rows["volume_order_in_series"] = [1, 2]
         rows["n_volumes_in_series"] = 2
         series.append(rows)
+    if upper_anchor:
+        following = dynamic_rows([30], "AX T1 LAVA arterial")
+        following["series_id"] = "following"
+        following["volume_id"] = "following"
+        series.append(following)
     rows = pd.concat([native, *series], ignore_index=True).drop(
         columns="acquisition_order"
     )
 
     out = mc.annotate_mri(rows)
 
-    assert out.loc[1:, "time_delta"].eq(25).all()
-    assert out.loc[1:, "phase"].eq("ARTERIAL").all()
-    assert out.loc[1:, "mri_perfusion_source"].eq("time_delta").all()
-    assert out.loc[1:, "mri_dynamic_order_source"].str.contains("ambiguous").all()
+    assert out.loc[1:4, "time_delta"].eq(25).all()
+    assert out.loc[1:4, "phase"].eq("OTHER" if upper_anchor else "ARTERIAL").all()
+    assert (
+        out.loc[1:4, "mri_perfusion_source"]
+        .eq(mc.GENERIC_DYNAMIC_CONTEXT_PENDING if upper_anchor else "time_delta")
+        .all()
+    )
+    assert out.loc[1:4, "mri_dynamic_order_source"].str.contains("ambiguous").all()
 
 
 @pytest.mark.parametrize(
