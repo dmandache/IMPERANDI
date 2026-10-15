@@ -26,9 +26,10 @@ def test_to_times_converts_only_real_clock_time_columns():
 
     out = to_times(df.copy())
 
-    assert out.loc[0, "StudyTime"] == dt_time(9, 30, 15)
-    assert out.loc[1, "AcquisitionDateTime"] == dt_time(13, 15, 59)
-    assert out.loc[1, "InstanceCreationTime"] == dt_time(13, 14, 15)
+    assert out.loc[0, "StudyTime"] == "093015"
+    assert out.loc[1, "AcquisitionDateTime"] == "20240101131559"
+    assert out.loc[0, "InstanceCreationTime"] == "101010.123"
+    assert out.loc[1, "InstanceCreationTime"] == "131415.000"
 
     # Duration-like columns should remain untouched.
     assert out["EchoTime"].tolist() == ["500", "750"]
@@ -204,19 +205,34 @@ def test_to_dates_converts_iso_columns_and_ignores_other_columns():
     assert result["description"].tolist() == ["20240131", "unchanged"]
 
 
-def test_to_dates_uses_inferred_order_for_non_iso_columns(monkeypatch):
-    df = pd.DataFrame({"ReviewDate": ["31/01/2024"]})
-    seen = []
-
-    monkeypatch.setattr(datetime_utils, "_infer_dayfirst", lambda _series: True)
-
-    def fake_to_datetime(values, *, dayfirst, format, errors):
-        seen.append((dayfirst, format, errors))
-        return pd.Series([pd.Timestamp("2024-01-31")], index=values.index)
-
-    monkeypatch.setattr(datetime_utils.pd, "to_datetime", fake_to_datetime)
+def test_to_dates_uses_inferred_order_for_non_iso_columns():
+    df = pd.DataFrame({"ReviewDate": ["31/01/2024", "01/02/2024"]})
 
     result = datetime_utils.to_dates(df)
 
-    assert result.loc[0, "ReviewDate"] == pd.Timestamp("2024-01-31")
-    assert seen == [(True, "%Y%m%d", "coerce")]
+    assert result["ReviewDate"].tolist() == [
+        pd.Timestamp("2024-01-31"),
+        pd.Timestamp("2024-02-01"),
+    ]
+
+
+def test_to_dates_accepts_compact_delimited_and_normalized_values():
+    df = pd.DataFrame(
+        {
+            "AcquisitionDate": [
+                "20240101",
+                "2024-02-02",
+                "2024/03/03",
+                pd.Timestamp("2024-04-04 12:34:56"),
+            ]
+        }
+    )
+
+    result = datetime_utils.to_dates(df)
+
+    assert result["AcquisitionDate"].tolist() == [
+        pd.Timestamp("2024-01-01"),
+        pd.Timestamp("2024-02-02"),
+        pd.Timestamp("2024-03-03"),
+        pd.Timestamp("2024-04-04"),
+    ]

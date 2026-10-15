@@ -95,7 +95,7 @@ def test_earlier_dynamic_controls_all_volumes_despite_later_named_phase():
     df = dataset("MR", "dynamic", "portal")
     df.loc[df.volume_id.eq("v3"), "time"] = "120400"
     out = curate(df)
-    assert out.phase.tolist() == ["NATIVE", "ARTERIAL", "PORTAL_VENOUS", "DELAYED"]
+    assert out.phase.tolist() == ["NATIVE", "PORTAL_VENOUS", "DELAYED", "DELAYED"]
     assert out.phase_text_column.eq("SeriesDescription").all()
 
 
@@ -105,9 +105,9 @@ def test_ordinal_context_cannot_be_synthesized_across_columns(series, protocol):
     assert out.phase.tolist() == ["OTHER"]
 
 
-def test_post_only_dynamics_never_infer_native_or_assume_phase_offsets():
+def test_post_only_dynamics_use_order_without_inheriting_lower_priority_native():
     out = curate(dataset("MR", "Multiphase post", "w/o"))
-    assert out.phase.tolist() == ["OTHER"] * 4
+    assert out.phase.tolist() == ["ARTERIAL", "PORTAL_VENOUS", "DELAYED", "DELAYED"]
 
 
 @pytest.mark.parametrize("later", ["ART-PORT", "Mask Multiart", "dynamic"])
@@ -123,7 +123,7 @@ def test_post_only_single_volume_acquisitions_do_not_gain_native_from_exam_order
     df = dataset("MR", "Multiphase post", "w/o", count=3)
     df.series_id = ["series1", "series2", "series3"]
     out = curate(df)
-    assert out.phase.tolist() == ["OTHER"] * 3
+    assert out.phase.tolist() == ["ARTERIAL", "PORTAL_VENOUS", "DELAYED"]
 
 
 @pytest.mark.parametrize("modality", ["CT", "MR"])

@@ -23,6 +23,10 @@ def test_bundled_manifests_are_loadable(manifest_name, dataset_name):
 
     assert manifest["dataset_name"] == dataset_name
     assert manifest["cleaning"]["steps"]
+    step_types = [step["type"] for step in manifest["cleaning"]["steps"]]
+    assert (
+        step_types.index("phase_curation") == step_types.index("modality_curation") + 1
+    )
     assert manifest["phase_curation"]["strategies"]
     assert manifest["segmentation"]["backend"] == "totalsegmentator"
     assert manifest["segmentation"]["crop"] is False

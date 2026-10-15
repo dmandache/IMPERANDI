@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from typing import Any
 
 import pandas as pd
+from imperandi.curation.common import DYNAMIC_ORDER_INPUTS
 
 SUPPORTED_PHASE_STRATEGIES = {"ontology", "rules", "totalsegmentator"}
 DEFAULT_UNRESOLVED_LABELS = ["", "OTHER", "UNKNOWN", "UNCLASSIFIED", "NONE"]
@@ -71,6 +72,11 @@ def validate_phase_curation(config: Mapping[str, Any] | None) -> dict[str, Any]:
         config = DEFAULT_PHASE_CURATION
     if not isinstance(config, Mapping):
         raise ValueError("phase_curation must be a mapping.")
+
+    if any(key in config for key in ("mri_dynamic", "profiles", "phase_windows")):
+        raise ValueError(
+            "MRI phase profiles and timing delays are built-in rules, not manifest settings."
+        )
 
     strategies = config.get("strategies")
     if not isinstance(strategies, list) or not strategies:
@@ -216,6 +222,7 @@ def phase_curation_input_columns(config: Mapping[str, Any] | None) -> set[str]:
         if strategy["type"] == "ontology":
             columns.update(strategy["columns"])
         elif strategy["type"] == "rules":
+            columns.update(DYNAMIC_ORDER_INPUTS)
             columns.update(
                 {"rule_phase", "rule_phase_confidence", "rule_phase_reason"}
             )
@@ -433,10 +440,13 @@ def apply_phase_curation(
             )
     return out
 
+
 def phase_needs_strategy(
     df: pd.DataFrame,
     config: Mapping[str, Any] | None,
     strategy_type: str,
+    *,
+    progress_logger: logging.Logger | None = None,
 ) -> pd.Series:
     """Return eligible rows unresolved before ``strategy_type`` is reached."""
     normalized = validate_phase_curation(config)
@@ -457,7 +467,7 @@ def phase_needs_strategy(
     eligible = [
         _strategy_applies(df.iloc[position], strategy) for position in range(len(df))
     ]
-    return pd.Series(
+    needs_strategy = pd.Series(
         [
             prior["phase_status"].iloc[position] == PHASE_STATUS_UNRESOLVED
             and eligible[position]
@@ -465,6 +475,26 @@ def phase_needs_strategy(
         ],
         index=df.index,
     )
+    if progress_logger is not None:
+        statuses = prior["phase_status"]
+        outside_modalities = sum(
+            statuses.iloc[position] == PHASE_STATUS_UNRESOLVED and not applies
+            for position, applies in enumerate(eligible)
+        )
+        progress_logger.info(
+            "Phase prediction eligibility: %s (%s), allowed modalities: %s; "
+            "%d/%d volume(s) eligible, %d resolved by earlier strategies, "
+            "%d phase not applicable, %d unresolved outside allowed modalities",
+            strategy["name"],
+            strategy["type"],
+            ", ".join(strategy.get("modalities") or []) or "all",
+            int(needs_strategy.sum()),
+            len(df),
+            int(statuses.eq(PHASE_STATUS_RESOLVED).sum()),
+            int(statuses.eq(PHASE_STATUS_NOT_APPLICABLE).sum()),
+            outside_modalities,
+        )
+    return needs_strategy
 
 
 __all__ = [

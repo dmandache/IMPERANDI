@@ -124,7 +124,15 @@ def save_selected_candidates(df: pd.DataFrame, path: Path, config) -> int:
             # Preserve the evidence that produced the input decision. Reannotation
             # supplies missing selection features, not a replacement audit trail.
             for column in data.columns:
-                if column.startswith(("rule_phase", "ct_phase", "mri_perfusion_", "mri_dynamic_", "phase_text_")):
+                if column == "time_delta" or column.startswith(
+                    (
+                        "rule_phase",
+                        "ct_phase",
+                        "mri_perfusion_",
+                        "mri_dynamic_",
+                        "phase_text_",
+                    )
+                ):
                     annotated[column] = data[column]
             if modality == "CT":
                 annotated["selection_score"] = annotated.apply(score_ct, axis=1)

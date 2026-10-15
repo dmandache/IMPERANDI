@@ -38,6 +38,7 @@ from imperandi.utils.run_state import (
     now_epoch,
 )
 from imperandi.ingest.defaults import DEFAULT_DICOM_TAGS
+from imperandi.utils.dicom_timing import DICOM_CLOCK_DTYPES
 from imperandi.ingest.apply_hook_manifests import apply_id_standardization
 
 warnings.filterwarnings("ignore")
@@ -616,6 +617,54 @@ def _normalize_dicom_value(value):
     return str(value)
 
 
+FUNCTIONAL_GROUP_SEQUENCE_KEYWORDS = (
+    "SharedFunctionalGroupsSequence",
+    "PerFrameFunctionalGroupsSequence",
+)
+
+
+def _selected_read_tags(tags: list[str]) -> list[str]:
+    """Include enhanced-DICOM functional groups needed for nested tag lookup."""
+    return list(dict.fromkeys([*tags, *FUNCTIONAL_GROUP_SEQUENCE_KEYWORDS]))
+
+
+def _nested_selected_values(ds, requested: set[str], selected: dict[str, list]) -> None:
+    """Collect requested keywords with one walk through loaded sequences."""
+    try:
+        elements = iter(ds)
+    except TypeError:
+        return
+    for elem in elements:
+        if elem.keyword in requested and elem.VR != "SQ":
+            selected[elem.keyword].append(_normalize_dicom_value(elem.value))
+        if elem.VR == "SQ":
+            for item in elem.value or []:
+                _nested_selected_values(item, requested, selected)
+
+
+def _selected_values(ds, tags: list[str]) -> dict:
+    """Return requested top-level or enhanced-frame values under canonical names."""
+    values_by_tag = {tag: [] for tag in tags}
+    missing = set()
+    for tag in tags:
+        top_level = ds.get(tag)
+        if top_level is None:
+            missing.add(tag)
+        else:
+            values_by_tag[tag].append(_normalize_dicom_value(top_level))
+    if missing:
+        _nested_selected_values(ds, missing, values_by_tag)
+
+    selected = {}
+    for tag, values in values_by_tag.items():
+        selected[tag] = (
+            None
+            if not values
+            else values[0] if len(values) == 1 else values
+        )
+    return selected
+
+
 def build_effective_tags(
     *,
     default_tags: list[str],
@@ -681,9 +730,9 @@ def read_dicom_header_selected_standard(source, *, tags: list[str], force=False)
         ds = _load_dicom_dataset_standard(
             source,
             force=force,
-            specific_tags=tags,
+            specific_tags=_selected_read_tags(tags),
         )
-        values = {tag: _normalize_dicom_value(ds.get(tag)) for tag in tags}
+        values = _selected_values(ds, tags)
         return pd.Series(values)
     except Exception:
         return pd.Series({})
@@ -696,10 +745,10 @@ def read_dicom_header_selected_archive_aware(
         ds = _load_dicom_dataset_archive_aware(
             source,
             force=force,
-            specific_tags=tags,
+            specific_tags=_selected_read_tags(tags),
             archive_max_depth=archive_max_depth,
         )
-        values = {tag: _normalize_dicom_value(ds.get(tag)) for tag in tags}
+        values = _selected_values(ds, tags)
         return pd.Series(values)
     except Exception:
         return pd.Series({})
@@ -1305,7 +1354,7 @@ def process_with_checkpoint(
             resumed_rows=len(df),
         )
         if return_df:
-            return pd.read_csv(output_path)
+            return pd.read_csv(output_path, dtype=DICOM_CLOCK_DTYPES)
         return None
 
     if not can_resume:
@@ -1358,7 +1407,9 @@ def process_with_checkpoint(
             if extra_cols:
                 checkpoint_columns = [*checkpoint_columns, *extra_cols]
                 if paths.main_checkpoint_path.exists():
-                    existing = pd.read_csv(paths.main_checkpoint_path)
+                    existing = pd.read_csv(
+                        paths.main_checkpoint_path, dtype=DICOM_CLOCK_DTYPES
+                    )
                     existing = existing.reindex(
                         columns=checkpoint_columns, fill_value=None
                     )
@@ -1484,7 +1535,7 @@ def process_with_checkpoint(
     _flush_buffer(force_state=True)
 
     if paths.main_checkpoint_path.exists():
-        out = pd.read_csv(paths.main_checkpoint_path)
+        out = pd.read_csv(paths.main_checkpoint_path, dtype=DICOM_CLOCK_DTYPES)
     else:
         out = df.copy()
     if "_source_idx" in out.columns:

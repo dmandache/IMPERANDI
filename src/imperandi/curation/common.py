@@ -14,6 +14,7 @@ from typing import Sequence
 
 import numpy as np
 import pandas as pd
+from imperandi.utils.dicom_timing import DICOM_CLOCK_DTYPES
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,35 @@ TEXT_COLS_DEFAULT = [
     "ScanOptions",
     "SequenceName",
 ]
+
+# Phase inference uses the canonical cleaning outputs, not raw DICOM clocks.
+DYNAMIC_ORDER_INPUTS = {
+    "patient_key",
+    "study_id",
+    "StudyInstanceUID",
+    "series_id",
+    "SeriesInstanceUID",
+    "date",
+    "time",
+    "acquisition_order",
+    "volume_order_in_series",
+    "n_volumes_in_series",
+    "volume_order_source",
+    "Modality",
+    *TEXT_COLS_DEFAULT,
+    "acquisition_plane",
+    "RepetitionTime",
+    "EchoTime",
+    "ContrastBolusAgentPhase",
+    "acquisition_id",
+    "FrameOfReferenceUID",
+    "ImagePositionPatient",
+    "ImageOrientationPatient",
+    "PixelSpacing",
+    "Rows",
+    "Columns",
+}
+
 
 _TEXT_COLUMNS: ContextVar[tuple[str, ...] | None] = ContextVar(
     "curation_text_columns", default=None
@@ -89,6 +119,9 @@ def with_manifest_text_columns(modality: str):
 
 
 def read_csv(path: str | Path, **kwargs) -> pd.DataFrame:
+    dtype = kwargs.get("dtype", {})
+    if isinstance(dtype, dict):
+        kwargs["dtype"] = {**DICOM_CLOCK_DTYPES, **dtype}
     return pd.read_csv(Path(path).expanduser(), low_memory=False, **kwargs)
 
 

@@ -29,6 +29,7 @@ import numpy as np
 import pandas as pd
 
 from imperandi.curation import common, rules as shared_rules
+from imperandi.utils.dicom_timing import scalar_values
 from imperandi.curation.contrast import infer_pre_post_native_acquisitions
 from imperandi.curation.common import (
     clean_text as clean_text,
@@ -66,7 +67,6 @@ ART_PORT_LATE_CONTEXT_PENDING = "art_port_late_context_pending"
 ART_PORT_CONTEXT_PENDING = "art_port_context_pending"
 MASK_MULTIART_CONTEXT_PENDING = "mask_multiart_context_pending"
 GENERIC_DYNAMIC_CONTEXT_PENDING = "generic_dynamic_context_pending"
-GENERIC_DYNAMIC_CONTEXT_BLOCKED = "generic_dynamic_context_blocked"
 
 
 def _first_numeric(value) -> float:
@@ -143,6 +143,8 @@ def parse_time_to_seconds(x) -> float:
         return np.nan
 
     hh, mm, ss, frac = m.groups()
+    if int(hh) > 23 or int(mm) > 59 or int(ss) > 59:
+        return np.nan
     seconds = int(hh) * 3600 + int(mm) * 60 + int(ss)
     if frac:
         seconds += float("0." + frac)
@@ -203,6 +205,18 @@ def _first_text_column_value(
     cols: Sequence[str] | None = None,
 ):
     return common.first_text_column_value(row, evaluator, _resolve_text_cols(cols))
+
+
+def _first_text_decision(row: pd.Series, evaluator):
+    """Retain the field behind a label/reason/confidence text decision."""
+    for column, text in iter_series_text_columns(row):
+        result = evaluator(text)
+        if result is not None:
+            label, reason, confidence = result
+            if column != "SeriesDescription":
+                reason += f"; {column}={text!r}"
+            return label, reason, confidence
+    return None
 
 
 def _phase_text_column(row: pd.Series):
@@ -350,6 +364,8 @@ def add_volume_order_features(
     out = df.drop(columns=["volume_index_in_series"], errors="ignore").copy()
 
     if "volume_order_in_series" in out.columns and "n_volumes_in_series" in out.columns:
+        if "volume_order_source" not in out:
+            out["volume_order_source"] = "provided"
         return out
 
     if series_col not in out.columns or volume_col not in out.columns:
@@ -373,13 +389,11 @@ def add_volume_order_features(
     )
     work["_row_order_for_volume_order"] = np.arange(len(work))
 
-    for col in ["AcquisitionNumber", "InstanceNumber", "volume_id"]:
-        if col not in work.columns:
-            work[col] = np.nan
-
-    work["_sort_acquisition_number"] = work["AcquisitionNumber"].apply(_first_numeric)
-    work["_sort_instance_number"] = work["InstanceNumber"].apply(_first_numeric)
-    work["_sort_volume_id"] = work[volume_col].apply(_stable_text)
+    work["_sort_acquisition_order"] = (
+        work["acquisition_order"].map(_first_numeric)
+        if "acquisition_order" in work
+        else np.nan
+    )
     work["_series_group_key"] = work.apply(
         lambda row: "||".join(_stable_text(row.get(c)) for c in series_group_cols),
         axis=1,
@@ -395,9 +409,8 @@ def add_volume_order_features(
             [
                 "_series_group_key",
                 "_sort_time_seconds",
-                "_sort_acquisition_number",
-                "_sort_instance_number",
-                "_sort_volume_id",
+                "_sort_acquisition_order",
+                "_row_order_for_volume_order",
             ],
             na_position="last",
         )
@@ -444,6 +457,17 @@ def add_volume_order_features(
         "is_multivolume_series",
     ]:
         out[col] = ordered[col].to_numpy()
+    supported = (
+        work.groupby("_series_group_key")[
+            ["_sort_time_seconds", "_sort_acquisition_order"]
+        ]
+        .transform("nunique")
+        .gt(1)
+        .any(axis=1)
+    )
+    out["volume_order_source"] = np.where(
+        supported.to_numpy(), "computed", "input_order"
+    )
     return out
 
 
@@ -455,7 +479,7 @@ def add_volume_order_features(
 def detect_mri_sequence(row: pd.Series) -> tuple[str, str, str]:
     modality = safe_str(row.get("Modality")).upper()
 
-    text_match = _first_text_column_value(
+    text_match = _first_text_decision(
         row,
         lambda text: (
             ("LOCALIZER", "matched localizer/scout/survey keyword", "high")
@@ -546,16 +570,16 @@ def has_post_contrast_text(row: pd.Series) -> bool:
 
 
 def has_pure_post_contrast_text(row: pd.Series) -> bool:
+    """Recognize acquisition postcontrast wording, not an agent or exam mention."""
+    evidence = _phase_text_column(row)
+    if evidence is None or evidence[0] == "StudyDescription":
+        return False
+    text = evidence[1]
     return bool(
-        _first_phase_text_value(
-            row,
-            lambda text: shared_rules.has_post_contrast_text(
-                text, rules.RX_PHASE_POST_CONTRAST
-            )
-            and not re.search(rules.RX_PHASE_NATIVE, text)
-            and not shared_rules.has_pre_post_contrast_text(
-                text, rules.RX_PHASE_NATIVE, rules.RX_PHASE_POST_CONTRAST
-            ),
+        shared_rules.has_post_contrast_text(text, shared_rules.RX_PHASE_POST_CONTRAST)
+        and not re.search(rules.RX_PHASE_NATIVE, text)
+        and not shared_rules.has_pre_post_contrast_text(
+            text, rules.RX_PHASE_NATIVE, rules.RX_PHASE_POST_CONTRAST
         )
     )
 
@@ -582,7 +606,10 @@ def detect_explicit_phase_from_text(row: pd.Series) -> tuple[str | None, str, st
     match = _first_phase_text_value(
         row,
         lambda text: match_phase(
-            text, rules.PHASE_RULES, post=rules.RX_PHASE_POST_CONTRAST
+            text,
+            rules.PHASE_RULES,
+            post=rules.RX_PHASE_POST_CONTRAST,
+            prefer_delayed_time=True,
         ),
     )
     if match is not None:
@@ -609,51 +636,45 @@ def infer_special_t1_phase_from_volume_order(
     if pd.isna(order) or pd.isna(n_volumes) or n_volumes < 2:
         return None, "no independent second volume detected", "unknown", "none"
 
+    if (
+        not float(order).is_integer()
+        or not float(n_volumes).is_integer()
+        or not 1 <= order <= n_volumes
+    ):
+        return (
+            "OTHER",
+            "invalid dynamic volume order/count",
+            "unknown",
+            "dynamic_profile_guard",
+        )
     order = int(order)
     n_volumes = int(n_volumes)
-
-    if text_matches_art_port_late(row):
-        if order == 1:
-            return (
-                "ARTERIAL",
-                f"inferred ARTERIAL from first ART/PORT/LATE volume {order}/{n_volumes}",
-                "inferred",
-                "volume_order_art_port_late",
+    if text_matches_art_port_late(row) or text_matches_art_port(row):
+        late = text_matches_art_port_late(row)
+        label = (
+            "ARTERIAL"
+            if order == 1
+            else (
+                ("DELAYED" if late else "PORTAL_VENOUS")
+                if order == n_volumes
+                else (
+                    "PORTAL_VENOUS"
+                    if late and n_volumes == 3 and order == 2
+                    else "OTHER"
+                )
             )
-        if order == 2:
-            return (
-                "PORTAL_VENOUS",
-                f"inferred PORTAL_VENOUS from second ART/PORT/LATE volume {order}/{n_volumes}",
-                "inferred",
-                "volume_order_art_port_late",
-            )
-        return (
-            "DELAYED",
-            f"inferred DELAYED from later ART/PORT/LATE volume {order}/{n_volumes}",
-            "inferred",
-            "volume_order_art_port_late",
         )
-
-    if text_matches_art_port(row):
-        if order == 1:
-            return (
-                "ARTERIAL",
-                f"inferred ARTERIAL from first ART-PORT volume {order}/{n_volumes}",
-                "inferred",
-                "volume_order_art_port",
-            )
-        if order == 2:
-            return (
-                "PORTAL_VENOUS",
-                f"inferred PORTAL_VENOUS from second ART-PORT volume {order}/{n_volumes}",
-                "inferred",
-                "volume_order_art_port",
-            )
+        profile = "ART/PORT/LATE" if late else "ART-PORT"
         return (
-            "DELAYED",
-            f"inferred DELAYED from later ART-PORT volume {order}/{n_volumes}",
-            "inferred",
-            "volume_order_art_port",
+            label,
+            f"{profile} endpoint fallback volume {order}/{n_volumes}"
+            + (
+                "; intermediate phase unresolved from profile order"
+                if label == "OTHER"
+                else ""
+            ),
+            "unknown" if label == "OTHER" else "inferred",
+            "volume_order_art_port_late" if late else "volume_order_art_port",
         )
 
     if text_matches_mask_multiart(row):
@@ -690,11 +711,10 @@ def detect_t1_perfusion_phase(row: pd.Series) -> tuple[str, str, str, str]:
     Volume-aware T1 phase classifier.
 
     Priority:
-      1. Special multivolume ART/PORT/LATE, ART-PORT, or Mask+Multiart order inference.
-      2. Defer single-volume special dynamic candidates to exam context.
-      3. Explicit pure phase text, e.g. SANS IV, ART, PORT, TARDIF.
-      4. Defer generic dynamic rows to compatible, anchored exam chronology.
-      5. OTHER.
+      1. Direct DICOM phase labels and pure named phase evidence.
+      2. Established ART/PORT/LATE, ART-PORT, and Mask+Multiart inference.
+      3. Defer generic dynamics and PhN prefixes to compatible chronology.
+      4. OTHER.
     """
     seq = norm_label(row.get("mri_sequence"))
 
@@ -710,6 +730,62 @@ def detect_t1_perfusion_phase(row: pd.Series) -> tuple[str, str, str, str]:
 
     if seq != "T1":
         return "OTHER", f"sequence={seq}; phase not assigned", "unknown", "none"
+
+    phase_values = {
+        norm_label(value) for value in scalar_values(row.get("ContrastBolusAgentPhase"))
+    }
+    phase_mapping = {
+        "PRE_CONTRAST": "NATIVE",
+        "ARTERIAL": "ARTERIAL",
+        "PORTAL_VENOUS": "PORTAL_VENOUS",
+        "DELAYED": "DELAYED",
+    }
+    supported = {
+        phase_mapping[value] for value in phase_values if value in phase_mapping
+    }
+    if supported and len(phase_values) > 1:
+        return (
+            "OTHER",
+            "conflicting ContrastBolusAgentPhase values within volume",
+            "unknown",
+            "dicom_phase_conflict",
+        )
+    if len(supported) == 1:
+        label = next(iter(supported))
+        return label, "explicit ContrastBolusAgentPhase", "explicit", "dicom_phase"
+    special_profile = (
+        text_matches_art_port(row)
+        or text_matches_art_port_late(row)
+        or text_matches_mask_multiart(row)
+    )
+    if not special_profile:
+        explicit = detect_explicit_phase_from_text(row)
+        if explicit[0] is not None:
+            return explicit
+    if special_profile:
+        text_column, text = _phase_text_column(row) or ("", "")
+        durations = shared_rules._durations(text)
+        if durations:
+            labels = []
+            for _, seconds in durations:
+                matches = {
+                    rule.label
+                    for rule in rules.PHASE_RULES
+                    if rule.accepts_time(seconds)
+                }
+                labels.append(next(iter(matches)) if len(matches) == 1 else "OTHER")
+            label = labels[0] if len(set(labels)) == 1 else "OTHER"
+            return (
+                label,
+                f"explicit duration in {text_column}={text!r}"
+                + (
+                    "; unsupported duration; order fallback blocked"
+                    if label == "OTHER"
+                    else ""
+                ),
+                "explicit" if label != "OTHER" else "unknown",
+                "explicit_duration",
+            )
 
     # A single derived product is not another acquisition in an ART/PORT
     # container. Only a real multivolume order can disambiguate its phase here;
@@ -727,6 +803,19 @@ def detect_t1_perfusion_phase(row: pd.Series) -> tuple[str, str, str, str]:
             "derived dynamic product lacks acquisition phase evidence",
             "unknown",
             "none",
+        )
+
+    if (
+        _phase_matches_pattern(row, rules.RX_PHASE_MULTIART_DYNAMIC)
+        and not text_matches_mask_multiart(row)
+        and not text_matches_art_port(row)
+        and not text_matches_art_port_late(row)
+    ):
+        return (
+            "ARTERIAL",
+            "explicit Multiart profile; all acquisitions arterial",
+            "explicit",
+            "explicit_text",
         )
 
     if text_matches_art_port_late(row):
@@ -768,12 +857,6 @@ def detect_t1_perfusion_phase(row: pd.Series) -> tuple[str, str, str, str]:
             MASK_MULTIART_CONTEXT_PENDING,
         )
 
-    explicit_label, explicit_reason, explicit_conf, explicit_source = (
-        detect_explicit_phase_from_text(row)
-    )
-    if explicit_label is not None:
-        return explicit_label, explicit_reason, explicit_conf, explicit_source
-
     ordinal_index = detect_ordinal_phase_index(row)
     if ordinal_index is not None:
         return (
@@ -794,89 +877,22 @@ def detect_t1_perfusion_phase(row: pd.Series) -> tuple[str, str, str, str]:
     return "OTHER", "no supported T1 perfusion phase rule matched", "unknown", "none"
 
 
-def infer_phase_from_ordinal_context(
-    row: pd.Series,
-    exam_rows: pd.DataFrame,
-) -> tuple[str | None, str, str, str]:
-    ordinal_index = detect_ordinal_phase_index(row)
-    if ordinal_index is None:
-        return None, "no ordinal phase index detected", "unknown", "none"
-
-    if norm_label(row.get("mri_sequence")) != "T1":
-        return (
-            None,
-            "ordinal phase ignored because sequence is not T1",
-            "unknown",
-            "ordinal_context",
-        )
-
-    has_dynamic_text = _phase_matches_any_patterns(
-        row,
-        [rules.RX_T1_DYNAMIC, rules.RX_T1_3D_GRE],
-    )
-    has_post_text = has_post_contrast_text(row)
-    exam_has_post_ordinal = bool(
-        exam_rows.apply(
-            lambda r: detect_ordinal_phase_index(r) is not None
-            and has_post_contrast_text(r),
-            axis=1,
-        ).any()
-    )
-    exam_has_explicit_native = bool(
-        exam_rows["mri_perfusion_label"].map(norm_label).eq("NATIVE").any()
-        and exam_rows["mri_perfusion_source"].eq("explicit_text").any()
-    )
-    exam_has_native_fallback = bool(
-        exam_rows.apply(is_native_fallback_candidate, axis=1).any()
-    )
-
-    if has_post_text or (has_dynamic_text and exam_has_post_ordinal):
-        mapping = {1: "ARTERIAL", 2: "PORTAL_VENOUS", 3: "DELAYED"}
-        label = mapping.get(ordinal_index, "DELAYED")
-        context = (
-            "with explicit/fallback native context"
-            if exam_has_explicit_native or exam_has_native_fallback
-            else "from post-contrast dynamic ordinal context"
-        )
-        return (
-            label,
-            f"inferred {label} from Ph{ordinal_index} {context}",
-            "inferred",
-            "ordinal_context",
-        )
-
-    return (
-        None,
-        f"ordinal phase Ph{ordinal_index} detected but context is insufficient",
-        "unknown",
-        "ordinal_context",
-    )
-
-
-def _acquisition_sort_key(row: pd.Series, row_order: int) -> tuple:
-    acquisition_order = _first_numeric(row.get("acquisition_order"))
-    acquisition_number = _first_numeric(row.get("AcquisitionNumber"))
-    acquisition_time = parse_time_to_seconds(row.get("time"))
-    series_number = _first_numeric(row.get("SeriesNumber"))
-    return (
-        acquisition_order if pd.notna(acquisition_order) else np.inf,
-        acquisition_number if pd.notna(acquisition_number) else np.inf,
-        acquisition_time if pd.notna(acquisition_time) else np.inf,
-        series_number if pd.notna(series_number) else np.inf,
-        row_order,
-    )
-
-
 def _infer_special_profile_phases_by_acquisition_order(
     exam_rows: pd.DataFrame,
     *,
     candidate_sources: set[str],
     profile_name: str,
     rank_to_label,
+    profile_match=None,
+    minimum_count=2,
 ) -> list[tuple[int, str, str]]:
     """Resolve special dynamic profiles by acquisition order within Dixon component."""
     candidates = exam_rows.loc[
         exam_rows["mri_perfusion_source"].isin(candidate_sources)
+        | (
+            exam_rows["mri_perfusion_source"].eq("explicit_duration")
+            & exam_rows.apply(profile_match, axis=1)
+        )
     ].copy()
     if candidates.empty:
         return []
@@ -887,34 +903,68 @@ def _infer_special_profile_phases_by_acquisition_order(
     candidates["_is_single_volume"] = n_volumes.eq(1)
     candidates["_is_multivolume"] = n_volumes.gt(1)
 
-    row_order = {idx: order for order, idx in enumerate(candidates.index)}
     component = (
         candidates["dixon_component"].fillna("UNKNOWN")
         if "dixon_component" in candidates.columns
         else pd.Series("UNKNOWN", index=candidates.index)
     )
     assignments = []
-    for component_name, component_rows in candidates.groupby(component, sort=False):
+    # Keep studies, sequence families, planes and reconstruction components apart.
+    grouping = candidates.apply(_generic_dynamic_key, axis=1)
+    for _, component_rows in candidates.groupby(grouping, sort=False):
+        component_name = component.loc[component_rows.index[0]]
         has_single_volume = bool(component_rows["_is_single_volume"].any())
         has_multivolume = bool(component_rows["_is_multivolume"].any())
         if not has_single_volume:
             continue
-        if not has_multivolume and len(component_rows) < 2:
+        rejection = None
+        if len(component_rows) < minimum_count:
+            rejection = f"fewer than {minimum_count} acquisitions"
+        # Require one complete, distinct ordering field; never break ties with
+        # SeriesNumber, cross-series AcquisitionNumber, or input row order.
+        order_values = None
+        for column in ("acquisition_order", "time"):
+            if column not in component_rows:
+                continue
+            parser = (
+                _first_numeric
+                if column == "acquisition_order"
+                else parse_time_to_seconds
+            )
+            values = component_rows[column].map(parser)
+            if values.notna().all() and values.nunique() == len(values):
+                order_values = values
+                break
+        if len(component_rows) == 1 and minimum_count == 1:
+            order_values = pd.Series([0], index=component_rows.index)
+        if rejection is None and order_values is None:
+            rejection = "missing or tied acquisition order"
+        if rejection:
+            assignments.extend(
+                (
+                    idx,
+                    "OTHER",
+                    f"ambiguous {profile_name}: {rejection}; independent phase evidence required",
+                )
+                for idx in component_rows.index
+                if component_rows.loc[idx, "mri_perfusion_source"]
+                != "explicit_duration"
+            )
             continue
 
-        ranked = sorted(
-            component_rows.index,
-            key=lambda row_idx: _acquisition_sort_key(
-                component_rows.loc[row_idx], row_order[row_idx]
-            ),
-        )
+        ranked = order_values.sort_values(kind="stable").index
         context = (
             "mixed multivolume and single-volume matches"
             if has_multivolume
             else "single-volume series"
         )
         for rank, row_idx in enumerate(ranked, start=1):
-            label = rank_to_label(rank)
+            if (
+                component_rows.loc[row_idx, "mri_perfusion_source"]
+                == "explicit_duration"
+            ):
+                continue
+            label = rank_to_label(rank, len(ranked))
             assignments.append(
                 (
                     row_idx,
@@ -939,10 +989,11 @@ def infer_art_port_phases_by_acquisition_order(
             "volume_order_art_port",
         },
         profile_name="ART-PORT",
-        rank_to_label=lambda rank: {
-            1: "ARTERIAL",
-            2: "PORTAL_VENOUS",
-        }.get(rank, "DELAYED"),
+        profile_match=lambda row: text_matches_art_port(row)
+        and not text_matches_art_port_late(row),
+        rank_to_label=lambda rank, count: (
+            "ARTERIAL" if rank == 1 else "PORTAL_VENOUS" if rank == count else "OTHER"
+        ),
     )
 
 
@@ -957,10 +1008,16 @@ def infer_art_port_late_phases_by_acquisition_order(
             "volume_order_art_port_late",
         },
         profile_name="ART/PORT/LATE",
-        rank_to_label=lambda rank: {
-            1: "ARTERIAL",
-            2: "PORTAL_VENOUS",
-        }.get(rank, "DELAYED"),
+        profile_match=text_matches_art_port_late,
+        rank_to_label=lambda rank, count: (
+            "ARTERIAL"
+            if rank == 1
+            else (
+                "DELAYED"
+                if rank == count
+                else "PORTAL_VENOUS" if count == 3 else "OTHER"
+            )
+        ),
     )
 
 
@@ -975,7 +1032,9 @@ def infer_mask_multiart_phases_by_acquisition_order(
             "volume_order_mask_multiart",
         },
         profile_name="Mask+Multiart",
-        rank_to_label=lambda rank: "NATIVE" if rank == 1 else "ARTERIAL",
+        profile_match=text_matches_mask_multiart,
+        minimum_count=1,
+        rank_to_label=lambda rank, count: "NATIVE" if rank == 1 else "ARTERIAL",
     )
 
 
@@ -1021,198 +1080,187 @@ def _generic_dynamic_key(row: pd.Series) -> tuple:
             common.stable_text(row.get(col))
             for col in ("patient_key", "date", "study_id", "StudyInstanceUID")
         ),
+        tuple(parse_image_type_tokens(row.get("ImageType"))),
         family,
         plane,
         norm_label(row.get("dixon_component"), "NOT_DIXON"),
     )
 
 
+def _matches_dynamic_group(row: pd.Series, key: tuple, series_ids: set[str]) -> bool:
+    """Keep native/context matching consistent with the target dynamic protocol."""
+    row_key = _generic_dynamic_key(row)
+    if row_key == key:
+        return True
+    if row_key[:-1] != key[:-1]:
+        return False
+    # An explicitly identified water reconstruction can support an unidentified
+    # Dixon reconstruction of the same protocol, never a known fat component.
+    if row_key[-1] == "WATER" and key[-1] in {"DIXON_UNKNOWN", "NOT_DIXON"}:
+        return True
+    return (
+        row_key[-1] in {"NOT_DIXON", "DIXON_UNKNOWN"}
+        and _dynamic_series_id(row) in series_ids
+    )
+
+
 def _series_temporal_order(rows: pd.DataFrame):
-    """Return identifiers comparable within this known series, never across UIDs."""
-    for column in (
-        "TemporalPositionIdentifier",
-        "TemporalPositionIndex",
-        "AcquisitionNumber",
-        "volume_order_in_series",
-        "InstanceNumber",
+    """Use volume ranks only within a known series."""
+    if "volume_order_in_series" not in rows:
+        return None, ""
+    if (
+        "volume_order_source" in rows
+        and rows.volume_order_source.eq("input_order").any()
     ):
-        if column not in rows:
-            continue
-        if column == "volume_order_in_series" and not (
-            "volume_split_method" in rows
-            and rows.volume_split_method.eq("repeated_slice_stack").all()
-        ):
-            # This feature can otherwise be computed from lexical volume IDs.
-            continue
-
-        def identifier(value):
-            if column in {"InstanceNumber", "volume_order_in_series"}:
-                return _first_numeric(value)
-            if isinstance(value, (list, tuple, set, np.ndarray)):
-                numbers = [_first_numeric(item) for item in value]
-                if any(pd.isna(number) for number in numbers) or len(set(numbers)) != 1:
-                    return np.nan
-                return numbers[0]
-            return _first_numeric(value)
-
-        values = rows[column].map(identifier)
-        if values.notna().all() and values.nunique() > 1:
-            return values, column
+        return None, ""
+    values = rows.volume_order_in_series.map(_first_numeric)
+    counts = rows.get(
+        "n_volumes_in_series", pd.Series(float("nan"), index=rows.index)
+    ).map(_first_numeric)
+    valid = values.ge(1) & values.le(counts) & values.mod(1).eq(0) & counts.mod(1).eq(0)
+    if valid.all() and values.nunique() > 1:
+        return values, "volume_order_in_series"
     return None, ""
 
 
 def _generic_dynamic_chronology(rows: pd.DataFrame):
-    """Keep acquisition identity, ordering clocks, and scan timing separate.
-
-    A temporal identifier can split a shared series clock into distinct frames.
-    That clock then cannot provide per-frame contrast delays. Canonical time is
-    timing evidence only when its provenance identifies an acquisition clock.
-    """
-    evidence = pd.DataFrame(index=rows.index)
-    clocks = {
-        column: rows[column].map(common.acquisition_time_seconds)
-        for column in ("AcquisitionTime", "time")
-        if column in rows
-    }
-    evidence["seconds"] = np.nan
-    evidence["timing_source"] = ""
-    evidence["timing_reliable"] = False
-    evidence["invalid_clock"] = False
-    for idx, row in rows.iterrows():
-        acquired = clocks.get("AcquisitionTime", pd.Series(dtype=float)).get(
-            idx, np.nan
-        )
-        if pd.notna(acquired):
-            evidence.loc[idx, ["seconds", "timing_source", "timing_reliable"]] = [
-                acquired,
-                "AcquisitionTime",
-                True,
-            ]
-        elif "time" in clocks and pd.notna(clocks["time"].loc[idx]):
-            source = common.stable_text(row.get("time_source"))
-            evidence.loc[idx, ["seconds", "timing_source", "timing_reliable"]] = [
-                clocks["time"].loc[idx],
-                source or "time (unknown source)",
-                source in {"AcquisitionTime", "AcquisitionDateTime"},
-            ]
-        elif any(safe_str(row.get(column)) for column in clocks):
-            evidence.loc[idx, "invalid_clock"] = True
-
+    """Order by canonical time, then acquisition order or series-local rank."""
     series = rows.apply(_dynamic_series_id, axis=1)
     local_orders = {}
     for sid in set(series) - {""}:
-        indices = series.index[series.eq(sid)]
-        local_orders[sid] = _series_temporal_order(rows.loc[indices])
-
-    chronology, source, is_clock = None, "", False
-    for column, values in clocks.items():
-        if values.notna().all() and (
-            column == "AcquisitionTime" or evidence.timing_reliable.all()
-        ):
-            chronology, source, is_clock = values, column, True
-            break
-    same_series = series.ne("").all() and series.nunique() == 1
-    if chronology is None and same_series:
-        chronology, source = local_orders[series.iloc[0]]
-        if chronology is not None:
-            source += " within series"
-    if chronology is None and "acquisition_order" in rows:
-        values = rows.acquisition_order.map(_first_numeric)
-        if values.notna().all() and values.nunique() > 1:
-            chronology, source = values, "acquisition_order"
-    if chronology is None:
-        for column, values in clocks.items():
-            if values.notna().all():
-                chronology, source, is_clock = values, column, True
-                break
-    if chronology is None:
-        # A missing or malformed volume does not invalidate the usable clocks.
-        for column, values in clocks.items():
-            if values.notna().any():
-                chronology, source, is_clock = values, column, True
-                break
-    if chronology is None:
+        local_orders[sid] = _series_temporal_order(rows.loc[series.eq(sid)])[0]
+    choices = {}
+    for column, parser in (
+        ("time", parse_time_to_seconds),
+        ("acquisition_order", _first_numeric),
+    ):
+        if column in rows:
+            choices[column] = rows[column].map(parser)
+    if series.ne("").all() and series.nunique() == 1:
+        local = local_orders[series.iloc[0]]
+        if local is not None:
+            choices["volume_order_in_series within series"] = local
+    complete = [
+        column
+        for column, values in choices.items()
+        if values.notna().all() and values.nunique() > 1
+    ]
+    partial = [
+        column
+        for column, values in choices.items()
+        if values.notna().any() and values.nunique() > 1
+    ]
+    if not (complete or partial):
         return None, "no comparable acquisition chronology"
-
+    source = (complete or partial)[0]
+    values = choices[source]
+    evidence = pd.DataFrame(index=rows.index)
     evidence["order"] = np.nan
     evidence["order_source"] = source
-    evidence["ordering_seconds"] = chronology if is_clock else np.nan
     rank = 0
-    for value in sorted(chronology.dropna().unique()):
-        indices = chronology.index[chronology.eq(value)]
-        temporal_series = {
-            sid
-            for sid in set(series.loc[indices]) - {""}
-            if local_orders[sid][0] is not None
-            and local_orders[sid][0]
-            .loc[indices.intersection(series.index[series.eq(sid)])]
-            .nunique()
-            > 1
-        }
-        if temporal_series:
-            if len(temporal_series) != 1 or series.loc[indices].nunique() != 1:
-                # Local temporal positions cannot align simultaneous series.
-                evidence.loc[indices, "order_source"] = (
-                    source + "; ambiguous temporal order across series"
-                )
-                continue
-            sid = next(iter(temporal_series))
-            positions, temporal_source = local_orders[sid]
-            for position in sorted(positions.loc[indices].unique()):
-                frame = indices[positions.loc[indices].eq(position)]
-                evidence.loc[frame, "order"] = rank
-                evidence.loc[frame, "order_source"] = (
-                    source + "; " + temporal_source + " within series"
-                )
-                rank += 1
-        else:
-            evidence.loc[indices, "order"] = rank
+    for value in sorted(values.dropna().unique()):
+        indices = values.index[values.eq(value)]
+        frames = [indices]
+        if source == "time" and len(indices) > 1:
+            acquisition = choices.get("acquisition_order")
+            if (
+                acquisition is not None
+                and acquisition.loc[indices].notna().all()
+                and acquisition.loc[indices].nunique() > 1
+            ):
+                frames = [
+                    indices[acquisition.loc[indices].eq(position)]
+                    for position in sorted(acquisition.loc[indices].unique())
+                ]
+                evidence.loc[indices, "order_source"] += "; acquisition_order"
+            else:
+                local_series = [
+                    sid
+                    for sid in set(series.loc[indices]) - {""}
+                    if local_orders[sid] is not None
+                    and local_orders[sid]
+                    .loc[indices.intersection(local_orders[sid].index)]
+                    .nunique()
+                    > 1
+                ]
+                if local_series:
+                    if len(local_series) != 1 or series.loc[indices].nunique() != 1:
+                        evidence.loc[
+                            indices, "order_source"
+                        ] += "; ambiguous volume order across series"
+                        continue
+                    positions = local_orders[local_series[0]].loc[indices]
+                    frames = [
+                        indices[positions.eq(position)]
+                        for position in sorted(positions.unique())
+                    ]
+                    evidence.loc[
+                        indices, "order_source"
+                    ] += "; volume_order_in_series within series"
+        for frame in frames:
+            evidence.loc[frame, "order"] = rank
             rank += 1
-
-    # Different temporal acquisitions with one AcquisitionTime have a container
-    # timestamp, even if acquisition_order supplied a distinct rank for each.
-    for sid in set(series) - {""}:
-        indices = series.index[series.eq(sid)]
-        for _, frame in evidence.loc[indices].groupby("seconds"):
-            if frame.order.nunique() > 1:
-                evidence.loc[frame.index, "timing_reliable"] = False
     return evidence, ""
 
 
-def _dynamic_phase_interval(seconds, label):
-    rule = next(rule for rule in rules.PHASE_RULES if rule.label == label)
-    start, end = rule.time_ranges[0]
-    return seconds - end, seconds - start
-
-
-def _intersect_dynamic_interval(interval, other):
-    start, end = max(interval[0], other[0]), min(interval[1], other[1])
-    return (start, end) if start <= end else None
+def _dynamic_time_deltas(rows: pd.DataFrame) -> pd.Series:
+    """Measure seconds from the first volume in each compatible dynamic group."""
+    delta = pd.Series(np.nan, index=rows.index, dtype=float)
+    if "time" not in rows:
+        return delta
+    eligible = rows.loc[rows.mri_sequence.eq("T1")].copy()
+    for column in ("is_subtraction", "is_quant_or_report"):
+        if column in eligible:
+            eligible = eligible.loc[~eligible[column].fillna(False)]
+    if eligible.empty:
+        return delta
+    seconds = eligible.time.map(parse_time_to_seconds)
+    for _, group in eligible.groupby(
+        eligible.apply(_generic_dynamic_key, axis=1), sort=False
+    ):
+        if not group.apply(
+            lambda row: _phase_matches_pattern(row, rules.RX_PHASE_GENERIC_DYNAMIC)
+            or _phase_matches_pattern(row, rules.RX_PHASE_MULTIART_DYNAMIC),
+            axis=1,
+        ).any():
+            continue
+        chronology, _ = _generic_dynamic_chronology(group)
+        if chronology is None:
+            # A shared populated time still gives an unambiguous zero delta.
+            reference = seconds.loc[group.index]
+        else:
+            first = chronology.index[chronology.order.eq(chronology.order.min())]
+            reference = seconds.loc[first]
+        if reference.empty or reference.isna().any() or reference.nunique() != 1:
+            continue
+        delta.loc[group.index] = seconds.loc[group.index] - reference.iloc[0]
+    return delta
 
 
 def infer_generic_dynamic_phases_from_exam_context(
     exam_rows: pd.DataFrame,
-) -> list[tuple[object, str, str, str, str, str, bool]]:
-    """Resolve compatible volumes independently; explicit labels remain fixed."""
-    eligible = (
-        exam_rows.loc[
-            exam_rows.mri_sequence.map(norm_label).eq("T1")
-            & ~exam_rows.is_derived_low_value.fillna(False)
-        ]
-        if "is_derived_low_value" in exam_rows
-        else exam_rows.loc[exam_rows.mri_sequence.map(norm_label).eq("T1")]
-    )
+) -> list[tuple[object, str, str, str, str]]:
+    """Prefer default delay windows before the ordered dynamic template.
+
+    Succeeding explicit phases bound generic inference. Within those bounds,
+    elapsed seconds from time_delta precede the established order fallback.
+    """
+
+    eligible = exam_rows.loc[exam_rows.mri_sequence.map(norm_label).eq("T1")].copy()
+    for column in ("is_subtraction", "is_quant_or_report"):
+        if column in eligible:
+            eligible = eligible.loc[~eligible[column].fillna(False)]
     if eligible.empty:
         return []
     generic = eligible.loc[
         eligible.mri_perfusion_source.isin(
-            {GENERIC_DYNAMIC_CONTEXT_PENDING, "none", "volume_order"}
+            {GENERIC_DYNAMIC_CONTEXT_PENDING, "none", "volume_order", "ordinal_context"}
         )
         & eligible.apply(
             lambda row: _phase_matches_pattern(row, rules.RX_PHASE_GENERIC_DYNAMIC)
             and not text_matches_art_port(row)
             and not text_matches_mask_multiart(row)
-            and detect_ordinal_phase_index(row) is None
+            and not _phase_matches_pattern(row, rules.RX_PHASE_MULTIART_DYNAMIC)
             and detect_explicit_phase_from_text(row)[0] is None,
             axis=1,
         )
@@ -1220,9 +1268,29 @@ def infer_generic_dynamic_phases_from_exam_context(
     if generic.empty:
         return []
     anchors = eligible.loc[
-        eligible.mri_perfusion_source.eq("explicit_text")
-        & eligible.mri_perfusion_label.isin(
-            {"NATIVE", "ARTERIAL", "PORTAL_VENOUS", "DELAYED"}
+        (
+            eligible.mri_perfusion_source.isin(
+                {
+                    "explicit_text",
+                    "dicom_phase",
+                    "strategy_context",
+                    "acquisition_phase",
+                }
+            )
+            & eligible.mri_perfusion_label.isin(
+                {"NATIVE", "ARTERIAL", "PORTAL_VENOUS", "DELAYED"}
+            )
+        )
+        | (
+            eligible.mri_perfusion_label.eq("NATIVE")
+            & eligible.mri_perfusion_source.isin(
+                {
+                    "exam_context",
+                    "group_pre_post_order",
+                    "volume_order_mask_multiart",
+                    "acquisition_order_mask_multiart",
+                }
+            )
         )
     ]
     keys = eligible.apply(_generic_dynamic_key, axis=1)
@@ -1231,26 +1299,31 @@ def infer_generic_dynamic_phases_from_exam_context(
         groups.setdefault(keys.loc[idx], []).append(idx)
     assignments = []
     phases = ["NATIVE", "ARTERIAL", "PORTAL_VENOUS", "DELAYED"]
+    phase_ranks = {phase: rank for rank, phase in enumerate(phases)}
     for key, indices in groups.items():
         candidates = generic.loc[indices]
         series_ids = set(candidates.apply(_dynamic_series_id, axis=1)) - {""}
         matched_anchors = anchors.loc[
-            [
-                idx
-                for idx in anchors.index
-                if keys.loc[idx] == key
-                or (
-                    keys.loc[idx][:-1] == key[:-1]
-                    and keys.loc[idx][-1] in {"NOT_DIXON", "DIXON_UNKNOWN"}
-                    and _dynamic_series_id(anchors.loc[idx]) in series_ids
-                )
-            ]
+            anchors.apply(
+                lambda row: _matches_dynamic_group(row, key, series_ids), axis=1
+            )
         ]
         context = pd.concat([candidates, matched_anchors])
         evidence, failure = _generic_dynamic_chronology(context)
+        explicit_anchors = matched_anchors.loc[
+            matched_anchors.mri_perfusion_source.isin(
+                {
+                    "explicit_text",
+                    "dicom_phase",
+                    "strategy_context",
+                    "acquisition_phase",
+                }
+            )
+        ]
+        native_context = matched_anchors.drop(index=explicit_anchors.index)
         source = (
             "dynamic_explicit_anchor"
-            if not matched_anchors.empty
+            if not explicit_anchors.empty
             else (
                 "volume_order"
                 if len(series_ids) == 1 and "acquisition_order" not in context
@@ -1258,293 +1331,167 @@ def infer_generic_dynamic_phases_from_exam_context(
             )
         )
         anchor_ids = ", ".join(
-            str(row.get("volume_id", idx)) for idx, row in matched_anchors.iterrows()
+            str(row.get("volume_id", idx)) for idx, row in explicit_anchors.iterrows()
         )
+        native_context_ids = ", ".join(
+            str(row.get("volume_id", idx)) for idx, row in native_context.iterrows()
+        )
+        upper_bounds = {}
+        if evidence is not None:
+            anchor_ranks = explicit_anchors.mri_perfusion_label.map(phase_ranks)
+            anchor_ranks = anchor_ranks.loc[anchor_ranks.gt(0)]
+            time_order = (
+                context.time.map(parse_time_to_seconds)
+                if "time" in context
+                else pd.Series(np.nan, index=context.index)
+            )
+            for idx in indices:
+                # Ambiguous local ranks can still precede an anchor by canonical time.
+                order = (
+                    evidence.order
+                    if pd.notna(evidence.loc[idx, "order"])
+                    else time_order
+                )
+                later = order.index[order.gt(order.loc[idx])]
+                upper = anchor_ranks.reindex(later).min()
+                if pd.notna(upper):
+                    upper_bounds[idx] = int(upper)
 
-        def record(idx, label, reason, *, timing=False):
+        def assign(idx, label, reason, *, use_delta=True, minimum_phase=1):
+            decision_source = source
+            upper = upper_bounds.get(idx) if use_delta else None
+            seconds = safe_float(candidates.loc[idx].get("time_delta"))
+            matches = {
+                rule.label
+                for rule in rules.PHASE_RULES
+                if use_delta
+                and rule.accepts_time(seconds)
+                and (upper is None or phase_ranks.get(rule.label, len(phases)) < upper)
+            }
+            if len(matches) == 1:
+                label = matches.pop()
+                reason = f"matched default {label} delay window from time_delta={seconds:g}s since first volume in group"
+                decision_source = "time_delta"
+            if upper is not None:
+                if phase_ranks.get(label, -1) >= upper:
+                    label = phases[upper - 1] if upper - 1 >= minimum_phase else "OTHER"
+                reason += f"; reserved succeeding explicit {phases[upper]} phase"
+                if label == "OTHER":
+                    reason += "; no compatible postcontrast phase remains"
             order_source = (
                 evidence.loc[idx, "order_source"] if evidence is not None else ""
             )
-            timing_source = evidence.loc[idx, "timing_source"] if timing else ""
             assignments.append(
                 (
                     idx,
                     label,
                     (
-                        "generic dynamic inference blocked: "
+                        "generic dynamic unresolved: "
                         if label == "OTHER"
                         else f"inferred {label}; "
                     )
                     + reason
                     + f"; ordered by {order_source}, family={key[-3]}, plane={key[-2]}, component={key[-1]}"
-                    + (f"; explicit anchors={anchor_ids}" if anchor_ids else ""),
-                    GENERIC_DYNAMIC_CONTEXT_BLOCKED if label == "OTHER" else source,
+                    + (f"; explicit anchors={anchor_ids}" if anchor_ids else "")
+                    + (
+                        f"; native context={native_context_ids}"
+                        if native_context_ids
+                        else ""
+                    ),
+                    (
+                        GENERIC_DYNAMIC_CONTEXT_PENDING
+                        if label == "OTHER"
+                        else decision_source
+                    ),
                     order_source,
-                    timing_source,
-                    bool(timing),
                 )
             )
+            return label
 
         if evidence is None:
             for idx in indices:
-                record(idx, "OTHER", failure)
+                assign(idx, "OTHER", failure)
             continue
         for idx in candidates.index[evidence.loc[candidates.index, "order"].isna()]:
-            record(idx, "OTHER", "missing or ambiguous acquisition order")
+            assign(idx, "OTHER", "missing or ambiguous acquisition order")
         usable = evidence.loc[evidence.order.notna()]
-        uncertain_prefix = evidence.loc[candidates.index, "order"].isna().any()
         native_indices = matched_anchors.index[
             matched_anchors.mri_perfusion_label.eq("NATIVE")
         ]
         ordered_native = native_indices.intersection(usable.index)
         if len(ordered_native):
             latest_native = usable.loc[ordered_native, "order"].max()
-            early_candidates = candidates.index.intersection(
+            early = candidates.index.intersection(
                 usable.index[usable.order.le(latest_native)]
             )
-            uncertain_prefix |= not early_candidates.empty
-            for idx in early_candidates:
-                record(
+            for idx in early:
+                assign(
                     idx,
                     "OTHER",
-                    "acquisition does not occur strictly after the explicit native anchor",
+                    "acquisition does not occur strictly after the resolved native context",
                 )
             usable = usable.loc[
-                usable.order.gt(latest_native)
-                | (usable.index.isin(ordered_native) & usable.order.eq(latest_native))
+                usable.order.gt(latest_native) | usable.index.isin(ordered_native)
+            ]
+            # Repeated explicit natives do not consume postcontrast positions.
+            usable = usable.loc[
+                ~usable.index.isin(ordered_native) | usable.order.eq(latest_native)
             ]
         frames = [list(frame.index) for _, frame in usable.groupby("order", sort=True)]
-        segments = [[]]
-        previous_clock = np.nan
+        remaining = candidates.index.intersection(usable.index)
+        if not frames or remaining.empty:
+            continue
+        has_native = len(native_indices) > 0
+        acquisition_count = len(frames) + int(has_native and not len(ordered_native))
+        if acquisition_count < 3:
+            for idx in remaining:
+                assign(
+                    idx,
+                    "OTHER",
+                    "fewer than three distinct acquisitions for a generic dynamic template",
+                )
+            continue
+        pure_post = (
+            candidates.loc[remaining].apply(has_pure_post_contrast_text, axis=1).any()
+        )
+        first_labels = matched_anchors.loc[
+            matched_anchors.index.intersection(frames[0]), "mri_perfusion_label"
+        ]
+        infer_native = not has_native and not pure_post and first_labels.empty
+        previous_phase = -1 if infer_native else 0
         for frame in frames:
-            clock = usable.loc[frame, "ordering_seconds"].min()
-            if (
-                pd.notna(clock)
-                and pd.notna(previous_clock)
-                and clock - previous_clock > rules.GENERIC_DYNAMIC_MAX_GAP_SECONDS
-            ):
-                segments.append([])
-            segments[-1].append(frame)
-            previous_clock = clock
-        for segment in segments:
-            segment_indices = [idx for frame in segment for idx in frame]
-            remaining = candidates.index.intersection(segment_indices)
-            if remaining.empty:
-                continue
-            segment_anchors = matched_anchors.loc[
-                matched_anchors.index.intersection(segment_indices)
+            named = matched_anchors.loc[
+                matched_anchors.index.intersection(frame), "mri_perfusion_label"
             ]
-            has_native = segment_anchors.mri_perfusion_label.eq("NATIVE").any()
-            post_anchors = segment_anchors.loc[
-                segment_anchors.mri_perfusion_label.ne("NATIVE")
-            ]
-            pure_post = (
-                candidates.loc[remaining]
-                .apply(has_pure_post_contrast_text, axis=1)
-                .any()
-            )
-            if len(segment) < 3:
-                for idx in remaining:
-                    record(
-                        idx,
-                        "OTHER",
-                        "fewer than three distinct acquisitions in this continuous group (gap exceeds 900s or insufficient acquisitions)",
-                    )
-                continue
-            if (
-                post_anchors.empty
-                and not has_native
-                and (pure_post or len(native_indices))
-            ):
-                for idx in remaining:
-                    record(
-                        idx,
-                        "OTHER",
-                        "post-only or disconnected group has no compatible explicit phase anchor",
-                    )
-                continue
-            first_labels = segment_anchors.loc[
-                segment_anchors.index.intersection(segment[0]), "mri_perfusion_label"
-            ]
-            infer_native = (
-                not has_native
-                and not pure_post
-                and not len(native_indices)
-                and first_labels.empty
-            )
-            native_frame = segment[0] if infer_native else []
-            native_times = evidence.loc[
-                list(
-                    segment_anchors.index[
-                        segment_anchors.mri_perfusion_label.eq("NATIVE")
-                    ]
-                )
-                + native_frame
-            ]
-            native_times = native_times.loc[native_times.timing_reliable, "seconds"]
-            interval = (
-                native_times.max() if not native_times.empty else -np.inf,
-                np.inf,
-            )
-            # Named phases calibrate when their clocks are compatible. A bad
-            # anchor's clock never deletes its explicit label or other volumes.
-            calibrated = False
-            calibration_basis = ""
-            rejected_anchors = []
-            for phase in phases[1:]:
-                for idx in post_anchors.index[
-                    post_anchors.mri_perfusion_label.eq(phase)
-                ]:
-                    if not evidence.loc[idx, "timing_reliable"]:
-                        continue
-                    overlap = _intersect_dynamic_interval(
-                        interval,
-                        _dynamic_phase_interval(evidence.loc[idx, "seconds"], phase),
-                    )
-                    if overlap is not None:
-                        interval, calibrated = overlap, True
-                        calibration_basis = "explicit postcontrast acquisition clocks"
-                    else:
-                        rejected_anchors.append(str(post_anchors.loc[idx].get("volume_id", idx)))
-            first_post = next(
-                (
-                    frame
-                    for frame in segment
-                    if not set(frame).intersection(native_frame)
-                    and not segment_anchors.loc[
-                        segment_anchors.index.intersection(frame), "mri_perfusion_label"
-                    ]
-                    .eq("NATIVE")
-                    .any()
-                ),
-                [],
-            )
-            seed_failure = uncertain_prefix and not calibrated
-            if (
-                first_post
-                and not uncertain_prefix
-                and not set(first_post).intersection(post_anchors.index)
-            ):
-                seeds = evidence.loc[first_post]
-                seeds = seeds.loc[seeds.timing_reliable & ~seeds.invalid_clock]
-                if not seeds.empty:
-                    overlap = _intersect_dynamic_interval(
-                        interval,
-                        _dynamic_phase_interval(seeds.seconds.min(), "ARTERIAL"),
-                    )
-                    if overlap is not None:
-                        interval, calibrated = overlap, True
-                        calibration_basis = (
-                            calibration_basis + "; " if calibration_basis else ""
-                        ) + "arterial start inferred from acquisition order"
-                    elif not calibrated:
-                        seed_failure = True
-            previous_phase = 0 if has_native else -1
-            for rank, frame in enumerate(segment, start=1):
-                named = segment_anchors.loc[
-                    segment_anchors.index.intersection(frame), "mri_perfusion_label"
-                ]
-                if named.nunique() > 1:
-                    for idx in remaining.intersection(frame):
-                        record(
-                            idx,
-                            "OTHER",
-                            "conflicting explicit labels for this acquisition",
-                        )
-                    continue
-                if not named.empty:
-                    previous_phase = max(previous_phase, phases.index(named.iloc[0]))
-                expected = (
-                    "NATIVE"
-                    if infer_native and rank == 1
-                    else phases[min(max(previous_phase + 1, 1), 3)]
-                )
-                later_named = segment_anchors.loc[
-                    segment_anchors.index.intersection(
-                        [idx for later_frame in segment[rank:] for idx in later_frame]
-                    ),
-                    "mri_perfusion_label",
-                ]
-                later_ranks = [
-                    phases.index(label)
-                    for label in later_named
-                    if phases.index(label) >= max(previous_phase, 1)
-                ]
-                if expected != "NATIVE" and later_ranks:
-                    expected = phases[min(phases.index(expected), min(later_ranks))]
-                frame_labels = []
+            if named.nunique() > 1:
                 for idx in remaining.intersection(frame):
-                    if evidence.loc[idx, "invalid_clock"]:
-                        record(idx, "OTHER", "invalid acquisition clock")
-                        # A known temporal position remains in the order-only
-                        # template even when its individual clock is invalid.
-                        previous_phase = max(previous_phase, phases.index(expected))
-                        continue
-                    if not named.empty:
-                        label = named.iloc[0]
-                        record(
-                            idx,
-                            label,
-                            "same acquisition as an explicit phase",
-                            timing=False,
-                        )
-                    elif expected == "NATIVE":
-                        label = "NATIVE"
-                        record(
-                            idx,
-                            label,
-                            "first acquisition in a full dynamic group; phase evidence=order only",
-                        )
-                    elif evidence.loc[idx, "timing_reliable"] and calibrated:
-                        fits = [
-                            (phase, overlap)
-                            for phase in phases[1:]
-                            if (
-                                overlap := _intersect_dynamic_interval(
-                                    interval,
-                                    _dynamic_phase_interval(
-                                        evidence.loc[idx, "seconds"], phase
-                                    ),
-                                )
-                            )
-                            is not None
-                        ]
-                        if len(fits) != 1:
-                            record(
-                                idx,
-                                "OTHER",
-                                "acquisition cannot satisfy unambiguous contrast-phase timing windows"
-                                + f"; acquisition_seconds={evidence.loc[idx, 'seconds']}; injection_interval_seconds={interval}; compatible_phases={[phase for phase, _ in fits]}; rejected_anchor_clocks={rejected_anchors}",
-                                timing=True,
-                            )
-                            continue
-                        label, interval = fits[0]
-                        record(
-                            idx,
-                            label,
-                            f"phase evidence=shared injection interval using {evidence.loc[idx, 'timing_source']}; "
-                            + calibration_basis
-                            + f"; acquisition_seconds={evidence.loc[idx, 'seconds']}; injection_interval_seconds={interval}; rejected_anchor_clocks={rejected_anchors}",
-                            timing=True,
-                        )
-                    elif seed_failure:
-                        record(
-                            idx,
-                            "OTHER",
-                            "first postcontrast acquisition is uncertain or cannot satisfy native and arterial timing windows",
-                            timing=bool(evidence.loc[idx, "timing_reliable"]),
-                        )
-                        continue
-                    else:
-                        label = expected
-                        record(
-                            idx,
-                            label,
-                            "phase evidence=order only; no reliable per-acquisition phase timing",
-                        )
-                    frame_labels.append(phases.index(label))
-                if frame_labels:
-                    previous_phase = max(previous_phase, max(frame_labels))
+                    assign(
+                        idx,
+                        "OTHER",
+                        "conflicting explicit phases at one acquisition position",
+                        use_delta=False,
+                    )
+                continue
+            reason = "phase evidence=order only; ordered dynamic template"
+            if not named.empty:
+                label = named.iloc[0]
+            else:
+                label = phases[min(previous_phase + 1, len(phases) - 1)]
+            if not named.empty:
+                previous_phase = max(previous_phase, phase_ranks[label])
+            for idx in remaining.intersection(frame):
+                assigned = assign(
+                    idx,
+                    label,
+                    reason,
+                    use_delta=named.empty,
+                    minimum_phase=max(previous_phase, 1),
+                )
+                if assigned != "OTHER":
+                    previous_phase = max(
+                        previous_phase,
+                        phase_ranks.get(assigned, len(phases) - 1),
+                    )
     return assignments
 
 
@@ -1553,16 +1500,17 @@ def is_native_fallback_candidate(row: pd.Series) -> bool:
         return False
     if norm_label(row.get("mri_perfusion_label")) != "OTHER":
         return False
-    if row.get("mri_perfusion_source") == GENERIC_DYNAMIC_CONTEXT_BLOCKED:
-        return False
-    if bool(row.get("is_derived_low_value")):
+    if (
+        bool(row.get("is_derived_low_value"))
+        or row.get("mri_perfusion_source") == "dicom_phase_conflict"
+    ):
         return False
 
     if (
         _row_matches_pattern(row, rules.RX_SUBTRACTION)
         or _row_matches_pattern(row, rules.RX_MIP_MPR)
         or _row_matches_pattern(row, rules.RX_QUANT_OR_REPORT)
-        or has_post_contrast_text(row)
+        or has_pure_post_contrast_text(row)
         or detect_ordinal_phase_index(row) is not None
     ):
         return False
@@ -1580,34 +1528,6 @@ def is_native_fallback_candidate(row: pd.Series) -> bool:
         or _sequence_matches_pattern(row, rules.RX_T1_3D_GRE)
         or dixon_component in {"WATER", "IN_PHASE", "DIXON_UNKNOWN"}
     )
-
-
-def _exam_has_post_contrast_dynamic_phase(exam_rows: pd.DataFrame) -> bool:
-    phase = exam_rows["mri_perfusion_label"].map(norm_label)
-    source = exam_rows["mri_perfusion_source"].fillna("none")
-    resolved_dynamic = phase.isin(
-        ["ARTERIAL", "PORTAL_VENOUS", "DELAYED"]
-    ) & source.isin(
-        [
-            "ordinal_context",
-            "acquisition_order_art_port_late",
-            "acquisition_order_art_port",
-            "acquisition_order_mask_multiart",
-            "acquisition_order_dixon_component",
-            "dynamic_explicit_anchor",
-            "volume_order_art_port_late",
-            "volume_order",
-            "volume_order_art_port",
-            "volume_order_mask_multiart",
-        ]
-    )
-    post_text_dynamic = exam_rows.apply(
-        lambda r: has_post_contrast_text(r)
-        and detect_ordinal_phase_index(r) is not None
-        and norm_label(r.get("mri_sequence")) == "T1",
-        axis=1,
-    )
-    return bool(resolved_dynamic.any() or post_text_dynamic.any())
 
 
 def _sort_key_for_native_fallback(row: pd.Series) -> tuple:
@@ -1629,43 +1549,175 @@ def _sort_key_for_native_fallback(row: pd.Series) -> tuple:
     quality_score += 1 if bool(row.get("is_breath_hold")) else 0
 
     time_seconds = parse_time_to_seconds(row.get("time"))
-    series_number = safe_float(row.get("SeriesNumber"))
-    acquisition_number = safe_float(row.get("AcquisitionNumber"))
-    order = min(
-        [x for x in [time_seconds, series_number, acquisition_number] if pd.notna(x)]
-        or [np.inf]
+    acquisition_order = safe_float(row.get("acquisition_order"))
+    return (
+        -quality_score,
+        -component_score,
+        time_seconds if pd.notna(time_seconds) else np.inf,
+        acquisition_order if pd.notna(acquisition_order) else np.inf,
     )
-    return (-quality_score, -component_score, order)
 
 
 def infer_missing_native_fallback(exam_rows: pd.DataFrame) -> tuple[int | None, str]:
-    if exam_rows["mri_perfusion_label"].map(norm_label).eq("NATIVE").any():
-        return None, "native/precontrast already resolved in exam"
-    if not _exam_has_post_contrast_dynamic_phase(exam_rows):
-        return None, "no post-contrast dynamic context for native fallback"
-
-    candidates = exam_rows.loc[exam_rows.apply(is_native_fallback_candidate, axis=1)]
+    """Find a separate native before dynamics in one compatible protocol group."""
+    if exam_rows.mri_perfusion_label.eq("NATIVE").any():
+        return None, "native/precontrast already resolved in compatible protocol"
+    candidates = exam_rows.loc[
+        exam_rows.apply(
+            lambda row: is_native_fallback_candidate(row)
+            and not _phase_matches_pattern(row, rules.RX_PHASE_GENERIC_DYNAMIC),
+            axis=1,
+        )
+    ]
     if candidates.empty:
-        return None, "no suitable native fallback candidate"
-
+        return None, "no suitable separate native fallback candidate"
+    dynamics = exam_rows.loc[
+        exam_rows.apply(
+            lambda row: _phase_matches_pattern(row, rules.RX_PHASE_GENERIC_DYNAMIC),
+            axis=1,
+        )
+    ]
+    if dynamics.empty:
+        return None, "no dynamic context"
+    known_phases = exam_rows.loc[
+        exam_rows.mri_perfusion_label.isin({"ARTERIAL", "PORTAL_VENOUS", "DELAYED"})
+    ]
+    context = pd.concat([dynamics, known_phases]).loc[
+        lambda frame: ~frame.index.duplicated()
+    ]
     ranked = sorted(
         candidates.index,
         key=lambda idx: _sort_key_for_native_fallback(candidates.loc[idx]),
     )
-    idx = ranked[0]
-    desc = candidates.loc[idx].get("SeriesDescription")
-    return (
-        idx,
-        (
-            "selected fallback native/precontrast from exam context because no explicit "
-            f"native series was found and post-contrast dynamic phases exist: {desc}"
+    for idx in ranked:
+        chronology, _ = _generic_dynamic_chronology(
+            pd.concat([candidates.loc[[idx]], context])
+        )
+        if (
+            chronology is None
+            or chronology.order.isna().any()
+            or chronology.order.nunique() < 3
+        ):
+            continue
+        if chronology.loc[idx, "order"] >= chronology.loc[context.index, "order"].min():
+            continue
+        desc = candidates.loc[idx].get("SeriesDescription")
+        return idx, (
+            "selected fallback native/precontrast from compatible protocol context: "
+            f"a separate candidate precedes the ordered dynamic acquisitions: {desc}"
+        )
+    return None, "no supported native candidate before compatible dynamics"
+
+
+def _infer_missing_native_fallbacks(
+    exam_rows: pd.DataFrame,
+) -> list[tuple[object, str]]:
+    """Resolve each compatible protocol independently; unrelated natives do not veto it."""
+    eligible = exam_rows.loc[
+        exam_rows.mri_sequence.eq("T1")
+        & exam_rows.mri_perfusion_label.ne("HEPATOBILIARY")
+    ].copy()
+    for column in ("is_subtraction", "is_quant_or_report"):
+        if column in eligible:
+            eligible = eligible.loc[~eligible[column].fillna(False)]
+    if eligible.empty:
+        return []
+    dynamics = eligible.loc[
+        eligible.apply(
+            lambda row: _phase_matches_pattern(row, rules.RX_PHASE_GENERIC_DYNAMIC),
+            axis=1,
+        )
+    ]
+    assignments = []
+    if dynamics.empty:
+        return assignments
+    for key, rows in dynamics.groupby(
+        dynamics.apply(_generic_dynamic_key, axis=1), sort=False
+    ):
+        series_ids = set(rows.apply(_dynamic_series_id, axis=1)) - {""}
+        context = eligible.loc[
+            eligible.apply(
+                lambda row: _matches_dynamic_group(row, key, series_ids), axis=1
+            )
+        ]
+        idx, reason = infer_missing_native_fallback(context)
+        if idx is not None:
+            assignments.append((idx, reason))
+            eligible.loc[idx, "mri_perfusion_label"] = "NATIVE"
+            eligible.loc[idx, "mri_perfusion_source"] = "exam_context"
+    return assignments
+
+
+def _share_acquisition_phase_evidence(rows: pd.DataFrame) -> pd.DataFrame:
+    """Share authoritative phase labels across compatible reconstructions."""
+    if "acquisition_id" not in rows:
+        return rows
+    out = rows.copy()
+    keys = out.apply(
+        lambda row: tuple(
+            common.stable_text(row.get(col))
+            for col in ("patient_key", "study_id", "StudyInstanceUID", "acquisition_id")
         ),
+        axis=1,
     )
+    for key, group in out.groupby(keys, sort=False):
+        if not key[-1] or not (key[1] or key[2]) or len(group) < 2:
+            continue
+        if (
+            not group.mri_sequence.eq("T1").all()
+            or group.mri_perfusion_source.eq("dicom_phase_conflict").any()
+        ):
+            continue
+        incompatible = False
+        for column in (
+            "FrameOfReferenceUID",
+            "Rows",
+            "Columns",
+            "PixelSpacing",
+            "ImageOrientationPatient",
+            "ImagePositionPatient",
+        ):
+            if (
+                column in group
+                and len(set(group[column].map(common.stable_text)) - {""}) > 1
+            ):
+                incompatible = True
+        for column in ("time", "acquisition_order", "volume_order_in_series"):
+            if (
+                column in group
+                and group[column].dropna().map(common.stable_text).nunique() > 1
+            ):
+                incompatible = True
+        if incompatible:
+            continue
+        anchors = group.loc[
+            group.mri_perfusion_source.isin(
+                {
+                    "explicit_text",
+                    "dicom_phase",
+                    "strategy_context",
+                }
+            )
+            & group.mri_perfusion_label.ne("OTHER")
+        ]
+        if anchors.empty or anchors.mri_perfusion_label.nunique() != 1:
+            continue
+        anchor = anchors.iloc[0]
+        unresolved = group.index[group.mri_perfusion_label.eq("OTHER")]
+        for idx in unresolved:
+            out.loc[idx, "mri_perfusion_label"] = anchor.mri_perfusion_label
+            out.loc[idx, "mri_perfusion_reason"] = (
+                f"same validated acquisition_id={key[-1]} as authoritative phase: {anchor.mri_perfusion_reason}"
+            )
+            out.loc[idx, "mri_perfusion_confidence"] = "inferred"
+            out.loc[idx, "mri_perfusion_source"] = "acquisition_phase"
+    return out
 
 
 def add_mri_perfusion_columns(
     df: pd.DataFrame,
     exam_group_cols: Sequence[str] | None = None,
+    phase_curation: dict | None = None,
 ) -> pd.DataFrame:
     out = df.copy()
     out["phase_text_column"] = out.apply(
@@ -1686,8 +1738,7 @@ def add_mri_perfusion_columns(
         ]
     ] = pd.DataFrame(result.tolist(), index=out.index)
     out["mri_dynamic_order_source"] = ""
-    out["mri_dynamic_timing_source"] = ""
-    out["mri_dynamic_timing_reliable"] = False
+    out["time_delta"] = np.nan
 
     group_cols = [c for c in (exam_group_cols or []) if c in out.columns]
     if group_cols:
@@ -1697,78 +1748,91 @@ def add_mri_perfusion_columns(
     else:
         grouped = [out.index]
 
+    # Resolve only strategies ahead of rules. Their labels inform chronology,
+    # while raw rule outputs and final strategy precedence remain independent.
+    config = validate_phase_curation(phase_curation)
+    preceding = []
+    for strategy in config["strategies"]:
+        if strategy["type"] == "rules":
+            break
+        preceding.append(strategy)
+    authority = pd.DataFrame(index=out.index)
+    if preceding:
+        authority = apply_phase_curation(out, {**config, "strategies": preceding})
+
+    def context_rows(indices):
+        context = out.loc[indices].copy()
+        if "phase_status" in authority:
+            resolved = authority.loc[indices, "phase_status"].eq("RESOLVED")
+            selected = resolved.index[resolved]
+            context.loc[selected, "mri_perfusion_label"] = authority.loc[
+                selected, "phase"
+            ]
+            context.loc[selected, "mri_perfusion_source"] = "strategy_context"
+            context.loc[selected, "mri_perfusion_reason"] = authority.loc[
+                selected, "phase_reason"
+            ]
+            context.loc[selected, "mri_perfusion_confidence"] = authority.loc[
+                selected, "phase_confidence"
+            ]
+        return context
+
     for idx in grouped:
-        exam_rows = out.loc[idx].copy()
+        out.loc[idx, "time_delta"] = _dynamic_time_deltas(out.loc[idx])
+        shared = _share_acquisition_phase_evidence(context_rows(idx))
+        propagated = shared.index[shared.mri_perfusion_source.eq("acquisition_phase")]
+        for column in (
+            "mri_perfusion_label",
+            "mri_perfusion_reason",
+            "mri_perfusion_confidence",
+            "mri_perfusion_source",
+        ):
+            out.loc[propagated, column] = shared.loc[propagated, column]
+        exam_rows = context_rows(idx)
 
         for row_idx, label, reason in infer_art_port_late_phases_by_acquisition_order(
             exam_rows
         ):
             out.loc[row_idx, "mri_perfusion_label"] = label
             out.loc[row_idx, "mri_perfusion_reason"] = reason
-            out.loc[row_idx, "mri_perfusion_confidence"] = "inferred"
+            out.loc[row_idx, "mri_perfusion_confidence"] = (
+                "unknown" if label == "OTHER" else "inferred"
+            )
             out.loc[row_idx, "mri_perfusion_source"] = "acquisition_order_art_port_late"
 
-        unresolved_art_port_late = out.loc[idx, "mri_perfusion_source"].eq(
-            ART_PORT_LATE_CONTEXT_PENDING
-        )
-        for row_idx in out.loc[idx].index[unresolved_art_port_late]:
-            out.loc[row_idx, "mri_perfusion_label"] = "DELAYED"
-            out.loc[row_idx, "mri_perfusion_reason"] = (
-                "ART/PORT/LATE exam context did not resolve multiple single-volume "
-                "acquisitions; treated as delayed"
-            )
-            out.loc[row_idx, "mri_perfusion_confidence"] = "inferred"
-            out.loc[row_idx, "mri_perfusion_source"] = (
-                "explicit_text_art_port_late_single"
-            )
-
-        exam_rows = out.loc[idx].copy()
+        exam_rows = context_rows(idx)
 
         for row_idx, label, reason in infer_art_port_phases_by_acquisition_order(
             exam_rows
         ):
             out.loc[row_idx, "mri_perfusion_label"] = label
             out.loc[row_idx, "mri_perfusion_reason"] = reason
-            out.loc[row_idx, "mri_perfusion_confidence"] = "inferred"
+            out.loc[row_idx, "mri_perfusion_confidence"] = (
+                "unknown" if label == "OTHER" else "inferred"
+            )
             out.loc[row_idx, "mri_perfusion_source"] = "acquisition_order_art_port"
 
-        unresolved_art_port = out.loc[idx, "mri_perfusion_source"].eq(
-            ART_PORT_CONTEXT_PENDING
-        )
-        for row_idx in out.loc[idx].index[unresolved_art_port]:
-            out.loc[row_idx, "mri_perfusion_label"] = "PORTAL_VENOUS"
-            out.loc[row_idx, "mri_perfusion_reason"] = (
-                "ART-PORT exam context did not resolve two single-volume acquisitions; "
-                "treated as portal/transition"
-            )
-            out.loc[row_idx, "mri_perfusion_confidence"] = "inferred"
-            out.loc[row_idx, "mri_perfusion_source"] = "explicit_text_art_port_single"
-
-        exam_rows = out.loc[idx].copy()
+        exam_rows = context_rows(idx)
 
         for row_idx, label, reason in infer_mask_multiart_phases_by_acquisition_order(
             exam_rows
         ):
             out.loc[row_idx, "mri_perfusion_label"] = label
             out.loc[row_idx, "mri_perfusion_reason"] = reason
-            out.loc[row_idx, "mri_perfusion_confidence"] = "inferred"
+            out.loc[row_idx, "mri_perfusion_confidence"] = (
+                "unknown" if label == "OTHER" else "inferred"
+            )
             out.loc[row_idx, "mri_perfusion_source"] = "acquisition_order_mask_multiart"
 
-        unresolved_mask_multiart = out.loc[idx, "mri_perfusion_source"].eq(
-            MASK_MULTIART_CONTEXT_PENDING
-        )
-        for row_idx in out.loc[idx].index[unresolved_mask_multiart]:
-            out.loc[row_idx, "mri_perfusion_label"] = "ARTERIAL"
-            out.loc[row_idx, "mri_perfusion_reason"] = (
-                "Mask+Multiart exam context did not contain multiple single-volume "
-                "acquisitions; treated as arterial"
-            )
-            out.loc[row_idx, "mri_perfusion_confidence"] = "inferred"
-            out.loc[row_idx, "mri_perfusion_source"] = (
-                "explicit_text_mask_multiart_single"
-            )
+        exam_rows = context_rows(idx)
+        for fallback_idx, reason in _infer_missing_native_fallbacks(exam_rows):
+            logger.info("Fallback native selected for MRI protocol: %s", reason)
+            out.loc[fallback_idx, "mri_perfusion_label"] = "NATIVE"
+            out.loc[fallback_idx, "mri_perfusion_reason"] = reason
+            out.loc[fallback_idx, "mri_perfusion_confidence"] = "fallback"
+            out.loc[fallback_idx, "mri_perfusion_source"] = "exam_context"
 
-        exam_rows = out.loc[idx].copy()
+        exam_rows = context_rows(idx)
 
         for (
             row_idx,
@@ -1776,8 +1840,6 @@ def add_mri_perfusion_columns(
             reason,
             source,
             order_source,
-            timing_source,
-            timing_reliable,
         ) in infer_generic_dynamic_phases_from_exam_context(exam_rows):
             out.loc[row_idx, "mri_perfusion_label"] = label
             out.loc[row_idx, "mri_perfusion_reason"] = reason
@@ -1786,29 +1848,9 @@ def add_mri_perfusion_columns(
             )
             out.loc[row_idx, "mri_perfusion_source"] = source
             out.loc[row_idx, "mri_dynamic_order_source"] = order_source
-            out.loc[row_idx, "mri_dynamic_timing_source"] = timing_source
-            out.loc[row_idx, "mri_dynamic_timing_reliable"] = timing_reliable
 
-        exam_rows = out.loc[idx].copy()
+        exam_rows = context_rows(idx)
 
-        for row_idx, row in exam_rows.iterrows():
-            if norm_label(row.get("mri_perfusion_label")) != "OTHER":
-                continue
-            label, reason, confidence, source = infer_phase_from_ordinal_context(
-                row, exam_rows
-            )
-            if label is None:
-                if source == "ordinal_context":
-                    out.loc[row_idx, "mri_perfusion_reason"] = reason
-                    out.loc[row_idx, "mri_perfusion_confidence"] = confidence
-                    out.loc[row_idx, "mri_perfusion_source"] = source
-                continue
-            out.loc[row_idx, "mri_perfusion_label"] = label
-            out.loc[row_idx, "mri_perfusion_reason"] = reason
-            out.loc[row_idx, "mri_perfusion_confidence"] = confidence
-            out.loc[row_idx, "mri_perfusion_source"] = source
-
-        exam_rows = out.loc[idx].copy()
         eligible = exam_rows.loc[
             exam_rows["mri_sequence"].eq("T1")
             & ~exam_rows["is_derived_low_value"].fillna(False)
@@ -1830,7 +1872,7 @@ def add_mri_perfusion_columns(
         ):
             label = norm_label(out.loc[row_idx, "mri_perfusion_label"])
             source = out.loc[row_idx, "mri_perfusion_source"]
-            if source == GENERIC_DYNAMIC_CONTEXT_BLOCKED:
+            if source == "dicom_phase_conflict":
                 continue
             if label != "OTHER" and not (
                 label == "NATIVE"
@@ -1842,15 +1884,11 @@ def add_mri_perfusion_columns(
             out.loc[row_idx, "mri_perfusion_confidence"] = "inferred"
             out.loc[row_idx, "mri_perfusion_source"] = "group_pre_post_order"
 
-        exam_rows = out.loc[idx].copy()
-        fallback_idx, reason = infer_missing_native_fallback(exam_rows)
-        if fallback_idx is not None:
-            logger.info("Fallback native selected for MRI exam: %s", reason)
-            out.loc[fallback_idx, "mri_perfusion_label"] = "NATIVE"
-            out.loc[fallback_idx, "mri_perfusion_reason"] = reason
-            out.loc[fallback_idx, "mri_perfusion_confidence"] = "fallback"
-            out.loc[fallback_idx, "mri_perfusion_source"] = "exam_context"
-
+    for row_idx, row in out.iterrows():
+        if row.phase_text_column and row.phase_text_value:
+            detail = f"{row.phase_text_column}={row.phase_text_value!r}"
+            if detail not in row.mri_perfusion_reason:
+                out.loc[row_idx, "mri_perfusion_reason"] += f"; {detail}"
     return out
 
 
@@ -2332,9 +2370,12 @@ def select_best_candidates(
         )
     ].copy()
 
-    # Keep phase provenance on derived products, but exclude them independently
-    # from the default diagnostic selection, even if they are the only candidate.
-    selectable = selectable.loc[~selectable["is_derived_low_value"]].copy()
+    # MIP/MPR reconstructions remain diagnostic candidates: their score penalty
+    # prefers source images without leaving a phase slot empty when only a
+    # reconstruction carries its phase. DERIVED alone is not an exclusion.
+    # Only subtraction and quantitative/report flags exclude eligible products.
+    excluded_products = selectable["is_subtraction"] | selectable["is_quant_or_report"]
+    selectable = selectable.loc[~excluded_products].copy()
     selectable = selectable[selectable["selection_score"].fillna(-9999) > -500].copy()
 
     if selectable.empty:
@@ -2458,8 +2499,13 @@ def annotate_mri(
     volume_col: str = "volume_id",
     date_col: str = "date",
     phase_curation: dict | None = None,
+    resolve_phase: bool = True,
 ) -> pd.DataFrame:
-    """Add labels, features, and scores to a volume/series-level dataframe."""
+    """Add labels, features, and scores to a volume/series-level dataframe.
+
+    Set ``resolve_phase=False`` to leave canonical phase resolution to a later
+    cleaning step while still producing the modality's rule evidence.
+    """
     out = df.copy()
     if date_col in out.columns:
         out[date_col] = pd.to_datetime(out[date_col], errors="coerce").dt.date
@@ -2485,11 +2531,14 @@ def annotate_mri(
             "best_candidate_group_columns"
         ],
     )
-    out = add_mri_perfusion_columns(out, exam_group_cols=exam_cols)
+    out = add_mri_perfusion_columns(
+        out, exam_group_cols=exam_cols, phase_curation=phase_curation
+    )
     out["rule_phase"] = out["mri_perfusion_label"]
     out["rule_phase_reason"] = out["mri_perfusion_reason"]
     out["rule_phase_confidence"] = out["mri_perfusion_confidence"]
-    out = apply_phase_curation(out, phase_curation)
+    if resolve_phase:
+        out = apply_phase_curation(out, phase_curation)
     out = add_scores(out)
     return out
 

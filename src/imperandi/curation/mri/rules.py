@@ -20,8 +20,12 @@ RX_BREATH_HOLD = shared.RX_BREATH_HOLD
 RX_RESP_TRIGGERED = shared.RX_RESP_TRIGGERED
 RX_PHASE_ARTERIAL = shared.RX_PHASE_ARTERIAL
 RX_PHASE_PORTAL = shared.RX_PHASE_PORTAL
-RX_PHASE_DELAYED = shared.RX_PHASE_DELAYED
 RX_PHASE_ORDINAL = shared.RX_PHASE_ORDINAL
+RX_PHASE_DELAYED = token(
+    r"transitionnel|transitional",
+    shared.RX_PHASE_DELAYED
+)
+
 
 # Reusable MR families and contrast agents.
 GADOLINIUM = r"gd|gad|gado|gadopdc|gadolinium|eovist|primovist|gadoxetate|gadoxetic"
@@ -30,6 +34,7 @@ T1_GRE = (
     rf"vibe|lava|e?thrive|twist|grasp|dynava|fspgr|spgr|tfe"
     rf"|twist{SEP}vibe|lava{SEP}flex|{DIXON}|idea(?:l)?|disco"
 )
+RX_PHASE_MULTIART_DYNAMIC = token(rf"multi{SEP}{shared.ARTERIAL}")
 T2_FAST_SPIN = r"tse|fse|frfse"
 T2_SINGLE_SHOT = r"haste|e?ssfse|ssh"
 T2_MOTION_ROBUST = r"f?blade|propeller|prop"
@@ -45,7 +50,9 @@ RX_SEQUENCE_DWI = token(
     rf"|apparent{SEP}diffusion{SEP}coefficient"
     rf"|trace|ivim|dti|ep2d|b{SEP}(?:={SEP})?\d{{1,4}}"
 )
-RX_SEQUENCE_T1 = token(rf"t1(?:{SEP}weighted)?|3d{SEP}t1", T1_GRE)
+RX_SEQUENCE_T1 = token(
+    rf"t1(?:{SEP}weighted)?|3d{SEP}t1", T1_GRE, RX_PHASE_MULTIART_DYNAMIC
+)
 RX_SEQUENCE_T1_CONTRAST = token(
     GADOLINIUM,
     rf"t1{SEP}(?:{GADOLINIUM}|{shared.CONTRAST}|post|c\+|fs{SEP}post)",
@@ -65,7 +72,7 @@ RX_PHASE_NATIVE = token(
 RX_PHASE_POST_CONTRAST = token(shared.RX_PHASE_POST_CONTRAST, GADOLINIUM)
 RX_PHASE_HEPATOBILIARY = token(
     rf"bili|hepato{SEP}(?:biliary|biliaire)|hbp|bhp"
-    rf"|voie{SEP}biliaire|transitionnel"
+    rf"|voie{SEP}biliaire"
 )
 PHASE_RULES = shared.phase_rules(
     native=RX_PHASE_NATIVE,
@@ -101,13 +108,10 @@ RX_T1_DYNAMIC = token(
     RX_PHASE_POST_CONTRAST,
 )
 
-# Engineering guard against joining unrelated dynamic acquisitions. It uses the
-# upper end of the existing 3–15 minute delayed-phase policy, not injection time.
-GENERIC_DYNAMIC_MAX_GAP_SECONDS = 900.0
-
 GENERIC_DYNAMIC_FAMILIES = (
     ("DIXON", token(DIXON)),
-    ("VIBE", token(r"vibe|twist|grasp|dynava")),
+    ("GRASP", token(r"grasp")),
+    ("VIBE", token(r"vibe|twist|dynava")),
     ("LAVA", token(r"lava")),
     ("THRIVE", token(r"e?thrive")),
     ("IDEAL", token(r"idea(?:l)?")),
@@ -151,7 +155,11 @@ T1_PHASE_PRIORITY = {**shared.PHASE_PRIORITY, "HEPATOBILIARY": 90}
 
 # Explicit phase labels should beat phases inferred from a dynamic container.
 T1_PHASE_SOURCE_PRIORITY = {
+    "time_delta": 15,
+    "explicit_duration": 10,
     "explicit_text": 40,
+    "dicom_phase": 40,
+    "acquisition_phase": 15,
     "explicit_text_art_port_late_single": 25,
     "explicit_text_art_port_single": 25,
     "explicit_text_mask_multiart_single": 25,
@@ -163,7 +171,6 @@ T1_PHASE_SOURCE_PRIORITY = {
     "acquisition_order_dixon_component": 5,
     "dynamic_explicit_anchor": 15,
     "generic_dynamic_context_pending": -20,
-    "generic_dynamic_context_blocked": -20,
     "volume_order_art_port_late": 10,
     "volume_order_art_port": 10,
     "volume_order_mask_multiart": 10,

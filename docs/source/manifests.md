@@ -31,7 +31,15 @@ One manifest configures the main data path:
 
 The `cleaning.steps` order is executable configuration. In particular,
 `modality_curation` should run after volume grouping and acquisition ordering,
-and `finalize` should remain last.
+followed by `phase_curation`, and `finalize` should remain last.
+`modality_curation` generates CT/MR features, sequence labels, and raw rule
+evidence. It can run without a top-level `phase_curation` block and does not
+resolve canonical phases or write selection exports. The separate
+`phase_curation` step requires that block, resolves the ordered strategies from
+existing evidence, and refreshes phase-dependent selection scores. It can also
+run alone on a table that already contains rule, ontology, or model evidence.
+Cleaning consumes existing model predictions; use `imperandi phase` to run
+TotalSegmentator when prediction is needed.
 
 ## YAML manifest skeleton
 
@@ -87,6 +95,7 @@ cleaning:
     - type: compute_visit_order
     - type: compute_acquisition_order
     - type: modality_curation
+    - type: phase_curation
     - type: finalize
 
 segmentation:
@@ -170,6 +179,61 @@ Copy a built-in YAML manifest as the starting point because the full built-in
 cleaning pipeline contains the geometry, modality, volume, and quality-control
 steps omitted from this abbreviated skeleton.
 
+## Date and time coalescing
+
+`coalesce_date` and `coalesce_time` accept an ordered `candidates` list. Each
+row uses the first candidate that parses successfully; blank, malformed, and
+absent columns fall through to the next candidate. An explicit list replaces
+the defaults completely and may name site-specific CSV columns:
+
+```yaml
+cleaning:
+  steps:
+    - type: coalesce_date
+      candidates:
+        - StudyDate
+        - AcquisitionDate
+        - SeriesDate
+
+    - type: coalesce_time
+      candidates:
+        - FrameAcquisitionDateTime
+        - AcquisitionDateTime
+        - AcquisitionTime
+```
+
+Without `candidates`, the date order is `StudyDate`, `AcquisitionDate`, then
+`SeriesDate`. The time order is `FrameReferenceDateTime`,
+`FrameAcquisitionDateTime`, `AcquisitionDateTime`, then `AcquisitionTime`.
+The resulting `date_source` and `time_source` columns contain the exact source
+column name and survive volume aggregation and CSV export. Candidate lists must
+be nonempty lists of nonempty column names. DICOM DA, TM, and DT values,
+including fractional seconds and DT UTC offsets, are supported. A configured
+datetime contributes its represented date or time component while the raw
+datetime remains available.
+
+The canonical `date` is the examination date by default because `StudyDate`
+has first priority and is used for visit grouping. Ordering and phase inference
+use the canonical `time`, `acquisition_order`, and series-local
+`volume_order_in_series` / `n_volumes_in_series` columns. Raw DICOM datetime
+and bolus fields remain metadata; they do not calibrate contrast delays or
+override this ordering. Phase curation compares canonical time-of-day values
+without reconstructing cross-midnight timestamps.
+
+`ContentTime` and `InstanceCreationTime` describe content or object creation,
+and `StudyTime` cannot order acquisitions within a study. `SeriesTime` can also
+be too coarse for individual acquisitions. All remain available as raw tags
+and may be named explicitly for datasets that need them, but they are excluded
+from the default acquisition-time candidates. Their literal column names are
+retained in `time_source` for provenance. Once coalesced, `time` is the
+canonical clock used by curation regardless of the selected source.
+
+Enhanced DICOM values found under shared or per-frame functional groups are
+promoted to their canonical keyword columns during selected-tag parsing.
+Multiple per-frame values remain lists until volume aggregation. Private tags,
+vendor-specific timing sequences, and conflicting frame clock domains are not
+interpreted automatically.
+
 ## Cleaning filters
 
 Add `type: filter` steps to `cleaning.steps` to keep or discard records that
@@ -237,9 +301,14 @@ Perfusion phase and diagnostic selection eligibility are independent. Derived
 products, including subtraction, MIP/MPR, secondary/key images, and quantitative
 maps, can retain an evidenced acquisition phase. These product markers do not
 produce `NOT_APPLICABLE`; without phase evidence the row remains `UNRESOLVED`.
-Explicit derived-product markers still exclude the row from default diagnostic
-selection, even when its phase is `RESOLVED`. `ImageType=DERIVED` alone does not
-exclude diagnostic CT reconstructions or MRI Dixon/GRE images from selection.
+MRI MIP/MPR reconstructions remain eligible for diagnostic selection, with score
+penalties that prefer source images when comparable candidates exist. They can
+fill a phase slot when its only resolved candidate is a reconstruction.
+Within eligible sequence/phase slots, MRI selection excludes only rows flagged
+as subtraction or quantitative/report products. Dixon component labels and
+secondary/key-product markers do not independently exclude a candidate.
+`ImageType=DERIVED` alone does not exclude
+diagnostic CT reconstructions or MRI Dixon/GRE images from selection.
 Legacy `phase_applicability_reason=DERIVED` values are ignored by the resolver;
 rerun `clean` to regenerate metadata phase evidence suppressed by older rules.
 
@@ -313,7 +382,7 @@ phase_curation:
 
 `--selected_csv_path` applies only to `phase`. Relative paths resolve from the working
 directory. Omitting the option uses the input-derived defaults; it is not a
-manifest setting. Cleaning pipelines without `modality_curation` do not
+manifest setting. Cleaning pipelines without a `phase_curation` step do not
 produce selection exports.
 The main output retains all its rows.
 The selected CSV saves `selected_long`: one best eligible CT volume per phase
@@ -413,9 +482,10 @@ shift the native fallback onto the second acquisition. Missing or indistinguisha
 chronology leaves the fallback unresolved. Later phases keep their existing rules.
 The inferred confidence and reason record the matching field and text; MR also
 records `mri_perfusion_source=group_pre_post_order`. Generic post-only dynamic
-MR containers remain unresolved unless another supported rule identifies their
-phases; their first acquisition is never assumed to be native. Both keywords must occur in
-the same scalar value, not separate fields or separate entries of a list.
+MR containers use arterial/portal/delayed order inference without requiring an
+explicit phase anchor; their first acquisition is not assumed to be native.
+Both keywords must occur in the same scalar value, not separate fields or
+separate entries of a list.
 
 The shared timing policy recognizes arterial delays of 20–35 seconds, portal
 delays of 60–90 seconds, and delayed acquisitions at 3–15 minutes. It parses
@@ -424,59 +494,83 @@ window through its seconds component. Colon notation denotes minutes and
 seconds (`1:30 min`); decimal notation denotes fractional units (`1.5 min`).
 Conflicting durations without an explicit phase label remain unresolved.
 An adjacent duration on a named delayed phase must also fit the delayed window.
+For MRI, an explicit duration overrides generic `late`/`tardif` wording regardless
+of word order; the existing hepatobiliary timing window remains unchanged.
 These windows are curation heuristics, not universal acquisition standards.
 
-Generic MR dynamic inference includes compatible explicit phase acquisitions
-in its chronology. An explicit native followed by three generic dynamic
-acquisitions yields native, arterial, portal, and delayed; the first generic
-acquisition does not restart at native. Named postcontrast phases also retain
-their positions and labels. Without a native anchor, a generic full dynamic
-group can still use the native/arterial/portal/delayed template; a post-only
-group requires a compatible explicit phase anchor. At least three distinct
-acquisitions, including anchors, are required. An explicit native plus two
-generic postcontrast acquisitions can therefore resolve arterial and portal.
+MRI phase delays and protocol mappings are built into the rule engine.
+The manifest does not expose `mri_dynamic`, configurable profiles, or timing
+windows. Keep site-specific controlled labels in an ontology strategy.
+Standard `ContrastBolusAgentPhase` metadata is direct evidence; conflicting
+values within a volume remain unresolved instead of receiving an order-based
+phase. Strategies before `rules`, including ontology, contribute native and
+named phase context before generic dynamic progression. Repeated natives count
+once. Vendor `PhN` prefixes do not define physiological phases or require a
+`Ph1`. Without compatible native context, the first ordered generic dynamic
+acquisition falls back to native, even if its prefix is `Ph2` or `Ph3`, unless
+stronger phase evidence establishes otherwise. Bare agent names such as `gado`
+and exam-level injection descriptions are protocol context; clear acquisition
+postcontrast wording such as `post` or `C+` still establishes post-only context.
 
-Compatibility preserves patient, date, study, sequence family, plane, and Dixon
-component. An unspecified native Dixon component can anchor a known component
-only within the same series. Derived products do not anchor or shift ranks.
-Acquisition identity is separate from clock evidence. Within a known series,
-`TemporalPositionIdentifier` or `TemporalPositionIndex` distinguishes volumes
-even when their timestamps are identical. Acquisition numbers, trusted repeated
-slice stack order, and instance numbers can supply local order as fallbacks;
-these identifiers are never compared across series. A timestamp shared by
-distinct temporal acquisitions cannot provide per-volume phase timing. Tied
-reconstructions without distinct temporal identifiers share one acquisition.
+Generic MR dynamics use compatible acquisitions ordered by canonical `time`,
+then `acquisition_order` to refine ties or replace missing times. Supplied
+`volume_order_in_series` and `n_volumes_in_series` provide local order within
+one series; local ranks are never compared across unrelated series. A shared
+series time can be refined by its local volume rank. Incomplete or ambiguous
+order leaves the affected acquisitions unresolved; lexical volume IDs never
+establish chronology. Computed volume ranks record `volume_order_source=computed`
+when time/order evidence is available, or `input_order` for a neutral input-order
+fallback, which does not establish dynamic chronology.
 
-Complete `AcquisitionTime` takes precedence for chronology. Coalescing time
-records each row's supplying column in `time_source`. A canonical `time` is
-reliable phase-timing evidence only when its source is `AcquisitionTime` or
-`AcquisitionDateTime`; series, content, creation, study, and unknown clocks
-provide ordering evidence only. Local temporal identifiers take precedence
-over these weaker clocks within one series. Complete exam `acquisition_order`
-can also supply order. Missing clocks can use an order-only inference; malformed
-clocks leave the affected volumes `OTHER` without deleting usable neighbors.
+Three distinct acquisitions, including compatible explicitly named phases,
+are required for the generic order template. Full dynamics follow `NATIVE`,
+`ARTERIAL`, `PORTAL_VENOUS`, then `DELAYED` for later acquisitions. Post-only groups start
+at arterial. A compatible native anchors the progression and counts once;
+repeated native acquisitions do not consume postcontrast positions. Explicit
+phase labels retain their positions and provenance. A succeeding explicit phase
+in the compatible group is reserved for its named acquisition. Earlier generic
+volumes must remain below that phase, including when a `time_delta` window matches
+the reserved phase. Order fallback can repeat a preceding phase, or stay unresolved
+when no compatible postcontrast phase remains. Without a succeeding explicit
+phase, the existing timing and order progression applies. A separate unlabelled
+native can be inferred when it precedes compatible dynamics. Groups match on
+`patient_key`, `date`, `study_id`, `StudyInstanceUID`, `ImageType`, sequence family,
+plane, and Dixon component. `ImageType` uses its full ordered token sequence,
+normalized for case and representation (lists, serialized lists, or separated
+strings). Missing image types group together separately from populated values.
+Different image types have independent phase progressions and `time_delta`
+references. Series IDs and time gaps do not split these groups.
 
-Reliable acquisition clocks constrain a possible injection interval using the
-shared arterial, portal, and delayed windows. An explicit postcontrast phase
-can calibrate it; otherwise the first supported postcontrast acquisition seeds
-an arterial assumption. Native start bounds injection from below and is never
-treated as injection time. Each volume is checked independently against that
-interval, allowing repeated phases and skipped phases. Volumes outside all
-windows or with ambiguous timing stay `OTHER`; they do not shift later phases.
-Explicit labels remain fixed even when an anchor's clock is incompatible.
+ART-PORT profiles use arterial at the first volume and portal at the last.
+ART/PORT/LATE profiles use arterial first and delayed last; the middle of a
+three-volume profile is portal. Other intermediate positions remain unresolved
+unless explicit text supplies a phase. Multiart assigns arterial throughout;
+Mask+Multiart assigns native first and arterial thereafter. These mappings use
+volume rank/count or exam acquisition order. Textual phase names and durations
+remain explicit rule evidence. Raw injection times, frame windows, clock domains,
+and estimated injection intervals are not used.
 
-Acquisitions must follow the latest explicit native. Gaps over 15 minutes
-separate continuous groups instead of invalidating supported earlier volumes;
-each group still needs three distinct acquisitions. When only order is usable,
-the phase template remains an inference, with explicit anchors bounding its
-progression. A disconnected group cannot restart at native when a compatible
-explicit native exists elsewhere. Later native fallback cannot override a
-blocked volume. Anchored assignments record
-`mri_perfusion_source=dynamic_explicit_anchor`; blocked volumes record
-`generic_dynamic_context_blocked` and the reason. The separate audit columns
-`mri_dynamic_order_source`, `mri_dynamic_timing_source`, and
-`mri_dynamic_timing_reliable` distinguish ordering from usable phase-timing
-checks. Order-only assignments have empty timing source and reliability false.
+Assignments with explicit context record `dynamic_explicit_anchor`; other ordered
+dynamics use `volume_order` or `acquisition_order_dixon_component`. Unresolved
+dynamics retain `generic_dynamic_context_pending` with a reason.
+`mri_dynamic_order_source` records the canonical columns used to order them.
+Dynamic groups also receive `time_delta`, measured in seconds as the volume's
+canonical `time` minus the first volume's `time` in that group. Compatible native
+and explicitly labelled acquisitions participate in the reference group. Missing
+or invalid current/reference times leave the value empty; acquisition or volume
+ranks do not supply elapsed seconds. Groups with a shared populated time have
+zero deltas. For generic dynamics, a valid `time_delta` matching one default
+phase-delay window takes precedence over the order template: arterial at
+20–35 seconds, portal at 60–90 seconds, delayed at 180–900 seconds, and the
+existing MR hepatobiliary windows. Boundaries are inclusive. Missing, invalid,
+negative, non-finite, out-of-window deltas, or matches at/above a succeeding
+explicit phase use the existing order fallback within the explicit bounds.
+Explicit phase labels and the special dynamic profiles keep their precedence.
+Matching elapsed-time evidence can resolve a phase even when fewer than three
+acquisitions prevent the generic order template from resolving it.
+These deltas remain relative to the first volume in the group; bolus-time
+calibration is not used. Reasons record the matched delta and
+`mri_perfusion_source=time_delta` identifies assignments made from these windows.
 
 CT adds angiography/CTA terms. MR adds gadolinium-related terms, hepatobiliary
 labels and timing (20 minutes or 2 hours through 2h59m59s), sequence families,

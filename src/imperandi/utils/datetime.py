@@ -6,6 +6,7 @@ import logging
 from datetime import time
 from typing import Optional, Any
 import re
+from imperandi.utils.dicom_timing import DICOM_CLOCK_DTYPES
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +148,13 @@ def earliest_acquisition_datetime(tm_or_list) -> Optional[time]:
     return _parse_dicom_time(tm_or_list)
 
 
+def _earliest_precise_time(value):
+    tokens = _iter_time_tokens(value)
+    parsed = [_parse_dicom_time(token, include_ms=True) for token in tokens]
+    parsed = [clock for clock in parsed if clock is not None]
+    return min(parsed) if parsed else None
+
+
 def _iter_time_tokens(value):
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return []
@@ -237,7 +245,14 @@ def to_times(df: pd.DataFrame) -> pd.DataFrame:
     logger.info("Detected real-time columns: %s", time_cols)
 
     for c in time_cols:
-        df[c] = df[c].apply(earliest_acquisition_datetime)
+        if c.lower().endswith("datetime") or c in DICOM_CLOCK_DTYPES:
+            # Acquisition DT/TM must retain its original precision for inference.
+            continue
+        df[c] = df[c].apply(
+            lambda value: (
+                value if isinstance(value, time) else _earliest_precise_time(value)
+            )
+        )
 
     return df
 
@@ -288,22 +303,46 @@ def _infer_dayfirst(series, n_samples=50):
 
 
 def to_dates(df):
-    date_cols = [c for c in df.columns if "date" in c.lower()]
+    date_cols = [
+        c
+        for c in df.columns
+        if "date" in c.lower() and not c.lower().endswith(("datetime", "_source"))
+    ]
     logger.info("Detected date columns: %s", date_cols)
 
     for c in date_cols:
-        if _is_iso_like(df[c]):
-            # ISO dates: dayfirst irrelevant → silence warnings
-            dayfirst = False
-            logger.info("%s: ISO format detected -> dayfirst=False", c)
-            df[c] = pd.to_datetime(
-                df[c], dayfirst=False, format="%Y%m%d", errors="coerce"
+        values = df[c]
+        text = values.astype("string").str.strip()
+        parsed = pd.Series(pd.NaT, index=values.index, dtype="datetime64[ns]")
+
+        format_masks = (
+            (text.str.fullmatch(r"\d{8}", na=False), "%Y%m%d"),
+            (text.str.fullmatch(r"\d{4}-\d{2}-\d{2}", na=False), "%Y-%m-%d"),
+            (text.str.fullmatch(r"\d{4}/\d{2}/\d{2}", na=False), "%Y/%m/%d"),
+        )
+        recognized = pd.Series(False, index=values.index)
+        for mask, date_format in format_masks:
+            recognized |= mask
+            parsed.loc[mask] = pd.to_datetime(
+                text.loc[mask], format=date_format, errors="coerce"
             )
-        else:
-            dayfirst = _infer_dayfirst(df[c])
+
+        remaining = values.notna() & ~recognized
+        if remaining.any():
+            dayfirst = _infer_dayfirst(values.loc[remaining])
             logger.info("%s: dayfirst = %s", c, dayfirst)
-            df[c] = pd.to_datetime(
-                df[c], dayfirst=dayfirst, format="%Y%m%d", errors="coerce"
-            )
+
+            def parse_normalized(value):
+                result = pd.to_datetime(value, dayfirst=dayfirst, errors="coerce")
+                if pd.isna(result):
+                    return pd.NaT
+                result = pd.Timestamp(result)
+                if result.tzinfo is not None:
+                    result = result.tz_localize(None)
+                return result.normalize()
+
+            parsed.loc[remaining] = values.loc[remaining].map(parse_normalized)
+
+        df[c] = parsed
 
     return df

@@ -257,6 +257,7 @@ def match_phase(
     rules: Sequence[PhaseRule] = PHASE_RULES,
     *,
     post: str = RX_PHASE_POST_CONTRAST,
+    prefer_delayed_time: bool = False,
 ) -> tuple[str, str] | None:
     """Match explicit words first, then an unambiguous complete duration.
 
@@ -271,6 +272,11 @@ def match_phase(
         ):
             continue
         for match in re.finditer(rule.pattern, text):
+            if rule.label == "DELAYED" and prefer_delayed_time and durations:
+                # MRI's generic tardif/late wording must yield to its explicit
+                # delay, even when the number precedes the word or is separated
+                # by other protocol text.
+                continue
             if rule.label == "DELAYED" and any(
                 duration.start() >= match.end()
                 and re.fullmatch(SEP, text[match.end() : duration.start()])
@@ -290,4 +296,13 @@ def match_phase(
         if not matches:
             return None
         timed_matches.update(matches)
-    return next(iter(timed_matches)) if len(timed_matches) == 1 else None
+    if len(timed_matches) != 1:
+        return None
+    label, description = next(iter(timed_matches))
+    if prefer_delayed_time and any(
+        rule.label == "DELAYED" and re.search(rule.pattern, text) for rule in rules
+    ):
+        description += (
+            f"; explicit delay seconds={[seconds for _, seconds in durations]}"
+        )
+    return label, description

@@ -13,6 +13,7 @@ import types
 import pandas as pd
 import pytest
 
+from imperandi import cli
 from imperandi.ingest.clean import validate_cleaning_manifest
 from imperandi.utils.manifest import load_manifest
 
@@ -847,3 +848,75 @@ def test_manifests_and_published_reference_counts(target, patients, phases):
         assert ref.loc[ref["include_tumor"].eq("1"), "patient_key"].nunique() == 14
     else:
         assert ref["label"].value_counts().to_dict() == {"0": 34, "1": 15}
+
+
+@pytest.mark.parametrize(
+    "target,modality,phases",
+    [
+        ("mri_multiphase", "MR", ["NATIVE", "ARTERIAL", "PORTAL_VENOUS", "DELAYED"]),
+        ("ct_portal_venous", "CT", ["PORTAL_VENOUS"]),
+    ],
+)
+def test_benchmark_cleaning_exports_resolved_phases_ready_for_cohort_building(
+    tmp_path, target, modality, phases
+):
+    rows = []
+    descriptions = [
+        f"AX T1 {phase}" if modality == "MR" else f"AX {phase}" for phase in phases
+    ]
+    if modality == "CT":
+        descriptions.append("AX bolus tracking")
+    for acquisition, description in enumerate(descriptions):
+        for position in range(3):
+            rows.append(
+                {
+                    "patient_key": "p1",
+                    "study_id": "exam1",
+                    "StudyInstanceUID": "exam1",
+                    "series_id": f"series{acquisition}",
+                    "Modality": modality,
+                    "SOPClassUID": (
+                        "1.2.840.10008.5.1.4.1.1.4"
+                        if modality == "MR"
+                        else "1.2.840.10008.5.1.4.1.1.2"
+                    ),
+                    "SeriesDescription": description,
+                    "ImageType": "ORIGINAL PRIMARY",
+                    "StudyDate": "20200101",
+                    "AcquisitionTime": f"12000{acquisition}",
+                    "AcquisitionNumber": acquisition + 1,
+                    "ImageOrientationPatient": "[1, 0, 0, 0, 1, 0]",
+                    "ImagePositionPatient": f"[0, 0, {position * 3}]",
+                    "PixelSpacing": "[1, 1]",
+                    "SliceThickness": 3,
+                    "Rows": 512,
+                    "Columns": 512,
+                    "dicom_path": f"/dicoms/series{acquisition}/slice{position}.dcm",
+                }
+            )
+    source, output = tmp_path / "dicom_index.csv", tmp_path / "dicom_index_clean.csv"
+    pd.DataFrame(rows).to_csv(source, index=False)
+
+    assert (
+        cli.main(
+            [
+                "clean",
+                str(source),
+                str(output),
+                "--manifest",
+                str(BENCHMARK / target / "manifest.yaml"),
+            ]
+        )
+        == 0
+    )
+
+    cleaned = pd.read_csv(output)
+    assert set(cleaned.phase) == set(phases)
+    assert cleaned.phase_status.eq("RESOLVED").all()
+    assert cleaned.phase_source.eq("metadata_phase_candidates").all()
+    selected_path = tmp_path / "dicom_index_curated.csv"
+    selected = cohort.read_csv(selected_path)
+    assert set(selected.phase) == set(phases)
+    built, _ = cohort.build_cohort(selected, target)
+    assert set(built.phase) == set(phases)
+    assert built.patient_key.eq("p1").all()

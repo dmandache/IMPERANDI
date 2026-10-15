@@ -3,13 +3,15 @@ import logging
 import hashlib
 import re
 from ast import literal_eval
-from datetime import time as dt_time
+from datetime import date as dt_date
+from datetime import datetime, time as dt_time
 from pathlib import Path
 from typing import Callable
 
 import numpy as np
 import pandas as pd
 from pydicom.uid import UID
+from pydicom.valuerep import DT as DicomDT
 from unidecode import unidecode
 
 from imperandi.utils.manifest import load_manifest, resolve_function_path
@@ -21,18 +23,22 @@ from imperandi.ingest.hooks import (
     apply_patient_key_standardization,
     get_clean_hook_outputs,
 )
-from imperandi.curation import curate_by_modality
+from imperandi.curation import split_by_modality
+from imperandi.curation.common import manifest_text_columns, norm_label
+from imperandi.curation.ct.curate import annotate_ct, score_ct
+from imperandi.curation.mri.curate import annotate_mri, add_scores
 from imperandi.curation.export import (
     save_selected_candidates,
     selected_output_path,
 )
 from imperandi.curation.phase import (
+    apply_phase_curation,
     phase_curation_input_columns,
     validate_phase_curation,
 )
 from imperandi.utils.logging import log_task_summary, setup_logging
 from imperandi.utils.misc import print_args, report_volumes, report_change
-from imperandi.utils.datetime import to_dates, to_times
+from imperandi.utils.dicom_timing import DICOM_CLOCK_DTYPES
 from imperandi.ingest.defaults import (
     DEFAULT_DICOM_TAGS,
     DATE_CANDIDATES,
@@ -54,6 +60,14 @@ BASE_INPUT_COLUMNS = [
     "series_id",
     "dicom_path",
 ]
+
+CANONICAL_TIMING_COLUMNS = {
+    "date",
+    "date_source",
+    "time",
+    "time_source",
+    "time_delta",
+}
 
 
 pd.options.mode.chained_assignment = None
@@ -210,23 +224,33 @@ def normalize_clean_args(args: argparse.Namespace) -> argparse.Namespace:
     return args
 
 
-def read_csv_with_valid_columns(file, required_columns=None):
+def read_csv_with_valid_columns(file, required_columns=None, string_columns=None):
     """Read only recognized identifier and DICOM metadata columns from CSV."""
     available_columns = pd.read_csv(file, nrows=0).columns
     requested = set(COLUMNS_TO_USE)
     if required_columns:
         requested.update(required_columns)
     valid_columns = [col for col in available_columns if col in requested]
-    return pd.read_csv(file, usecols=valid_columns)
+    dtypes = dict(DICOM_CLOCK_DTYPES)
+    dtypes.update({column: "string" for column in string_columns or []})
+    return pd.read_csv(file, usecols=valid_columns, dtype=dtypes)
 
 
-def load_data(csv_path, required_columns=None):
+def load_data(csv_path, required_columns=None, string_columns=None):
     """Load and concatenate metadata CSVs, dropping empty helper columns."""
     if len(csv_path) == 1:
-        df = read_csv_with_valid_columns(csv_path[0], required_columns=required_columns)
+        df = read_csv_with_valid_columns(
+            csv_path[0],
+            required_columns=required_columns,
+            string_columns=string_columns,
+        )
     else:
         dfs = [
-            read_csv_with_valid_columns(file, required_columns=required_columns)
+            read_csv_with_valid_columns(
+                file,
+                required_columns=required_columns,
+                string_columns=string_columns,
+            )
             for file in csv_path
         ]
         df = pd.concat(dfs, ignore_index=True)
@@ -277,30 +301,33 @@ def remove_pet_ct(df):
 
 
 def add_date(df, candidate_columns=None):
-    candidates = candidate_columns or DATE_CANDIDATES
+    candidates = DATE_CANDIDATES if candidate_columns is None else candidate_columns
     candidate_cols = [col for col in candidates if col in df.columns]
-    if not candidate_cols:
-        return df
-
-    parsed_by_candidate = {}
-    for col in candidate_cols:
-        parsed_by_candidate[col] = df[col].apply(_normalize_date_candidate)
-    # Ordered fallback: first candidate has highest priority, next ones fill gaps.
-    date = parsed_by_candidate[candidate_cols[0]].copy()
+    parsed_by_candidate = {
+        col: df[col].map(lambda value, column=col: _normalize_date_candidate(value, column))
+        for col in candidate_cols
+    }
+    date = pd.Series(pd.NaT, index=df.index, dtype="datetime64[ns]")
+    source = pd.Series(None, index=df.index, dtype=object)
     fill_contrib = {}
-    for col in candidate_cols[1:]:
+    # Ordered row-level fallback: invalid values never block later candidates.
+    for col in candidate_cols:
         missing_before = int(date.isna().sum())
+        use = date.isna() & parsed_by_candidate[col].notna()
+        source.loc[use] = col
         date = date.fillna(parsed_by_candidate[col])
         missing_after = int(date.isna().sum())
         fill_contrib[col] = missing_before - missing_after
 
     df["date"] = date
+    df["date_source"] = source
     total_valid = int(df["date"].notna().sum())
     logger.info(
-        "Date candidates (priority order) %s -> %d/%d valid%s",
+        "Date candidates (priority order) %s -> %d/%d (%.2f%%) valid%s",
         candidate_cols,
         total_valid,
         len(df),
+        100 * total_valid / len(df) if len(df) else 0.0,
         (
             f"; fallback filled {fill_contrib}"
             if any(v > 0 for v in fill_contrib.values())
@@ -311,20 +338,17 @@ def add_date(df, candidate_columns=None):
 
 
 def add_time(df, candidate_columns=None):
-    candidates = candidate_columns or TIME_CANDIDATES
+    candidates = TIME_CANDIDATES if candidate_columns is None else candidate_columns
     candidate_cols = [col for col in candidates if col in df.columns]
-    if not candidate_cols:
-        return df
-
     parsed_by_candidate = {
-        col: df[col].apply(_normalize_instance_creation_time) for col in candidate_cols
+        col: df[col].map(lambda value, column=col: _normalize_time_candidate(value, column))
+        for col in candidate_cols
     }
-    # Ordered fallback: first candidate has highest priority, next ones fill gaps.
-    time = parsed_by_candidate[candidate_cols[0]].copy()
+    time = pd.Series(None, index=df.index, dtype=object)
     source = pd.Series(None, index=df.index, dtype=object)
-    source.loc[time.notna()] = candidate_cols[0]
     fill_contrib = {}
-    for col in candidate_cols[1:]:
+    # Ordered row-level fallback: invalid values never block later candidates.
+    for col in candidate_cols:
         missing_before = int(time.isna().sum())
         source.loc[time.isna() & parsed_by_candidate[col].notna()] = col
         time = time.fillna(parsed_by_candidate[col])
@@ -333,12 +357,14 @@ def add_time(df, candidate_columns=None):
 
     df["time"] = time
     df["time_source"] = source
+
     total_valid = int(df["time"].notna().sum())
     logger.info(
-        "Time candidates (priority order) %s -> %d/%d valid%s",
+        "Time candidates (priority order) %s -> %d/%d (%.2f%%) valid%s",
         candidate_cols,
         total_valid,
         len(df),
+        100 * total_valid / len(df) if len(df) else 0.0,
         (
             f"; fallback filled {fill_contrib}"
             if any(v > 0 for v in fill_contrib.values())
@@ -1177,9 +1203,43 @@ def group_volumes(df):
     """Aggregate instance metadata into one row per volume.
 
     The canonical ``time`` column represents the volume acquisition start, so
-    resolve varying per-instance times to the earliest valid clock time instead
-    of carrying a list into downstream volume-level processing.
+    varying per-instance times resolve to the earliest valid value.
     """
+
+    def selected_pair(group, value_column, source_column, parser):
+        candidates = []
+        if value_column not in group:
+            return float("NaN"), float("NaN")
+        for idx, value in group[value_column].items():
+            parsed = parser(value)
+            if parsed is not None and not _is_nan(parsed):
+                candidates.append((parsed, idx))
+        if not candidates:
+            return float("NaN"), float("NaN")
+        try:
+            parsed, idx = min(candidates, key=lambda item: item[0])
+        except TypeError:
+            # Mixed local/offset-aware values are deliberately not compared.
+            parsed, idx = candidates[0]
+        source = group.at[idx, source_column] if source_column in group else float("NaN")
+        return parsed, source
+
+    selected_provenance = {}
+    for volume_id, group in df.groupby("volume_id"):
+        selected_provenance[volume_id] = {
+            "date": selected_pair(
+                group,
+                "date",
+                "date_source",
+                _normalize_date_candidate,
+            ),
+            "time": selected_pair(
+                group,
+                "time",
+                "time_source",
+                _normalize_instance_creation_time,
+            ),
+        }
 
     def agg_fun(col):
         vals = list(col.dropna())
@@ -1195,7 +1255,25 @@ def group_volumes(df):
 
     df = df.groupby("volume_id").agg(agg_fun)
     df = df.reset_index()
-    df = df.dropna(axis=1, how="all")
+    for canonical, source in (
+        ("date", "date_source"),
+        ("time", "time_source"),
+    ):
+        if canonical not in df and source not in df:
+            continue
+        pairs = df["volume_id"].map(
+            lambda volume_id: selected_provenance.get(volume_id, {}).get(
+                canonical, (float("NaN"), float("NaN"))
+            )
+        )
+        df[canonical] = pairs.map(lambda pair: pair[0])
+        df[source] = pairs.map(lambda pair: pair[1])
+    empty_columns = [
+        column
+        for column in df.columns
+        if column not in CANONICAL_TIMING_COLUMNS and df[column].isna().all()
+    ]
+    df = df.drop(columns=empty_columns)
     return df
 
 
@@ -1277,7 +1355,6 @@ def compute_visit_order(df):
     )
     df_study["delay_since_first_exam"] = df_study["date"] - first_date
     df_study["visit_order"] = df_study.groupby("patient_key")["date"].cumcount()
-    logger.info("%s %s", df.shape, df_study.shape)
 
     df = df.merge(
         df_study[["delay_since_prev_exam", "delay_since_first_exam", "visit_order"]],
@@ -1315,6 +1392,13 @@ def _normalize_instance_creation_time(value):
     s = value.strip()
     if not s or s.lower() in {"none", "nan", "nat"}:
         return None
+
+    # Parse scalar clock strings before literal evaluation, which would strip
+    # significant leading zeroes from DICOM TM values such as 010203.123456.
+    for fmt in ("%H%M%S.%f", "%H%M%S", "%H:%M:%S.%f", "%H:%M:%S"):
+        parsed = pd.to_datetime(s, format=fmt, errors="coerce")
+        if pd.notna(parsed):
+            return parsed.time()
 
     try:
         literal = literal_eval(s)
@@ -1487,7 +1571,6 @@ def compute_acquisition_order(df: pd.DataFrame) -> pd.DataFrame:
         )
 
     df["_acq_timestamp"] = date_values + time_delta
-
     # ------------------------------------------------------------------
     # DICOM numeric ordering fields
     # ------------------------------------------------------------------
@@ -1574,7 +1657,6 @@ def compute_acquisition_order(df: pd.DataFrame) -> pd.DataFrame:
     ).dt.total_seconds()
 
     df_study["acquisition_order"] = grouped.cumcount()
-
     # ------------------------------------------------------------------
     # Merge volume-level annotations back
     # ------------------------------------------------------------------
@@ -1794,6 +1876,11 @@ def _get_step_inputs(step: dict) -> set[str]:
             "Rows",
             "Columns",
         }
+    if step_type == "phase_curation":
+        # Phase-only cleaning can consume a previously annotated modality CSV.
+        return _get_step_inputs({"type": "modality_curation"}) | _get_step_outputs(
+            {"type": "modality_curation"}
+        )
     return set()
 
 
@@ -1806,9 +1893,12 @@ def _get_step_outputs(step: dict) -> set[str]:
             outputs |= {"_patient_key_raw", "patient_key_std_failed"}
         return outputs
     if step_type == "coalesce_date":
-        return {"date"}
+        return {"date", "date_source"}
     if step_type == "coalesce_time":
-        return {"time", "time_source"}
+        return {
+            "time",
+            "time_source",
+        }
     if step_type == "sop_class":
         return {"sop_class"}
     if step_type == "normalize_string":
@@ -1851,18 +1941,65 @@ def _get_step_outputs(step: dict) -> set[str]:
             "curation_modality",
             "selection_slot",
             "selection_score",
+            "selection_modality",
+            "ct_selection_score",
             "ct_phase",
+            "ct_phase_reason",
+            "ct_phase_confidence",
             "mri_sequence",
+            "mri_sequence_reason",
+            "mri_sequence_confidence",
             "mri_perfusion_label",
+            "mri_perfusion_reason",
+            "mri_perfusion_confidence",
+            "mri_perfusion_source",
+            "mri_dynamic_order_source",
+            "time_delta",
+            "volume_order_in_series",
+            "volume_order_source",
+            "n_volumes_in_series",
+            "is_multivolume_series",
+            "series_text",
+            "plane",
+            "dixon_component",
+            "dixon_component_reason",
+            "dixon_component_source",
+            "is_subtraction",
+            "is_mip_mpr",
+            "is_quant_or_report",
+            "is_derived_low_value",
+            "is_3d_gre",
+            "is_dynamic_t1_text",
+            "is_breath_hold",
+            "is_resp_triggered",
+            "is_t2_fatsat",
+            "is_t2_motion_robust",
+            "is_t2_haste_ssfse",
+            "is_t2_tse_fse",
+            "is_t2_mrcp_biliary",
+            "t1_score",
+            "t2_score",
+            "dwi_score",
             "rule_phase",
             "rule_phase_reason",
             "rule_phase_confidence",
+            "phase_applicability_reason",
+            "phase_text_column",
+            "phase_text_value",
+        }
+    if step_type == "phase_curation":
+        return {
             "phase",
             "phase_status",
-            "phase_applicability_reason",
             "phase_source",
             "phase_reason",
             "phase_confidence",
+            "selection_slot",
+            "selection_score",
+            "ct_selection_score",
+            "t1_score",
+            "t2_score",
+            "dwi_score",
         }
     return set()
 
@@ -1878,7 +2015,7 @@ def _validate_string_list(
         raise ValueError(f"{field_name} must be a list of strings.")
     if not allow_empty and not value:
         raise ValueError(f"{field_name} must be a non-empty list of strings.")
-    if any(not isinstance(item, str) or not item for item in value):
+    if any(not isinstance(item, str) or not item.strip() for item in value):
         raise ValueError(f"{field_name} must contain only non-empty strings.")
 
 
@@ -2061,12 +2198,16 @@ def validate_cleaning_manifest(manifest: dict) -> list[dict]:
 
         validated_steps.append(step)
 
-    if any(step["type"] == "modality_curation" for step in validated_steps):
+    if any(step["type"] == "phase_curation" for step in validated_steps):
         if "phase_curation" not in manifest:
             raise ValueError(
                 "Manifest must define phase_curation when cleaning uses "
-                "modality_curation."
+                "phase_curation."
             )
+    if "phase_curation" in manifest and any(
+        step["type"] in {"modality_curation", "phase_curation"}
+        for step in validated_steps
+    ):
         validate_phase_curation(manifest["phase_curation"])
 
     return validated_steps
@@ -2084,9 +2225,23 @@ def _collect_required_input_columns(
             if col not in produced:
                 required.add(col)
         produced.update(_get_step_outputs(step))
-    if any(step["type"] == "modality_curation" for step in steps):
+    if any(step["type"] in {"modality_curation", "phase_curation"} for step in steps):
         required.update(phase_curation_input_columns(phase_curation))
     return sorted(required)
+
+
+def _collect_timing_candidate_columns(steps: list[dict]) -> list[str]:
+    """Return configured/default coalescing inputs that must remain raw strings."""
+    columns = []
+    for step in steps:
+        if step["type"] == "coalesce_date":
+            candidates = step.get("candidates", DATE_CANDIDATES)
+        elif step["type"] == "coalesce_time":
+            candidates = step.get("candidates", TIME_CANDIDATES)
+        else:
+            continue
+        columns.extend(candidates)
+    return list(dict.fromkeys(columns))
 
 
 def _step_label(step: dict) -> str:
@@ -2164,15 +2319,68 @@ def _run_hook_step(df: pd.DataFrame, step: dict) -> pd.DataFrame:
     return df
 
 
-def _normalize_date_candidate(value):
-    """Convert a date candidate into a scalar timestamp or ``NaT``."""
-    if isinstance(value, list):
-        return pd.NaT
+def _normalize_date_candidate(value, column_name: str = ""):
+    """Convert DICOM DA/DT or normalized date values into a scalar date."""
+    value = _as_python_scalar(value)
     if value is None or _is_nan(value):
         return pd.NaT
-    if isinstance(value, pd.Timestamp):
-        return value
-    return pd.to_datetime(value, errors="coerce")
+    if isinstance(value, (list, tuple, np.ndarray)):
+        parsed = [_normalize_date_candidate(item, column_name) for item in value]
+        parsed = [item for item in parsed if pd.notna(item)]
+        return min(parsed) if parsed else pd.NaT
+    if isinstance(value, (pd.Timestamp, datetime, dt_date)):
+        return pd.Timestamp(value).tz_localize(None).normalize()
+
+    text = str(value).strip()
+    if not text or text.lower() in {"none", "nan", "nat"}:
+        return pd.NaT
+    if column_name.lower().endswith("datetime") or re.fullmatch(
+        r"\d{8,14}(?:\.\d{1,6})?(?:[+-]\d{4})?", text
+    ):
+        try:
+            represented = DicomDT(text)
+            return pd.Timestamp(represented.date())
+        except (TypeError, ValueError):
+            pass
+    parsed = pd.to_datetime(text, errors="coerce")
+    if pd.isna(parsed):
+        return pd.NaT
+    return pd.Timestamp(parsed).tz_localize(None).normalize()
+
+
+def _normalize_time_candidate(value, column_name: str = ""):
+    """Extract a clock time from DICOM TM/DT or normalized timestamp values."""
+    value = _as_python_scalar(value)
+    if value is None or _is_nan(value):
+        return None
+    if isinstance(value, (list, tuple, np.ndarray)):
+        parsed = [_normalize_time_candidate(item, column_name) for item in value]
+        parsed = [item for item in parsed if item is not None]
+        return min(parsed) if parsed else None
+    if isinstance(value, (pd.Timestamp, datetime)):
+        return value.timetz()
+
+    prefer_datetime = column_name.lower().endswith("datetime")
+    if not prefer_datetime:
+        parsed_time = _normalize_instance_creation_time(value)
+        if parsed_time is not None:
+            return parsed_time
+    text = str(value).strip()
+    match = re.fullmatch(
+        r"(\d{4}(?:\d{2}){0,5})(?:\.\d{1,6})?(?:[+-]\d{4})?", text
+    )
+    if match and len(match.group(1)) >= 10:
+        try:
+            return DicomDT(text).timetz()
+        except (TypeError, ValueError):
+            return None
+    if prefer_datetime or re.match(r"^\d{4}-\d{2}-\d{2}[T ]", text):
+        try:
+            parsed = pd.Timestamp(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed.timetz() if pd.notna(parsed) else None
+    return None
 
 
 def _rule_mask(df: pd.DataFrame, rule: dict) -> pd.Series:
@@ -2256,13 +2464,13 @@ def _safe_uid_keyword(value):
 
 def _run_coalesce_date_step(df: pd.DataFrame, step: dict) -> pd.DataFrame:
     """Normalize candidate date columns and populate the canonical ``date``."""
-    df = to_dates(df.copy())
+    #df = to_dates(df.copy())
     return add_date(df, candidate_columns=step.get("candidates"))
 
 
 def _run_coalesce_time_step(df: pd.DataFrame, step: dict) -> pd.DataFrame:
     """Normalize candidate time columns and populate the canonical ``time``."""
-    df = to_times(df.copy())
+    #df = to_times(df.copy())
     return add_time(df, candidate_columns=step.get("candidates"))
 
 
@@ -2414,20 +2622,64 @@ def _run_modality_curation_step(
     *,
     phase_curation: dict | None = None,
 ) -> pd.DataFrame:
-    """Annotate volume-level rows with CT/MR-specific curation labels and scores."""
+    """Generate CT/MR features and rule evidence without resolving phase."""
     if "Modality" not in df.columns:
         return df
 
-    results = curate_by_modality(df, phase_curation=phase_curation)
-    curated = results["curated_all"]
-    if curated.empty:
-        return df.iloc[0:0].copy()
-    return curated
+    config = validate_phase_curation(phase_curation)
+    ct, mr, _ = split_by_modality(df)
+    parts = []
+    for modality, data in (("CT", ct), ("MR", mr)):
+        if data.empty:
+            continue
+        with manifest_text_columns(modality, config):
+            annotated = (
+                annotate_ct(
+                    data, exam_group_columns=config["best_candidate_group_columns"]
+                )
+                if modality == "CT"
+                else annotate_mri(data, phase_curation=config, resolve_phase=False)
+            )
+        parts.append(annotated.assign(curation_modality=modality))
+    return (
+        pd.concat(parts, ignore_index=True, sort=False)
+        if parts
+        else df.iloc[0:0].copy()
+    )
+
+
+def _run_phase_curation_step(
+    df: pd.DataFrame,
+    step: dict,
+    *,
+    phase_curation: dict | None = None,
+) -> pd.DataFrame:
+    """Resolve existing phase evidence and refresh phase-dependent scores."""
+    out = apply_phase_curation(df, phase_curation, progress_logger=logger)
+    ct, mr, other = split_by_modality(out.reset_index(drop=True))
+    if not ct.empty and "ct_phase" in ct:
+        with manifest_text_columns("CT", phase_curation):
+            ct["ct_selection_score"] = ct.apply(score_ct, axis=1)
+        ct["selection_score"] = ct["ct_selection_score"]
+        ct["selection_slot"] = ct["phase"].map(lambda phase: f"CT_{norm_label(phase)}")
+    if not mr.empty and "mri_sequence" in mr:
+        with manifest_text_columns("MR", phase_curation):
+            mr = add_scores(mr)
+    return (
+        pd.concat([ct, mr, other], sort=False)
+        .reindex(range(len(out)))
+        .set_axis(out.index)
+    )
 
 
 def _run_finalize_step(df: pd.DataFrame, step: dict) -> pd.DataFrame:
     """Drop empty helper columns and restore the canonical output ordering."""
-    df = df.dropna(axis=1, how="all")
+    empty_columns = [
+        column
+        for column in df.columns
+        if column not in CANONICAL_TIMING_COLUMNS and df[column].isna().all()
+    ]
+    df = df.drop(columns=empty_columns)
     df = reorder_columns(df)
     df = reorder_rows(df)
     return df
@@ -2452,6 +2704,7 @@ STEP_REGISTRY: dict[str, Callable[[pd.DataFrame, dict], pd.DataFrame]] = {
     "compute_visit_order": _run_compute_visit_order_step,
     "compute_acquisition_order": _run_compute_acquisition_order_step,
     "modality_curation": _run_modality_curation_step,
+    "phase_curation": _run_phase_curation_step,
     "finalize": _run_finalize_step,
 }
 
@@ -2467,8 +2720,8 @@ def run_clean_pipeline(
 
     for step in steps:
         df_prev = df.copy()
-        if step["type"] == "modality_curation":
-            df = _run_modality_curation_step(
+        if step["type"] in {"modality_curation", "phase_curation"}:
+            df = STEP_REGISTRY[step["type"]](
                 df,
                 step,
                 phase_curation=phase_curation,
@@ -2498,16 +2751,21 @@ def clean_and_save_data(
     """Run the manifest-defined metadata-curation pipeline and write its CSV output."""
     steps = validate_cleaning_manifest(manifest)
     phase_curation = manifest.get("phase_curation")
-    has_curation = any(step["type"] == "modality_curation" for step in steps)
+    has_phase_curation = any(step["type"] == "phase_curation" for step in steps)
     first_input = csv_path[0] if isinstance(csv_path, (list, tuple)) else csv_path
     selected_path = selected_output_path(
         None,
         csv_path_out or first_input,
-        input_path=first_input if has_curation else None,
+        input_path=first_input if has_phase_curation else None,
         protected_paths=csv_path if isinstance(csv_path, (list, tuple)) else [csv_path],
     )
     required_columns = _collect_required_input_columns(steps, phase_curation)
-    df = load_data(csv_path, required_columns=required_columns)
+    timing_columns = _collect_timing_candidate_columns(steps)
+    df = load_data(
+        csv_path,
+        required_columns=required_columns,
+        string_columns=timing_columns,
+    )
     input_rows = len(df)
     df = run_clean_pipeline(df, steps, phase_curation=phase_curation)
 

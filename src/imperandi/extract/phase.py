@@ -10,7 +10,18 @@ import nibabel as nib
 import pandas as pd
 from tqdm import tqdm
 
+from imperandi.curation import split_by_modality
+from imperandi.curation.common import (
+    DYNAMIC_ORDER_INPUTS,
+    TEXT_COLS_DEFAULT,
+    manifest_text_columns,
+)
+from imperandi.curation.ct.curate import annotate_ct
+from imperandi.curation.mri.curate import annotate_mri
 from imperandi.curation.phase import (
+    PHASE_STATUS_NOT_APPLICABLE,
+    PHASE_STATUS_RESOLVED,
+    PHASE_STATUS_UNRESOLVED,
     apply_phase_curation,
     phase_curation_input_columns,
     phase_needs_strategy,
@@ -22,7 +33,7 @@ from imperandi.curation.export import (
     selected_output_path,
 )
 from imperandi.utils.manifest import load_manifest
-from imperandi.utils.logging import log_task_summary, setup_logging
+from imperandi.utils.logging import setup_logging
 from imperandi.utils.misc import print_args
 from imperandi.utils.checkpoint_cli import add_checkpoint_arguments
 from imperandi.utils.run_state import (
@@ -44,12 +55,51 @@ DEFAULT_CHECKPOINT_EVERY_ROWS = 50
 DEFAULT_CHECKPOINT_EVERY_SEC = 5 * 60
 
 
+def _ensure_modality_curation(df: pd.DataFrame, config: dict) -> pd.DataFrame:
+    """Supply missing CT/MR rule evidence before choosing prediction rows.
+
+    Annotate each complete modality cohort so exam/series context is available,
+    retaining supplied rule evidence and the original row order.
+    """
+    if "Modality" not in df:
+        return df
+    ct, mr, other = split_by_modality(df)
+    parts = [other]
+    for modality, data in (("CT", ct), ("MR", mr)):
+        if data.empty:
+            continue
+        needs_curation = (
+            ~data["rule_phase"].map(_has_populated_value)
+            if "rule_phase" in data
+            else pd.Series(True, index=data.index)
+        )
+        if not needs_curation.any() and (modality != "MR" or "time_delta" in data):
+            parts.append(data)
+            continue
+        with manifest_text_columns(modality, config):
+            annotated = (
+                annotate_ct(
+                    data,
+                    exam_group_columns=config["best_candidate_group_columns"],
+                )
+                if modality == "CT"
+                else annotate_mri(data, phase_curation=config, resolve_phase=False)
+            )
+        if modality == "MR":
+            data = data.assign(time_delta=annotated["time_delta"])
+        parts.extend([data.loc[~needs_curation], annotated.loc[needs_curation]])
+        logger.info(
+            "Applied %s modality curation to %d row(s)", modality, needs_curation.sum()
+        )
+    return pd.concat(parts, sort=False).reindex(df.index)
+
+
 def _load_phase_extractor() -> Callable[..., Any]:
     try:
         from totalsegmentator.bin.totalseg_get_phase import get_ct_contrast_phase
     except ModuleNotFoundError as exc:
         raise RuntimeError(
-            "The 'phase' command requires optional dependencies. "
+            "TotalSegmentator phase prediction requires optional dependencies. "
             "Install with: pip install -e .[segment]"
         ) from exc
     return get_ct_contrast_phase
@@ -66,7 +116,10 @@ def add_phase_arguments(
         nargs="?",
         type=str,
         default=None,
-        help="Path to input CSV with a `nifti_path` column. Defaults to ./nifti_index.csv.",
+        help=(
+            "Path to input CSV. Only TotalSegmentator prediction requires "
+            "`nifti_path`; metadata curation does not. Defaults to ./nifti_index.csv."
+        ),
     )
     parser.add_argument(
         "csv_path_out_pos",
@@ -205,11 +258,22 @@ def _normalize_phase_extractor_output(output: Any) -> Dict[str, Any] | None:
     return phase_info
 
 
+def _validate_nifti_path(row: Mapping[str, Any]) -> Tuple[Path | None, str | None]:
+    """Validate image input only for rows requiring TotalSegmentator prediction."""
+    value = row.get("nifti_path")
+    if not isinstance(value, str) or not value.strip():
+        return None, "column 'nifti_path' missing or invalid"
+    path = Path(value)
+    if not path.is_file():
+        return None, f"file not found: {path}"
+    return path, None
+
+
 def process_single_volume(
     idx: int,
     row: Mapping[str, Any],
     *,
-    phase_extractor: Callable[..., Any],
+    phase_extractor: Callable[..., Any] | None,
     verbose: bool = False,
 ) -> Tuple[int, Dict[str, Any] | None, str | None]:
     """Extract phase metadata for one cohort row without raising row errors.
@@ -218,13 +282,9 @@ def process_single_volume(
         ``(row_index, metadata, error)``. Successful metadata keys are prefixed
         with ``totalseg_``; failures return an error string instead.
     """
-    nifti_path_value = row.get("nifti_path")
-    if not isinstance(nifti_path_value, str) or not nifti_path_value.strip():
-        return idx, None, "column 'nifti_path' missing or invalid"
-
-    nifti_path = Path(nifti_path_value)
-    if not nifti_path.exists():
-        return idx, None, f"file not found: {nifti_path}"
+    nifti_path, path_error = _validate_nifti_path(row)
+    if path_error is not None:
+        return idx, None, path_error
 
     try:
         nifti_image = nib.load(str(nifti_path))
@@ -284,11 +344,28 @@ def main(args: argparse.Namespace) -> None:
     resume_values = {
         **vars(args),
         "checkpoint_phase_curation": phase_curation,
+        "checkpoint_modality_curation": 8,
     }
     if source_id_signature:
         resume_values["checkpoint_source_id"] = source_id_signature
     resume_args = argparse.Namespace(**resume_values)
-    semantic_columns = ["volume_id", *sorted(phase_curation_input_columns(phase_curation))]
+    semantic_columns = sorted(
+        phase_curation_input_columns(phase_curation)
+        | DYNAMIC_ORDER_INPUTS
+        | set(TEXT_COLS_DEFAULT)
+        | {
+            "patient_key",
+            "volume_id",
+            "SeriesNumber",
+            "AcquisitionNumber",
+            "InstanceNumber",
+            "SliceThickness",
+            "n_files",
+            "n_rows_in_volume",
+            "n_sop_instances_in_volume",
+            "n_rows_in_series",
+        }
+    )
     has_totalseg_strategy = any(
         strategy["type"] == "totalsegmentator"
         for strategy in phase_curation["strategies"]
@@ -325,10 +402,11 @@ def main(args: argparse.Namespace) -> None:
             )
             logger.info("Saved %d selected series -> %s", selected_count, selected_path)
         logger.info(
-            "Resume enabled and matching phase run already finished; skipping execution."
+            "Matching phase curation run already finished; reusing saved results "
+            "without rerunning phase curation or TotalSegmentator prediction."
         )
         log_finished_resume_summary(
-            logger, "Phase extraction", state, paths.error_checkpoint_path
+            logger, "Phase curation", state, paths.error_checkpoint_path
         )
         return
 
@@ -336,7 +414,7 @@ def main(args: argparse.Namespace) -> None:
         logger.info("Resuming phase from checkpoint: %s", paths.main_checkpoint_path)
         df = pd.read_csv(paths.main_checkpoint_path).copy()
     else:
-        df = pd.read_csv(args.csv_path).copy()
+        df = _ensure_modality_curation(pd.read_csv(args.csv_path), phase_curation)
         if can_partial_resume:
             df = merge_with_existing_output(
                 df,
@@ -399,6 +477,7 @@ def main(args: argparse.Namespace) -> None:
         df,
         phase_curation,
         "totalsegmentator",
+        progress_logger=logger,
     )
     prediction_strategy = next(
         (
@@ -411,8 +490,8 @@ def main(args: argparse.Namespace) -> None:
     if semantic_reprocess_ids and prediction_strategy is not None:
         # Imported predictions belong to the old inputs. A failed rerun must
         # not silently resolve from the stale prediction or confidence.
-        invalidated = df["_source_idx"].map(normalize_source_id).isin(
-            semantic_reprocess_ids
+        invalidated = (
+            df["_source_idx"].map(normalize_source_id).isin(semantic_reprocess_ids)
         )
         prediction_columns = {
             prediction_strategy["column"],
@@ -421,12 +500,10 @@ def main(args: argparse.Namespace) -> None:
         }
         for column in prediction_columns.intersection(df.columns):
             df.loc[invalidated, column] = pd.NA
-    if prediction_strategy is not None:
+    if prediction_strategy is None:
         logger.info(
-            "Phase extraction step: %s (totalsegmentator) selected %d/%d volume(s)",
-            prediction_strategy["name"],
-            int(needs_prediction.sum()),
-            len(df),
+            "TotalSegmentator prediction is not configured; "
+            "phase curation will use the configured metadata strategies."
         )
     prediction_skipped_indices = {
         normalize_source_id(df.at[idx, "_source_idx"])
@@ -456,7 +533,8 @@ def main(args: argparse.Namespace) -> None:
             for source_idx in newly_completed:
                 errors_by_idx.pop(source_idx, None)
             logger.info(
-                "Skipping %d row(s) with existing totalseg_phase (use --force to recompute)",
+                "Keeping %d existing TotalSegmentator prediction(s) "
+                "(use --force to recompute); phase curation will still run",
                 len(newly_completed),
             )
 
@@ -479,15 +557,20 @@ def main(args: argparse.Namespace) -> None:
         if bool(needs_prediction.at[idx])
         and normalize_source_id(df.at[idx, "_source_idx"]) not in completed_indices
     ]
-    phase_extractor = _load_phase_extractor() if row_indices else None
+    phase_extractor = None
     processed_source_ids = {
         normalize_source_id(df.at[idx, "_source_idx"]) for idx in row_indices
     }
-    for idx in tqdm(row_indices, total=len(row_indices), desc="Phase"):
+    for idx in tqdm(row_indices, total=len(row_indices), desc="TotalSegmentator phase"):
         src_idx = normalize_source_id(df.at[idx, "_source_idx"])
+        row = df.loc[idx].to_dict()
+        if phase_extractor is None:
+            _, path_error = _validate_nifti_path(row)
+            if path_error is None:
+                phase_extractor = _load_phase_extractor()
         _, phase_info, err_msg = process_single_volume(
             idx,
-            df.loc[idx].to_dict(),
+            row,
             phase_extractor=phase_extractor,
             verbose=args.verbose,
         )
@@ -550,27 +633,27 @@ def main(args: argparse.Namespace) -> None:
     )
 
     run_failed_count = len(processed_source_ids & set(errors_by_idx))
-    log_task_summary(
-        logger,
-        "Phase extraction",
-        total_rows=len(df),
-        processed_rows=len(row_indices),
-        succeeded_rows=max(0, len(row_indices) - run_failed_count),
-        skipped_rows=(
-            resume_skipped_count + prefilled_skipped_count + prediction_skipped_count
-        ),
-        failed_rows=run_failed_count,
-        success_label="phase extracted",
-        resumed_rows=(
-            resume_skipped_count - resume_failed_count + prefilled_skipped_count
-        ),
-        extra_counts={
-            "skipped by resume after prior failure": resume_failed_count,
-            "skipped with existing phase": prefilled_skipped_count,
-            "not sent to TotalSegmentator": prediction_skipped_count,
-        },
+    status_counts = df["phase_status"].value_counts()
+    logger.info(
+        "Phase curation summary: %d total, %d resolved, %d unresolved, %d not applicable",
+        len(df),
+        status_counts.get(PHASE_STATUS_RESOLVED, 0),
+        status_counts.get(PHASE_STATUS_UNRESOLVED, 0),
+        status_counts.get(PHASE_STATUS_NOT_APPLICABLE, 0),
     )
-    logger.info("Phase extraction done ✔")
+    logger.info(
+        "TotalSegmentator prediction summary: %d attempted, %d predicted, %d failed, "
+        "%d existing predictions kept, %d rows restored from checkpoint "
+        "(%d prior failures), %d not requested",
+        len(row_indices),
+        max(0, len(row_indices) - run_failed_count),
+        run_failed_count,
+        prefilled_skipped_count,
+        resume_skipped_count,
+        resume_failed_count,
+        prediction_skipped_count,
+    )
+    logger.info("Phase curation done ✔")
 
 
 if __name__ == "__main__":

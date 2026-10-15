@@ -24,7 +24,7 @@ phase_curation:
 cleaning:
   steps:
     - type: coalesce_date
-      candidates: [StudyDate, SeriesDate, AcquisitionDate]
+      candidates: [StudyDate, AcquisitionDate, SeriesDate]
     - type: coalesce_time
     - type: filter
       name: retain_ct_mr

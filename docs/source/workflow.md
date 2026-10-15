@@ -113,10 +113,10 @@ reevaluation so that a failed prediction cannot reuse a stale phase.
 Curation exports retain the original rule evidence and use the manifest's text
 column precedence for selection. `phase_text_column` and `phase_text_value`
 identify the selected metadata evidence; unresolved `phase_reason` includes the
-rule's blocking explanation. MRI dynamic reasons report acquisition and inferred
-injection-interval seconds (relative to midnight), compatible phases on ambiguity,
-and rejected anchor clocks. These intervals are inferred constraints, not recorded
-injection times. Wide QC cells include volume identifiers and phase provenance.
+rule's unresolved explanation. MRI dynamic reasons identify the order template
+and its canonical `time`, `acquisition_order`, or series-local volume rank.
+Raw DICOM clocks and bolus metadata do not calibrate phase delays. Wide QC cells
+include volume identifiers and phase provenance.
 Selection scores rank candidates; they are not calibrated phase confidence.
 
 ## Example Slurm batch script
@@ -187,3 +187,21 @@ starting from scratch unless you pass `--no_resume`.
 - Preserve error CSVs and logs with the corresponding output table.
 - Use explicit output paths in automation instead of relying on defaults.
 
+
+
+### MRI combined dynamic labels
+
+Explicit duration metadata or acquisition time relative to `ContrastBolusStartTime`
+is checked before order-based assignment. Timing outside supported windows or
+conflicting delays remains `OTHER`; endpoint fallback cannot override it. A shared
+multivolume container clock is not treated as a per-frame injection delay.
+
+Without exact timing, ART-PORT uses ARTERIAL for the first acquisition and
+PORTAL_VENOUS for the last. ART/PORT/LATE uses ARTERIAL for the first and DELAYED
+for the last; its middle acquisition is PORTAL_VENOUS only for a three-acquisition
+profile. Other intermediate acquisitions require timing evidence. An isolated
+combined label remains unresolved.
+
+Across series, endpoint assignment requires a complete, distinct acquisition-order
+or clock field. Studies, sequence families, planes and Dixon components remain
+separate. Acquisition clock alone supplies order, not a post-injection delay.

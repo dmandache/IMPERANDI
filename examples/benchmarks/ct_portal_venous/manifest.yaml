@@ -37,7 +37,7 @@ phase_curation:
 cleaning:
   steps:
     - type: coalesce_date
-      candidates: [StudyDate, SeriesDate, AcquisitionDate]
+      candidates: [StudyDate, AcquisitionDate, SeriesDate]
     - type: coalesce_time
     - type: filter
       name: retain_ct_candidates
@@ -82,6 +82,7 @@ cleaning:
     - type: compute_visit_order
     - type: compute_acquisition_order
     - type: modality_curation
+    - type: phase_curation
     - type: filter
       name: discard_not_applicable_phase
       kind: discard

@@ -120,11 +120,12 @@ cleaning:
       function: "imperandi.builtin_datasets_config.hooks.generic:standardize_patient_key"
       source_columns: [patient_key]
 
-    # Candidate lists are optional; first populated candidate wins.
+    # Candidate lists are optional; the first successfully parsed value wins.
+    # An explicit list replaces the built-in defaults.
     - type: coalesce_date
-      candidates: [AcquisitionDate, SeriesDate, StudyDate, ContentDate]
+      candidates: [StudyDate, AcquisitionDate, SeriesDate]
     - type: coalesce_time
-      candidates: [AcquisitionTime, SeriesTime, StudyTime, ContentTime]
+      candidates: [FrameAcquisitionDateTime, AcquisitionDateTime, AcquisitionTime]
 
     # Parameterless normalization/derivation steps.
     - type: sop_class
@@ -243,8 +244,10 @@ cleaning:
 
     - type: compute_visit_order
     - type: compute_acquisition_order
-    # Requires the top-level phase_curation block.
+    # Generate modality labels, features, and rule evidence.
     - type: modality_curation
+    # Resolve canonical phase using the top-level phase_curation block.
+    - type: phase_curation
     # Keep finalize last to drop empty helpers and restore canonical ordering.
     - type: finalize
 

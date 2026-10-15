@@ -282,7 +282,8 @@ def test_main_writes_phase_columns_and_error_csv(tmp_path, monkeypatch):
     assert "file not found" in err_df.loc[0, "error_message"]
 
 
-def test_main_resume_skips_completed_rows(tmp_path, monkeypatch):
+def test_main_resume_skips_completed_rows(tmp_path, monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger=phase_module.__name__)
     nifti = tmp_path / "valid.nii.gz"
     nifti.write_text("nifti")
     csv_path = tmp_path / "nifti_index.csv"
@@ -319,11 +320,17 @@ def test_main_resume_skips_completed_rows(tmp_path, monkeypatch):
     phase_module.main(args)
     assert calls["count"] == 1
 
+    caplog.clear()
     calls["count"] = 0
     args.resume = True
     phase_module.main(args)
     assert calls["count"] == 0
     assert extractor_loads["count"] == 1
+    assert "reusing saved results without rerunning phase curation" in caplog.text
+    assert (
+        "Phase curation summary: 0 succeeded, 1 resumed, 0 skipped, 0 failed"
+        in caplog.text
+    )
 
 
 def test_main_skips_rows_with_existing_totalseg_phase_when_not_forced(
@@ -369,7 +376,12 @@ def test_main_skips_rows_with_existing_totalseg_phase_when_not_forced(
     assert calls["count"] == 0
     out_df = pd.read_csv(args.csv_path_out)
     assert out_df.loc[0, "totalseg_phase"] == "portal"
-    assert "1 resumed" in caplog.text
+    assert "Keeping 1 existing TotalSegmentator prediction(s)" in caplog.text
+    assert "1 existing predictions kept, 0 rows restored from checkpoint" in caplog.text
+    assert (
+        "Phase curation summary: 1 total, 1 resolved, 0 unresolved, 0 not applicable"
+        in caplog.text
+    )
 
 
 def test_main_force_recomputes_existing_totalseg_phase(tmp_path, monkeypatch):
@@ -487,11 +499,22 @@ def test_main_skips_totalsegmentator_when_rules_resolve_phase(
     assert out_df.loc[0, "phase_source"] == "metadata_rules"
     assert "totalseg_phase" not in out_df.columns
     assert "Phase strategy order:" in caplog.text
-    assert "selected 0/1 volume(s)" in caplog.text
+    assert "0/1 volume(s) eligible, 1 resolved by earlier strategies" in caplog.text
+    assert (
+        "TotalSegmentator prediction summary: 0 attempted, 0 predicted, 0 failed"
+        in caplog.text
+    )
+    assert "1 not requested" in caplog.text
+    assert (
+        "Phase curation summary: 1 total, 1 resolved, 0 unresolved, 0 not applicable"
+        in caplog.text
+    )
+    assert "Phase extraction summary:" not in caplog.text
     assert "metadata_rules (rules) resolved 1 volume(s); 0 unresolved" in caplog.text
 
 
-def test_main_does_not_run_ct_predictor_for_mri(tmp_path, monkeypatch):
+def test_main_does_not_run_ct_predictor_for_mri(tmp_path, monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger=phase_module.__name__)
     csv_path = tmp_path / "nifti_index.csv"
     pd.DataFrame(
         [
@@ -525,3 +548,94 @@ def test_main_does_not_run_ct_predictor_for_mri(tmp_path, monkeypatch):
     out_df = pd.read_csv(args.csv_path_out)
     assert out_df.loc[0, "phase"] == "OTHER"
     assert out_df.loc[0, "phase_source"] == "fallback"
+    assert "allowed modalities: CT" in caplog.text
+    assert "1 unresolved outside allowed modalities" in caplog.text
+    assert (
+        "Phase curation summary: 1 total, 0 resolved, 1 unresolved, 0 not applicable"
+        in caplog.text
+    )
+
+
+@pytest.mark.parametrize(
+    "image_input", ["absent", "null", "blank", "missing", "directory"]
+)
+def test_main_curates_without_usable_nifti_or_predictor(
+    tmp_path, monkeypatch, image_input, caplog
+):
+    caplog.set_level(logging.INFO, logger=phase_module.__name__)
+    rows = pd.DataFrame(
+        {
+            "volume_id": ["resolved_ct", "unresolved_ct", "mri"],
+            "Modality": ["CT", "CT", "MR"],
+            "rule_phase": ["ARTERIAL", "OTHER", "OTHER"],
+        }
+    )
+    if image_input != "absent":
+        rows["nifti_path"] = {
+            "null": None,
+            "blank": " ",
+            "missing": str(tmp_path / "missing.nii.gz"),
+            "directory": str(tmp_path),
+        }[image_input]
+    csv_path = tmp_path / "input.csv"
+    rows.to_csv(csv_path, index=False)
+    monkeypatch.setattr(
+        phase_module,
+        "_load_phase_extractor",
+        lambda: pytest.fail("Do not load TotalSegmentator without usable images"),
+    )
+    args = argparse.Namespace(
+        csv_path=str(csv_path),
+        csv_path_out=str(tmp_path / "out.csv"),
+        error_csv_path=str(tmp_path / "errors.csv"),
+        manifest="generic",
+        verbose=False,
+        force=False,
+        resume=False,
+        strict_resume=False,
+        checkpoint_every_rows=1,
+        checkpoint_every_sec=3600,
+    )
+
+    phase_module.main(args)
+
+    result = pd.read_csv(args.csv_path_out).set_index("volume_id")
+    assert result.loc["resolved_ct", "phase"] == "ARTERIAL"
+    assert result.loc["resolved_ct", "phase_source"] == "metadata_rules"
+    assert result.loc[["unresolved_ct", "mri"], "phase"].eq("OTHER").all()
+    errors = pd.read_csv(args.error_csv_path)
+    assert errors.volume_id.tolist() == ["unresolved_ct"]
+    expected = (
+        "file not found"
+        if image_input in {"missing", "directory"}
+        else "missing or invalid"
+    )
+    assert expected in errors.loc[0, "error_message"]
+    assert "1/3 volume(s) eligible, 1 resolved by earlier strategies" in caplog.text
+    assert "1 unresolved outside allowed modalities" in caplog.text
+    assert (
+        "TotalSegmentator prediction summary: 1 attempted, 0 predicted, 1 failed"
+        in caplog.text
+    )
+    assert (
+        "Phase curation summary: 3 total, 1 resolved, 2 unresolved, 0 not applicable"
+        in caplog.text
+    )
+
+    if image_input == "missing":
+        # A later conversion must let semantic resume retry the prediction.
+        (tmp_path / "missing.nii.gz").write_bytes(b"nifti")
+        loads = []
+
+        def load_predictor():
+            loads.append(True)
+            return lambda _, quiet=True: {"phase": "portal"}
+
+        monkeypatch.setattr(phase_module, "_load_phase_extractor", load_predictor)
+        monkeypatch.setattr(phase_module.nib, "load", lambda _: object())
+        args.resume = True
+        phase_module.main(args)
+        result = pd.read_csv(args.csv_path_out).set_index("volume_id")
+        assert result.loc["unresolved_ct", "phase"] == "PORTAL_VENOUS"
+        assert result.loc["resolved_ct", "phase"] == "ARTERIAL"
+        assert loads == [True]

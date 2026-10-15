@@ -35,10 +35,16 @@ DEFAULT_DICOM_TAGS = [
     "InstanceNumber",
     "AcquisitionNumber",
     "TemporalPositionIdentifier",
+    "TemporalPositionIndex",
+    "NumberOfTemporalPositions",
+    "TemporalResolution",
+    "TemporalPositionTimeOffset",
+    "TriggerTime",
     "InstanceCreationDate",
     "InstanceCreationTime",
     "ContentDate",
     "ContentTime",
+    "TimezoneOffsetFromUTC",
     # Image geometry used for scan quality filters and volume reconstruction.
     "Rows",
     "Columns",
@@ -54,6 +60,19 @@ DEFAULT_DICOM_TAGS = [
     "AcquisitionDate",
     "AcquisitionTime",
     "AcquisitionDateTime",
+    "FrameReferenceDateTime",
+    "FrameAcquisitionDateTime",
+    "AcquisitionDuration",
+    "FrameAcquisitionDuration",
+    "FrameTime",
+    "FrameTimeVector",
+    "ContrastBolusStartTime",
+    "ContrastBolusStopTime",
+    "ContrastBolusInjectionDelay",
+    "ContrastBolusAgentPhase",
+    "ContrastBolusAgent",
+    "ContrastBolusIngredient",
+    "ImageComments",
     "AcquisitionMatrix",
     "ScanningSequence",
     "SequenceVariant",
@@ -93,11 +112,10 @@ DEFAULT_DICOM_TAGS = [
 # Used by clean.add_time in priority order to build the normalized time column.
 # Earlier tags are preferred; later tags fill missing values.
 TIME_CANDIDATES = [
+    "FrameReferenceDateTime",
+    "FrameAcquisitionDateTime",
+    "AcquisitionDateTime",
     "AcquisitionTime",
-    "ContentTime",
-    "SeriesTime",
-    "InstanceCreationTime",
-    "StudyTime",
 ]
 
 # Used by clean.add_date in priority order to build the normalized date column.
@@ -105,7 +123,5 @@ TIME_CANDIDATES = [
 DATE_CANDIDATES = [
     "StudyDate",
     "AcquisitionDate",
-    "ContentDate",
     "SeriesDate",
-    "InstanceCreationDate",
 ]

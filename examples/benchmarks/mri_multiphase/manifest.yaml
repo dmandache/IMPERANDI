@@ -19,9 +19,9 @@ phase_curation:
 cleaning:
   steps:
     - type: coalesce_date
-      candidates: [StudyDate, SeriesDate, AcquisitionDate]
+      candidates: [StudyDate, AcquisitionDate, SeriesDate]
     - type: coalesce_time
-      candidates: [AcquisitionTime, ContentTime, SeriesTime]
+      candidates: [FrameAcquisitionDateTime, AcquisitionDateTime, AcquisitionTime]
     - type: sop_class
     - type: filter
       name: retain_mr_candidates
@@ -81,6 +81,7 @@ cleaning:
     - type: compute_visit_order
     - type: compute_acquisition_order
     - type: modality_curation
+    - type: phase_curation
     - type: filter
       name: retain_T1_only
       kind: keep
