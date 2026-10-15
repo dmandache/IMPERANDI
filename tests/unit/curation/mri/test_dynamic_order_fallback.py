@@ -66,6 +66,34 @@ def test_four_dynamic_acquisitions_restore_full_phase_sequence(
 
 
 @pytest.mark.parametrize(
+    "description,expected",
+    [
+        ("AX T1 LAVA dynamic", ["NATIVE", "ARTERIAL", "PORTAL_VENOUS", "DELAYED"]),
+        ("AX T1 LAVA ART-PORT", ["ARTERIAL", "OTHER", "OTHER", "PORTAL_VENOUS"]),
+        ("AX T1 LAVA ART/PORT/LATE", ["ARTERIAL", "OTHER", "OTHER", "DELAYED"]),
+        ("AX T1 LAVA Mask+Multiart", ["NATIVE", "ARTERIAL", "ARTERIAL", "ARTERIAL"]),
+    ],
+)
+def test_different_image_types_have_independent_dynamic_progressions(
+    description, expected
+):
+    first = acquisitions(description, same_series=False, clocks=False)
+    first["ImageType"] = "ORIGINAL PRIMARY M"
+    first["acquisition_order"] *= 2
+    second = first.copy()
+    second["ImageType"] = "ORIGINAL PRIMARY P"
+    second["volume_id"] = "second_" + second.volume_id
+    second["series_id"] = "second_" + second.series_id
+    second["acquisition_order"] += 1
+    rows = pd.concat([first, second], ignore_index=True)
+
+    out = mc.annotate_mri(rows.sample(frac=1, random_state=11)).set_index("volume_id")
+
+    assert out.loc[first.volume_id, "phase"].tolist() == expected
+    assert out.loc[second.volume_id, "phase"].tolist() == expected
+
+
+@pytest.mark.parametrize(
     "description",
     ["AX T1 LAVA Multiart", "AX T1 VIBE multi arterial", "AX T1 multi-art", "Multiart"],
 )

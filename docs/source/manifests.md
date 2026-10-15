@@ -528,8 +528,13 @@ are required for the generic order template. Full dynamics follow `NATIVE`,
 at arterial. A compatible native anchors the progression and counts once;
 repeated native acquisitions do not consume postcontrast positions. Explicit
 phase labels retain their positions and provenance. A separate unlabelled
-native can be inferred when it precedes compatible dynamics. Patient, study,
-sequence family, plane, and Dixon component boundaries remain intact.
+native can be inferred when it precedes compatible dynamics. Groups match on
+`patient_key`, `date`, `study_id`, `StudyInstanceUID`, `ImageType`, sequence family,
+plane, and Dixon component. `ImageType` uses its full ordered token sequence,
+normalized for case and representation (lists, serialized lists, or separated
+strings). Missing image types group together separately from populated values.
+Different image types have independent phase progressions and `time_delta`
+references. Series IDs and time gaps do not split these groups.
 
 ART-PORT profiles use arterial at the first volume and portal at the last.
 ART/PORT/LATE profiles use arterial first and delayed last; the middle of a

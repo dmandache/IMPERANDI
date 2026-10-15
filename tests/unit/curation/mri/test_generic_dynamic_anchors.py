@@ -154,6 +154,7 @@ def test_full_and_post_only_dynamic_templates_without_native_anchor(
         {"SeriesDescription": "AX T1 VIBE pre"},
         {"acquisition_plane": "CORONAL"},
         {"ImageType": "ORIGINAL PRIMARY F"},
+        {"ImageType": "DERIVED PRIMARY"},
     ],
 )
 def test_unrelated_native_cannot_anchor_post_only_group(anchor_change):
