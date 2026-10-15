@@ -325,10 +325,11 @@ def add_date(df, candidate_columns=None):
     df["date_source"] = source
     total_valid = int(df["date"].notna().sum())
     logger.info(
-        "Date candidates (priority order) %s -> %d/%d valid%s",
+        "Date candidates (priority order) %s -> %d/%d (%.2f%%) valid%s",
         candidate_cols,
         total_valid,
         len(df),
+        100 * total_valid / len(df) if len(df) else 0.0,
         (
             f"; fallback filled {fill_contrib}"
             if any(v > 0 for v in fill_contrib.values())
@@ -395,10 +396,11 @@ def add_time(df, candidate_columns=None):
         df["acquisition_datetime_source"] = pd.Series(dtype=object)
     total_valid = int(df["time"].notna().sum())
     logger.info(
-        "Time candidates (priority order) %s -> %d/%d valid%s",
+        "Time candidates (priority order) %s -> %d/%d (%.2f%%) valid%s",
         candidate_cols,
         total_valid,
         len(df),
+        100 * total_valid / len(df) if len(df) else 0.0,
         (
             f"; fallback filled {fill_contrib}"
             if any(v > 0 for v in fill_contrib.values())
