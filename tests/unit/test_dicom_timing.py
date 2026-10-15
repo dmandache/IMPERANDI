@@ -157,6 +157,27 @@ def test_native_and_iso_offset_datetimes_share_the_utc_clock_domain():
     assert iso.seconds == utc.seconds == native.seconds
 
 
+def test_separate_timezone_offset_applies_to_dicom_dt_and_tm():
+    dt_interval = dicom_datetime_interval("20200101130000.123456", "+0100")
+    assert dt_interval.start == datetime(
+        2020, 1, 1, 12, 0, 0, 123456, tzinfo=timezone.utc
+    )
+
+    frame = pd.DataFrame(
+        {
+            "AcquisitionDate": ["20200101"],
+            "AcquisitionTime": ["130000.123456"],
+            "TimezoneOffsetFromUTC": ["+0100"],
+        }
+    )
+    cleaned = add_time(to_dates(frame))
+    assert cleaned.loc[0, "time"] == time(13, 0, 0, 123456)
+    assert cleaned.loc[0, "acquisition_datetime"] == (
+        "2020-01-01T12:00:00.123456+00:00"
+    )
+    assert cleaned.loc[0, "acquisition_datetime_source"] == "AcquisitionTime"
+
+
 def test_mixed_local_and_utc_study_clocks_do_not_invent_delays_or_order():
     frame = pd.DataFrame(
         {

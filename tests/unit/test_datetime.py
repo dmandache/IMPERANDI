@@ -26,10 +26,10 @@ def test_to_times_converts_only_real_clock_time_columns():
 
     out = to_times(df.copy())
 
-    assert out.loc[0, "StudyTime"] == dt_time(9, 30, 15)
+    assert out.loc[0, "StudyTime"] == "093015"
     assert out.loc[1, "AcquisitionDateTime"] == "20240101131559"
-    assert out.loc[0, "InstanceCreationTime"] == dt_time(10, 10, 10, 123000)
-    assert out.loc[1, "InstanceCreationTime"] == dt_time(13, 14, 15)
+    assert out.loc[0, "InstanceCreationTime"] == "101010.123"
+    assert out.loc[1, "InstanceCreationTime"] == "131415.000"
 
     # Duration-like columns should remain untouched.
     assert out["EchoTime"].tolist() == ["500", "750"]

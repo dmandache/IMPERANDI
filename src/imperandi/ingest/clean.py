@@ -3,13 +3,15 @@ import logging
 import hashlib
 import re
 from ast import literal_eval
-from datetime import time as dt_time
+from datetime import date as dt_date
+from datetime import datetime, time as dt_time
 from pathlib import Path
 from typing import Callable
 
 import numpy as np
 import pandas as pd
 from pydicom.uid import UID
+from pydicom.valuerep import DT as DicomDT
 from unidecode import unidecode
 
 from imperandi.utils.manifest import load_manifest, resolve_function_path
@@ -59,6 +61,15 @@ BASE_INPUT_COLUMNS = [
     "series_id",
     "dicom_path",
 ]
+
+CANONICAL_TIMING_COLUMNS = {
+    "date",
+    "date_source",
+    "time",
+    "time_source",
+    "acquisition_datetime",
+    "acquisition_datetime_source",
+}
 
 
 pd.options.mode.chained_assignment = None
@@ -215,23 +226,33 @@ def normalize_clean_args(args: argparse.Namespace) -> argparse.Namespace:
     return args
 
 
-def read_csv_with_valid_columns(file, required_columns=None):
+def read_csv_with_valid_columns(file, required_columns=None, string_columns=None):
     """Read only recognized identifier and DICOM metadata columns from CSV."""
     available_columns = pd.read_csv(file, nrows=0).columns
     requested = set(COLUMNS_TO_USE)
     if required_columns:
         requested.update(required_columns)
     valid_columns = [col for col in available_columns if col in requested]
-    return pd.read_csv(file, usecols=valid_columns, dtype=DICOM_CLOCK_DTYPES)
+    dtypes = dict(DICOM_CLOCK_DTYPES)
+    dtypes.update({column: "string" for column in string_columns or []})
+    return pd.read_csv(file, usecols=valid_columns, dtype=dtypes)
 
 
-def load_data(csv_path, required_columns=None):
+def load_data(csv_path, required_columns=None, string_columns=None):
     """Load and concatenate metadata CSVs, dropping empty helper columns."""
     if len(csv_path) == 1:
-        df = read_csv_with_valid_columns(csv_path[0], required_columns=required_columns)
+        df = read_csv_with_valid_columns(
+            csv_path[0],
+            required_columns=required_columns,
+            string_columns=string_columns,
+        )
     else:
         dfs = [
-            read_csv_with_valid_columns(file, required_columns=required_columns)
+            read_csv_with_valid_columns(
+                file,
+                required_columns=required_columns,
+                string_columns=string_columns,
+            )
             for file in csv_path
         ]
         df = pd.concat(dfs, ignore_index=True)
@@ -282,24 +303,26 @@ def remove_pet_ct(df):
 
 
 def add_date(df, candidate_columns=None):
-    candidates = candidate_columns or DATE_CANDIDATES
+    candidates = DATE_CANDIDATES if candidate_columns is None else candidate_columns
     candidate_cols = [col for col in candidates if col in df.columns]
-    if not candidate_cols:
-        return df
-
-    parsed_by_candidate = {}
-    for col in candidate_cols:
-        parsed_by_candidate[col] = df[col].apply(_normalize_date_candidate)
-    # Ordered fallback: first candidate has highest priority, next ones fill gaps.
-    date = parsed_by_candidate[candidate_cols[0]].copy()
+    parsed_by_candidate = {
+        col: df[col].map(lambda value, column=col: _normalize_date_candidate(value, column))
+        for col in candidate_cols
+    }
+    date = pd.Series(pd.NaT, index=df.index, dtype="datetime64[ns]")
+    source = pd.Series(None, index=df.index, dtype=object)
     fill_contrib = {}
-    for col in candidate_cols[1:]:
+    # Ordered row-level fallback: invalid values never block later candidates.
+    for col in candidate_cols:
         missing_before = int(date.isna().sum())
+        use = date.isna() & parsed_by_candidate[col].notna()
+        source.loc[use] = col
         date = date.fillna(parsed_by_candidate[col])
         missing_after = int(date.isna().sum())
         fill_contrib[col] = missing_before - missing_after
 
     df["date"] = date
+    df["date_source"] = source
     total_valid = int(df["date"].notna().sum())
     logger.info(
         "Date candidates (priority order) %s -> %d/%d valid%s",
@@ -316,29 +339,17 @@ def add_date(df, candidate_columns=None):
 
 
 def add_time(df, candidate_columns=None):
-    candidates = candidate_columns or TIME_CANDIDATES
+    candidates = TIME_CANDIDATES if candidate_columns is None else candidate_columns
     candidate_cols = [col for col in candidates if col in df.columns]
-    if not candidate_cols:
-        return df
-
-    parsed_by_candidate = {}
-    for col in candidate_cols:
-        if col.lower().endswith("datetime"):
-            parsed_by_candidate[col] = df[col].map(
-                lambda value: (
-                    interval.start.timetz()
-                    if (interval := dicom_datetime_interval(value))
-                    else None
-                )
-            )
-        else:
-            parsed_by_candidate[col] = df[col].apply(_normalize_instance_creation_time)
-    # Ordered fallback: first candidate has highest priority, next ones fill gaps.
-    time = parsed_by_candidate[candidate_cols[0]].copy()
+    parsed_by_candidate = {
+        col: df[col].map(lambda value, column=col: _normalize_time_candidate(value, column))
+        for col in candidate_cols
+    }
+    time = pd.Series(None, index=df.index, dtype=object)
     source = pd.Series(None, index=df.index, dtype=object)
-    source.loc[time.notna()] = candidate_cols[0]
     fill_contrib = {}
-    for col in candidate_cols[1:]:
+    # Ordered row-level fallback: invalid values never block later candidates.
+    for col in candidate_cols:
         missing_before = int(time.isna().sum())
         source.loc[time.isna() & parsed_by_candidate[col].notna()] = col
         time = time.fillna(parsed_by_candidate[col])
@@ -349,12 +360,13 @@ def add_time(df, candidate_columns=None):
     df["time_source"] = source
 
     def acquisition_stamp(row):
+        timezone_offset = row.get("TimezoneOffsetFromUTC")
         for col in (
             "FrameReferenceDateTime",
             "FrameAcquisitionDateTime",
             "AcquisitionDateTime",
         ):
-            if interval := dicom_datetime_interval(row.get(col)):
+            if interval := dicom_datetime_interval(row.get(col), timezone_offset):
                 return interval.start.isoformat(), col
         day = next(
             (
@@ -364,7 +376,9 @@ def add_time(df, candidate_columns=None):
             ),
             None,
         )
-        interval = dicom_time_interval(row.get("AcquisitionTime"), day)
+        interval = dicom_time_interval(
+            row.get("AcquisitionTime"), day, timezone_offset
+        )
         return (
             (interval.start.isoformat(), "AcquisitionTime")
             if interval
@@ -376,6 +390,9 @@ def add_time(df, candidate_columns=None):
         df[["acquisition_datetime", "acquisition_datetime_source"]] = pd.DataFrame(
             stamps.tolist(), index=df.index
         )
+    else:
+        df["acquisition_datetime"] = pd.Series(dtype=object)
+        df["acquisition_datetime_source"] = pd.Series(dtype=object)
     total_valid = int(df["time"].notna().sum())
     logger.info(
         "Time candidates (priority order) %s -> %d/%d valid%s",
@@ -1219,10 +1236,52 @@ def _sorted_unique(values, col_name):
 def group_volumes(df):
     """Aggregate instance metadata into one row per volume.
 
-    The canonical ``time`` column represents the volume acquisition start, so
-    resolve varying per-instance times to the earliest valid clock time instead
-    of carrying a list into downstream volume-level processing.
+    The canonical ``time`` and ``acquisition_datetime`` columns represent the
+    volume acquisition start, so resolve varying per-instance values to the
+    earliest valid value instead of carrying a list into downstream processing.
     """
+
+    def selected_pair(group, value_column, source_column, parser, formatter=None):
+        candidates = []
+        if value_column not in group:
+            return float("NaN"), float("NaN")
+        for idx, value in group[value_column].items():
+            parsed = parser(value)
+            if parsed is not None and not _is_nan(parsed):
+                candidates.append((parsed, idx))
+        if not candidates:
+            return float("NaN"), float("NaN")
+        try:
+            parsed, idx = min(candidates, key=lambda item: item[0])
+        except TypeError:
+            # Mixed local/offset-aware values are deliberately not compared.
+            parsed, idx = candidates[0]
+        source = group.at[idx, source_column] if source_column in group else float("NaN")
+        return (formatter(parsed) if formatter else parsed), source
+
+    selected_provenance = {}
+    for volume_id, group in df.groupby("volume_id"):
+        selected_provenance[volume_id] = {
+            "date": selected_pair(
+                group,
+                "date",
+                "date_source",
+                _normalize_date_candidate,
+            ),
+            "time": selected_pair(
+                group,
+                "time",
+                "time_source",
+                _normalize_instance_creation_time,
+            ),
+            "acquisition_datetime": selected_pair(
+                group,
+                "acquisition_datetime",
+                "acquisition_datetime_source",
+                _normalize_acquisition_datetime,
+                lambda value: value.isoformat(),
+            ),
+        }
 
     def agg_fun(col):
         vals = list(col.dropna())
@@ -1231,6 +1290,9 @@ def group_volumes(df):
         if col.name == "time":
             earliest = _normalize_instance_creation_time(vals)
             return earliest if earliest is not None else float("NaN")
+        if col.name == "acquisition_datetime":
+            earliest = _normalize_acquisition_datetime(vals)
+            return earliest.isoformat() if earliest is not None else float("NaN")
         unique_vals = _sorted_unique(vals, col.name)
         if len(unique_vals) == 1:
             return unique_vals[0]
@@ -1238,7 +1300,26 @@ def group_volumes(df):
 
     df = df.groupby("volume_id").agg(agg_fun)
     df = df.reset_index()
-    df = df.dropna(axis=1, how="all")
+    for canonical, source in (
+        ("date", "date_source"),
+        ("time", "time_source"),
+        ("acquisition_datetime", "acquisition_datetime_source"),
+    ):
+        if canonical not in df and source not in df:
+            continue
+        pairs = df["volume_id"].map(
+            lambda volume_id: selected_provenance.get(volume_id, {}).get(
+                canonical, (float("NaN"), float("NaN"))
+            )
+        )
+        df[canonical] = pairs.map(lambda pair: pair[0])
+        df[source] = pairs.map(lambda pair: pair[1])
+    empty_columns = [
+        column
+        for column in df.columns
+        if column not in CANONICAL_TIMING_COLUMNS and df[column].isna().all()
+    ]
+    df = df.drop(columns=empty_columns)
     return df
 
 
@@ -1359,6 +1440,13 @@ def _normalize_instance_creation_time(value):
     if not s or s.lower() in {"none", "nan", "nat"}:
         return None
 
+    # Parse scalar clock strings before literal evaluation, which would strip
+    # significant leading zeroes from DICOM TM values such as 010203.123456.
+    for fmt in ("%H%M%S.%f", "%H%M%S", "%H:%M:%S.%f", "%H:%M:%S"):
+        parsed = pd.to_datetime(s, format=fmt, errors="coerce")
+        if pd.notna(parsed):
+            return parsed.time()
+
     try:
         literal = literal_eval(s)
     except (ValueError, SyntaxError):
@@ -1398,6 +1486,12 @@ def _normalize_instance_creation_time(value):
             return parsed.time()
 
     return None
+
+
+def _normalize_acquisition_datetime(value):
+    """Return the earliest valid instant from one DT value or a value list."""
+    interval = dicom_datetime_interval(value)
+    return interval.start if interval else None
 
 
 def _normalize_acquisition_sort_number(value):
@@ -1540,7 +1634,12 @@ def compute_acquisition_order(df: pd.DataFrame) -> pd.DataFrame:
         "acquisition_datetime",
     ):
         if column in df:
-            parsed = df[column].map(dicom_datetime_interval)
+            parsed = df.apply(
+                lambda row: dicom_datetime_interval(
+                    row.get(column), row.get("TimezoneOffsetFromUTC")
+                ),
+                axis=1,
+            )
             use = precise.isna() & parsed.notna()
             precise.loc[use] = parsed.loc[use].map(lambda interval: interval.start)
             domains.loc[use] = parsed.loc[use].map(lambda interval: interval.domain)
@@ -1886,7 +1985,7 @@ def _get_step_outputs(step: dict) -> set[str]:
             outputs |= {"_patient_key_raw", "patient_key_std_failed"}
         return outputs
     if step_type == "coalesce_date":
-        return {"date"}
+        return {"date", "date_source"}
     if step_type == "coalesce_time":
         return {
             "time",
@@ -1963,7 +2062,7 @@ def _validate_string_list(
         raise ValueError(f"{field_name} must be a list of strings.")
     if not allow_empty and not value:
         raise ValueError(f"{field_name} must be a non-empty list of strings.")
-    if any(not isinstance(item, str) or not item for item in value):
+    if any(not isinstance(item, str) or not item.strip() for item in value):
         raise ValueError(f"{field_name} must contain only non-empty strings.")
 
 
@@ -2174,6 +2273,20 @@ def _collect_required_input_columns(
     return sorted(required)
 
 
+def _collect_timing_candidate_columns(steps: list[dict]) -> list[str]:
+    """Return configured/default coalescing inputs that must remain raw strings."""
+    columns = []
+    for step in steps:
+        if step["type"] == "coalesce_date":
+            candidates = step.get("candidates", DATE_CANDIDATES)
+        elif step["type"] == "coalesce_time":
+            candidates = step.get("candidates", TIME_CANDIDATES)
+        else:
+            continue
+        columns.extend(candidates)
+    return list(dict.fromkeys(columns))
+
+
 def _step_label(step: dict) -> str:
     """Build a human-readable label for logging and validation errors."""
     step_type = step["type"]
@@ -2249,15 +2362,68 @@ def _run_hook_step(df: pd.DataFrame, step: dict) -> pd.DataFrame:
     return df
 
 
-def _normalize_date_candidate(value):
-    """Convert a date candidate into a scalar timestamp or ``NaT``."""
-    if isinstance(value, list):
-        return pd.NaT
+def _normalize_date_candidate(value, column_name: str = ""):
+    """Convert DICOM DA/DT or normalized date values into a scalar date."""
+    value = _as_python_scalar(value)
     if value is None or _is_nan(value):
         return pd.NaT
-    if isinstance(value, pd.Timestamp):
-        return value
-    return pd.to_datetime(value, errors="coerce")
+    if isinstance(value, (list, tuple, np.ndarray)):
+        parsed = [_normalize_date_candidate(item, column_name) for item in value]
+        parsed = [item for item in parsed if pd.notna(item)]
+        return min(parsed) if parsed else pd.NaT
+    if isinstance(value, (pd.Timestamp, datetime, dt_date)):
+        return pd.Timestamp(value).tz_localize(None).normalize()
+
+    text = str(value).strip()
+    if not text or text.lower() in {"none", "nan", "nat"}:
+        return pd.NaT
+    if column_name.lower().endswith("datetime") or re.fullmatch(
+        r"\d{8,14}(?:\.\d{1,6})?(?:[+-]\d{4})?", text
+    ):
+        try:
+            represented = DicomDT(text)
+            return pd.Timestamp(represented.date())
+        except (TypeError, ValueError):
+            pass
+    parsed = pd.to_datetime(text, errors="coerce")
+    if pd.isna(parsed):
+        return pd.NaT
+    return pd.Timestamp(parsed).tz_localize(None).normalize()
+
+
+def _normalize_time_candidate(value, column_name: str = ""):
+    """Extract a clock time from DICOM TM/DT or normalized timestamp values."""
+    value = _as_python_scalar(value)
+    if value is None or _is_nan(value):
+        return None
+    if isinstance(value, (list, tuple, np.ndarray)):
+        parsed = [_normalize_time_candidate(item, column_name) for item in value]
+        parsed = [item for item in parsed if item is not None]
+        return min(parsed) if parsed else None
+    if isinstance(value, (pd.Timestamp, datetime)):
+        return value.timetz()
+
+    prefer_datetime = column_name.lower().endswith("datetime")
+    if not prefer_datetime:
+        parsed_time = _normalize_instance_creation_time(value)
+        if parsed_time is not None:
+            return parsed_time
+    text = str(value).strip()
+    match = re.fullmatch(
+        r"(\d{4}(?:\d{2}){0,5})(?:\.\d{1,6})?(?:[+-]\d{4})?", text
+    )
+    if match and len(match.group(1)) >= 10:
+        try:
+            return DicomDT(text).timetz()
+        except (TypeError, ValueError):
+            return None
+    if prefer_datetime or re.match(r"^\d{4}-\d{2}-\d{2}[T ]", text):
+        try:
+            parsed = pd.Timestamp(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed.timetz() if pd.notna(parsed) else None
+    return None
 
 
 def _rule_mask(df: pd.DataFrame, rule: dict) -> pd.Series:
@@ -2512,7 +2678,12 @@ def _run_modality_curation_step(
 
 def _run_finalize_step(df: pd.DataFrame, step: dict) -> pd.DataFrame:
     """Drop empty helper columns and restore the canonical output ordering."""
-    df = df.dropna(axis=1, how="all")
+    empty_columns = [
+        column
+        for column in df.columns
+        if column not in CANONICAL_TIMING_COLUMNS and df[column].isna().all()
+    ]
+    df = df.drop(columns=empty_columns)
     df = reorder_columns(df)
     df = reorder_rows(df)
     return df
@@ -2592,7 +2763,12 @@ def clean_and_save_data(
         protected_paths=csv_path if isinstance(csv_path, (list, tuple)) else [csv_path],
     )
     required_columns = _collect_required_input_columns(steps, phase_curation)
-    df = load_data(csv_path, required_columns=required_columns)
+    timing_columns = _collect_timing_candidate_columns(steps)
+    df = load_data(
+        csv_path,
+        required_columns=required_columns,
+        string_columns=timing_columns,
+    )
     input_rows = len(df)
     df = run_clean_pipeline(df, steps, phase_curation=phase_curation)
 

@@ -116,10 +116,6 @@ TIME_CANDIDATES = [
     "FrameAcquisitionDateTime",
     "AcquisitionDateTime",
     "AcquisitionTime",
-    "ContentTime",
-    "SeriesTime",
-    "InstanceCreationTime",
-    "StudyTime",
 ]
 
 # Used by clean.add_date in priority order to build the normalized date column.
@@ -127,7 +123,5 @@ TIME_CANDIDATES = [
 DATE_CANDIDATES = [
     "StudyDate",
     "AcquisitionDate",
-    "ContentDate",
     "SeriesDate",
-    "InstanceCreationDate",
 ]

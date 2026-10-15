@@ -259,9 +259,14 @@ def test_add_date_selects_best_date_candidate():
     assert out["date"].notna().sum() == 3
     assert out.loc[0, "date"] == pd.Timestamp("2020-01-01")
     assert out.loc[2, "date"] == pd.Timestamp("2021-01-03")
+    assert out["date_source"].tolist() == [
+        "StudyDate",
+        "AcquisitionDate",
+        "AcquisitionDate",
+    ]
 
 
-def test_add_time_selects_best_time_candidate():
+def test_add_time_defaults_exclude_non_acquisition_clocks():
     df = pd.DataFrame(
         {
             "AcquisitionTime": ["bad", None, None],
@@ -272,10 +277,100 @@ def test_add_time_selects_best_time_candidate():
 
     out = clean.add_time(df.copy())
 
-    assert out["time"].notna().sum() == 3
-    assert out.loc[0, "time"] == dt_time(12, 0, 0)
-    assert out.loc[2, "time"] == dt_time(12, 2, 0)
-    assert out["time_source"].tolist() == ["ContentTime"] * 3
+    assert out["time"].isna().all()
+    assert out["time_source"].isna().all()
+
+    configured = clean.add_time(
+        df.copy(), candidate_columns=["ContentTime", "StudyTime"]
+    )
+    assert configured["time"].tolist() == [
+        dt_time(12, 0),
+        dt_time(12, 1),
+        dt_time(12, 2),
+    ]
+    assert configured["time_source"].tolist() == ["ContentTime"] * 3
+
+
+def test_explicit_candidates_are_ordered_per_row_and_replace_defaults():
+    df = pd.DataFrame(
+        {
+            "CustomDate": ["bad", "20240202", None],
+            "BackupDate": ["20240301", "20240302", "bad"],
+            "StudyDate": ["20240101", "20240102", "20240103"],
+            "CustomTime": ["bad", "010203.123456", None],
+            "BackupTime": ["020304", "020305", "bad"],
+            "AcquisitionTime": ["120000", "120100", "120200"],
+        }
+    )
+    dated = clean.add_date(df.copy(), ["CustomDate", "BackupDate"])
+    timed = clean.add_time(dated, ["CustomTime", "BackupTime"])
+
+    assert dated["date"].tolist() == [
+        pd.Timestamp("2024-03-01"),
+        pd.Timestamp("2024-02-02"),
+        pd.NaT,
+    ]
+    assert dated.loc[[0, 1], "date_source"].tolist() == ["BackupDate", "CustomDate"]
+    assert pd.isna(dated.loc[2, "date_source"])
+    assert timed.loc[0, "time"] == dt_time(2, 3, 4)
+    assert timed.loc[1, "time"] == dt_time(1, 2, 3, 123456)
+    assert pd.isna(timed.loc[2, "time"])
+    assert timed.loc[[0, 1], "time_source"].tolist() == [
+        "BackupTime",
+        "CustomTime",
+    ]
+    assert pd.isna(timed.loc[2, "time_source"])
+
+
+def test_datetime_candidates_supply_date_and_time_components_with_provenance():
+    df = pd.DataFrame(
+        {
+            "CustomDateTime": [
+                "bad",
+                "20240102000304.123456+0100",
+                pd.Timestamp("2024-01-03 05:06:07.654321"),
+            ],
+            "FallbackDate": ["20240101", "20240101", "20240101"],
+            "FallbackTime": ["235959", "235959", "235959"],
+        }
+    )
+    out = clean.add_date(df.copy(), ["CustomDateTime", "FallbackDate"])
+    out = clean.add_time(out, ["CustomDateTime", "FallbackTime"])
+
+    assert out["date"].tolist() == [
+        pd.Timestamp("2024-01-01"),
+        pd.Timestamp("2024-01-02"),
+        pd.Timestamp("2024-01-03"),
+    ]
+    assert out["date_source"].tolist() == [
+        "FallbackDate",
+        "CustomDateTime",
+        "CustomDateTime",
+    ]
+    assert out.loc[0, "time"] == dt_time(23, 59, 59)
+    assert out.loc[1, "time"].isoformat() == "00:03:04.123456+01:00"
+    assert out.loc[2, "time"] == dt_time(5, 6, 7, 654321)
+
+
+def test_absent_candidate_columns_create_missing_canonical_values():
+    out = clean.run_clean_pipeline(
+        pd.DataFrame(
+            {
+                "patient_key": ["p"],
+                "study_id": ["s"],
+                "series_id": ["series"],
+                "volume_id": ["v1"],
+            }
+        ),
+        [
+            {"type": "coalesce_date", "candidates": ["MissingDate"]},
+            {"type": "coalesce_time", "candidates": ["MissingTime"]},
+            {"type": "group_volumes"},
+            {"type": "finalize"},
+        ],
+    )
+    assert {"date", "date_source", "time", "time_source"}.issubset(out.columns)
+    assert out.loc[0, ["date", "date_source", "time", "time_source"]].isna().all()
 
 
 def test_coalesced_time_preserves_per_row_provenance_through_volume_aggregation():
@@ -302,6 +397,78 @@ def test_coalesced_time_preserves_per_row_provenance_through_volume_aggregation(
     assert grouped.loc["scan", "time_source"] == "AcquisitionTime"
     assert grouped.loc["series", "time_source"] == "SeriesTime"
     assert grouped.loc["creation", "time_source"] == "InstanceCreationTime"
+
+
+def test_volume_aggregation_keeps_source_for_selected_earliest_value():
+    rows = pd.DataFrame(
+        {
+            "volume_id": ["v", "v"],
+            "PrimaryDate": ["20240102", "bad"],
+            "BackupDate": [None, "20240101"],
+            "PrimaryTime": ["120100", "bad"],
+            "BackupTime": [None, "120000.123456"],
+        }
+    )
+    rows = clean.add_date(rows, ["PrimaryDate", "BackupDate"])
+    rows = clean.add_time(rows, ["PrimaryTime", "BackupTime"])
+    grouped = clean.group_volumes(rows).iloc[0]
+
+    assert grouped["date"] == pd.Timestamp("2024-01-01")
+    assert grouped["date_source"] == "BackupDate"
+    assert grouped["time"] == dt_time(12, 0, 0, 123456)
+    assert grouped["time_source"] == "BackupTime"
+
+
+def test_configured_candidate_columns_are_retained_from_csv(tmp_path):
+    path = tmp_path / "custom.csv"
+    pd.DataFrame(
+        {
+            "patient_key": ["p"],
+            "CustomDate": ["20240101"],
+            "CustomClock": ["001234.123456"],
+            "Unconfigured": ["drop me"],
+        }
+    ).to_csv(path, index=False)
+    steps = clean.validate_cleaning_manifest(
+        {
+            "cleaning": {
+                "steps": [
+                    {"type": "coalesce_date", "candidates": ["CustomDate"]},
+                    {"type": "coalesce_time", "candidates": ["CustomClock"]},
+                ]
+            }
+        }
+    )
+    required = clean._collect_required_input_columns(steps)
+    loaded = clean.load_data(
+        [path],
+        required_columns=required,
+        string_columns=clean._collect_timing_candidate_columns(steps),
+    )
+
+    assert loaded.loc[0, "CustomClock"] == "001234.123456"
+    assert "CustomDate" in loaded
+    assert "Unconfigured" not in loaded
+
+
+def test_study_date_remains_exam_date_across_midnight_acquisition():
+    raw_dt = "20240102000000.123456+0100"
+    df = pd.DataFrame(
+        {
+            "StudyDate": ["20240101"],
+            "AcquisitionDate": ["20240102"],
+            "AcquisitionDateTime": [raw_dt],
+            "TimezoneOffsetFromUTC": ["+0100"],
+        }
+    )
+    out = clean.add_time(clean.add_date(df))
+
+    assert out.loc[0, "date"] == pd.Timestamp("2024-01-01")
+    assert out.loc[0, "date_source"] == "StudyDate"
+    assert out.loc[0, "AcquisitionDateTime"] == raw_dt
+    assert out.loc[0, "TimezoneOffsetFromUTC"] == "+0100"
+    assert out.loc[0, "acquisition_datetime"] == "2024-01-01T23:00:00.123456+00:00"
+    assert out.loc[0, "acquisition_datetime_source"] == "AcquisitionDateTime"
 
 
 def test_generic_manifest_filters_pixel_spacing_declaratively():
@@ -502,6 +669,39 @@ def test_group_volumes_resolves_time_lists_to_earliest_scalar():
     assert pd.isna(by_volume.loc["v2", "time"])
 
 
+def test_group_volumes_resolves_acquisition_datetime_lists_to_earliest_scalar():
+    df = pd.DataFrame(
+        {
+            "volume_id": ["v1", "v1", "v2"],
+            "acquisition_datetime": [
+                ["20240102143923.123456", "20240102143921.654321"],
+                "['20240102143924.000001', 'malformed']",
+                None,
+            ],
+            "acquisition_datetime_source": [
+                "FrameAcquisitionDateTime",
+                "AcquisitionDateTime",
+                None,
+            ],
+        }
+    )
+
+    grouped = clean.group_volumes(df)
+    by_volume = grouped.set_index("volume_id")
+
+    assert (
+        by_volume.loc["v1", "acquisition_datetime"]
+        == "2024-01-02T14:39:21.654321"
+    )
+    assert not isinstance(by_volume.loc["v1", "acquisition_datetime"], list)
+    assert (
+        by_volume.loc["v1", "acquisition_datetime_source"]
+        == "FrameAcquisitionDateTime"
+    )
+    assert pd.isna(by_volume.loc["v2", "acquisition_datetime"])
+    assert pd.isna(by_volume.loc["v2", "acquisition_datetime_source"])
+
+
 def test_generic_manifest_filters_volume_length_declaratively():
     base_path = Path(__file__).resolve().parents[2] / "src" / "imperandi"
     manifest = clean.load_manifest("generic", base_path=base_path)
@@ -608,7 +808,7 @@ def test_compute_visit_and_acquisition_order():
         }
     )
     df2 = clean.add_date(df2)
-    df2 = clean.add_time(df2)
+    df2 = clean.add_time(df2, ["InstanceCreationTime"])
     out2 = clean.compute_acquisition_order(df2.copy())
     assert "acquisition_order" in out2.columns
     assert set(out2["acquisition_order"].dropna()) == {0, 1, 2}
@@ -631,7 +831,7 @@ def test_compute_visit_and_acquisition_order():
         }
     )
     df3 = clean.add_date(df3)
-    df3 = clean.add_time(df3)
+    df3 = clean.add_time(df3, ["InstanceCreationTime"])
     out3 = clean.compute_acquisition_order(df3.copy())
     assert out3.set_index("volume_id").loc["v1", "acquisition_order"] == 0
     assert out3.set_index("volume_id").loc["v2", "acquisition_order"] == 1
@@ -655,7 +855,7 @@ def test_compute_visit_and_acquisition_order():
         }
     )
     df4 = clean.add_date(df4)
-    df4 = clean.add_time(df4)
+    df4 = clean.add_time(df4, ["InstanceCreationTime"])
     out4 = clean.compute_acquisition_order(df4.copy())
     out4_by_volume = out4.set_index("volume_id")
     assert out4_by_volume.loc["v2", "acquisition_order"] == 0
@@ -960,6 +1160,14 @@ def test_multiple_rule_filter_requires_logic():
         ),
         (
             {"type": "coalesce_date", "candidates": "StudyDate"},
+            "coalesce_date.candidates",
+        ),
+        (
+            {"type": "coalesce_time", "candidates": []},
+            "coalesce_time.candidates",
+        ),
+        (
+            {"type": "coalesce_date", "candidates": [" "]},
             "coalesce_date.candidates",
         ),
         (
@@ -1426,3 +1634,5 @@ def test_clean_and_save_data_runs_manifest_pipeline(tmp_path):
     assert out.loc[0, "patient_key"] == "12-30"
     assert out.loc[0, "_patient_key_raw"] == "patient_0012_030"
     assert out.loc[0, "volume_length"] == 2.0
+    assert out.loc[0, "date_source"] == "StudyDate"
+    assert out.loc[0, "time_source"] == "AcquisitionTime"
