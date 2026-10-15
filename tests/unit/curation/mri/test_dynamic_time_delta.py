@@ -88,7 +88,7 @@ def test_distinct_dynamic_groups_have_independent_reference_times(field, value):
     ],
 )
 def test_equivalent_image_type_encodings_share_the_time_reference(image_type):
-    rows = dynamic_rows()
+    rows = dynamic_rows().astype({"ImageType": object})
     rows.at[1, "ImageType"] = image_type
 
     out = annotate_mri(rows)
