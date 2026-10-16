@@ -63,6 +63,34 @@ def test_modality_step_does_not_resolve_canonical_phase(cohort, monkeypatch):
     assert "phase_source" not in out
 
 
+@pytest.mark.parametrize(
+    "description,family",
+    [("T2 HASTE", "single_shot"), ("T2 VISTA", "multi_shot")],
+)
+def test_t2_acquisition_family_can_filter_cleaning_output(cohort, description, family):
+    cohort.loc[cohort.Modality.eq("MR"), "SeriesDescription"] = description
+    column = "mri_t2_acquisition_family"
+    steps = clean.validate_cleaning_manifest(
+        {
+            "cleaning": {
+                "steps": [
+                    {"type": "modality_curation"},
+                    {
+                        "type": "filter",
+                        "kind": "keep",
+                        "scope": "row",
+                        "rules": [{"column": column, "op": "eq", "value": family}],
+                    },
+                ]
+            }
+        }
+    )
+    assert column not in clean._collect_required_input_columns(steps)
+    result = clean.run_clean_pipeline(cohort, steps)
+    assert result.volume_id.tolist() == ["mr"]
+    assert result[column].tolist() == [family]
+
+
 @pytest.mark.parametrize("ontology_first", [False, True])
 def test_split_curation_matches_full_modality_api(cohort, ontology_first):
     config = phase_config(ontology_first)

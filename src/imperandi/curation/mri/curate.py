@@ -533,6 +533,24 @@ def add_mri_sequence_columns(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def detect_t2_acquisition_family(row: pd.Series) -> str | None:
+    """Classify T2 acquisitions using the first field with family evidence."""
+    sequence = row.get("mri_sequence")
+    if _is_missing(sequence):
+        sequence = detect_mri_sequence(row)[0]
+    if norm_label(sequence) != "T2":
+        return None
+
+    def evaluate(text):
+        if re.search(rules.RX_T2_SINGLE_SHOT, text):
+            return "single_shot"
+        if re.search(rules.RX_T2_MULTI_SHOT, text):
+            return "multi_shot"
+        return None
+
+    return _first_text_column_value(row, evaluate)
+
+
 # -----------------------------------------------------------------------------
 # T1 perfusion phase classification
 # -----------------------------------------------------------------------------
@@ -2159,6 +2177,7 @@ def add_basic_feature_columns(df: pd.DataFrame) -> pd.DataFrame:
     )
 
     # T2 features.
+    out["mri_t2_acquisition_family"] = out.apply(detect_t2_acquisition_family, axis=1)
     t2_patterns = (
         rules.RX_T2_FATSAT,
         rules.RX_T2_MOTION_ROBUST,
@@ -2223,9 +2242,9 @@ def score_t1(row: pd.Series) -> float:
 def score_t2(row: pd.Series) -> float:
     score = {"AXIAL": 50, "CORONAL": 20, "SAGITTAL": 5}.get(row.get("plane"), 30)
     score += 35 if bool(row.get("is_t2_fatsat")) else 0
-    score += 35 if bool(row.get("is_t2_motion_robust")) else 0
-    score += 15 if bool(row.get("is_t2_haste_ssfse")) else 0
-    score += 10 if bool(row.get("is_t2_tse_fse")) else 0
+    score += {"multi_shot": 20, "single_shot": 10}.get(
+        row.get("mri_t2_acquisition_family"), 0
+    )
     score += 8 if bool(row.get("is_resp_triggered")) else 0
     score += 5 if bool(row.get("is_breath_hold")) else 0
     score -= 60 if bool(row.get("is_t2_mrcp_biliary")) else 0

@@ -1949,6 +1949,7 @@ def _get_step_outputs(step: dict) -> set[str]:
             "mri_sequence",
             "mri_sequence_reason",
             "mri_sequence_confidence",
+            "mri_t2_acquisition_family",
             "mri_perfusion_label",
             "mri_perfusion_reason",
             "mri_perfusion_confidence",

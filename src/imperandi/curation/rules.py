@@ -65,7 +65,7 @@ RX_RESP_TRIGGERED = token(
 
 # Generic contrast vocabulary. Contrast-agent names belong in modality modules.
 INJECTION = r"inj(?:ect(?:ed|ion|e|ee|é|ée)?)?|iv"
-CONTRAST = r"contrast(?:ed|[eé]e?)?|c\+"
+CONTRAST = r"contrast(?:ed|[eé]e?)?|c\+|pdc|pdc\+|pdc{SEP}enhanced|enhanced"
 RX_PHASE_NATIVE = token(
     rf"native|natif|un{SEP}enhanced|non{SEP}enhanced"
     rf"|pr[eé](?:{SEP}(?:{CONTRAST}|{INJECTION}))?"

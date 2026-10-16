@@ -35,9 +35,16 @@ T1_GRE = (
     rf"|twist{SEP}vibe|lava{SEP}flex|{DIXON}|idea(?:l)?|disco"
 )
 RX_PHASE_MULTIART_DYNAMIC = token(rf"multi{SEP}{shared.ARTERIAL}")
-T2_FAST_SPIN = r"tse|fse|frfse"
-T2_SINGLE_SHOT = r"haste|e?ssfse|ssh"
-T2_MOTION_ROBUST = r"f?blade|propeller|prop"
+T2_FAST_SPIN = rf"tse|fse|frfse|(?:fast|turbo){SEP}spin{SEP}echo"
+# Siemens HASTE, GE SSFSE/eSSFSE, and Philips SS-TSE/single-shot TSE.
+T2_SINGLE_SHOT = (
+    rf"haste|e?ss{SEP}fse|ss{SEP}tse|ssh"
+    rf"|single{SEP}shot{SEP}(?:fse|tse|(?:fast|turbo){SEP}spin{SEP}echo)"
+)
+# Siemens BLADE/SPACE, GE PROPELLER/CUBE, and Philips MultiVane/VISTA.
+T2_MOTION_ROBUST = r"f?blade|propeller|prop|multivane"
+T2_3D_SPIN = r"space|cube|vista"
+T2_CONVENTIONAL_SPIN = rf"(?:conventional{SEP})?(?:se|spin{SEP}echo)"
 RX_DIXON_FAT_FRACTION = token(rf"fat{SEP}fraction|fatfrac|pdff|ff|quant")
 RX_DIXON_R2STAR = token(rf"r2\*|r2{SEP}star|t2(?:\*|{SEP}star){SEP}map")
 RX_QUANT_OR_REPORT = token(
@@ -61,7 +68,8 @@ RX_SEQUENCE_T1_CONTRAST = token(
 )
 RX_SEQUENCE_T2 = token(
     rf"t2(?:{SEP}weighted)?|{T2_FAST_SPIN}|{T2_SINGLE_SHOT}"
-    rf"|{T2_MOTION_ROBUST}|spir|spair|aspir|bhte"
+    rf"|{T2_MOTION_ROBUST}|{T2_3D_SPIN}"
+    rf"|conventional{SEP}(?:se|spin{SEP}echo)|spir|spair|aspir|bhte"
 )
 
 # Contrast-agent and hepatobiliary phases are specific to MR.
@@ -123,9 +131,20 @@ GENERIC_DYNAMIC_FAMILIES = (
 
 # Features used to rank MR diagnostic candidates.
 RX_T2_FATSAT = token(rf"fs|fat{SEP}sat|spair|spir|stir|tirm")
-RX_T2_MOTION_ROBUST = token(T2_MOTION_ROBUST, r"multivane|radial", RX_RESP_TRIGGERED)
+RX_T2_MOTION_ROBUST = token(T2_MOTION_ROBUST, r"radial", RX_RESP_TRIGGERED)
 RX_T2_HASTE_SSFSE = token(T2_SINGLE_SHOT, rf"single{SEP}shot")
 RX_T2_TSE_FSE = token(T2_FAST_SPIN, rf"sense|te{SEP}\d+|fast{SEP}spin|turbo{SEP}spin")
+# Acquisition-family evidence excludes nonspecific ranking cues such as SENSE,
+# TE, fat suppression, and respiratory triggering. Single-shot evidence must
+# be checked first because SS-TSE and single-shot FSE also contain TSE/FSE.
+RX_T2_SINGLE_SHOT = RX_T2_HASTE_SSFSE
+RX_T2_MULTI_SHOT = token(
+    T2_FAST_SPIN,
+    T2_CONVENTIONAL_SPIN,
+    T2_MOTION_ROBUST,
+    T2_3D_SPIN,
+    rf"multi{SEP}shot",
+)
 RX_T2_MRCP_BILIARY = token(r"mrcp|bili|biliary|biliaire|chol|cholangio|cholangi")
 RX_T1_3D_GRE = token(r"3d", T1_GRE)
 
