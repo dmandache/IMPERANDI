@@ -25,7 +25,7 @@ id_extraction:
 #   function: standardize_patient_key
 
 # Ordered phase fallback chain: the first resolved label wins. Supported
-# strategy types are ontology, rules, and totalsegmentator (at most one each).
+# strategy types are explicit, ontology, rules, and totalsegmentator (at most one each).
 phase_curation:
   # These columns identify each group that gets one best candidate per selection
   # slot. null uses available patient_key, study_id, and date columns. If an

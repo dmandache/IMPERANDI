@@ -65,6 +65,20 @@ phase_curation:
   # Together these identify each group that gets one best candidate per slot.
   best_candidate_group_columns: [patient_key, study_id, date]
   strategies:
+    # Explicit assignments run first and receive a +1000 selection-score bonus.
+    # Each assignment reuses the logic/rules structure of cleaning filters.
+    - type: explicit
+      name: reviewed_assignments
+      confidence: high
+      assignments:
+        - name: reviewed_ph1
+          phase: ARTERIAL
+          # Optional: and (default) or or. The first matching rule wins.
+          logic: and
+          rules:
+            - {column: patient_key, op: in, value: [example_patient_001, example_patient_002]}
+            - {column: SeriesDescription, op: icontains, value: ph1}
+
     # Exact, case-insensitive site-ontology mapping. columns are tried in order.
     - type: ontology
       name: reviewed_site_ontology
