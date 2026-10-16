@@ -38,7 +38,11 @@ from imperandi.curation.common import (
     read_csv,
     safe_str,
 )
-from imperandi.curation.phase import apply_phase_curation, validate_phase_curation
+from imperandi.curation.phase import (
+    apply_phase_curation,
+    phase_selection_bonus,
+    validate_phase_curation,
+)
 from imperandi.curation.rules import SEP_CHARS, match_phase, match_plane
 
 from . import rules
@@ -2218,6 +2222,7 @@ def score_t1(row: pd.Series) -> float:
     source = safe_str(row.get("mri_perfusion_source")) or "none"
 
     score = float(rules.T1_PHASE_PRIORITY.get(phase, 0))
+    score += phase_selection_bonus(row)
     score += rules.T1_PHASE_SOURCE_PRIORITY.get(source, 0)
 
     score += {"AXIAL": 50, "CORONAL": 20, "SAGITTAL": 5}.get(row.get("plane"), 30)

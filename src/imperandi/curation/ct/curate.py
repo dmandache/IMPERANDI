@@ -26,7 +26,11 @@ from imperandi.curation.common import (
     with_manifest_text_columns,
 )
 from imperandi.curation.contrast import infer_pre_post_native_acquisitions
-from imperandi.curation.phase import apply_phase_curation, validate_phase_curation
+from imperandi.curation.phase import (
+    apply_phase_curation,
+    phase_selection_bonus,
+    validate_phase_curation,
+)
 from imperandi.curation.rules import (
     RX_IMAGE_ORIGINAL,
     RX_IMAGE_PRIMARY,
@@ -135,6 +139,7 @@ def score_ct(row: pd.Series) -> float:
     f = detect_ct_features(row)
 
     score = float(rules.CT_PHASE_PRIORITY.get(phase, 0))
+    score += phase_selection_bonus(row)
     score += 40 if f["is_axial"] else 0
     score += 30 if f["is_original"] else 0
 

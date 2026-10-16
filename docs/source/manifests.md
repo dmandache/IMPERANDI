@@ -263,6 +263,9 @@ Missing values do not match operators other than `is_null`. Set
 `keep_null: true` on the filter step to preserve records with a missing value
 in any referenced column, whether the step keeps matches or discards them.
 If a referenced column is absent entirely, the step is skipped with a warning.
+For list-valued cells, a positive rule matches any populated item; `ne` and
+`not_in` require every populated item to pass. Empty/all-null lists count as null,
+including for `keep_null`. Explicit phase assignments use the same matching code.
 
 For example, retain CT and MR volumes whose reconstructed length is at least
 30 mm, while preserving volumes whose length is unknown:
@@ -292,7 +295,8 @@ The resolver writes:
 - `phase`: canonical uppercase phase such as `NATIVE`, `ARTERIAL`, `PORTAL_VENOUS`, or `DELAYED`; genuinely unresolved diagnostic acquisitions use `OTHER`, while non-phaseable acquisitions remain empty;
 - `phase_status`: `RESOLVED`, `UNRESOLVED`, or `NOT_APPLICABLE`;
 - `phase_source`: configured strategy name, `fallback`/`unresolved`, or `not_applicable`;
-- `phase_confidence`: rule, ontology, or predictor confidence when available;
+- `phase_strategy`: stable strategy type (`explicit`, `ontology`, `rules`, or `totalsegmentator`), `fallback`/`unresolved`, or `not_applicable`;
+- `phase_confidence`: explicit-assignment, rule, ontology, or predictor confidence when available;
 - `phase_reason`: concise provenance for the decision (for example `LOCALIZER` or `NON_T1_SEQUENCE` for not-applicable rows).
 
 `qc_unresolved_phase.csv` contains only rows with `phase_status=UNRESOLVED`. Acquisitions explicitly classified as `NOT_APPLICABLE` are excluded from phase QC.
@@ -415,6 +419,64 @@ and `date` are available. If none are available, the command logs a warning and
 writes empty selected and QC tables because it cannot identify candidate groups.
 For example, `[patient_key, visit_id]` selects one best candidate per patient
 visit rather than per study. Custom columns are loaded by the cleaning pipeline.
+
+### Explicit phase assignments
+
+Use `type: explicit` to assign a phase when one or more metadata conditions
+match. Put it before `rules`, ontology, or prediction strategies when the manual
+assignment should take precedence:
+
+```yaml
+phase_curation:
+  strategies:
+    - type: explicit
+      name: reviewed_assignments
+      assignments:
+        - name: reviewed_ph1
+          phase: ARTERIAL
+          logic: and
+          rules:
+            - {column: patient_key, op: in, value: [patient_001, patient_002]}
+            - {column: SeriesDescription, op: icontains, value: ph1}
+    - type: rules
+    - type: totalsegmentator
+  fallback: OTHER
+```
+
+In this example, both rules must match the same row. Each assignment uses the
+same `logic` and `rules` structure as a cleaning filter. Assignments default to
+`logic: and`; set `logic: or` to accept any rule. A single rule is also accepted.
+The first matching assignment wins, and later strategies only process unresolved
+rows. Assignment names are optional and default to `rule_1`,
+`rule_2`, and so on. Strategy `confidence` defaults to `high`. Assigned phase
+labels are normalized like other phase labels.
+
+Rules share operator validation and matching code with cleaning filters:
+
+| Operators | Matching |
+| --- | --- |
+| `eq`, `ne` | Exact, case-sensitive scalar equality or inequality |
+| `in`, `not_in` | Membership in a YAML list |
+| `contains`, `icontains` | Literal substring, case-sensitive or case-insensitive |
+| `regex` | Regular expression; use `(?i)` for case-insensitive patterns |
+| `lt`, `lte`, `gt`, `gte` | Numeric comparison; `value` must be a number |
+| `is_null`, `not_null` | Missing/populated cell; omit `value` |
+
+Missing columns never satisfy a condition. Null cells only match `is_null`.
+List-valued cells follow the [cleaning-filter matching rules](#cleaning-filters).
+Custom condition columns are loaded by `clean` and included
+in phase-command resume fingerprints. Quote identifier and date strings when
+YAML could otherwise interpret them as numbers or dates.
+
+Explicit matches record the strategy name in `phase_source`, `explicit` in
+`phase_strategy`, and the rule name and input values in `phase_reason`. CT and MRI T1
+scoring fetches the shared default bonus (1000 points) for resolved explicit
+assignments, so a reviewed assignment takes priority over an
+automatically assigned candidate in the same exam and phase slot. Unmatched and
+inferred rows receive no bonus. Phase applicability and diagnostic-product
+eligibility still apply. The numeric bonus is calculated during scoring and is
+not stored as a CSV column; persisted strategy provenance supports later scoring
+with the current default value.
 
 ### Explicit ontology
 

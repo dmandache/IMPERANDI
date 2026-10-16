@@ -118,6 +118,7 @@ def save_selected_candidates(df: pd.DataFrame, path: Path, config) -> int:
                 "phase_source",
                 "phase_confidence",
                 "phase_reason",
+                "phase_strategy",
             ):
                 if column in data:
                     annotated[column] = data[column]
