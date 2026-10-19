@@ -568,11 +568,10 @@ values within a volume remain unresolved instead of receiving an order-based
 phase. Strategies before `rules`, including ontology, contribute native and
 named phase context before generic dynamic progression. Repeated natives count
 once. Vendor `PhN` prefixes do not define physiological phases or require a
-`Ph1`. Without compatible native context, the first ordered generic dynamic
-acquisition falls back to native, even if its prefix is `Ph2` or `Ph3`, unless
-stronger phase evidence establishes otherwise. Bare agent names such as `gado`
-and exam-level injection descriptions are protocol context; clear acquisition
-postcontrast wording such as `post` or `C+` still establishes post-only context.
+`Ph1`. Generic dynamics are assumed to begin after injection, including when
+their prefixes start at `Ph2` or `Ph3`. Native assignment requires separate
+native evidence or a supported special profile. Bare agent names such as `gado`
+and exam-level injection descriptions remain protocol context.
 
 Generic MR dynamics use compatible acquisitions ordered by canonical `time`,
 then `acquisition_order` to refine ties or replace missing times. Supplied
@@ -585,10 +584,10 @@ when time/order evidence is available, or `input_order` for a neutral input-orde
 fallback, which does not establish dynamic chronology.
 
 Three distinct acquisitions, including compatible explicitly named phases,
-are required for the generic order template. Full dynamics follow `NATIVE`,
-`ARTERIAL`, `PORTAL_VENOUS`, then `DELAYED` for later acquisitions. Post-only groups start
-at arterial. A compatible native anchors the progression and counts once;
-repeated native acquisitions do not consume postcontrast positions. Explicit
+are required for the generic order template. Generic dynamics follow `ARTERIAL`,
+`PORTAL_VENOUS`, then `DELAYED` for later acquisitions. A compatible separate
+native anchors the progression and counts once; repeated native acquisitions
+do not consume postcontrast positions. Explicit
 phase labels retain their positions and provenance. A succeeding explicit phase
 in the compatible group is reserved for its named acquisition. Earlier generic
 volumes must remain below that phase, including when a `time_delta` window matches
@@ -616,13 +615,17 @@ Assignments with explicit context record `dynamic_explicit_anchor`; other ordere
 dynamics use `volume_order` or `acquisition_order_dixon_component`. Unresolved
 dynamics retain `generic_dynamic_context_pending` with a reason.
 `mri_dynamic_order_source` records the canonical columns used to order them.
-Dynamic groups also receive `time_delta`, measured in seconds as the volume's
-canonical `time` minus the first volume's `time` in that group. Compatible native
-and explicitly labelled acquisitions participate in the reference group. Missing
+Dynamic groups also receive `time_delta`, an estimated post-injection delay in
+seconds: the volume's canonical `time` minus the first postcontrast dynamic
+volume's `time`, plus `DEFAULT_DYNAMIC_START_DELAY_SECONDS` (20 seconds by default).
+This global variable lives in `imperandi.curation.mri.mri_rules`. Compatible named
+postcontrast acquisitions can set the reference time. Explicit native acquisitions
+and separate non-dynamic candidates do not set it; their deltas can be negative
+when they precede the estimated injection time. Missing
 or invalid current/reference times leave the value empty; acquisition or volume
-ranks do not supply elapsed seconds. Groups with a shared populated time have
-zero deltas. For generic dynamics, a valid `time_delta` matching one default
-phase-delay window takes precedence over the order template: arterial at
+ranks do not supply elapsed seconds. Dynamic acquisitions with a shared populated
+time receive the assumed starting delay. For generic dynamics, a valid `time_delta`
+matching one default phase-delay window takes precedence over the order template: arterial at
 20–35 seconds, portal at 60–90 seconds, delayed at 180–900 seconds, and the
 existing MR hepatobiliary windows. Boundaries are inclusive. Missing, invalid,
 negative, non-finite, out-of-window deltas, or matches at/above a succeeding
@@ -630,9 +633,13 @@ explicit phase use the existing order fallback within the explicit bounds.
 Explicit phase labels and the special dynamic profiles keep their precedence.
 Matching elapsed-time evidence can resolve a phase even when fewer than three
 acquisitions prevent the generic order template from resolving it.
-These deltas remain relative to the first volume in the group; bolus-time
-calibration is not used. Reasons record the matched delta and
+The assumed starting delay estimates injection time from the first postcontrast
+dynamic volume; measured bolus-time calibration is not used. Reasons record the
+matched delta and assumed starting delay, and
 `mri_perfusion_source=time_delta` identifies assignments made from these windows.
+Changing the global starting delay invalidates saved phase-command checkpoints.
+Previously curated CSVs retain their supplied rule evidence; rerun metadata
+curation from source to regenerate their timing and phases.
 
 CT adds angiography/CTA terms. MR adds gadolinium-related terms, hepatobiliary
 labels and timing (20 minutes or 2 hours through 2h59m59s), sequence families,

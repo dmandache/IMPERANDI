@@ -1,4 +1,4 @@
-"""Elapsed seconds follow dynamic groups and survive curation exports."""
+"""Estimated post-injection seconds follow dynamic groups and curation exports."""
 
 from datetime import time
 
@@ -8,6 +8,7 @@ import yaml
 
 from imperandi import cli
 from imperandi.curation.selection_export import save_selected_candidates
+from imperandi.curation.mri import mri_curation as mc
 from imperandi.curation.mri.mri_curation import annotate_mri
 from imperandi.ingest.clean import run_clean_pipeline
 
@@ -35,17 +36,16 @@ def dynamic_rows(description="AX T1 LAVA dynamic"):
         "AX T1 ART-PORT",
         "AX T1 ART/PORT/LATE",
         "AX T1 Multiart",
-        "AX T1 Mask+Multiart",
     ],
 )
-def test_time_delta_uses_seconds_from_first_volume_independent_of_input_order(
+def test_time_delta_adds_default_start_delay_independent_of_input_order(
     description,
 ):
     rows = dynamic_rows(description)
 
     out = annotate_mri(rows.sample(frac=1, random_state=4)).set_index("volume_id")
 
-    assert out.loc[rows.volume_id, "time_delta"].tolist() == [0, 60.25, 180, 180]
+    assert out.loc[rows.volume_id, "time_delta"].tolist() == [20, 80.25, 200, 200]
 
 
 @pytest.mark.parametrize(
@@ -74,8 +74,8 @@ def test_distinct_dynamic_groups_have_independent_reference_times(field, value):
 
     out = annotate_mri(rows.sample(frac=1, random_state=7)).set_index("volume_id")
 
-    assert out.loc[first.volume_id, "time_delta"].tolist() == [0, 60.25, 180, 180]
-    assert out.loc[second.volume_id, "time_delta"].tolist() == [0, 60.25, 180, 180]
+    assert out.loc[first.volume_id, "time_delta"].tolist() == [20, 80.25, 200, 200]
+    assert out.loc[second.volume_id, "time_delta"].tolist() == [20, 80.25, 200, 200]
 
 
 @pytest.mark.parametrize(
@@ -93,7 +93,7 @@ def test_equivalent_image_type_encodings_share_the_time_reference(image_type):
 
     out = annotate_mri(rows)
 
-    assert out.time_delta.tolist() == [0, 60.25, 180, 180]
+    assert out.time_delta.tolist() == [20, 80.25, 200, 200]
 
 
 @pytest.mark.parametrize("missing", [None, "invalid", "246060"])
@@ -110,7 +110,7 @@ def test_missing_current_or_reference_time_is_not_replaced_with_order_numbers(
         assert out.time_delta.isna().all()
     else:
         assert pd.isna(out.loc["v1", "time_delta"])
-        assert out.loc[["v0", "v2", "v3"], "time_delta"].tolist() == [0, 180, 180]
+        assert out.loc[["v0", "v2", "v3"], "time_delta"].tolist() == [20, 200, 200]
 
 
 def test_absent_time_and_non_dynamic_groups_have_no_time_delta():
@@ -131,14 +131,91 @@ def test_cleaning_retains_empty_time_delta_when_no_times_are_available():
     assert out.time_delta.isna().all()
 
 
-def test_explicit_native_in_same_group_supplies_reference_time():
+def test_explicit_native_does_not_shift_the_first_dynamic_reference():
     rows = dynamic_rows()
     rows.loc[0, "SeriesDescription"] = "AX T1 LAVA pre"
 
     out = annotate_mri(rows)
 
-    assert out.time_delta.tolist() == [0, 60.25, 180, 180]
+    assert out.time_delta.tolist() == [-40.25, 20, 139.75, 139.75]
     assert out.loc[0, "phase"] == "NATIVE"
+    assert out.loc[1, "phase"] == "ARTERIAL"
+
+
+def test_global_start_delay_changes_exported_deltas_and_phase_windows(monkeypatch):
+    monkeypatch.setattr(mc.rules, "DEFAULT_DYNAMIC_START_DELAY_SECONDS", 60.0)
+
+    out = annotate_mri(dynamic_rows())
+
+    assert out.time_delta.tolist() == [60, 120.25, 240, 240]
+    assert out.loc[0, "phase"] == "PORTAL_VENOUS"
+    assert (
+        "assumed first dynamic acquisition delay=60s"
+        in out.loc[0, "mri_perfusion_reason"]
+    )
+
+
+def test_phase_resume_recomputes_when_global_start_delay_changes(tmp_path, monkeypatch):
+    source, output = tmp_path / "input.csv", tmp_path / "output.csv"
+    dynamic_rows().to_csv(source, index=False)
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text(
+        yaml.safe_dump({"phase_curation": {"strategies": [{"type": "rules"}]}})
+    )
+    command = ["phase", str(source), str(output), "--manifest", str(manifest)]
+
+    assert cli.main(command) == 0
+    initial = pd.read_csv(output)
+    assert initial.loc[0, "time_delta"] == 20
+    assert initial.loc[0, "phase"] == "ARTERIAL"
+
+    monkeypatch.setattr(mc.rules, "DEFAULT_DYNAMIC_START_DELAY_SECONDS", 60.0)
+    assert cli.main(command) == 0
+
+    updated = pd.read_csv(output)
+    assert updated.loc[0, "time_delta"] == 60
+    assert updated.loc[0, "phase"] == "PORTAL_VENOUS"
+
+
+def test_manifest_native_assignment_does_not_set_dynamic_reference():
+    rows = dynamic_rows()
+    rows["known_phase"] = ["native", "", "", ""]
+    out = annotate_mri(
+        rows,
+        phase_curation={
+            "strategies": [
+                {
+                    "type": "ontology",
+                    "columns": ["known_phase"],
+                    "mapping": {"native": "NATIVE"},
+                },
+                {"type": "rules"},
+            ]
+        },
+    )
+
+    assert out.time_delta.tolist() == [-40.25, 20, 139.75, 139.75]
+    assert out.loc[0, "phase"] == "NATIVE"
+    assert out.loc[1, "phase"] == "ARTERIAL"
+
+
+def test_named_postcontrast_acquisition_can_start_the_dynamic_reference():
+    rows = dynamic_rows()
+    rows.loc[0, "SeriesDescription"] = "AX T1 LAVA"
+    rows["ContrastBolusAgentPhase"] = ["ARTERIAL", None, None, None]
+
+    out = annotate_mri(rows)
+
+    assert out.time_delta.tolist() == [20, 80.25, 200, 200]
+    assert out.loc[0, "mri_perfusion_source"] == "dicom_phase"
+    assert out.loc[1, "phase"] == "PORTAL_VENOUS"
+
+
+def test_mask_multiart_keeps_native_and_starts_postcontrast_timing_after_it():
+    out = annotate_mri(dynamic_rows("AX T1 Mask+Multiart"))
+
+    assert out.phase.tolist() == ["NATIVE", "ARTERIAL", "ARTERIAL", "ARTERIAL"]
+    assert out.time_delta.tolist() == [-40.25, 20, 139.75, 139.75]
 
 
 def test_water_and_fat_dynamic_groups_have_independent_reference_times():
@@ -151,17 +228,17 @@ def test_water_and_fat_dynamic_groups_have_independent_reference_times():
         "volume_id"
     )
 
-    assert out.loc[water.volume_id, "time_delta"].tolist() == [0, 60.25, 180, 180]
-    assert out.loc[fat.volume_id, "time_delta"].tolist() == [0, 60.25, 180, 180]
+    assert out.loc[water.volume_id, "time_delta"].tolist() == [20, 80.25, 200, 200]
+    assert out.loc[fat.volume_id, "time_delta"].tolist() == [20, 80.25, 200, 200]
 
 
-def test_shared_populated_time_has_zero_delta_without_ordering_evidence():
+def test_shared_populated_time_receives_default_start_delay_without_order():
     rows = dynamic_rows().drop(columns="acquisition_order")
     rows["time"] = "12:00:00"
 
     out = annotate_mri(rows)
 
-    assert out.time_delta.eq(0).all()
+    assert out.time_delta.eq(20).all()
 
 
 def test_configured_exam_groups_keep_separate_time_references():
@@ -176,7 +253,7 @@ def test_configured_exam_groups_keep_separate_time_references():
         },
     )
 
-    assert out.time_delta.tolist() == [0, 60.25, 0, 0]
+    assert out.time_delta.tolist() == [20, 80.25, 20, 20]
 
 
 def test_export_preserves_reference_from_full_group_when_given_a_subset(tmp_path):
@@ -185,7 +262,7 @@ def test_export_preserves_reference_from_full_group_when_given_a_subset(tmp_path
 
     save_selected_candidates(out, path, {"strategies": [{"type": "rules"}]})
 
-    assert pd.read_csv(path).loc[0, "time_delta"] == 60.25
+    assert pd.read_csv(path).loc[0, "time_delta"] == 80.25
 
 
 @pytest.mark.parametrize("command", ["clean", "phase"])
@@ -217,10 +294,10 @@ def test_cli_writes_time_delta_in_main_and_selected_tables(
 
     result = pd.read_csv(output).set_index("volume_id")
     assert result.loc[["v0", "v1", "v2", "v3"], "time_delta"].tolist() == [
-        0,
-        60.25,
-        180,
-        180,
+        20,
+        80.25,
+        200,
+        200,
     ]
     selected = pd.read_csv(tmp_path / "input_curated.csv").set_index("volume_id")
     pd.testing.assert_series_equal(

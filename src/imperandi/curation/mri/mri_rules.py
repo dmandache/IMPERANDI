@@ -73,6 +73,9 @@ RX_SEQUENCE_T2 = token(
 )
 
 # Contrast-agent and hepatobiliary phases are specific to MR.
+# Assume the first postcontrast dynamic acquisition starts this long after injection.
+DEFAULT_DYNAMIC_START_DELAY_SECONDS = 20.0
+
 RX_PHASE_NATIVE = token(
     rf"(?:pr[eé]|sans|non){SEP}(?:{GADOLINIUM})|mas(?:k|que)",
     shared.RX_PHASE_NATIVE,

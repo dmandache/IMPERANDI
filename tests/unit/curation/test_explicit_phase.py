@@ -336,7 +336,7 @@ def test_explicit_dynamic_anchor_does_not_give_inferred_neighbors_a_bonus():
             "volume_id": ["v0", "v1", "v2"],
             "Modality": ["MR"] * 3,
             "SeriesDescription": ["AX T1 LAVA dynamic"] * 3,
-            "time": ["120000", "120001", "120002"],
+            "time": ["115959", "120000", "120016"],
         }
     )
     options = config(

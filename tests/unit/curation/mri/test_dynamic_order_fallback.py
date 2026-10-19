@@ -1,4 +1,4 @@
-"""Restored protocol inference when independent timing is unavailable."""
+"""Postcontrast dynamic order fallback when elapsed timing is unavailable."""
 
 import pandas as pd
 import pytest
@@ -17,7 +17,7 @@ def acquisitions(description, *, same_series=True, clocks=True):
                 "volume_id": f"v{i}",
                 "Modality": "MR",
                 "SeriesDescription": description,
-                "time": f"12000{i}" if clocks else None,
+                "time": ["120000", "120016", "120111", "120112"][i] if clocks else None,
                 "time_source": "AcquisitionTime",
                 "acquisition_order": i,
                 "TemporalPositionIdentifier": i + 1,
@@ -48,7 +48,7 @@ def annotate(df):
 )
 @pytest.mark.parametrize("same_series", [False, True])
 @pytest.mark.parametrize("clocks", [False, True])
-def test_four_dynamic_acquisitions_restore_full_phase_sequence(
+def test_generic_dynamic_acquisitions_begin_after_injection(
     description, same_series, clocks
 ):
     out = annotate(
@@ -57,9 +57,9 @@ def test_four_dynamic_acquisitions_restore_full_phase_sequence(
         )
     )
     assert out.mri_perfusion_label.tolist() == [
-        "NATIVE",
         "ARTERIAL",
         "PORTAL_VENOUS",
+        "DELAYED",
         "DELAYED",
     ]
     assert out.mri_perfusion_confidence.eq("inferred").all()
@@ -68,7 +68,7 @@ def test_four_dynamic_acquisitions_restore_full_phase_sequence(
 @pytest.mark.parametrize(
     "description,expected",
     [
-        ("AX T1 LAVA dynamic", ["NATIVE", "ARTERIAL", "PORTAL_VENOUS", "DELAYED"]),
+        ("AX T1 LAVA dynamic", ["ARTERIAL", "PORTAL_VENOUS", "DELAYED", "DELAYED"]),
         ("AX T1 LAVA ART-PORT", ["ARTERIAL", "OTHER", "OTHER", "PORTAL_VENOUS"]),
         ("AX T1 LAVA ART/PORT/LATE", ["ARTERIAL", "OTHER", "OTHER", "DELAYED"]),
         ("AX T1 LAVA Mask+Multiart", ["NATIVE", "ARTERIAL", "ARTERIAL", "ARTERIAL"]),
@@ -122,9 +122,9 @@ def test_raw_injection_clocks_do_not_override_canonical_order():
     rows["ContrastBolusStartTime"] = "120000"
     out = annotate(rows)
     assert out.mri_perfusion_label.tolist() == [
-        "NATIVE",
         "ARTERIAL",
         "PORTAL_VENOUS",
+        "DELAYED",
         "DELAYED",
     ]
 
@@ -135,9 +135,9 @@ def test_timing_outside_windows_falls_back_to_known_dynamic_order():
     rows["ContrastBolusStartTime"] = "120000"
     out = annotate(rows)
     assert out.mri_perfusion_label.tolist() == [
-        "NATIVE",
         "ARTERIAL",
         "PORTAL_VENOUS",
+        "DELAYED",
         "DELAYED",
     ]
 
@@ -147,9 +147,9 @@ def test_long_gaps_do_not_delete_an_ordered_four_acquisition_template():
     rows["time"] = ["110000", "120000", "120100", "123000"]
     out = annotate(rows)
     assert out.mri_perfusion_label.tolist() == [
-        "NATIVE",
         "ARTERIAL",
         "PORTAL_VENOUS",
+        "DELAYED",
         "DELAYED",
     ]
 
@@ -169,9 +169,9 @@ def test_supplied_local_volume_order_restores_template_without_clocks():
     rows["n_volumes_in_series"] = 4
     out = annotate(rows.sample(frac=1, random_state=3))
     assert out.mri_perfusion_label.tolist() == [
-        "NATIVE",
         "ARTERIAL",
         "PORTAL_VENOUS",
+        "DELAYED",
         "DELAYED",
     ]
     assert out.mri_dynamic_order_source.eq("volume_order_in_series within series").all()
@@ -209,7 +209,7 @@ def test_separate_native_counts_before_unlabelled_dynamic_progression(
     count, expected, native_description, native_source
 ):
     rows = acquisitions("AX T1 LAVA dynamic", same_series=False).iloc[:count].copy()
-    rows["time"] = ["120000", "120001", "120002"][:count]
+    rows["time"] = ["120000", "120016", "120111"][:count]
     rows["acquisition_order"] += 1
     native = rows.iloc[0].copy()
     native.update(
@@ -275,15 +275,15 @@ def test_extra_dynamic_acquisitions_remain_delayed_after_standard_progression(
         )
     ).set_index("volume_id")
     assert out.loc[[f"v{i}" for i in range(5)], "mri_perfusion_label"].tolist() == [
-        "NATIVE",
         "ARTERIAL",
         "PORTAL_VENOUS",
+        "DELAYED",
         "DELAYED",
         "DELAYED",
     ]
 
 
-def test_late_unlabelled_candidate_does_not_steal_native_from_dynamic_start():
+def test_late_unlabelled_candidate_is_not_inferred_native():
     rows = acquisitions("AX T1 LAVA dynamic", same_series=False).iloc[:3].copy()
     late = rows.iloc[-1].copy()
     late.update(
@@ -299,9 +299,9 @@ def test_late_unlabelled_candidate_does_not_steal_native_from_dynamic_start():
         pd.concat([rows, pd.DataFrame([late])], ignore_index=True)
     ).set_index("volume_id")
     assert out.loc[["v0", "v1", "v2"], "mri_perfusion_label"].tolist() == [
-        "NATIVE",
         "ARTERIAL",
         "PORTAL_VENOUS",
+        "DELAYED",
     ]
     assert out.loc["late", "mri_perfusion_label"] == "OTHER"
 
@@ -324,9 +324,9 @@ def test_unlabelled_candidate_cannot_anchor_a_different_study():
     ).set_index("volume_id")
     assert out.loc["native", "mri_perfusion_label"] == "OTHER"
     assert out.loc[["v0", "v1", "v2"], "mri_perfusion_label"].tolist() == [
-        "NATIVE",
         "ARTERIAL",
         "PORTAL_VENOUS",
+        "DELAYED",
     ]
 
 

@@ -95,14 +95,14 @@ def test_earlier_dynamic_controls_all_volumes_despite_later_named_phase():
     df = dataset("MR", "dynamic", "portal")
     df.loc[df.volume_id.eq("v3"), "time"] = "120400"
     out = curate(df)
-    assert out.phase.tolist() == ["NATIVE", "PORTAL_VENOUS", "DELAYED", "DELAYED"]
+    assert out.phase.tolist() == ["ARTERIAL", "PORTAL_VENOUS", "DELAYED", "DELAYED"]
     assert out.phase_text_column.eq("SeriesDescription").all()
 
 
 @pytest.mark.parametrize("series,protocol", [("post", "Ph1"), ("Ph1", "post contrast")])
 def test_ordinal_context_cannot_be_synthesized_across_columns(series, protocol):
     out = curate(dataset("MR", series, protocol, count=1))
-    assert out.phase.tolist() == ["OTHER"]
+    assert out.phase.tolist() == ["ARTERIAL" if series == "Ph1" else "OTHER"]
 
 
 def test_post_only_dynamics_use_order_without_inheriting_lower_priority_native():

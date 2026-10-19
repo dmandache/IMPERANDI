@@ -1226,7 +1226,8 @@ def _generic_dynamic_chronology(rows: pd.DataFrame):
 
 
 def _dynamic_time_deltas(rows: pd.DataFrame) -> pd.Series:
-    """Measure seconds from the first volume in each compatible dynamic group."""
+    """Estimate post-injection seconds from the first postcontrast dynamic volume."""
+
     delta = pd.Series(np.nan, index=rows.index, dtype=float)
     if "time" not in rows:
         return delta
@@ -1240,22 +1241,43 @@ def _dynamic_time_deltas(rows: pd.DataFrame) -> pd.Series:
     for _, group in eligible.groupby(
         eligible.apply(_generic_dynamic_key, axis=1), sort=False
     ):
-        if not group.apply(
+        dynamic = group.apply(
             lambda row: _phase_matches_pattern(row, rules.RX_PHASE_GENERIC_DYNAMIC)
             or _phase_matches_pattern(row, rules.RX_PHASE_MULTIART_DYNAMIC),
             axis=1,
-        ).any():
+        )
+        if not dynamic.any():
             continue
-        chronology, _ = _generic_dynamic_chronology(group)
-        if chronology is None:
-            # A shared populated time still gives an unambiguous zero delta.
-            reference = seconds.loc[group.index]
+        # Named postcontrast acquisitions belong to the same dynamic context;
+        # native scans and separate unlabelled candidates do not set its clock.
+        postcontrast = group.loc[
+            (
+                dynamic
+                | group.mri_perfusion_label.isin(
+                    {"ARTERIAL", "PORTAL_VENOUS", "DELAYED", "HEPATOBILIARY"}
+                )
+            )
+            & group.mri_perfusion_label.ne("NATIVE")
+        ]
+        if postcontrast.empty:
+            continue
+        dynamic_seconds = seconds.loc[postcontrast.index]
+        if dynamic_seconds.notna().all():
+            # Ambiguous ranks within tied acquisitions do not obscure their clock.
+            reference = dynamic_seconds.loc[dynamic_seconds.eq(dynamic_seconds.min())]
         else:
+            chronology, _ = _generic_dynamic_chronology(postcontrast)
+            if chronology is None:
+                continue
             first = chronology.index[chronology.order.eq(chronology.order.min())]
             reference = seconds.loc[first]
         if reference.empty or reference.isna().any() or reference.nunique() != 1:
             continue
-        delta.loc[group.index] = seconds.loc[group.index] - reference.iloc[0]
+        delta.loc[group.index] = (
+            seconds.loc[group.index]
+            - reference.iloc[0]
+            + rules.DEFAULT_DYNAMIC_START_DELAY_SECONDS
+        )
     return delta
 
 
@@ -1265,7 +1287,7 @@ def infer_generic_dynamic_phases_from_exam_context(
     """Prefer default delay windows before the ordered dynamic template.
 
     Succeeding explicit phases bound generic inference. Within those bounds,
-    elapsed seconds from time_delta precede the established order fallback.
+    estimated post-injection seconds from time_delta precede the order fallback.
     """
 
     eligible = exam_rows.loc[exam_rows.mri_sequence.map(norm_label).eq("T1")].copy()
@@ -1392,7 +1414,11 @@ def infer_generic_dynamic_phases_from_exam_context(
             }
             if len(matches) == 1:
                 label = matches.pop()
-                reason = f"matched default {label} delay window from time_delta={seconds:g}s since first volume in group"
+                reason = (
+                    f"matched default {label} delay window from estimated post-injection "
+                    f"time_delta={seconds:g}s; assumed first dynamic acquisition delay="
+                    f"{rules.DEFAULT_DYNAMIC_START_DELAY_SECONDS:g}s"
+                )
                 decision_source = "time_delta"
             if upper is not None:
                 if phase_ranks.get(label, -1) >= upper:
@@ -1451,6 +1477,7 @@ def infer_generic_dynamic_phases_from_exam_context(
                     idx,
                     "OTHER",
                     "acquisition does not occur strictly after the resolved native context",
+                    use_delta=False,
                 )
             usable = usable.loc[
                 usable.order.gt(latest_native) | usable.index.isin(ordered_native)
@@ -1473,14 +1500,8 @@ def infer_generic_dynamic_phases_from_exam_context(
                     "fewer than three distinct acquisitions for a generic dynamic template",
                 )
             continue
-        pure_post = (
-            candidates.loc[remaining].apply(has_pure_post_contrast_text, axis=1).any()
-        )
-        first_labels = matched_anchors.loc[
-            matched_anchors.index.intersection(frames[0]), "mri_perfusion_label"
-        ]
-        infer_native = not has_native and not pure_post and first_labels.empty
-        previous_phase = -1 if infer_native else 0
+        # Generic dynamics begin after injection; native requires separate evidence.
+        previous_phase = 0
         for frame in frames:
             named = matched_anchors.loc[
                 matched_anchors.index.intersection(frame), "mri_perfusion_label"
@@ -1800,8 +1821,8 @@ def add_mri_perfusion_columns(
         return context
 
     for idx in grouped:
-        out.loc[idx, "time_delta"] = _dynamic_time_deltas(out.loc[idx])
         shared = _share_acquisition_phase_evidence(context_rows(idx))
+        out.loc[idx, "time_delta"] = _dynamic_time_deltas(shared)
         propagated = shared.index[shared.mri_perfusion_source.eq("acquisition_phase")]
         for column in (
             "mri_perfusion_label",

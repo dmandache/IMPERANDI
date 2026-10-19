@@ -40,12 +40,12 @@ def curate(rows, **config):
 
 
 def anchored_rows(description="dynamic", same_series=False):
-    # Keep this chronology fixture outside delay windows to exercise order fallback.
+    # After the initial 20-second assumption, later clocks exercise order fallback.
     return [
         volume("pre", "pre", "115959", series_id="DYNAMIC" if same_series else "PRE"),
         volume("d1", description, "120000"),
-        volume("d2", description, "120001"),
-        volume("d3", description, "120002"),
+        volume("d2", description, "120016"),
+        volume("d3", description, "120111"),
     ]
 
 
@@ -61,12 +61,12 @@ def test_explicit_native_anchors_same_or_separate_series(same_series, descriptio
     ]
     assert out.loc["pre", "mri_perfusion_source"] == "explicit_text"
     assert (
-        out.loc[["d1", "d2", "d3"], "mri_perfusion_source"]
+        out.loc[["d2", "d3"], "mri_perfusion_source"]
         .eq("dynamic_explicit_anchor")
         .all()
     )
     assert "explicit anchors=pre" in out.loc["d1", "mri_perfusion_reason"]
-    assert "phase evidence=order only" in out.loc["d1", "mri_perfusion_reason"]
+    assert out.loc["d1", "mri_perfusion_source"] == "time_delta"
 
 
 def test_native_anchor_counts_toward_minimum_acquisition_count():
@@ -77,7 +77,7 @@ def test_native_anchor_counts_toward_minimum_acquisition_count():
         "PORTAL_VENOUS",
     ]
     out = curate(anchored_rows()[:2])
-    assert out.loc["d1", "phase"] == "OTHER"
+    assert out.loc["d1", "phase"] == "ARTERIAL"
 
 
 def test_named_portal_stays_in_chronology_instead_of_restarting_generic_ranks():
@@ -111,7 +111,7 @@ def test_order_inference_reserves_succeeding_explicit_phase_only_when_available(
     if not native:
         rows = rows[1:]
     if next_phase:
-        rows.append(volume("next", next_phase, "120003", series_id="NEXT"))
+        rows.append(volume("next", next_phase, "120112", series_id="NEXT"))
     for rank, row in enumerate(rows):
         row["acquisition_order"] = rank
         if not clocks:
@@ -131,7 +131,9 @@ def test_order_inference_reserves_succeeding_explicit_phase_only_when_available(
         else "acquisition_order_dixon_component"
     )
     resolved = out.loc[["d1", "d2", "d3"]].loc[lambda frame: frame.phase.ne("OTHER")]
-    assert resolved.mri_perfusion_source.eq(expected_source).all()
+    assert resolved.mri_perfusion_source.isin(
+        [expected_source, "time_delta"] if clocks else [expected_source]
+    ).all()
     if "OTHER" in expected:
         assert (
             out.loc[["d1", "d2", "d3"], "mri_perfusion_reason"]
@@ -140,14 +142,14 @@ def test_order_inference_reserves_succeeding_explicit_phase_only_when_available(
         )
 
 
-def test_full_dynamic_keeps_initial_native_before_succeeding_portal():
+def test_generic_dynamic_starts_arterial_before_succeeding_portal():
     rows = anchored_rows()[1:]
-    rows.append(volume("next", "portal", "120003", series_id="NEXT"))
+    rows.append(volume("next", "portal", "120112", series_id="NEXT"))
 
     out = curate(rows)
 
     assert out.loc[["d1", "d2", "d3", "next"], "phase"].tolist() == [
-        "NATIVE",
+        "ARTERIAL",
         "ARTERIAL",
         "ARTERIAL",
         "PORTAL_VENOUS",
@@ -158,10 +160,10 @@ def test_repeated_explicit_phase_does_not_advance_unresolved_interval():
     rows = [
         volume("pre", "pre", "115959"),
         volume("art", "arterial", "120000"),
-        volume("between", "dynamic post", "120001"),
-        volume("art_again", "arterial", "120002"),
-        volume("after", "dynamic post", "120003"),
-        volume("portal", "portal", "120004"),
+        volume("between", "dynamic post", "120016"),
+        volume("art_again", "arterial", "120111"),
+        volume("after", "dynamic post", "120112"),
+        volume("portal", "portal", "120113"),
     ]
 
     out = curate(rows)
@@ -178,7 +180,7 @@ def test_succeeding_anchor_in_different_image_type_does_not_bound_phases():
     rows = anchored_rows()
     rows.append(
         volume(
-            "next", "portal", "120003", series_id="NEXT", ImageType="DERIVED PRIMARY"
+            "next", "portal", "120112", series_id="NEXT", ImageType="DERIVED PRIMARY"
         )
     )
 
@@ -193,7 +195,7 @@ def test_succeeding_anchor_in_different_image_type_does_not_bound_phases():
 
 def test_explicit_phase_at_same_acquisition_position_can_still_be_shared():
     rows = anchored_rows()
-    rows.append(volume("portal", "portal", "120001", series_id="PORTAL"))
+    rows.append(volume("portal", "portal", "120016", series_id="PORTAL"))
 
     out = curate(rows)
 
@@ -261,7 +263,7 @@ def test_repeated_explicit_native_acquisitions_do_not_consume_postcontrast_ranks
 @pytest.mark.parametrize(
     "description,expected",
     [
-        ("dynamic", ["NATIVE", "ARTERIAL", "PORTAL_VENOUS"]),
+        ("dynamic", ["ARTERIAL", "PORTAL_VENOUS", "DELAYED"]),
         ("dynamic post", ["ARTERIAL", "PORTAL_VENOUS", "DELAYED"]),
     ],
 )
@@ -348,7 +350,7 @@ def test_raw_acquisition_time_cannot_override_canonical_shared_time():
         row["AcquisitionTime"] = row["time"]
         row["time"] = "120000"
     out = curate(rows)
-    assert out.loc[["d1", "d2", "d3"], "phase"].eq("OTHER").all()
+    assert out.loc[["d1", "d2", "d3"], "phase"].eq("ARTERIAL").all()
 
 
 @pytest.mark.parametrize(
@@ -419,39 +421,43 @@ def test_second_complete_clock_can_fill_a_partial_clock():
     assert "ordered by time" in out.loc["d1", "mri_perfusion_reason"]
 
 
-def test_native_relative_deltas_use_default_windows_without_bolus_calibration():
+def test_native_does_not_shift_estimated_post_injection_windows():
     rows = anchored_rows("dynamic post")
     for row, clock in zip(rows, ["115000", "120000", "120100", "120500"]):
         row["time"] = clock
     out = curate(rows)
-    assert out.loc[["d1", "d2", "d3"], "time_delta"].tolist() == [600, 660, 900]
-    assert out.loc[["d1", "d2", "d3"], "phase"].eq("DELAYED").all()
+    assert out.loc[["d1", "d2", "d3"], "time_delta"].tolist() == [20, 80, 320]
+    assert out.loc[["d1", "d2", "d3"], "phase"].tolist() == [
+        "ARTERIAL",
+        "PORTAL_VENOUS",
+        "DELAYED",
+    ]
     assert out.loc[["d1", "d2", "d3"], "mri_perfusion_source"].eq("time_delta").all()
 
 
 @pytest.mark.parametrize(
     "clocks,expected",
     [
-        (["115900", "120000", "120001", "120002"], ["PORTAL_VENOUS"] * 3),
+        (["115900", "120000", "120001", "120002"], ["ARTERIAL"] * 3),
         (
             ["115959", "120000", "120100", "120500"],
             ["ARTERIAL", "PORTAL_VENOUS", "DELAYED"],
         ),
         (
             ["115900", "120000", "120010", "120500"],
-            ["PORTAL_VENOUS", "PORTAL_VENOUS", "DELAYED"],
+            ["ARTERIAL", "ARTERIAL", "DELAYED"],
         ),
         (
             ["115900", "120000", "120200", "120500"],
-            ["PORTAL_VENOUS", "DELAYED", "DELAYED"],
+            ["ARTERIAL", "PORTAL_VENOUS", "DELAYED"],
         ),
         (
             ["115900", "120000", "120100", "120200"],
-            ["PORTAL_VENOUS", "DELAYED", "DELAYED"],
+            ["ARTERIAL", "PORTAL_VENOUS", "DELAYED"],
         ),
         (
             ["115900", "120000", "120100", "121501"],
-            ["PORTAL_VENOUS", "DELAYED", "DELAYED"],
+            ["ARTERIAL", "PORTAL_VENOUS", "DELAYED"],
         ),
     ],
     ids=[
@@ -494,7 +500,7 @@ def test_shared_timing_windows_include_their_boundaries(clocks):
 def test_incompatible_clock_preserves_named_postcontrast_anchor():
     rows = anchored_rows("dynamic post")
     rows[1]["SeriesDescription"] = "AX T1 LAVA arterial"
-    rows[2]["time"] = "120001"
+    rows[2]["time"] = "120016"
     out = curate(rows)
     assert out.loc[["pre", "d1"], "phase"].tolist() == ["NATIVE", "ARTERIAL"]
     assert out.loc[["d2", "d3"], "phase"].tolist() == ["PORTAL_VENOUS", "DELAYED"]
@@ -532,22 +538,26 @@ def test_tied_reconstructions_share_phase_without_consuming_another_rank():
 
 
 @pytest.mark.parametrize(
-    "clock_changes",
+    "clock_changes,expected",
     [
-        ["110000", "120000", "120100", "120200"],
-        ["115959", "120000", "120010", "121701"],
+        (
+            ["110000", "120000", "120100", "120200"],
+            ["ARTERIAL", "PORTAL_VENOUS", "DELAYED"],
+        ),
+        (
+            ["115959", "120000", "120010", "121701"],
+            ["ARTERIAL", "ARTERIAL", "PORTAL_VENOUS"],
+        ),
     ],
 )
-def test_long_clock_gaps_do_not_block_ordered_dynamic_acquisitions(clock_changes):
+def test_long_clock_gaps_do_not_block_ordered_dynamic_acquisitions(
+    clock_changes, expected
+):
     rows = anchored_rows()
     for row, clock in zip(rows, clock_changes):
         row["time"] = clock
     out = curate(rows)
-    assert out.loc[["d1", "d2", "d3"], "phase"].tolist() == [
-        "ARTERIAL",
-        "PORTAL_VENOUS",
-        "DELAYED",
-    ]
+    assert out.loc[["d1", "d2", "d3"], "phase"].tolist() == expected
     assert "phase evidence=order only" in out.loc["d3", "mri_perfusion_reason"]
 
 
@@ -580,9 +590,9 @@ def test_mixed_pre_post_dynamic_uses_order_when_timing_is_uninformative():
     rows[2]["time"] = "120220"
     out = curate(rows)
     assert out.loc[["d1", "d2", "d3"], "phase"].tolist() == [
-        "NATIVE",
         "ARTERIAL",
         "PORTAL_VENOUS",
+        "DELAYED",
     ]
     assert "phase evidence=order only" in out.loc["d3", "mri_perfusion_reason"]
 
@@ -609,9 +619,9 @@ def test_same_series_canonical_ranks_preserve_volumes_with_one_clock(identifier)
     out = curate(rows[::-1])
     assert out.loc[["pre", "d1", "d2", "d3", "late"], "phase"].tolist() == [
         "NATIVE",
-        "PORTAL_VENOUS",
-        "PORTAL_VENOUS",
-        "PORTAL_VENOUS",
+        "ARTERIAL",
+        "ARTERIAL",
+        "ARTERIAL",
         "DELAYED",
     ]
     assert (
@@ -621,7 +631,7 @@ def test_same_series_canonical_ranks_preserve_volumes_with_one_clock(identifier)
     )
     assert (
         out.loc[["d1", "d2", "d3"], "mri_perfusion_reason"]
-        .str.contains("time_delta=60s")
+        .str.contains("time_delta=20s")
         .all()
     )
     assert out.loc["late", "mri_perfusion_source"] == "explicit_text"
@@ -643,8 +653,8 @@ def test_full_dynamic_resolves_supported_frames_around_incompatible_transition()
     )
     out = curate(rows[::-1])
     assert out.loc[["v1", "v2", "v3", "v4", "late"], "phase"].tolist() == [
-        "NATIVE",
         "ARTERIAL",
+        "PORTAL_VENOUS",
         "PORTAL_VENOUS",
         "PORTAL_VENOUS",
         "DELAYED",
@@ -662,7 +672,7 @@ def test_canonical_time_supplies_elapsed_windows_regardless_of_source(source):
         row["time"] = clock
         row["time_source"] = source
     out = curate(rows)
-    assert out.loc[["d1", "d2", "d3"], "phase"].eq("PORTAL_VENOUS").all()
+    assert out.loc[["d1", "d2", "d3"], "phase"].eq("ARTERIAL").all()
     assert out.loc[["d1", "d2", "d3"], "mri_perfusion_source"].eq("time_delta").all()
 
 
@@ -679,7 +689,7 @@ def test_postcontrast_marker_cannot_supply_an_inferred_native(marker):
         for i in range(1, 4)
     ]
     out = curate(rows)
-    assert out.phase.tolist() == ["ARTERIAL", "PORTAL_VENOUS", "DELAYED"]
+    assert out.phase.eq("ARTERIAL").all()
     rows.append(volume("portal", "portal", "120300", series_id="PORTAL"))
     out = curate(rows)
     assert not out.phase.eq("NATIVE").any()
@@ -719,7 +729,7 @@ def test_simultaneous_series_temporal_positions_are_not_aligned():
     out = curate(rows)
     assert (
         out.loc[[f"{sid}{i}" for sid in ["A", "B"] for i in range(1, 4)], "phase"]
-        .eq("OTHER")
+        .eq("ARTERIAL")
         .all()
     )
     assert out.loc["A1", "mri_dynamic_order_source"].endswith(
@@ -732,7 +742,7 @@ def test_no_temporal_identity_does_not_split_one_clock_using_lexical_volume_ids(
     for row in rows[1:]:
         row["time"] = "120000"
     out = curate(rows)
-    assert out.loc[["d1", "d2", "d3"], "phase"].eq("OTHER").all()
+    assert out.loc[["d1", "d2", "d3"], "phase"].eq("ARTERIAL").all()
 
 
 def test_shared_native_clock_can_be_ordered_with_supplied_series_volume_ranks():
@@ -747,8 +757,8 @@ def test_shared_native_clock_can_be_ordered_with_supplied_series_volume_ranks():
     assert out.loc[["pre", "d1", "d2", "d3"], "phase"].tolist() == [
         "NATIVE",
         "ARTERIAL",
-        "PORTAL_VENOUS",
-        "DELAYED",
+        "ARTERIAL",
+        "ARTERIAL",
     ]
 
 
@@ -793,8 +803,8 @@ def test_canonical_time_is_used_regardless_of_original_clock_source():
     assert out.loc["pre", "phase"] == "NATIVE"
     assert out.loc[["d1", "d2", "d3"], "phase"].tolist() == [
         "OTHER",
-        "PORTAL_VENOUS",
+        "OTHER",
         "OTHER",
     ]
-    assert out.loc["d2", "mri_perfusion_source"] == "time_delta"
+    assert out.loc["d2", "mri_perfusion_source"] == "generic_dynamic_context_pending"
     assert out.loc[["d1", "d2", "d3"], "mri_dynamic_order_source"].eq("time").all()

@@ -35,7 +35,7 @@ def annotate(rows, config=None):
     "numbers", [[1, 2, 3, 4], [2, 3, 4, 5], [None, 1, 2, 3], [None, 3, None, 7]]
 )
 @pytest.mark.parametrize("agent", ["", "gado", "primovist"])
-def test_numbering_and_agent_alone_do_not_block_native_fallback(numbers, agent):
+def test_numbering_and_agent_keep_the_postcontrast_dynamic_default(numbers, agent):
     rows = frame(
         [
             f"{'ph'+str(number)+'/' if number is not None else ''}AX LAVA dyn 4 {agent}"
@@ -43,7 +43,7 @@ def test_numbering_and_agent_alone_do_not_block_native_fallback(numbers, agent):
         ]
     )
     out = annotate(rows.sample(frac=1, random_state=4)).loc[[f"v{i}" for i in range(4)]]
-    assert out.phase.tolist() == ["NATIVE", "ARTERIAL", "PORTAL_VENOUS", "DELAYED"]
+    assert out.phase.tolist() == ["ARTERIAL", "PORTAL_VENOUS", "DELAYED", "DELAYED"]
 
 
 @pytest.mark.parametrize(
@@ -86,7 +86,7 @@ def test_exam_level_injection_description_does_not_exclude_a_separate_native_can
 @pytest.mark.parametrize(
     "other_native,expected", [("AX VIBE pre", "NATIVE"), ("AX VIBE", "OTHER")]
 )
-def test_unrelated_native_does_not_suppress_protocol_native_fallback(
+def test_unrelated_native_does_not_change_postcontrast_dynamic_progression(
     other_native, expected
 ):
     rows = frame(
@@ -100,9 +100,9 @@ def test_unrelated_native_does_not_suppress_protocol_native_fallback(
     out = annotate(rows)
     assert out.loc["v0", "phase"] == expected
     assert out.loc[["v1", "v2", "v3"], "phase"].tolist() == [
-        "NATIVE",
         "ARTERIAL",
         "PORTAL_VENOUS",
+        "DELAYED",
     ]
 
 
@@ -127,7 +127,7 @@ def test_two_protocol_groups_resolve_their_own_separate_native_candidates():
 def test_late_separate_candidate_is_not_native_even_when_an_explicit_anchor_exists():
     rows = frame(["AX LAVA dyn gado", "AX LAVA dyn gado", "AX LAVA delayed", "AX LAVA"])
     out = annotate(rows)
-    assert out.phase.tolist() == ["NATIVE", "ARTERIAL", "DELAYED", "OTHER"]
+    assert out.phase.tolist() == ["ARTERIAL", "PORTAL_VENOUS", "DELAYED", "OTHER"]
 
 
 def test_explicit_native_without_clock_is_still_counted_once():
@@ -145,7 +145,7 @@ def test_named_phases_override_order_while_raw_bolus_clocks_do_not():
     rows["AcquisitionTime"] = ["120025.000000", "120115.000000", "120400.000000"]
     rows["ContrastBolusStartTime"] = "120000.000000"
     out = annotate(rows)
-    assert out.phase.tolist() == ["NATIVE", "ARTERIAL", "PORTAL_VENOUS"]
+    assert out.phase.tolist() == ["ARTERIAL", "PORTAL_VENOUS", "DELAYED"]
     rows = frame(["AX LAVA arterial", "Ph1/AX LAVA dyn gado", "Ph2/AX LAVA dyn gado"])
     assert annotate(rows).phase.tolist() == ["ARTERIAL", "PORTAL_VENOUS", "DELAYED"]
 

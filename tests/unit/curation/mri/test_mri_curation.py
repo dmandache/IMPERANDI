@@ -250,13 +250,13 @@ def test_post_gado_ordinal_phases_with_explicit_native_are_context_inferred():
                 "Ph2/Ax LAVA Gado MPh Turbo",
                 series_id="SER_PH2",
                 volume_id="V2",
-                time="120001",
+                time="120016",
             ),
             row(
                 "Ph3/Ax LAVA Gado MPh Turbo",
                 series_id="SER_PH3",
                 volume_id="V3",
-                time="120002",
+                time="120111",
             ),
         ]
     )
@@ -288,7 +288,7 @@ def test_post_gado_ordinal_phases_with_explicit_native_are_context_inferred():
             ],
             "mri_perfusion_source",
         ]
-    ) == {"dynamic_explicit_anchor"}
+    ) == {"time_delta", "dynamic_explicit_anchor"}
 
 
 def test_missing_native_fallback_uses_water_lava_only_with_dynamic_context():
@@ -344,12 +344,17 @@ def test_explicit_portal_overrides_ordinal_phase_text():
     assert out.loc[0, "mri_perfusion_source"] == "explicit_text"
 
 
-def test_single_numbered_dynamic_does_not_bypass_generic_minimum():
-    out = mc.annotate_mri(pd.DataFrame([row("Ph1/Ax LAVA Gado MPh Turbo")]))
+@pytest.mark.parametrize("clock", ["120000", None])
+def test_single_dynamic_uses_assumed_start_delay_when_clock_is_available(clock):
+    out = mc.annotate_mri(pd.DataFrame([row("Ph1/Ax LAVA Gado MPh Turbo", time=clock)]))
 
-    assert out.loc[0, "mri_perfusion_label"] == "OTHER"
-    assert out.loc[0, "mri_perfusion_confidence"] == "unknown"
-    assert out.loc[0, "mri_perfusion_source"] == mc.GENERIC_DYNAMIC_CONTEXT_PENDING
+    assert out.loc[0, "mri_perfusion_label"] == ("ARTERIAL" if clock else "OTHER")
+    assert out.loc[0, "mri_perfusion_confidence"] == (
+        "inferred" if clock else "unknown"
+    )
+    assert out.loc[0, "mri_perfusion_source"] == (
+        "time_delta" if clock else mc.GENERIC_DYNAMIC_CONTEXT_PENDING
+    )
 
 
 def test_hepatobiliary_2h_takes_priority_over_delayed_tardif():
@@ -890,24 +895,24 @@ def test_mask_multiart_first_and_only_volume_is_native():
     assert out.loc[0, "mri_perfusion_confidence"] == "inferred"
 
 
-def test_generic_4d_mdixon_volume_order_pre_art_port_delayed():
+def test_generic_4d_mdixon_volume_order_art_port_delayed():
     results = curate(
         [
             row("4D mDIXON-W", series_id="SER_4D", volume_id="V1", time="120000"),
-            row("4D mDIXON-W", series_id="SER_4D", volume_id="V2", time="120001"),
-            row("4D mDIXON-W", series_id="SER_4D", volume_id="V3", time="120002"),
-            row("4D mDIXON-W", series_id="SER_4D", volume_id="V4", time="120003"),
+            row("4D mDIXON-W", series_id="SER_4D", volume_id="V2", time="120016"),
+            row("4D mDIXON-W", series_id="SER_4D", volume_id="V3", time="120111"),
+            row("4D mDIXON-W", series_id="SER_4D", volume_id="V4", time="120112"),
         ]
     )
     cur = results["curated"].sort_values("volume_order_in_series")
 
     assert cur["mri_perfusion_label"].tolist() == [
-        "NATIVE",
         "ARTERIAL",
         "PORTAL_VENOUS",
         "DELAYED",
+        "DELAYED",
     ]
-    assert set(cur["mri_perfusion_source"]) == {"volume_order"}
+    assert set(cur["mri_perfusion_source"]) == {"time_delta", "volume_order"}
 
 
 def test_generic_4d_mdixon_mixed_multivolume_and_single_volume_uses_acquisition_order():
@@ -924,28 +929,28 @@ def test_generic_4d_mdixon_mixed_multivolume_and_single_volume_uses_acquisition_
                 "4D mDIXON-W",
                 series_id="SER_MULTI",
                 volume_id="VM1",
-                time="120001",
+                time="120016",
                 acquisition_order=1,
             ),
             row(
                 "4D mDIXON-W",
                 series_id="SER_SINGLE_PORT",
                 volume_id="VS2",
-                time="120002",
+                time="120111",
                 acquisition_order=2,
             ),
             row(
                 "4D mDIXON-W",
                 series_id="SER_MULTI",
                 volume_id="VM2",
-                time="120003",
+                time="120112",
                 acquisition_order=3,
             ),
             row(
                 "4D mDIXON-W",
                 series_id="SER_MULTI",
                 volume_id="VM3",
-                time="120004",
+                time="120113",
                 acquisition_order=4,
             ),
         ]
@@ -953,13 +958,16 @@ def test_generic_4d_mdixon_mixed_multivolume_and_single_volume_uses_acquisition_
     cur = results["curated"].sort_values("acquisition_order")
 
     assert cur["mri_perfusion_label"].tolist() == [
-        "NATIVE",
         "ARTERIAL",
         "PORTAL_VENOUS",
         "DELAYED",
         "DELAYED",
+        "DELAYED",
     ]
-    assert set(cur["mri_perfusion_source"]) == {"acquisition_order_dixon_component"}
+    assert set(cur["mri_perfusion_source"]) == {
+        "time_delta",
+        "acquisition_order_dixon_component",
+    }
 
 
 # -----------------------------------------------------------------------------

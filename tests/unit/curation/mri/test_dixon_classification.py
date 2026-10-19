@@ -253,7 +253,7 @@ def test_dixon_components_are_independent_from_acquisition_order():
     )
     ip_phases = phased[phased["volume_id"].str.startswith("IP_")]
     water_phases = phased[phased["volume_id"].str.startswith("W_")]
-    expected_phases = ["NATIVE", "ARTERIAL", "PORTAL_VENOUS", "DELAYED"]
+    expected_phases = ["ARTERIAL", "PORTAL_VENOUS", "DELAYED", "DELAYED"]
 
     assert ip_phases["mri_perfusion_label"].tolist() == expected_phases
     assert water_phases["mri_perfusion_label"].tolist() == expected_phases

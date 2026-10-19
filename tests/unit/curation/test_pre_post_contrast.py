@@ -357,7 +357,7 @@ def test_multivolume_mixed_series_uses_volume_order_and_preserves_existing_dynam
         _row(
             "MR",
             f"V{rank}",
-            f"12000{rank}",
+            ["120000", "120016", "120111", "120112"][rank - 1],
             "T1 dynamic pre-post",
             series_id="DYNAMIC",
             volume_order_in_series=rank,
@@ -366,9 +366,9 @@ def test_multivolume_mixed_series_uses_volume_order_and_preserves_existing_dynam
         )
         for rank in [1, 2, 3, 4]
     ]
-    rows[-1]["time"] = "120004"
+    rows[-1]["time"] = "120112"
     out = _curate("MR", rows)
-    assert out.phase.tolist() == ["NATIVE", "ARTERIAL", "PORTAL_VENOUS", "DELAYED"]
+    assert out.phase.tolist() == ["ARTERIAL", "PORTAL_VENOUS", "DELAYED", "DELAYED"]
 
 
 def test_localizer_does_not_become_native_or_displace_first_t1():

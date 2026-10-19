@@ -106,7 +106,7 @@ def test_ambiguous_precision_or_unaligned_local_bolus_uses_generic_order(clock):
     frame["AcquisitionDateTime"] = clock
     frame["ContrastBolusStartTime"] = "120000.000000"
     out = annotate(frame)
-    assert out.phase.tolist() == ["NATIVE", "ARTERIAL", "PORTAL_VENOUS", "DELAYED"]
+    assert out.phase.tolist() == ["ARTERIAL", "PORTAL_VENOUS", "DELAYED", "DELAYED"]
 
 
 def test_container_frame_clock_cannot_supply_distinct_volume_delays():
@@ -114,10 +114,10 @@ def test_container_frame_clock_cannot_supply_distinct_volume_delays():
     frame["FrameAcquisitionDateTime"] = "20200101120025.000000"
     frame["ContrastBolusStartTime"] = "120000.000000"
     out = annotate(frame)
-    assert out.phase.tolist() == ["NATIVE", "ARTERIAL", "PORTAL_VENOUS", "DELAYED"]
+    assert out.phase.tolist() == ["ARTERIAL", "PORTAL_VENOUS", "DELAYED", "DELAYED"]
 
 
-def test_missing_ph1_does_not_block_first_dynamic_native_fallback():
+def test_missing_ph1_keeps_the_postcontrast_dynamic_default():
     frame = volumes(3)
     frame["SeriesDescription"] = [
         "AX T1 VIBE dynamic Ph2",
@@ -125,7 +125,7 @@ def test_missing_ph1_does_not_block_first_dynamic_native_fallback():
         "AX T1 VIBE dynamic Ph4",
     ]
     out = annotate(frame)
-    assert out.phase.tolist() == ["NATIVE", "ARTERIAL", "PORTAL_VENOUS"]
+    assert out.phase.tolist() == ["ARTERIAL", "PORTAL_VENOUS", "DELAYED"]
 
 
 @pytest.mark.parametrize("native_count", [1, 2])
@@ -230,7 +230,9 @@ def test_phase_sharing_requires_compatible_supplied_acquisition_identity(bad_evi
         )
     out = annotate(frame)
     assert out.loc["v1", "phase"] == (
-        "PORTAL_VENOUS" if bad_evidence is None else "OTHER"
+        "PORTAL_VENOUS"
+        if bad_evidence is None
+        else "ARTERIAL" if bad_evidence == "clock" else "OTHER"
     )
     if bad_evidence is None:
         assert out.loc["v1", "mri_perfusion_source"] == "acquisition_phase"
@@ -279,9 +281,9 @@ def test_long_dynamic_without_calibrated_timing_retains_order_fallback():
     ]
     out = annotate(frame)
     assert out.phase.tolist() == [
-        "NATIVE",
         "ARTERIAL",
         "PORTAL_VENOUS",
+        "DELAYED",
         "DELAYED",
         "DELAYED",
         "DELAYED",

@@ -18,6 +18,7 @@ from imperandi.curation.metadata_helpers import (
 )
 from imperandi.curation.ct.ct_curation import annotate_ct
 from imperandi.curation.mri.mri_curation import annotate_mri
+from imperandi.curation.mri import mri_rules
 from imperandi.curation.phase_resolution import (
     PHASE_STATUS_NOT_APPLICABLE,
     PHASE_STATUS_RESOLVED,
@@ -345,6 +346,7 @@ def main(args: argparse.Namespace) -> None:
         **vars(args),
         "checkpoint_phase_curation": phase_curation,
         "checkpoint_modality_curation": 8,
+        "checkpoint_dynamic_start_delay_seconds": mri_rules.DEFAULT_DYNAMIC_START_DELAY_SECONDS,
     }
     if source_id_signature:
         resume_values["checkpoint_source_id"] = source_id_signature
