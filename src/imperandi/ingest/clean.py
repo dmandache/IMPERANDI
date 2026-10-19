@@ -2550,7 +2550,9 @@ def _run_modality_curation_step(
         with manifest_text_columns(modality, config):
             annotated = (
                 annotate_ct(
-                    data, exam_group_columns=config["best_candidate_group_columns"]
+                    data,
+                    exam_group_columns=config["best_candidate_group_columns"],
+                    phase_curation=config,
                 )
                 if modality == "CT"
                 else annotate_mri(data, phase_curation=config, resolve_phase=False)

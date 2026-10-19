@@ -367,6 +367,9 @@ by `Modality`, ontology columns, or TotalSegmentator prediction columns.
 
 ### Best series per exam
 
+For named contextual rule controls, additional inference grouping columns, and
+Python extensions, see [Curation policies and custom rules](curation.md).
+
 `clean` saves all curated rows and `phase` saves all input rows with resolved
 phases. Both also save the best-series dataframe and its QC table automatically
 beside the input CSV as `<input_stem>_curated.csv` and

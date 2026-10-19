@@ -82,6 +82,7 @@ def _ensure_modality_curation(df: pd.DataFrame, config: dict) -> pd.DataFrame:
                 annotate_ct(
                     data,
                     exam_group_columns=config["best_candidate_group_columns"],
+                    phase_curation=config,
                 )
                 if modality == "CT"
                 else annotate_mri(data, phase_curation=config, resolve_phase=False)

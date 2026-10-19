@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import pandas as pd
 
+from .engine import CurationEngine, CurationResult
+from .policy import CurationPolicy
+from .rule_engine import Rule, RuleContext, RuleResult
+
 from imperandi.curation.ct import curate_ct
 from imperandi.curation.mri import curate_mri
 from imperandi.curation.phase_resolution import (
@@ -47,6 +51,9 @@ def curate_by_modality(
     study_col: str | None = "study_id",
     date_col: str = "date",
     phase_curation: dict | None = None,
+    *,
+    curation_policy: CurationPolicy | None = None,
+    rule_trace: list[dict] | None = None,
 ) -> dict[str, object]:
     ct_df, mri_df, other_df = split_by_modality(df)
 
@@ -57,6 +64,8 @@ def curate_by_modality(
             study_col=study_col,
             date_col=date_col,
             phase_curation=phase_curation,
+            curation_policy=curation_policy,
+            rule_trace=rule_trace,
         )
         if not ct_df.empty
         else None
@@ -68,6 +77,8 @@ def curate_by_modality(
             study_col=study_col,
             date_col=date_col,
             phase_curation=phase_curation,
+            curation_policy=curation_policy,
+            rule_trace=rule_trace,
         )
         if not mri_df.empty
         else None
@@ -109,6 +120,12 @@ def curate_by_modality(
 
 
 __all__ = [
+    "CurationEngine",
+    "CurationResult",
+    "CurationPolicy",
+    "Rule",
+    "RuleContext",
+    "RuleResult",
     "apply_phase_curation",
     "curate_by_modality",
     "curate_ct",

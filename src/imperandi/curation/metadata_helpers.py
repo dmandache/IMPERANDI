@@ -75,8 +75,14 @@ def has_text_columns_override() -> bool:
 
 def phase_evidence_summary(row: pd.Series) -> str:
     """Compact provenance for wide QC cells; score remains a separate measure."""
-    fields = ("volume_id", "phase_status", "phase_source", "phase_confidence",
-              "mri_perfusion_source", "phase_reason")
+    fields = (
+        "volume_id",
+        "phase_status",
+        "phase_source",
+        "phase_confidence",
+        "mri_perfusion_source",
+        "phase_reason",
+    )
     return "; ".join(
         f"{column}={row[column]}"
         for column in fields
@@ -110,8 +116,23 @@ def with_manifest_text_columns(modality: str):
         @wraps(function)
         def wrapped(*args, **kwargs):
             arguments = call_signature.bind(*args, **kwargs)
-            with manifest_text_columns(modality, arguments.arguments.get("phase_curation")):
-                return function(*args, **kwargs)
+            config = arguments.arguments.get("phase_curation")
+            policy = arguments.arguments.get("curation_policy")
+            if policy is not None:
+                from .policy import CurationPolicy
+
+                if (
+                    config is not None
+                    and CurationPolicy.from_phase_config(config).phase_curation
+                    != policy.phase_curation
+                ):
+                    raise ValueError(
+                        "phase_curation and curation_policy disagree; supply one policy."
+                    )
+                config = policy.phase_curation
+                arguments.arguments["phase_curation"] = config
+            with manifest_text_columns(modality, config):
+                return function(*arguments.args, **arguments.kwargs)
 
         return wrapped
 

@@ -57,7 +57,9 @@ def save_unresolved_phase_cases(df: pd.DataFrame, path: Path) -> None:
         fallback = df.get("phase_source", empty).eq("fallback") & df.get(
             "phase_reason", empty
         ).eq("no phase strategy resolved")
-        unresolved = df.loc[df.get("phase", empty).isna() | fallback.fillna(False)].copy()
+        unresolved = df.loc[
+            df.get("phase", empty).isna() | fallback.fillna(False)
+        ].copy()
     unresolved = unresolved.drop(columns=["_source_idx"], errors="ignore")
     atomic_write_csv(unresolved, path, index=False)
     logger.info("Saved %d unresolved phase cases -> %s", len(unresolved), path)
@@ -113,7 +115,9 @@ def save_selected_candidates(df: pd.DataFrame, path: Path, config) -> int:
         with manifest_text_columns(modality, normalized):
             # Annotation supplies selection features even for a phase-only input.
             annotated = (
-                annotate_ct(data, exam_group_columns=exam_columns)
+                annotate_ct(
+                    data, exam_group_columns=exam_columns, phase_curation=normalized
+                )
                 if modality == "CT"
                 else annotate_mri(data, phase_curation=normalized)
             )

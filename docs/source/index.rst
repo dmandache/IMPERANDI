@@ -44,6 +44,7 @@ Start here
    :caption: Python API
 
    api/imperandi
+   curation
    api/ingest
    api/process
    api/extract

@@ -11,21 +11,20 @@ import re
 import numpy as np
 import pandas as pd
 
+from imperandi.curation.policy import CurationPolicy
+
 from imperandi.curation import metadata_helpers as common, shared_rules
 from imperandi.curation.metadata_helpers import (
     build_series_text,
     first_text_column_value,
     get_exam_group_cols,
     norm_label,
-    TEXT_COLS_DEFAULT,
     safe_float,
     safe_str,
     stable_text,
-    resolve_text_columns,
     has_text_columns_override,
     with_manifest_text_columns,
 )
-from imperandi.curation.native_inference import infer_pre_post_native_acquisitions
 from imperandi.curation.phase_resolution import (
     apply_phase_curation,
     phase_selection_bonus,
@@ -63,7 +62,11 @@ def detect_ct_phase(row: pd.Series) -> tuple[str, str, str]:
     match = match_phase(evidence[1], rules.PHASE_RULES) if evidence else None
     if match is not None:
         label, description = match
-        return label, f"matched CT {description} evidence in {evidence[0]}={evidence[1]!r}", "high"
+        return (
+            label,
+            f"matched CT {description} evidence in {evidence[0]}={evidence[1]!r}",
+            "high",
+        )
     return "OTHER", "no CT phase keyword matched", "low"
 
 
@@ -163,12 +166,18 @@ def score_ct(row: pd.Series) -> float:
     return float(score)
 
 
+@with_manifest_text_columns("CT")
 def annotate_ct(
     df: pd.DataFrame,
     date_col: str = "date",
     exam_group_columns: list[str] | None = None,
+    *,
+    phase_curation: dict | None = None,
+    curation_policy: CurationPolicy | None = None,
+    rule_trace: list[dict] | None = None,
 ) -> pd.DataFrame:
-    out = df.copy()
+    original_index = df.index
+    out = df.copy() if df.index.is_unique else df.reset_index(drop=True).copy()
     if date_col in out.columns:
         out[date_col] = pd.to_datetime(out[date_col], errors="coerce").dt.date
 
@@ -185,12 +194,6 @@ def annotate_ct(
     out[["ct_phase", "ct_phase_reason", "ct_phase_confidence"]] = pd.DataFrame(
         result.tolist(), index=out.index
     )
-    eligible = out.loc[
-        out["phase_applicability_reason"].isna()
-        & ~out.apply(
-            lambda row: detect_ct_features(row)["is_derived_low_value"], axis=1
-        )
-    ]
     group_columns = get_exam_group_cols(
         out, date_col=date_col, exam_group_columns=exam_group_columns
     )
@@ -206,17 +209,14 @@ def annotate_ct(
             ]
         )
     )
-    for idx, reason in infer_pre_post_native_acquisitions(
-        eligible,
-        text_columns=resolve_text_columns(TEXT_COLS_DEFAULT),
+    from .context_rules import run_ct_context_rules
+
+    out = run_ct_context_rules(
+        out,
         group_columns=group_columns,
-        phase_column="ct_phase",
-        phase_rules=rules.PHASE_RULES,
-    ):
-        if out.loc[idx, "ct_phase"] == "OTHER":
-            out.loc[idx, "ct_phase"] = "NATIVE"
-            out.loc[idx, "ct_phase_reason"] = reason
-            out.loc[idx, "ct_phase_confidence"] = "inferred"
+        policy=curation_policy or CurationPolicy.from_phase_config(phase_curation),
+        trace=rule_trace,
+    )
     out["rule_phase"] = out["ct_phase"]
     out["rule_phase_reason"] = out["ct_phase_reason"]
     out["rule_phase_confidence"] = out["ct_phase_confidence"]
@@ -226,6 +226,7 @@ def annotate_ct(
     )
     out["selection_score"] = out["ct_selection_score"]
     out["selection_modality"] = "CT"
+    out.index = original_index
     return out
 
 
@@ -313,6 +314,9 @@ def curate_ct(
     study_col: str | None = "study_id",
     date_col: str = "date",
     phase_curation: dict | None = None,
+    *,
+    curation_policy: CurationPolicy | None = None,
+    rule_trace: list[dict] | None = None,
 ) -> dict[str, pd.DataFrame]:
     exam_cols = get_exam_group_cols(
         df,
@@ -321,7 +325,14 @@ def curate_ct(
         date_col,
         validate_phase_curation(phase_curation)["best_candidate_group_columns"],
     )
-    curated = annotate_ct(df, date_col=date_col, exam_group_columns=exam_cols)
+    curated = annotate_ct(
+        df,
+        date_col=date_col,
+        exam_group_columns=exam_cols,
+        phase_curation=phase_curation,
+        curation_policy=curation_policy,
+        rule_trace=rule_trace,
+    )
     curated = apply_phase_curation(curated, phase_curation)
     curated["ct_selection_score"] = curated.apply(score_ct, axis=1)
     curated["selection_slot"] = curated["phase"].map(

@@ -28,9 +28,10 @@ from typing import Sequence
 import numpy as np
 import pandas as pd
 
+from imperandi.curation.policy import CurationPolicy
+
 from imperandi.curation import metadata_helpers as common, shared_rules
 from imperandi.utils.dicom_timing import scalar_values
-from imperandi.curation.native_inference import infer_pre_post_native_acquisitions
 from imperandi.curation.metadata_helpers import (
     clean_text as clean_text,
     get_exam_group_cols,
@@ -1784,8 +1785,12 @@ def add_mri_perfusion_columns(
     df: pd.DataFrame,
     exam_group_cols: Sequence[str] | None = None,
     phase_curation: dict | None = None,
+    *,
+    curation_policy: CurationPolicy | None = None,
+    rule_trace: list[dict] | None = None,
 ) -> pd.DataFrame:
-    out = df.copy()
+    original_index = df.index
+    out = df.copy() if df.index.is_unique else df.reset_index(drop=True).copy()
     out["phase_text_column"] = out.apply(
         lambda row: evidence[0] if (evidence := _phase_text_column(row)) else "",
         axis=1,
@@ -1806,161 +1811,19 @@ def add_mri_perfusion_columns(
     out["mri_dynamic_order_source"] = ""
     out["time_delta"] = np.nan
 
-    group_cols = [c for c in (exam_group_cols or []) if c in out.columns]
-    if group_cols:
-        grouped = out.groupby(
-            [out[col].map(common.stable_text) for col in group_cols], dropna=False
-        ).groups.values()
-    else:
-        grouped = [out.index]
+    from .context_rules import run_mri_context_rules
 
-    # Resolve only strategies ahead of rules. Their labels inform chronology,
-    # while raw rule outputs and final strategy precedence remain independent.
-    config = validate_phase_curation(phase_curation)
-    preceding = []
-    for strategy in config["strategies"]:
-        if strategy["type"] == "rules":
-            break
-        preceding.append(strategy)
-    authority = pd.DataFrame(index=out.index)
-    if preceding:
-        authority = apply_phase_curation(out, {**config, "strategies": preceding})
-
-    def context_rows(indices):
-        context = out.loc[indices].copy()
-        if "phase_status" in authority:
-            resolved = authority.loc[indices, "phase_status"].eq("RESOLVED")
-            selected = resolved.index[resolved]
-            context.loc[selected, "mri_perfusion_label"] = authority.loc[
-                selected, "phase"
-            ]
-            context.loc[selected, "mri_perfusion_source"] = "strategy_context"
-            context.loc[selected, "mri_perfusion_reason"] = authority.loc[
-                selected, "phase_reason"
-            ]
-            context.loc[selected, "mri_perfusion_confidence"] = authority.loc[
-                selected, "phase_confidence"
-            ]
-        return context
-
-    for idx in grouped:
-        shared = _share_acquisition_phase_evidence(context_rows(idx))
-        out.loc[idx, "time_delta"] = _dynamic_time_deltas(shared)
-        propagated = shared.index[shared.mri_perfusion_source.eq("acquisition_phase")]
-        for column in (
-            "mri_perfusion_label",
-            "mri_perfusion_reason",
-            "mri_perfusion_confidence",
-            "mri_perfusion_source",
-        ):
-            out.loc[propagated, column] = shared.loc[propagated, column]
-        exam_rows = context_rows(idx)
-
-        for row_idx, label, reason in infer_art_port_late_phases_by_acquisition_order(
-            exam_rows
-        ):
-            out.loc[row_idx, "mri_perfusion_label"] = label
-            out.loc[row_idx, "mri_perfusion_reason"] = reason
-            out.loc[row_idx, "mri_perfusion_confidence"] = (
-                "unknown" if label == "OTHER" else "inferred"
-            )
-            out.loc[row_idx, "mri_perfusion_source"] = "acquisition_order_art_port_late"
-
-        exam_rows = context_rows(idx)
-
-        for row_idx, label, reason in infer_art_port_phases_by_acquisition_order(
-            exam_rows
-        ):
-            out.loc[row_idx, "mri_perfusion_label"] = label
-            out.loc[row_idx, "mri_perfusion_reason"] = reason
-            out.loc[row_idx, "mri_perfusion_confidence"] = (
-                "unknown" if label == "OTHER" else "inferred"
-            )
-            out.loc[row_idx, "mri_perfusion_source"] = "acquisition_order_art_port"
-
-        exam_rows = context_rows(idx)
-
-        for row_idx, label, reason in infer_mask_multiart_phases_by_acquisition_order(
-            exam_rows
-        ):
-            out.loc[row_idx, "mri_perfusion_label"] = label
-            out.loc[row_idx, "mri_perfusion_reason"] = reason
-            out.loc[row_idx, "mri_perfusion_confidence"] = (
-                "unknown" if label == "OTHER" else "inferred"
-            )
-            out.loc[row_idx, "mri_perfusion_source"] = "acquisition_order_mask_multiart"
-
-        exam_rows = context_rows(idx)
-        native_fallbacks = _infer_missing_native_fallbacks(exam_rows)
-        for fallback_idx, reason in native_fallbacks:
-            logger.info("Fallback native selected for MRI protocol: %s", reason)
-            out.loc[fallback_idx, "mri_perfusion_label"] = "NATIVE"
-            out.loc[fallback_idx, "mri_perfusion_reason"] = reason
-            out.loc[fallback_idx, "mri_perfusion_confidence"] = "fallback"
-            out.loc[fallback_idx, "mri_perfusion_source"] = "exam_context"
-
-        exam_rows = context_rows(idx)
-        if native_fallbacks:
-            # A dynamic candidate newly resolved as native cannot remain the
-            # first postcontrast acquisition used to estimate delay windows.
-            out.loc[idx, "time_delta"] = _dynamic_time_deltas(exam_rows)
-            exam_rows = context_rows(idx)
-
-        for (
-            row_idx,
-            label,
-            reason,
-            source,
-            order_source,
-        ) in infer_generic_dynamic_phases_from_exam_context(exam_rows):
-            out.loc[row_idx, "mri_perfusion_label"] = label
-            out.loc[row_idx, "mri_perfusion_reason"] = reason
-            out.loc[row_idx, "mri_perfusion_confidence"] = (
-                "inferred" if label != "OTHER" else "unknown"
-            )
-            out.loc[row_idx, "mri_perfusion_source"] = source
-            out.loc[row_idx, "mri_dynamic_order_source"] = order_source
-
-        exam_rows = context_rows(idx)
-
-        eligible = exam_rows.loc[
-            exam_rows["mri_sequence"].eq("T1")
-            & ~exam_rows["is_derived_low_value"].fillna(False)
-        ]
-        compatibility = [
-            col
-            for col in ("study_id", "StudyInstanceUID", "dixon_component", "plane")
-            if col in eligible
-        ]
-        for row_idx, reason in infer_pre_post_native_acquisitions(
-            eligible,
-            text_columns=_resolve_text_cols(),
-            group_columns=compatibility,
-            phase_column="mri_perfusion_label",
-            native=rules.RX_PHASE_NATIVE,
-            post=rules.RX_PHASE_POST_CONTRAST,
-            phase_rules=rules.PHASE_RULES,
-            extra_patterns=(rules.RX_PHASE_GENERIC_DYNAMIC,),
-        ):
-            label = norm_label(out.loc[row_idx, "mri_perfusion_label"])
-            source = out.loc[row_idx, "mri_perfusion_source"]
-            if source == "dicom_phase_conflict":
-                continue
-            if label != "OTHER" and not (
-                label == "NATIVE"
-                and source in {"volume_order", "acquisition_order_dixon_component"}
-            ):
-                continue
-            out.loc[row_idx, "mri_perfusion_label"] = "NATIVE"
-            out.loc[row_idx, "mri_perfusion_reason"] = reason
-            out.loc[row_idx, "mri_perfusion_confidence"] = "inferred"
-            out.loc[row_idx, "mri_perfusion_source"] = "group_pre_post_order"
+    policy = curation_policy or CurationPolicy.from_phase_config(phase_curation)
+    out = run_mri_context_rules(
+        out, exam_group_cols=exam_group_cols, policy=policy, trace=rule_trace
+    )
 
     for row_idx, row in out.iterrows():
         if row.phase_text_column and row.phase_text_value:
             detail = f"{row.phase_text_column}={row.phase_text_value!r}"
             if detail not in row.mri_perfusion_reason:
                 out.loc[row_idx, "mri_perfusion_reason"] += f"; {detail}"
+    out.index = original_index
     return out
 
 
@@ -2649,6 +2512,9 @@ def annotate_mri(
     date_col: str = "date",
     phase_curation: dict | None = None,
     resolve_phase: bool = True,
+    *,
+    curation_policy: CurationPolicy | None = None,
+    rule_trace: list[dict] | None = None,
 ) -> pd.DataFrame:
     """Add labels, features, and scores to a volume/series-level dataframe.
 
@@ -2681,7 +2547,11 @@ def annotate_mri(
         ],
     )
     out = add_mri_perfusion_columns(
-        out, exam_group_cols=exam_cols, phase_curation=phase_curation
+        out,
+        exam_group_cols=exam_cols,
+        phase_curation=phase_curation,
+        curation_policy=curation_policy,
+        rule_trace=rule_trace,
     )
     out["rule_phase"] = out["mri_perfusion_label"]
     out["rule_phase_reason"] = out["mri_perfusion_reason"]
@@ -2702,6 +2572,9 @@ def curate_mri(
     date_col: str = "date",
     display_text_col_count: int | None = None,
     phase_curation: dict | None = None,
+    *,
+    curation_policy: CurationPolicy | None = None,
+    rule_trace: list[dict] | None = None,
 ) -> dict[str, pd.DataFrame]:
     """Full MRI curation pipeline.
 
@@ -2716,6 +2589,8 @@ def curate_mri(
         volume_col=volume_col,
         date_col=date_col,
         phase_curation=phase_curation,
+        curation_policy=curation_policy,
+        rule_trace=rule_trace,
     )
     selected_long, selected_wide = select_best_candidates(
         curated,
