@@ -555,9 +555,20 @@ chronology leaves the fallback unresolved. Later phases keep their existing rule
 The inferred confidence and reason record the matching field and text; MR also
 records `mri_perfusion_source=group_pre_post_order`. Generic post-only dynamic
 MR containers use arterial/portal/delayed order inference without requiring an
-explicit phase anchor; their first acquisition is not assumed to be native.
-Both keywords must occur in the same scalar value, not separate fields or
-separate entries of a list.
+explicit phase anchor. Both keywords must occur in the same scalar value, not
+separate fields or separate entries of a list.
+
+An earlier unresolved T1 acquisition may instead receive
+native fallback when a compatible arterial acquisition is already classified,
+even if its selected text contains generic postcontrast, dynamic, or ordinal wording.
+It must precede the other dynamic/named postcontrast acquisitions in comparable
+chronology, and the compatible group must not already contain a resolved native.
+The candidate and arterial acquisition suffice for this exception. Explicit phase
+labels and conflicting DICOM phase evidence remain authoritative. This fallback
+records `mri_perfusion_source=exam_context` with `fallback` confidence and a reason
+identifying the classified arterial context. Estimated delays are refreshed to
+exclude the newly inferred native from the postcontrast reference. Without that
+context, the first post-only dynamic acquisition is not assumed to be native.
 
 The shared timing policy recognizes arterial delays of 20–35 seconds, portal
 delays of 60–90 seconds, and delayed acquisitions at 3–15 minutes. It parses
@@ -580,7 +591,8 @@ named phase context before generic dynamic progression. Repeated natives count
 once. Vendor `PhN` prefixes do not define physiological phases or require a
 `Ph1`. Generic dynamics are assumed to begin after injection, including when
 their prefixes start at `Ph2` or `Ph3`. Native assignment requires separate
-native evidence or a supported special profile. Bare agent names such as `gado`
+native evidence, a supported special profile, or the earlier-candidate fallback
+before an already classified arterial acquisition. Bare agent names such as `gado`
 and exam-level injection descriptions remain protocol context.
 
 Generic MR dynamics use compatible acquisitions ordered by canonical `time`,

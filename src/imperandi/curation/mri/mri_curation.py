@@ -1538,7 +1538,9 @@ def infer_generic_dynamic_phases_from_exam_context(
     return assignments
 
 
-def is_native_fallback_candidate(row: pd.Series) -> bool:
+def is_native_fallback_candidate(
+    row: pd.Series, *, before_arterial: bool = False
+) -> bool:
     if norm_label(row.get("mri_sequence")) != "T1":
         return False
     if norm_label(row.get("mri_perfusion_label")) != "OTHER":
@@ -1553,8 +1555,13 @@ def is_native_fallback_candidate(row: pd.Series) -> bool:
         _row_matches_pattern(row, rules.RX_SUBTRACTION)
         or _row_matches_pattern(row, rules.RX_MIP_MPR)
         or _row_matches_pattern(row, rules.RX_QUANT_OR_REPORT)
-        or has_pure_post_contrast_text(row)
-        or detect_ordinal_phase_index(row) is not None
+        or (
+            not before_arterial
+            and (
+                has_pure_post_contrast_text(row)
+                or detect_ordinal_phase_index(row) is not None
+            )
+        )
     ):
         return False
 
@@ -1602,13 +1609,17 @@ def _sort_key_for_native_fallback(row: pd.Series) -> tuple:
 
 
 def infer_missing_native_fallback(exam_rows: pd.DataFrame) -> tuple[int | None, str]:
-    """Find a separate native before dynamics in one compatible protocol group."""
+    """Find a native before dynamics or an already classified arterial acquisition."""
     if exam_rows.mri_perfusion_label.eq("NATIVE").any():
         return None, "native/precontrast already resolved in compatible protocol"
+    has_arterial = exam_rows.mri_perfusion_label.eq("ARTERIAL").any()
     candidates = exam_rows.loc[
         exam_rows.apply(
-            lambda row: is_native_fallback_candidate(row)
-            and not _phase_matches_pattern(row, rules.RX_PHASE_GENERIC_DYNAMIC),
+            lambda row: is_native_fallback_candidate(row, before_arterial=has_arterial)
+            and (
+                has_arterial
+                or not _phase_matches_pattern(row, rules.RX_PHASE_GENERIC_DYNAMIC)
+            ),
             axis=1,
         )
     ]
@@ -1620,7 +1631,7 @@ def infer_missing_native_fallback(exam_rows: pd.DataFrame) -> tuple[int | None, 
             axis=1,
         )
     ]
-    if dynamics.empty:
+    if dynamics.empty and not has_arterial:
         return None, "no dynamic context"
     known_phases = exam_rows.loc[
         exam_rows.mri_perfusion_label.isin({"ARTERIAL", "PORTAL_VENOUS", "DELAYED"})
@@ -1633,18 +1644,29 @@ def infer_missing_native_fallback(exam_rows: pd.DataFrame) -> tuple[int | None, 
         key=lambda idx: _sort_key_for_native_fallback(candidates.loc[idx]),
     )
     for idx in ranked:
+        # The candidate may itself carry generic dynamic/postcontrast wording.
+        following = context.drop(index=idx, errors="ignore")
         chronology, _ = _generic_dynamic_chronology(
-            pd.concat([candidates.loc[[idx]], context])
+            pd.concat([candidates.loc[[idx]], following])
         )
         if (
             chronology is None
             or chronology.order.isna().any()
-            or chronology.order.nunique() < 3
+            or chronology.order.nunique() < (2 if has_arterial else 3)
         ):
             continue
-        if chronology.loc[idx, "order"] >= chronology.loc[context.index, "order"].min():
+        if (
+            chronology.loc[idx, "order"]
+            >= chronology.loc[following.index, "order"].min()
+        ):
             continue
         desc = candidates.loc[idx].get("SeriesDescription")
+        if has_arterial:
+            return idx, (
+                "selected fallback native/precontrast before an already classified "
+                "ARTERIAL acquisition in the compatible protocol; generic postcontrast "
+                f"wording does not veto this earlier candidate: {desc}"
+            )
         return idx, (
             "selected fallback native/precontrast from compatible protocol context: "
             f"a separate candidate precedes the ordered dynamic acquisitions: {desc}"
@@ -1667,7 +1689,8 @@ def _infer_missing_native_fallbacks(
         return []
     dynamics = eligible.loc[
         eligible.apply(
-            lambda row: _phase_matches_pattern(row, rules.RX_PHASE_GENERIC_DYNAMIC),
+            lambda row: _phase_matches_pattern(row, rules.RX_PHASE_GENERIC_DYNAMIC)
+            or row.mri_perfusion_label == "ARTERIAL",
             axis=1,
         )
     ]
@@ -1868,7 +1891,8 @@ def add_mri_perfusion_columns(
             out.loc[row_idx, "mri_perfusion_source"] = "acquisition_order_mask_multiart"
 
         exam_rows = context_rows(idx)
-        for fallback_idx, reason in _infer_missing_native_fallbacks(exam_rows):
+        native_fallbacks = _infer_missing_native_fallbacks(exam_rows)
+        for fallback_idx, reason in native_fallbacks:
             logger.info("Fallback native selected for MRI protocol: %s", reason)
             out.loc[fallback_idx, "mri_perfusion_label"] = "NATIVE"
             out.loc[fallback_idx, "mri_perfusion_reason"] = reason
@@ -1876,6 +1900,11 @@ def add_mri_perfusion_columns(
             out.loc[fallback_idx, "mri_perfusion_source"] = "exam_context"
 
         exam_rows = context_rows(idx)
+        if native_fallbacks:
+            # A dynamic candidate newly resolved as native cannot remain the
+            # first postcontrast acquisition used to estimate delay windows.
+            out.loc[idx, "time_delta"] = _dynamic_time_deltas(exam_rows)
+            exam_rows = context_rows(idx)
 
         for (
             row_idx,

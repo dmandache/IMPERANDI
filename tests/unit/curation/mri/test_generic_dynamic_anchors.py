@@ -119,6 +119,9 @@ def test_order_inference_reserves_succeeding_explicit_phase_only_when_available(
 
     out = curate(rows[::-1])
 
+    expected = expected.copy()
+    if next_phase == "arterial" and not native:
+        expected[0] = "NATIVE"
     assert out.loc[["d1", "d2", "d3"], "phase"].tolist() == expected
     if next_phase:
         assert out.loc["next", "mri_perfusion_source"] == "explicit_text"
@@ -130,13 +133,16 @@ def test_order_inference_reserves_succeeding_explicit_phase_only_when_available(
         if native or next_phase
         else "acquisition_order_dixon_component"
     )
-    resolved = out.loc[["d1", "d2", "d3"]].loc[lambda frame: frame.phase.ne("OTHER")]
+    resolved = out.loc[["d1", "d2", "d3"]].loc[
+        lambda frame: ~frame.phase.isin(["OTHER", "NATIVE"])
+    ]
     assert resolved.mri_perfusion_source.isin(
         [expected_source, "time_delta"] if clocks else [expected_source]
     ).all()
     if "OTHER" in expected:
         assert (
             out.loc[["d1", "d2", "d3"], "mri_perfusion_reason"]
+            .loc[out.loc[["d1", "d2", "d3"], "phase"].eq("OTHER")]
             .str.contains("no compatible postcontrast phase remains")
             .all()
         )

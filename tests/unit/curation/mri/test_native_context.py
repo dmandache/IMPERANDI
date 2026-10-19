@@ -168,3 +168,100 @@ def test_separate_native_and_one_dynamic_with_known_delayed_anchor_meet_minimum(
     out = annotate(rows)
     assert out.phase.tolist() == ["NATIVE", "ARTERIAL", "DELAYED"]
     assert out.loc["v0", "mri_perfusion_source"] == "exam_context"
+
+
+@pytest.mark.parametrize(
+    "candidate",
+    ["AX LAVA post", "AX LAVA C+", "AX LAVA dynamic post", "Ph1/AX LAVA dynamic post"],
+)
+@pytest.mark.parametrize("arterial_source", ["text", "dicom", "ontology"])
+def test_classified_arterial_unblocks_earlier_postcontrast_native(
+    candidate, arterial_source
+):
+    rows = frame([candidate, "AX LAVA arterial", "AX LAVA portal"])
+    config = None
+    if arterial_source != "text":
+        rows.loc[1, "SeriesDescription"] = "AX LAVA"
+    if arterial_source == "dicom":
+        rows["ContrastBolusAgentPhase"] = [None, "ARTERIAL", None]
+    elif arterial_source == "ontology":
+        rows["site_phase"] = [None, "arterial", None]
+        config = {
+            "strategies": [
+                {
+                    "type": "ontology",
+                    "columns": ["site_phase"],
+                    "mapping": {"arterial": "ARTERIAL"},
+                },
+                {"type": "rules"},
+            ]
+        }
+    out = annotate(rows.sample(frac=1, random_state=4), config)
+    assert out.loc[["v0", "v1", "v2"], "phase"].tolist() == [
+        "NATIVE",
+        "ARTERIAL",
+        "PORTAL_VENOUS",
+    ]
+    assert out.loc["v0", "mri_perfusion_source"] == "exam_context"
+    assert out.loc["v0", "mri_perfusion_confidence"] == "fallback"
+    assert "already classified ARTERIAL" in out.loc["v0", "phase_reason"]
+
+
+def test_postcontrast_native_exception_needs_only_the_earlier_candidate_and_arterial():
+    out = annotate(frame(["AX LAVA post", "AX LAVA arterial"]))
+    assert out.loc[["v0", "v1"], "phase"].tolist() == ["NATIVE", "ARTERIAL"]
+
+
+def test_new_native_is_removed_from_the_postcontrast_delay_reference():
+    rows = frame(["Ph1/AX LAVA dynamic post", "AX LAVA arterial", "AX LAVA dynamic"])
+    rows["time"] = ["115800", "120000", "120040"]
+    out = annotate(rows)
+    assert out.loc[["v0", "v1", "v2"], "phase"].tolist() == [
+        "NATIVE",
+        "ARTERIAL",
+        "PORTAL_VENOUS",
+    ]
+    assert out.loc[["v1", "v2"], "time_delta"].tolist() == [20, 60]
+    assert out.loc["v2", "mri_perfusion_source"] == "time_delta"
+
+
+@pytest.mark.parametrize("rank", [1, 2, None])
+def test_postcontrast_native_exception_requires_candidate_strictly_before_arterial(
+    rank,
+):
+    rows = frame(["AX LAVA post", "AX LAVA arterial"])
+    rows.loc[0, "acquisition_order"] = rank
+    assert annotate(rows).loc["v0", "phase"] == "OTHER"
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"study_id": "other-study"},
+        {"SeriesDescription": "AX VIBE post"},
+        {"SeriesDescription": "COR LAVA post"},
+        {"ImageType": "DERIVED PRIMARY"},
+        {"SeriesDescription": "AX LAVA portal post"},
+        {"ContrastBolusAgentPhase": ["PRE_CONTRAST", "ARTERIAL"]},
+    ],
+)
+def test_postcontrast_native_exception_preserves_phase_evidence_and_protocol_boundaries(
+    changes,
+):
+    rows = frame(["AX LAVA post", "AX LAVA arterial"])
+    for column, value in changes.items():
+        if column not in rows:
+            rows[column] = pd.Series(None, index=rows.index, dtype="object")
+        rows.at[0, column] = value
+    assert annotate(rows).loc["v0", "phase"] != "NATIVE"
+
+
+def test_postcontrast_native_exception_does_not_duplicate_an_existing_native():
+    out = annotate(frame(["AX LAVA pre", "AX LAVA post", "AX LAVA arterial"]))
+    assert out.phase.tolist() == ["NATIVE", "OTHER", "ARTERIAL"]
+
+
+@pytest.mark.parametrize("later", ["dynamic post", "portal", "delayed"])
+def test_postcontrast_candidate_still_requires_a_classified_arterial(later):
+    out = annotate(frame(["AX LAVA post", f"AX LAVA {later}"]))
+    assert out.loc["v0", "phase"] == "OTHER"
