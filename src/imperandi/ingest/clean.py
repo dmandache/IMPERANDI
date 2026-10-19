@@ -39,6 +39,12 @@ from imperandi.curation.phase import (
 from imperandi.utils.logging import log_task_summary, setup_logging
 from imperandi.utils.misc import print_args, report_volumes, report_change
 from imperandi.utils.dicom_timing import DICOM_CLOCK_DTYPES
+from imperandi.utils.conditions import (
+    SUPPORTED_OPERATORS,
+    rule_mask,
+    rules_mask,
+    validate_rule_group,
+)
 from imperandi.ingest.defaults import (
     DEFAULT_DICOM_TAGS,
     DATE_CANDIDATES,
@@ -77,21 +83,7 @@ DATETIME_TIME_RE = re.compile(
     r"datetime\.time\(\s*(\d{1,2})\s*,\s*(\d{1,2})(?:\s*,\s*(\d{1,2}))?(?:\s*,\s*(\d{1,6}))?\s*\)"
 )
 FLOAT_TOKEN_RE = re.compile(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?")
-SUPPORTED_FILTER_OPERATORS = {
-    "eq",
-    "ne",
-    "in",
-    "not_in",
-    "contains",
-    "icontains",
-    "regex",
-    "lt",
-    "lte",
-    "gt",
-    "gte",
-    "is_null",
-    "not_null",
-}
+SUPPORTED_FILTER_OPERATORS = SUPPORTED_OPERATORS
 
 
 def add_clean_arguments(
@@ -1949,6 +1941,7 @@ def _get_step_outputs(step: dict) -> set[str]:
             "mri_sequence",
             "mri_sequence_reason",
             "mri_sequence_confidence",
+            "mri_t2_acquisition_family",
             "mri_perfusion_label",
             "mri_perfusion_reason",
             "mri_perfusion_confidence",
@@ -1994,6 +1987,7 @@ def _get_step_outputs(step: dict) -> set[str]:
             "phase_source",
             "phase_reason",
             "phase_confidence",
+            "phase_strategy",
             "selection_slot",
             "selection_score",
             "ct_selection_score",
@@ -2154,45 +2148,9 @@ def validate_cleaning_manifest(manifest: dict) -> list[dict]:
                 raise ValueError("Filter steps must define kind='keep' or 'discard'.")
             if step.get("scope") not in {"row", "volume"}:
                 raise ValueError("Filter steps must define scope='row' or 'volume'.")
-            rules = step.get("rules")
-            if not isinstance(rules, list) or not rules:
-                raise ValueError("Filter steps must define a non-empty 'rules' list.")
-            logic = step.get("logic")
-            if logic is None:
-                if len(rules) == 1:
-                    step["logic"] = "and"
-                else:
-                    raise ValueError(
-                        "Filter steps must define logic='and' or 'or' when they "
-                        "contain multiple rules."
-                    )
-            elif logic not in {"and", "or"}:
-                raise ValueError("Filter step logic must be 'and' or 'or'.")
+            step.update(validate_rule_group(step, f"cleaning.steps[{index - 1}]"))
             if "keep_null" in step and not isinstance(step["keep_null"], bool):
                 raise ValueError("Filter steps must define keep_null as a boolean.")
-            for rule in rules:
-                if not isinstance(rule, dict):
-                    raise ValueError("Each filter rule must be an object.")
-                if "column" not in rule or "op" not in rule:
-                    raise ValueError("Each filter rule must define 'column' and 'op'.")
-                if not isinstance(rule["column"], str) or not rule["column"]:
-                    raise ValueError(
-                        "Each filter rule must define a non-empty 'column'."
-                    )
-                if not isinstance(rule["op"], str) or not rule["op"]:
-                    raise ValueError("Each filter rule must define a non-empty 'op'.")
-                if rule["op"] not in SUPPORTED_FILTER_OPERATORS:
-                    raise ValueError(f"Unsupported filter operator: {rule['op']!r}.")
-                if rule["op"] not in {"is_null", "not_null"} and "value" not in rule:
-                    raise ValueError(
-                        f"Filter operator {rule['op']!r} requires a 'value'."
-                    )
-                if rule["op"] in {"in", "not_in"} and not isinstance(
-                    rule["value"], list
-                ):
-                    raise ValueError(
-                        f"Filter operator {rule['op']!r} requires a list 'value'."
-                    )
 
         _validate_step_config(step)
 
@@ -2385,41 +2343,7 @@ def _normalize_time_candidate(value, column_name: str = ""):
 
 def _rule_mask(df: pd.DataFrame, rule: dict) -> pd.Series:
     """Evaluate a single declarative filter rule against ``df``."""
-    col = rule["column"]
-    op = rule["op"]
-    value = rule.get("value")
-    series = df[col]
-    non_null = series.notna()
-
-    if op == "eq":
-        return non_null & (series == value).fillna(False)
-    if op == "ne":
-        return non_null & (series != value).fillna(False)
-    if op == "in":
-        return non_null & series.isin(value)
-    if op == "not_in":
-        return non_null & ~series.isin(value)
-    if op == "contains":
-        return series.astype("string").str.contains(str(value), regex=False, na=False)
-    if op == "icontains":
-        return series.astype("string").str.contains(
-            str(value), regex=False, case=False, na=False
-        )
-    if op == "regex":
-        return series.astype("string").str.contains(str(value), regex=True, na=False)
-    if op == "lt":
-        return pd.to_numeric(series, errors="coerce") < value
-    if op == "lte":
-        return pd.to_numeric(series, errors="coerce") <= value
-    if op == "gt":
-        return pd.to_numeric(series, errors="coerce") > value
-    if op == "gte":
-        return pd.to_numeric(series, errors="coerce") >= value
-    if op == "is_null":
-        return series.isna()
-    if op == "not_null":
-        return series.notna()
-    raise ValueError(f"Unsupported filter operator: {op!r}")
+    return rule_mask(df, rule)
 
 
 def _run_filter_step(df: pd.DataFrame, step: dict) -> pd.DataFrame:
@@ -2434,24 +2358,15 @@ def _run_filter_step(df: pd.DataFrame, step: dict) -> pd.DataFrame:
         )
         return df
 
-    masks = [_rule_mask(df, rule).fillna(False) for rule in step["rules"]]
-    mask = masks[0].copy()
-    for current in masks[1:]:
-        if step["logic"] == "and":
-            mask = mask & current
-        else:
-            mask = mask | current
-
-    if step["kind"] == "keep":
-        if step.get("keep_null"):
-            null_mask = df[list(required_columns)].isna().any(axis=1)
-            mask = mask | null_mask
-        return df[mask].copy()
-
+    mask = rules_mask(df, step["rules"], step.get("logic", "and"))
     if step.get("keep_null"):
-        null_mask = df[list(required_columns)].isna().any(axis=1)
-        mask = mask & ~null_mask
-    return df[~mask].copy()
+        null_mask = rules_mask(
+            df,
+            [{"column": column, "op": "is_null"} for column in required_columns],
+            "or",
+        )
+        mask = mask | null_mask if step["kind"] == "keep" else mask & ~null_mask
+    return df[mask if step["kind"] == "keep" else ~mask].copy()
 
 
 def _safe_uid_keyword(value):

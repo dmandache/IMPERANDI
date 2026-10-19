@@ -10,8 +10,10 @@ from typing import Any
 
 import pandas as pd
 from imperandi.curation.common import DYNAMIC_ORDER_INPUTS
+from imperandi.utils.conditions import rules_mask, validate_rule_group
 
-SUPPORTED_PHASE_STRATEGIES = {"ontology", "rules", "totalsegmentator"}
+SUPPORTED_PHASE_STRATEGIES = {"explicit", "ontology", "rules", "totalsegmentator"}
+EXPLICIT_PHASE_SELECTION_BONUS = 1000.0
 DEFAULT_UNRESOLVED_LABELS = ["", "OTHER", "UNKNOWN", "UNCLASSIFIED", "NONE"]
 DEFAULT_PHASE_CURATION = {
     "strategies": [{"type": "rules"}],
@@ -66,6 +68,32 @@ def _validate_mapping(value: Any, field: str, *, required: bool) -> dict[str, st
     return mapping
 
 
+def _validate_explicit_assignments(value: Any, field: str) -> list[dict[str, Any]]:
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"{field} must be a non-empty list of assignments.")
+    rules = []
+    for index, raw_rule in enumerate(value):
+        rule_field = f"{field}[{index}]"
+        if not isinstance(raw_rule, Mapping):
+            raise ValueError(f"{rule_field} must be a mapping.")
+        rule = copy.deepcopy(dict(raw_rule))
+        name = rule.get("name", f"rule_{index + 1}")
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f"{rule_field}.name must be a non-empty string.")
+        rule["name"] = name.strip()
+        phase = rule.get("phase")
+        if not isinstance(phase, str) or normalize_phase_label(phase) is None:
+            raise ValueError(f"{rule_field}.phase must be a non-empty phase label.")
+        rule["phase"] = normalize_phase_label(phase)
+        rule.update(
+            validate_rule_group(
+                rule, rule_field, default_logic="and", strict_values=True
+            )
+        )
+        rules.append(rule)
+    return rules
+
+
 def validate_phase_curation(config: Mapping[str, Any] | None) -> dict[str, Any]:
     """Validate and normalize the manifest ``phase_curation`` section."""
     if config is None:
@@ -107,7 +135,16 @@ def validate_phase_curation(config: Mapping[str, Any] | None) -> dict[str, Any]:
             raise ValueError(f"{field}.name must be a non-empty string.")
         strategy["name"] = name.strip()
 
-        if strategy_type == "ontology":
+        if strategy_type == "explicit":
+            strategy["assignments"] = _validate_explicit_assignments(
+                strategy.get("assignments"), f"{field}.assignments"
+            )
+            confidence = strategy.get("confidence", "high")
+            if not isinstance(confidence, (str, int, float)):
+                raise ValueError(f"{field}.confidence must be a scalar value.")
+            strategy["confidence"] = confidence
+
+        elif strategy_type == "ontology":
             strategy["columns"] = _validate_string_list(
                 strategy.get("columns"), f"{field}.columns"
             )
@@ -219,7 +256,13 @@ def phase_curation_input_columns(config: Mapping[str, Any] | None) -> set[str]:
     for text_columns in normalized["text_columns"].values():
         columns.update(text_columns)
     for strategy in normalized["strategies"]:
-        if strategy["type"] == "ontology":
+        if strategy["type"] == "explicit":
+            columns.update(
+                condition["column"]
+                for assignment in strategy["assignments"]
+                for condition in assignment["rules"]
+            )
+        elif strategy["type"] == "ontology":
             columns.update(strategy["columns"])
         elif strategy["type"] == "rules":
             columns.update(DYNAMIC_ORDER_INPUTS)
@@ -294,6 +337,27 @@ def _first_populated(row: Mapping[str, Any], columns: list[str]) -> Any:
     return None
 
 
+def _match_explicit_assignments(df: pd.DataFrame, strategy: Mapping) -> list:
+    """Evaluate filter predicates once per column and retain the first match."""
+    matches = [None] * len(df)
+    for assignment in strategy["assignments"]:
+        mask = rules_mask(df, assignment["rules"], assignment["logic"])
+        for position in mask.to_numpy().nonzero()[0]:
+            if matches[position] is None:
+                matches[position] = assignment
+    return matches
+
+
+def phase_selection_bonus(row: Mapping[str, Any]) -> float:
+    """Fetch the default bonus from resolved assignment provenance."""
+    if (
+        normalize_phase_label(row.get("phase_status")) == PHASE_STATUS_RESOLVED
+        and normalize_phase_label(row.get("phase_strategy")) == "EXPLICIT"
+    ):
+        return EXPLICIT_PHASE_SELECTION_BONUS
+    return 0.0
+
+
 def _strategy_applies(row: Mapping[str, Any], strategy: Mapping[str, Any]) -> bool:
     modalities = strategy.get("modalities")
     if not modalities or "Modality" not in row:
@@ -308,13 +372,29 @@ def _strategy_applies(row: Mapping[str, Any], strategy: Mapping[str, Any]) -> bo
 
 
 def _resolve_strategy(
-    row: Mapping[str, Any], strategy: Mapping[str, Any]
+    row: Mapping[str, Any],
+    strategy: Mapping[str, Any],
+    *,
+    assignment: Mapping | None = None,
 ) -> tuple[str | None, Any, str | None]:
     strategy_type = strategy["type"]
     mapping = strategy.get("mapping", {})
 
     if not _strategy_applies(row, strategy):
         return None, None, None
+
+    if strategy_type == "explicit":
+        if assignment is None:
+            return None, None, None
+        evidence = "; ".join(
+            f"{rule['column']}={row.get(rule['column'])!r}"
+            for rule in assignment["rules"]
+        )
+        return (
+            assignment["phase"],
+            strategy["confidence"],
+            f"explicit rule {assignment['name']!r} ({assignment['logic']}) matched: {evidence}",
+        )
 
     if strategy_type == "ontology":
         for column in strategy["columns"]:
@@ -355,12 +435,20 @@ def apply_phase_curation(
     out["phase"] = pd.Series(pd.NA, index=out.index, dtype="object")
     out["phase_status"] = pd.Series(pd.NA, index=out.index, dtype="object")
     out["phase_source"] = pd.Series(pd.NA, index=out.index, dtype="object")
+    out["phase_strategy"] = pd.Series(pd.NA, index=out.index, dtype="object")
     out["phase_confidence"] = pd.Series(pd.NA, index=out.index, dtype="object")
     out["phase_reason"] = pd.Series(pd.NA, index=out.index, dtype="object")
 
     output_positions = {
         column: out.columns.get_loc(column)
-        for column in ("phase", "phase_status", "phase_source", "phase_confidence", "phase_reason")
+        for column in (
+            "phase",
+            "phase_status",
+            "phase_source",
+            "phase_strategy",
+            "phase_confidence",
+            "phase_reason",
+        )
     }
 
     unresolved: list[bool] = []
@@ -379,6 +467,7 @@ def apply_phase_curation(
         unresolved.append(False)
         out.iat[row_position, output_positions["phase_status"]] = PHASE_STATUS_NOT_APPLICABLE
         out.iat[row_position, output_positions["phase_source"]] = "not_applicable"
+        out.iat[row_position, output_positions["phase_strategy"]] = "not_applicable"
         out.iat[row_position, output_positions["phase_reason"]] = reason
 
     stop_type = stop_before.strip().lower() if stop_before else None
@@ -386,16 +475,30 @@ def apply_phase_curation(
     for strategy_index, strategy in enumerate(normalized["strategies"], start=1):
         if strategy["type"] == stop_type:
             break
+        explicit_matches = (
+            _match_explicit_assignments(source, strategy)
+            if strategy["type"] == "explicit"
+            else None
+        )
         resolved_count = 0
         for row_position, is_unresolved in enumerate(unresolved):
             if not is_unresolved:
                 continue
-            phase, confidence, reason = _resolve_strategy(source.iloc[row_position], strategy)
+            phase, confidence, reason = _resolve_strategy(
+                source.iloc[row_position],
+                strategy,
+                assignment=(
+                    explicit_matches[row_position]
+                    if explicit_matches is not None
+                    else None
+                ),
+            )
             if phase is None or phase in normalized["unresolved_labels"]:
                 continue
             out.iat[row_position, output_positions["phase"]] = phase
             out.iat[row_position, output_positions["phase_status"]] = PHASE_STATUS_RESOLVED
             out.iat[row_position, output_positions["phase_source"]] = strategy["name"]
+            out.iat[row_position, output_positions["phase_strategy"]] = strategy["type"]
             out.iat[row_position, output_positions["phase_confidence"]] = confidence
             out.iat[row_position, output_positions["phase_reason"]] = reason
             unresolved[row_position] = False
@@ -416,6 +519,9 @@ def apply_phase_curation(
         out.iat[row_position, output_positions["phase_status"]] = PHASE_STATUS_UNRESOLVED
         out.iat[row_position, output_positions["phase_source"]] = (
             "fallback" if apply_fallback and normalized["fallback"] is not None else "unresolved"
+        )
+        out.iat[row_position, output_positions["phase_strategy"]] = (
+            out.iat[row_position, output_positions["phase_source"]]
         )
         out.iat[row_position, output_positions["phase_reason"]] = "no phase strategy resolved"
         if any(strategy["type"] == "rules" for strategy in normalized["strategies"]):
@@ -508,5 +614,6 @@ __all__ = [
     "normalize_phase_label",
     "phase_curation_input_columns",
     "phase_needs_strategy",
+    "phase_selection_bonus",
     "validate_phase_curation",
 ]
