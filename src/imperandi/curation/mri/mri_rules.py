@@ -97,7 +97,7 @@ PHASE_RULES = shared.phase_rules(
 
 # These profiles describe MR multivolume containers, not a single pure phase.
 RX_PHASE_ART_PORT_DYNAMIC = token(
-    rf"{shared.ARTERIAL}{SEP}port(?:al(?:e)?)?|art[eé]rio{SEP}portal(?:e)?"
+    rf"{shared.ARTERIAL}{SEP}port(?:al(?:e)?)?|art[eé]rio{SEP}portal(?:e)?|art{SEP}port"
 )
 RX_PHASE_MASK_MULTIART_DYNAMIC = token(
     rf"mas(?:k|q(?:ue)?){SEP}(?:(?:multi|\d+){SEP})?{shared.ARTERIAL}"
