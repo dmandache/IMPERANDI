@@ -7,7 +7,7 @@ import pytest
 import yaml
 
 from imperandi import cli
-from imperandi.curation.mri import curate as mc
+from imperandi.curation.mri import mri_curation as mc
 
 
 def dynamic_rows(deltas, description="AX T1 LAVA dynamic"):

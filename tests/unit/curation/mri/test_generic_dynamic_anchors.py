@@ -3,7 +3,7 @@
 import pandas as pd
 import pytest
 
-from imperandi.curation.mri.curate import curate_mri
+from imperandi.curation.mri.mri_curation import curate_mri
 
 
 def volume(name, description, time, **kwargs):

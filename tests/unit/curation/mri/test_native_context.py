@@ -3,7 +3,7 @@
 import pandas as pd
 import pytest
 
-from imperandi.curation.mri import curate as mc
+from imperandi.curation.mri import mri_curation as mc
 
 
 def frame(descriptions):

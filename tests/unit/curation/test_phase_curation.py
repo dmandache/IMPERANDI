@@ -5,8 +5,8 @@ from unittest.mock import MagicMock
 import pandas as pd
 import pytest
 
-from imperandi.curation.ct.curate import curate_ct
-from imperandi.curation.phase import (
+from imperandi.curation.ct.ct_curation import curate_ct
+from imperandi.curation.phase_resolution import (
     apply_phase_curation,
     phase_needs_strategy,
     validate_phase_curation,

@@ -5,8 +5,8 @@ from datetime import time
 import pandas as pd
 import pytest
 
-from imperandi.curation import common
-from imperandi.curation.phase import phase_curation_input_columns
+from imperandi.curation import metadata_helpers as common
+from imperandi.curation.phase_resolution import phase_curation_input_columns
 from imperandi.ingest.clean import (
     add_time,
     compute_acquisition_order,

@@ -1,4 +1,4 @@
-"""Export of the best CT/MR candidates for each exam."""
+"""Export selected CT/MR candidates and unresolved-phase QC tables."""
 
 import logging
 from pathlib import Path
@@ -6,14 +6,18 @@ from pathlib import Path
 import pandas as pd
 
 from imperandi.curation import split_by_modality
-from imperandi.curation.ct.curate import annotate_ct, score_ct, select_ct_per_exam
-from imperandi.curation.mri.curate import (
+from imperandi.curation.ct.ct_curation import annotate_ct, score_ct, select_ct_per_exam
+from imperandi.curation.mri.mri_curation import (
     annotate_mri,
     add_scores,
     select_best_candidates,
 )
-from imperandi.curation.common import get_exam_group_cols, norm_label, manifest_text_columns
-from imperandi.curation.phase import validate_phase_curation
+from imperandi.curation.metadata_helpers import (
+    get_exam_group_cols,
+    norm_label,
+    manifest_text_columns,
+)
+from imperandi.curation.phase_resolution import validate_phase_curation
 from imperandi.utils.run_state import atomic_write_csv
 
 logger = logging.getLogger(__name__)
@@ -57,6 +61,7 @@ def save_unresolved_phase_cases(df: pd.DataFrame, path: Path) -> None:
     unresolved = unresolved.drop(columns=["_source_idx"], errors="ignore")
     atomic_write_csv(unresolved, path, index=False)
     logger.info("Saved %d unresolved phase cases -> %s", len(unresolved), path)
+
 
 def selected_output_path(
     configured, output_path, *, input_path=None, protected_paths=()

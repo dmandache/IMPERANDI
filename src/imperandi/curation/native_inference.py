@@ -1,4 +1,4 @@
-"""First-acquisition native fallback for mixed pre/postcontrast groups."""
+"""Infer native acquisitions from mixed pre/postcontrast group context."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ import re
 import numpy as np
 import pandas as pd
 
-from . import common, rules
-from .common import acquisition_time_seconds as _time_seconds
+from . import metadata_helpers as common, shared_rules as rules
+from .metadata_helpers import acquisition_time_seconds as _time_seconds
 
 
 def _text_values(value):

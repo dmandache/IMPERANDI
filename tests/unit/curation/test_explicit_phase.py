@@ -7,11 +7,11 @@ import pytest
 import yaml
 
 from imperandi import cli
-from imperandi.curation import phase as phase_policy
-from imperandi.curation.ct.curate import curate_ct, score_ct
-from imperandi.curation.export import save_selected_candidates
-from imperandi.curation.mri.curate import curate_mri, score_t1
-from imperandi.curation.phase import (
+from imperandi.curation import phase_resolution as phase_policy
+from imperandi.curation.ct.ct_curation import curate_ct, score_ct
+from imperandi.curation.selection_export import save_selected_candidates
+from imperandi.curation.mri.mri_curation import curate_mri, score_t1
+from imperandi.curation.phase_resolution import (
     apply_phase_curation,
     phase_curation_input_columns,
     phase_needs_strategy,

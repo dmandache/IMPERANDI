@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 
 from imperandi.curation import curate_by_modality, split_by_modality
-from imperandi.curation.ct.curate import curate_ct
+from imperandi.curation.ct.ct_curation import curate_ct
 
 
 def _base(desc, **extra):

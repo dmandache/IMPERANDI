@@ -1,9 +1,9 @@
 """
-Pytest suite for the simplified MVP MRI curation module.
+Pytest suite for MRI metadata curation.
 
-Run from the directory containing `mri_curation.py` and `mri_curation_rules.py`:
+Run from the repository root:
 
-    pytest -q test_mri_curation.py
+    pytest -q tests/unit/curation/mri/test_mri_curation.py
 
 The tests focus on edge cases that previously caused missed or wrongly selected
 T1/T2 liver MRI diagnostic candidates.
@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from imperandi.curation.mri import curate as mc
+from imperandi.curation.mri import mri_curation as mc
 
 # -----------------------------------------------------------------------------
 # Test helpers
