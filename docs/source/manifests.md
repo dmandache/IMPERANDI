@@ -311,6 +311,16 @@ fill a phase slot when its only resolved candidate is a reconstruction.
 Within eligible sequence/phase slots, MRI selection excludes only rows flagged
 as subtraction or quantitative/report products. Dixon component labels and
 secondary/key-product markers do not independently exclude a candidate.
+The MRI `T1_NATIVE` slot prefers a native from the same sequence family as a
+selected arterial, portal venous, or delayed candidate, with compatible plane
+and Dixon component. Known conflicting planes or Dixon components do not match;
+missing plane/component information does not veto an otherwise known family
+match. Matching uses the configured metadata text columns. Image-type differences
+alone do not prevent a selection match. If no compatible native exists or no
+selected dynamic protocol can be identified, ordinary score and tie-breaker
+ranking applies. Resolved explicit manifest assignments retain priority. The
+selected and QC candidate descriptions mark matching natives with
+`matches dynamic protocol`; other native alternatives remain available in QC.
 `ImageType=DERIVED` alone does not exclude
 diagnostic CT reconstructions or MRI Dixon/GRE images from selection.
 Legacy `phase_applicability_reason=DERIVED` values are ignored by the resolver;

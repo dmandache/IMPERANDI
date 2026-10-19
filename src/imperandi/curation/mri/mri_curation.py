@@ -2327,6 +2327,29 @@ def add_scores(df: pd.DataFrame) -> pd.DataFrame:
 # -----------------------------------------------------------------------------
 
 
+def _native_matches_dynamic_protocol(native: pd.Series, dynamic: pd.Series) -> bool:
+    """Match a known sequence family with compatible plane and reconstruction."""
+    native_family, native_plane, native_component = _generic_dynamic_key(native)[-3:]
+    dynamic_family, dynamic_plane, dynamic_component = _generic_dynamic_key(dynamic)[
+        -3:
+    ]
+    if native_family == "UNSPECIFIED_T1" or native_family != dynamic_family:
+        return False
+    planes = {"AXIAL", "CORONAL", "SAGITTAL"}
+    if (
+        native_plane in planes
+        and dynamic_plane in planes
+        and native_plane != dynamic_plane
+    ):
+        return False
+    unknown_components = {"NOT_DIXON", "DIXON_UNKNOWN"}
+    return (
+        native_component == dynamic_component
+        or native_component in unknown_components
+        or dynamic_component in unknown_components
+    )
+
+
 def add_tiebreaker_columns(df: pd.DataFrame, time_col: str = "time") -> pd.DataFrame:
     out = df.copy()
     out["_row_order"] = np.arange(len(out))
@@ -2379,6 +2402,8 @@ def select_best_candidates(
 
     ``display_text_col_count`` limits candidate display text to the first N
     configured ``TEXT_COLS_DEFAULT`` fields. ``None`` retains all fields.
+    Native selection prefers the protocols of the selected postcontrast phases,
+    after explicit manifest assignments and before ordinary quality ranking.
     """
     if display_text_col_count is not None:
         if isinstance(display_text_col_count, bool) or not isinstance(
@@ -2450,6 +2475,52 @@ def select_best_candidates(
 
     ranked = selectable.sort_values(sort_cols, ascending=ascending, na_position="last")
 
+    native_matches = {}
+    native_assignment_bonuses = {}
+    for _, exam in ranked.groupby(exam_cols, sort=False):
+        natives = exam.loc[exam.selection_slot.eq("T1_NATIVE")]
+        dynamics = (
+            exam.loc[
+                exam.selection_slot.isin(
+                    ["T1_ARTERIAL", "T1_PORTAL_VENOUS", "T1_DELAYED"]
+                )
+            ]
+            .groupby("selection_slot", sort=False)
+            .head(1)
+        )
+        if natives.empty or dynamics.empty:
+            continue
+        matches = {}
+        for _, native in natives.iterrows():
+            position = native["_row_order"]
+            matches[position] = any(
+                _native_matches_dynamic_protocol(native, dynamic)
+                for _, dynamic in dynamics.iterrows()
+            )
+        if any(matches.values()):
+            native_matches.update(matches)
+            for _, native in natives.iterrows():
+                native_assignment_bonuses[native["_row_order"]] = phase_selection_bonus(
+                    native
+                )
+    ranked["_native_protocol_match"] = ranked["_row_order"].map(
+        lambda position: native_matches.get(position, False)
+    )
+    ranked["_native_assignment_bonus"] = ranked["_row_order"].map(
+        lambda position: native_assignment_bonuses.get(position, 0.0)
+    )
+    prefix = len(exam_cols) + 1
+    ranked = ranked.sort_values(
+        [
+            *sort_cols[:prefix],
+            "_native_assignment_bonus",
+            "_native_protocol_match",
+            *sort_cols[prefix:],
+        ],
+        ascending=[*ascending[:prefix], False, False, *ascending[prefix:]],
+        na_position="last",
+    )
+
     def _display(row: pd.Series) -> str:
         display_cols = _resolve_text_cols()[:display_text_col_count]
         desc = build_display_text(row, cols=display_cols)
@@ -2461,6 +2532,8 @@ def select_best_candidates(
             desc = _display_str(row.get("ProtocolName")) or row.get("series_text", "")
 
         details = []
+        if row["_native_protocol_match"]:
+            details.append("matches dynamic protocol")
         volume_order = safe_float(row.get("volume_order_in_series"))
         n_volumes = safe_float(row.get("n_volumes_in_series"))
         if pd.notna(volume_order) and pd.notna(n_volumes):
@@ -2526,7 +2599,9 @@ def select_best_candidates(
             *[c for c in selected_wide if c not in original_exam_cols],
         ]
     ]
-    selected_long = selected_long.drop(columns=exam_key_cols)
+    selected_long = selected_long.drop(
+        columns=[*exam_key_cols, "_native_assignment_bonus", "_native_protocol_match"]
+    )
     return selected_long, selected_wide
 
 
