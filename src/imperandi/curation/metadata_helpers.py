@@ -1,4 +1,4 @@
-"""Shared helpers for deterministic modality curation."""
+"""Shared metadata parsing, text evidence, and exam grouping helpers."""
 
 from __future__ import annotations
 
@@ -87,7 +87,7 @@ def phase_evidence_summary(row: pd.Series) -> str:
 @contextmanager
 def manifest_text_columns(modality: str, config):
     """Keep annotation, scoring and export under the same metadata precedence."""
-    from imperandi.curation.phase import validate_phase_curation
+    from imperandi.curation.phase_resolution import validate_phase_curation
 
     columns = validate_phase_curation(config)["text_columns"].get(modality)
     token = _TEXT_COLUMNS.set(None if columns is None else tuple(columns))
@@ -254,7 +254,7 @@ def first_phase_text_column(
     row: pd.Series, cols=None, *, phase_rules=None, post=None, extra_patterns=()
 ):
     """Keep contrast/profile evidence even when it cannot resolve an exact phase."""
-    from . import rules
+    from . import shared_rules as rules
 
     return first_text_column(
         row,

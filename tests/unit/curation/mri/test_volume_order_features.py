@@ -2,7 +2,7 @@
 
 import pandas as pd
 
-from imperandi.curation.mri.curate import add_volume_order_features, curate_mri
+from imperandi.curation.mri.mri_curation import add_volume_order_features, curate_mri
 
 
 def _volume_row(volume_id, **extra):

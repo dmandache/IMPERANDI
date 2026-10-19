@@ -7,8 +7,8 @@ import pytest
 import yaml
 
 from imperandi import cli
-from imperandi.curation.export import save_selected_candidates
-from imperandi.curation.mri.curate import annotate_mri
+from imperandi.curation.selection_export import save_selected_candidates
+from imperandi.curation.mri.mri_curation import annotate_mri
 from imperandi.ingest.clean import run_clean_pipeline
 
 

@@ -1,4 +1,4 @@
-"""CT metadata curation and diagnostic candidate selection.
+"""CT metadata annotation, scoring, and diagnostic candidate selection.
 
 This module deliberately contains CT-specific clinical/technical heuristics.
 `imperandi.ingest.clean` should orchestrate this module, not duplicate these rules.
@@ -11,8 +11,8 @@ import re
 import numpy as np
 import pandas as pd
 
-from imperandi.curation import common, rules as shared_rules
-from imperandi.curation.common import (
+from imperandi.curation import metadata_helpers as common, shared_rules
+from imperandi.curation.metadata_helpers import (
     build_series_text,
     first_text_column_value,
     get_exam_group_cols,
@@ -25,19 +25,19 @@ from imperandi.curation.common import (
     has_text_columns_override,
     with_manifest_text_columns,
 )
-from imperandi.curation.contrast import infer_pre_post_native_acquisitions
-from imperandi.curation.phase import (
+from imperandi.curation.native_inference import infer_pre_post_native_acquisitions
+from imperandi.curation.phase_resolution import (
     apply_phase_curation,
     phase_selection_bonus,
     validate_phase_curation,
 )
-from imperandi.curation.rules import (
+from imperandi.curation.shared_rules import (
     RX_IMAGE_ORIGINAL,
     RX_IMAGE_PRIMARY,
     match_phase,
     match_plane,
 )
-from . import rules
+from . import ct_rules as rules
 
 
 def _phase_text_column(row: pd.Series):

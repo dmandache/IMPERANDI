@@ -1,4 +1,4 @@
-"""Canonical CT/MR metadata vocabulary and contrast-phase policy.
+"""Shared CT/MR metadata vocabulary and contrast-phase matching policy.
 
 All protocol words use token() and all optional protocol separators use SEP.
 Phase names take precedence over timing; complete durations are parsed once so

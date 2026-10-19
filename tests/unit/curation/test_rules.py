@@ -5,10 +5,14 @@ import re
 import pandas as pd
 import pytest
 
-from imperandi.curation import rules
-from imperandi.curation.ct import rules as ct_rules
-from imperandi.curation.ct.curate import curate_ct, detect_ct_features, detect_ct_phase
-from imperandi.curation.mri import curate as mr
+from imperandi.curation import shared_rules as rules
+from imperandi.curation.ct import ct_rules
+from imperandi.curation.ct.ct_curation import (
+    curate_ct,
+    detect_ct_features,
+    detect_ct_phase,
+)
+from imperandi.curation.mri import mri_curation as mr
 
 SEPARATORS = ["", " ", "_", ".", "+", "-", "/", " _-/+ "]
 SHARED_PHASE_NAMES = {

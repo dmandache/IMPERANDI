@@ -11,14 +11,14 @@ import pandas as pd
 from tqdm import tqdm
 
 from imperandi.curation import split_by_modality
-from imperandi.curation.common import (
+from imperandi.curation.metadata_helpers import (
     DYNAMIC_ORDER_INPUTS,
     TEXT_COLS_DEFAULT,
     manifest_text_columns,
 )
-from imperandi.curation.ct.curate import annotate_ct
-from imperandi.curation.mri.curate import annotate_mri
-from imperandi.curation.phase import (
+from imperandi.curation.ct.ct_curation import annotate_ct
+from imperandi.curation.mri.mri_curation import annotate_mri
+from imperandi.curation.phase_resolution import (
     PHASE_STATUS_NOT_APPLICABLE,
     PHASE_STATUS_RESOLVED,
     PHASE_STATUS_UNRESOLVED,
@@ -27,7 +27,7 @@ from imperandi.curation.phase import (
     phase_needs_strategy,
     validate_phase_curation,
 )
-from imperandi.curation.export import (
+from imperandi.curation.selection_export import (
     add_selected_csv_argument,
     save_selected_candidates,
     selected_output_path,

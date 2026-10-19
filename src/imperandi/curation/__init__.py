@@ -6,7 +6,10 @@ import pandas as pd
 
 from imperandi.curation.ct import curate_ct
 from imperandi.curation.mri import curate_mri
-from imperandi.curation.phase import apply_phase_curation, validate_phase_curation
+from imperandi.curation.phase_resolution import (
+    apply_phase_curation,
+    validate_phase_curation,
+)
 
 
 def _modality_label(value) -> str:

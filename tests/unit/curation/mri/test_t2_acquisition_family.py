@@ -3,7 +3,7 @@
 import pandas as pd
 import pytest
 
-from imperandi.curation.mri import curate as mr
+from imperandi.curation.mri import mri_curation as mr
 
 
 @pytest.mark.parametrize(

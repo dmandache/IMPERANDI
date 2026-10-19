@@ -6,14 +6,17 @@ import yaml
 
 from imperandi import cli
 from imperandi.curation import curate_by_modality
-from imperandi.curation.common import get_exam_group_cols
-from imperandi.curation.export import (
+from imperandi.curation.metadata_helpers import get_exam_group_cols
+from imperandi.curation.selection_export import (
     save_selected_candidates,
     selected_output_path,
     selected_qc_path,
     unresolved_phase_qc_path,
 )
-from imperandi.curation.phase import apply_phase_curation, validate_phase_curation
+from imperandi.curation.phase_resolution import (
+    apply_phase_curation,
+    validate_phase_curation,
+)
 from imperandi.extract import phase
 
 

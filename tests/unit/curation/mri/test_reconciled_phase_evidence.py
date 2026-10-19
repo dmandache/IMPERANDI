@@ -3,8 +3,8 @@
 import pandas as pd
 import pytest
 
-from imperandi.curation.mri import curate as mc
-from imperandi.curation.phase import validate_phase_curation
+from imperandi.curation.mri import mri_curation as mc
+from imperandi.curation.phase_resolution import validate_phase_curation
 
 
 def volumes(count=4, description="AX T1 VIBE dynamic"):

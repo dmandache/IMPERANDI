@@ -1,5 +1,5 @@
 """
-MRI curation utilities.
+MRI metadata annotation, scoring, and diagnostic candidate selection.
 
 Core functionality:
 1. Classify MRI sequence family: T1, T2, DWI, LOCALIZER, KEY_IMAGES, OTHER.
@@ -28,24 +28,24 @@ from typing import Sequence
 import numpy as np
 import pandas as pd
 
-from imperandi.curation import common, rules as shared_rules
+from imperandi.curation import metadata_helpers as common, shared_rules
 from imperandi.utils.dicom_timing import scalar_values
-from imperandi.curation.contrast import infer_pre_post_native_acquisitions
-from imperandi.curation.common import (
+from imperandi.curation.native_inference import infer_pre_post_native_acquisitions
+from imperandi.curation.metadata_helpers import (
     clean_text as clean_text,
     get_exam_group_cols,
     is_missing as _is_missing,
     read_csv,
     safe_str,
 )
-from imperandi.curation.phase import (
+from imperandi.curation.phase_resolution import (
     apply_phase_curation,
     phase_selection_bonus,
     validate_phase_curation,
 )
-from imperandi.curation.rules import SEP_CHARS, match_phase, match_plane
+from imperandi.curation.shared_rules import SEP_CHARS, match_phase, match_plane
 
-from . import rules
+from . import mri_rules as rules
 
 logger = logging.getLogger(__name__)
 

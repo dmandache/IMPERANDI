@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from imperandi.curation.mri import curate as mc
+from imperandi.curation.mri import mri_curation as mc
 from imperandi.ingest.clean import compute_acquisition_order
 
 

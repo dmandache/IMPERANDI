@@ -638,8 +638,9 @@ CT adds angiography/CTA terms. MR adds gadolinium-related terms, hepatobiliary
 labels and timing (20 minutes or 2 hours through 2h59m59s), sequence families,
 Dixon components, and dynamic acquisition-order inference. MR hepatobiliary
 names precede portal, arterial, and delayed names. The common vocabulary and
-timing policy live in `imperandi.curation.rules`; the CT and MR rule modules
-contain their respective extensions. `RX_PHASE_*` patterns match words;
+timing policy live in `imperandi.curation.shared_rules`;
+`imperandi.curation.ct.ct_rules` and `imperandi.curation.mri.mri_rules` contain
+their respective extensions. `RX_PHASE_*` patterns match words;
 `match_phase` combines them with complete-duration matching.
 
 Dixon water classification accepts exact structured `ImageType` tokens (`W` or

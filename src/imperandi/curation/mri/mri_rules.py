@@ -1,11 +1,11 @@
-"""MR sequence, contrast-agent, dynamic-acquisition, and Dixon extensions.
+"""MRI sequence, contrast-agent, dynamic-acquisition, and Dixon rules.
 
 Generic exclusions, planes, phase vocabulary, timing, and priorities come from
-curation.rules. Multiword MR terms use the same token and SEP conventions.
+curation.shared_rules. Multiword MR terms use the same token and SEP conventions.
 """
 
-from imperandi.curation import rules as shared
-from imperandi.curation.rules import SEP as SEP, token as token
+from imperandi.curation import shared_rules as shared
+from imperandi.curation.shared_rules import SEP as SEP, token as token
 
 # Shared rules keep their historical names for callers.
 RX_LOCALIZER = shared.RX_LOCALIZER

@@ -1,4 +1,4 @@
-"""Manifest-driven contrast-phase resolution with ordered fallbacks."""
+"""Resolve contrast phases using manifest strategies and ordered fallbacks."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from typing import Any
 
 import pandas as pd
-from imperandi.curation.common import DYNAMIC_ORDER_INPUTS
+from imperandi.curation.metadata_helpers import DYNAMIC_ORDER_INPUTS
 from imperandi.utils.conditions import rules_mask, validate_rule_group
 
 SUPPORTED_PHASE_STRATEGIES = {"explicit", "ontology", "rules", "totalsegmentator"}

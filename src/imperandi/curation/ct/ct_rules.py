@@ -1,7 +1,7 @@
-"""CT extensions to the canonical CT/MR metadata rules."""
+"""CT vocabulary and phase priorities extending the shared metadata rules."""
 
-from imperandi.curation import rules as shared
-from imperandi.curation.rules import SEP as SEP, token as token
+from imperandi.curation import shared_rules as shared
+from imperandi.curation.shared_rules import SEP as SEP, token as token
 
 RX_CT_LOCALIZER = shared.RX_LOCALIZER
 RX_CT_DERIVED_LOW_VALUE = shared.RX_DERIVED_LOW_VALUE

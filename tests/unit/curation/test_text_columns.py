@@ -8,9 +8,9 @@ import pandas as pd
 import pytest
 
 from imperandi.curation import curate_by_modality
-from imperandi.curation.ct import curate as ct
-from imperandi.curation.mri import curate as mr
-from imperandi.curation.phase import validate_phase_curation
+from imperandi.curation.ct import ct_curation as ct
+from imperandi.curation.mri import mri_curation as mr
+from imperandi.curation.phase_resolution import validate_phase_curation
 
 
 def dataset(modality):
