@@ -243,11 +243,17 @@ def test_separate_native_counts_before_unlabelled_dynamic_progression(
         )
 
 
-def test_native_alone_does_not_supply_dynamic_evidence_to_other_t1_volumes():
+def test_repeated_protocols_can_be_native_alongside_explicit_native():
     rows = acquisitions("AX T1 LAVA", same_series=False).iloc[:3].copy()
     rows.loc[0, "SeriesDescription"] = "AX T1 LAVA pre"
     out = mc.annotate_mri(rows)
-    assert out.mri_perfusion_label.tolist() == ["NATIVE", "OTHER", "OTHER"]
+    assert out.mri_perfusion_label.tolist() == ["NATIVE", "NATIVE", "NATIVE"]
+    assert out.loc[0, "mri_perfusion_source"] == "explicit_text"
+    assert (
+        out.loc[[1, 2], "mri_perfusion_reason"]
+        .str.contains("repeated matching protocol")
+        .all()
+    )
 
 
 @pytest.mark.parametrize("same_series", [False, True])

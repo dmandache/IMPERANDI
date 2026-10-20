@@ -342,45 +342,80 @@ def test_separate_native_fallback_resolves_other_t1_protocols_independently():
 
 @pytest.mark.parametrize("protocol", ["AX LAVA", "AX T1", "AX T1 SE", "AX T1 MPRAGE"])
 @pytest.mark.parametrize("count", [2, 4])
-def test_matching_protocol_repeats_infer_only_first_native_without_phase_words(protocol, count):
+def test_matching_protocol_repeats_label_all_eligible_natives(protocol, count):
     rows = frame([protocol] * count)
     out = annotate(rows.sample(frac=1, random_state=6)).loc[rows.volume_id]
-    assert out.phase.tolist() == ["NATIVE"] + ["OTHER"] * (count - 1)
-    assert "first acquisition of matching protocol" in out.loc["v0", "mri_perfusion_reason"]
-    assert out.loc["v0", "mri_perfusion_confidence"] == "fallback"
+    assert out.phase.eq("NATIVE").all()
+    assert out.mri_perfusion_reason.str.contains("repeated matching protocol").all()
+    assert out.mri_perfusion_confidence.eq("fallback").all()
+
+
+def test_repeated_protocol_labels_all_candidates_before_best_selection():
+    rows = frame(["AX T1 SE"] * 2).drop(columns="acquisition_order")
+    rows["n_rows_in_volume"] = [80, 120]
+    rows["SliceThickness"] = 5
+    rows["PixelSpacing"] = "1.0\\1.0"
+
+    result = mc.curate_mri(rows.iloc[::-1])
+
+    assert result["curated"].phase.eq("NATIVE").all()
+    selected = result["selected_long"]
+    assert selected.selection_slot.tolist() == ["T1_NATIVE"]
+    assert selected.volume_id.tolist() == ["v1"]
 
 
 def test_repeated_protocol_matching_normalizes_case_and_separators():
     out = annotate(frame(["AX_T1_SE", "ax.t1/se"]))
-    assert out.phase.tolist() == ["NATIVE", "OTHER"]
+    assert out.phase.tolist() == ["NATIVE", "NATIVE"]
 
 
 def test_repeated_protocols_are_resolved_independently():
     rows = frame(["AX T1 SE", "AX T1 MPRAGE", "AX T1 SE", "AX T1 MPRAGE"])
-    assert annotate(rows).phase.tolist() == ["NATIVE", "NATIVE", "OTHER", "OTHER"]
+    assert annotate(rows).phase.tolist() == ["NATIVE", "NATIVE", "NATIVE", "NATIVE"]
+
+
+@pytest.mark.parametrize(
+    "times,order",
+    [
+        ([None, None], [None, None]),
+        ([None, None], [None, 2]),
+        (["120000", "120000"], [1, 1]),
+        (["120100", "120000"], [0, 1]),
+    ],
+)
+def test_repeated_protocol_native_assignments_ignore_chronology(times, order):
+    rows = frame(["AX T1 SE"] * 2)
+    expected = annotate(rows).phase
+    rows["time"] = times
+    rows["acquisition_order"] = order
+
+    out = annotate(rows.iloc[::-1]).loc[rows.volume_id]
+
+    assert out.phase.eq("NATIVE").any()
+    pd.testing.assert_series_equal(out.phase, expected)
 
 
 @pytest.mark.parametrize("order", [[None, None], [None, 2], [1, 1]])
-def test_repeated_protocol_requires_complete_distinct_acquisition_order(order):
+def test_repeated_protocol_does_not_require_complete_distinct_acquisition_order(order):
     rows = frame(["AX T1 SE"] * 2)
     rows["acquisition_order"] = order
-    assert annotate(rows).phase.tolist() == ["OTHER", "OTHER"]
+    assert annotate(rows).phase.tolist() == ["NATIVE", "NATIVE"]
 
 
-def test_repeated_protocol_can_use_series_local_order_but_not_input_order():
+def test_repeated_protocol_ignores_series_local_and_input_order():
     rows = frame(["AX T1 SE"] * 2).drop(columns="acquisition_order")
     rows["series_id"] = "same-series"
     rows["volume_order_in_series"] = [1, 2]
     rows["n_volumes_in_series"] = 2
-    assert annotate(rows).phase.tolist() == ["NATIVE", "OTHER"]
+    assert annotate(rows).phase.tolist() == ["NATIVE", "NATIVE"]
     rows["volume_order_source"] = "input_order"
-    assert annotate(rows).phase.tolist() == ["OTHER", "OTHER"]
+    assert annotate(rows).phase.tolist() == ["NATIVE", "NATIVE"]
 
 
-def test_repeated_protocol_uses_canonical_time_before_acquisition_order():
+def test_repeated_protocol_does_not_use_canonical_time_to_select_one_native():
     rows = frame(["AX T1 SE"] * 2)
     rows["time"] = ["120100", "120000"]
-    assert annotate(rows).phase.tolist() == ["OTHER", "NATIVE"]
+    assert annotate(rows).phase.tolist() == ["NATIVE", "NATIVE"]
 
 
 @pytest.mark.parametrize(
@@ -404,12 +439,36 @@ def test_repeated_protocol_keeps_acquisition_and_protocol_boundaries(column, val
 def test_repeated_protocol_matches_across_image_types(image_type):
     rows = frame(["AX T1 SE"] * 2)
     rows.loc[1, "ImageType"] = image_type
-    assert annotate(rows).phase.tolist() == ["NATIVE", "OTHER"]
+    assert annotate(rows).phase.tolist() == ["NATIVE", "NATIVE"]
 
 
-@pytest.mark.parametrize("protocol", ["AX T1 SE post", "AX T1 SE MPR", "AX T2", "AX DWI"])
+@pytest.mark.parametrize(
+    "protocol",
+    [
+        "AX T1 SE post",
+        "AX T1 SE MPR",
+        "AX T1 SE fat",
+        "AX T2",
+        "AX DWI",
+    ],
+)
 def test_repeated_protocol_does_not_create_native_for_ineligible_acquisitions(protocol):
     assert not annotate(frame([protocol] * 2)).phase.eq("NATIVE").any()
+
+
+@pytest.mark.parametrize("ordered", [False, True])
+def test_repeated_protocol_preserves_dedicated_mixed_pre_post_inference(ordered):
+    rows = frame(["AX T1 SE pre/post"] * 2)
+    if not ordered:
+        rows = rows.drop(columns="acquisition_order")
+
+    out = annotate(rows)
+
+    assert out.phase.tolist() == (
+        ["NATIVE", "OTHER"] if ordered else ["OTHER", "OTHER"]
+    )
+    if ordered:
+        assert out.loc["v0", "mri_perfusion_source"] == "group_pre_post_order"
 
 
 def test_repeated_protocol_preserves_dicom_conflicts_and_known_phases():
@@ -422,7 +481,7 @@ def test_repeated_protocol_preserves_dicom_conflicts_and_known_phases():
     assert annotate(rows).phase.tolist() == ["ARTERIAL", "NATIVE"]
 
 
-def test_separate_native_choice_does_not_use_acquisition_order_for_quality_ties():
+def test_repeated_native_candidates_remain_labelled_with_perfusion_context():
     rows = frame(["AX LAVA", "AX LAVA", "AX LAVA portal"])
     rows["time"] = ["120100", "120000", "115900"]
     rows["acquisition_order"] = [3, 2, 1]
@@ -431,7 +490,7 @@ def test_separate_native_choice_does_not_use_acquisition_order_for_quality_ties(
     rows["acquisition_order"] = [1, 2, 3]
     second = annotate(rows.iloc[::-1])
     assert first.loc["v0", "phase"] == second.loc["v0", "phase"] == "NATIVE"
-    assert first.loc["v1", "phase"] == second.loc["v1", "phase"] == "OTHER"
+    assert first.loc["v1", "phase"] == second.loc["v1", "phase"] == "NATIVE"
 
 
 def test_repeated_protocol_uses_configured_protocol_name_field():
@@ -441,7 +500,7 @@ def test_repeated_protocol_uses_configured_protocol_name_field():
         "strategies": [{"type": "rules"}],
         "text_columns": {"MR": ["ProtocolName"]},
     })
-    assert out.phase.tolist() == ["NATIVE", "OTHER"]
+    assert out.phase.tolist() == ["NATIVE", "NATIVE"]
     assert "ProtocolName=" in out.loc["v0", "mri_perfusion_reason"]
     assert annotate(rows).phase.tolist() == ["OTHER", "OTHER"]
 

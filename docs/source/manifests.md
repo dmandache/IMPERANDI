@@ -627,13 +627,12 @@ without a recognized vendor name, matching protocol text after removing phase
 terms keeps unrelated T1 protocols separate.
 
 A further generic native fallback checks repeated acquisition protocols in the
-same configured text field, normalizing case and separators. Two distinct,
-reliably ordered matching acquisitions are sufficient: the earliest unlabelled
-diagnostic T1 acquisition becomes native even without perfusion-phase wording.
-Later unlabelled acquisitions remain unresolved. This route retains the same
-study, family, plane, and Dixon component boundaries and preserves
-resolved phases and existing natives. Missing chronology, input-order ranks,
-postcontrast candidates, and excluded derived products cannot establish native.
+same configured text field, normalizing case and separators. With at least two
+matching rows, every eligible unlabelled diagnostic T1 match becomes native,
+even without perfusion-phase wording or chronology. Phase labelling retains all
+eligible matches; best-candidate selection happens later. This route retains
+study, family, plane, and Dixon component boundaries and preserves resolved
+phases. Postcontrast candidates and excluded derived products remain ineligible.
 Dynamic and mixed pre/post descriptions retain their dedicated inference routes.
 
 ART-PORT profiles use arterial at the first volume and portal at the last.

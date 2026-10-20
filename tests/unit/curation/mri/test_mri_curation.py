@@ -1185,7 +1185,7 @@ def test_derived_mri_description_selection_depends_on_product(
     assert len(selected_for_slot(result, f"T1_{phase}")) == (1 if marker == "MIP" else 0)
 
 
-def test_explicit_mpr_phases_fill_slots_when_originals_are_unresolved():
+def test_explicit_mpr_postcontrast_phases_fill_slots_when_repeats_are_native():
     phases = [
         ("sans iv", "NATIVE"),
         ("arteriel", "ARTERIAL"),
@@ -1194,32 +1194,41 @@ def test_explicit_mpr_phases_fill_slots_when_originals_are_unresolved():
     ]
     rows = []
     for acquisition, (description, phase) in enumerate(phases, start=1):
-        rows.extend([
-            row(
-                "t1 vibe fs multi gado",
-                series_id=f"original_{acquisition}",
-                volume_id=f"original_{acquisition}",
-                protocol="T1 Vibe FS Multi Gado",
-                time=None,
-                AcquisitionNumber=acquisition,
-            ),
-            row(
-                description,
-                series_id=f"mpr_{acquisition}",
-                volume_id=f"mpr_{acquisition}",
-                protocol="T1 Vibe FS Multi Gado",
-                image_type=["DERIVED", "SECONDARY", "MPR", "CSA MPR THICK", "M"],
-                time=None,
-                RepetitionTime=4.65,
-                EchoTime=2.15,
-                AcquisitionNumber=acquisition,
-            ),
-        ])
+        rows.extend(
+            [
+                row(
+                    "t1 vibe fs multi gado",
+                    series_id=f"original_{acquisition}",
+                    volume_id=f"original_{acquisition}",
+                    protocol="T1 Vibe FS Multi Gado",
+                    time=None,
+                    AcquisitionNumber=acquisition,
+                ),
+                row(
+                    description,
+                    series_id=f"mpr_{acquisition}",
+                    volume_id=f"mpr_{acquisition}",
+                    protocol="T1 Vibe FS Multi Gado",
+                    image_type=["DERIVED", "SECONDARY", "MPR", "CSA MPR THICK", "M"],
+                    time=None,
+                    RepetitionTime=4.65,
+                    EchoTime=2.15,
+                    AcquisitionNumber=acquisition,
+                ),
+            ]
+        )
     result = curate(rows)
 
-    assert set(result["selected_long"]["volume_id"]) == {
-        f"mpr_{acquisition}" for acquisition in range(1, 5)
+    selected = result["selected_long"].set_index("selection_slot")
+    assert selected.loc["T1_NATIVE", "volume_id"] in {
+        f"original_{acquisition}" for acquisition in range(1, 5)
     }
+    for acquisition, (_, phase) in enumerate(phases[1:], start=2):
+        assert selected.loc[f"T1_{phase}", "volume_id"] == f"mpr_{acquisition}"
+    originals = result["curated"].loc[
+        result["curated"].volume_id.str.startswith("original_")
+    ]
+    assert originals.phase.eq("NATIVE").all()
     assert set(result["selected_long"]["phase"]) == {phase for _, phase in phases}
 
 

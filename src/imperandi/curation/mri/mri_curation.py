@@ -1660,67 +1660,50 @@ def infer_missing_native_fallback(exam_rows: pd.DataFrame) -> tuple[int | None, 
 
 
 def _infer_same_protocol_natives(rows: pd.DataFrame):
-    """Resolve the first acquisition of a repeated protocol without phase wording."""
+    """Label eligible repeated-protocol matches native without selecting a winner."""
     protocols = {}
-    native_protocols = set()
     for idx, row in rows.iterrows():
         if bool(row.get("is_derived_low_value")) or row.mri_perfusion_source in {
-            "dicom_phase_conflict", "ordinal_phase_conflict", "dynamic_profile_guard",
+            "dicom_phase_conflict",
+            "ordinal_phase_conflict",
+            "dynamic_profile_guard",
         }:
             continue
-        if row.mri_perfusion_label == "NATIVE":
-            native_protocols.update(
-                (_generic_dynamic_key(row), column, name)
-                for column, name in _native_protocol_texts(row, strip_phase=True)
-            )
         for column, name in _native_protocol_texts(row):
             key = (_generic_dynamic_key(row), column, name)
             protocols.setdefault(key, []).append(idx)
 
     assignments = []
     resolved = set()
-    for (key, column, name), indices in protocols.items():
-        group = rows.loc[indices]
-        if (
-            (key, column, name) in native_protocols
-            or group.mri_perfusion_label.eq("NATIVE").any()
-            or resolved.intersection(indices)
-        ):
+    for (_, column, name), indices in protocols.items():
+        indices = list(dict.fromkeys(indices))
+        if len(indices) < 2:
             continue
-        chronology, _ = _generic_dynamic_chronology(group)
-        if (
-            chronology is None
-            or chronology.order.isna().any()
-            or chronology.order.nunique() < 2
-        ):
-            continue
-        first = group.loc[chronology.order.eq(chronology.order.min())]
-        if not first.apply(
-            lambda row: is_native_fallback_candidate(row)
-            and row.mri_perfusion_source == "none"
-            and not _phase_matches_pattern(row, rules.RX_PHASE_GENERIC_DYNAMIC),
-            axis=1,
-        ).all():
-            continue
-        if first.apply(
-            lambda row: bool(
+        for idx in indices:
+            row = rows.loc[idx]
+            if (
+                idx in resolved
+                or not is_native_fallback_candidate(row)
+                or row.mri_perfusion_source != "none"
+                or _phase_matches_pattern(row, rules.RX_PHASE_GENERIC_DYNAMIC)
+            ):
+                continue
+            if bool(
                 _first_phase_text_value(
                     row,
                     lambda text: shared_rules.has_pre_post_contrast_text(
-                        text, native=rules.RX_PHASE_NATIVE,
+                        text,
+                        native=rules.RX_PHASE_NATIVE,
                         post=rules.RX_PHASE_POST_CONTRAST,
                     ),
                 )
-            ),
-            axis=1,
-        ).any():
-            continue
-        for idx in first.index:
+            ):
+                continue
             assignments.append(
                 (
                     idx,
-                    "inferred NATIVE from first acquisition of matching protocol: "
-                    f"{column}={name!r}; order={chronology.loc[idx, 'order_source']}",
+                    "inferred NATIVE from repeated matching protocol: "
+                    f"{column}={name!r}",
                 )
             )
             resolved.add(idx)
