@@ -174,7 +174,7 @@ def test_repeated_explicit_phase_does_not_advance_unresolved_interval():
     assert out.loc["portal", "phase"] == "PORTAL_VENOUS"
 
 
-def test_succeeding_anchor_in_different_image_type_does_not_bound_phases():
+def test_succeeding_anchor_in_different_image_type_bounds_phases():
     rows = anchored_rows()
     rows.append(
         volume(
@@ -186,9 +186,15 @@ def test_succeeding_anchor_in_different_image_type_does_not_bound_phases():
 
     assert out.loc[["d1", "d2", "d3"], "phase"].tolist() == [
         "ARTERIAL",
-        "PORTAL_VENOUS",
-        "DELAYED",
+        "ARTERIAL",
+        "ARTERIAL",
     ]
+    assert out.loc["next", "phase"] == "PORTAL_VENOUS"
+    assert (
+        out.loc[["d1", "d2", "d3"], "mri_perfusion_reason"]
+        .str.contains("reserved succeeding explicit PORTAL_VENOUS phase")
+        .all()
+    )
 
 
 def test_explicit_phase_at_same_acquisition_position_can_still_be_shared():
@@ -283,7 +289,6 @@ def test_full_and_post_only_dynamic_templates_without_native_anchor(
         {"SeriesDescription": "AX T1 VIBE pre"},
         {"acquisition_plane": "CORONAL"},
         {"ImageType": "ORIGINAL PRIMARY F"},
-        {"ImageType": "DERIVED PRIMARY"},
     ],
 )
 def test_unrelated_native_cannot_anchor_post_only_group(anchor_change):

@@ -577,7 +577,7 @@ native context, conflicting numbered native assignments remain unresolved.
 When an otherwise unlabelled T1 acquisition matches a numbered acquisition's
 protocol after removing `PhN`, the unnumbered acquisition is native. Matching
 uses the same configured text field, normalizes case and separators, and retains
-study, sequence, plane, image type, and Dixon component boundaries. This naming
+study, sequence, plane, and Dixon component boundaries. This naming
 evidence does not require three acquisitions or comparable chronology; assigning
 specific postcontrast phases still follows the timing and order rules. A native
 created solely by the numbered group's generic order fallback does not turn that
@@ -608,12 +608,12 @@ the reserved phase. Order fallback can repeat a preceding phase, or stay unresol
 when no compatible postcontrast phase remains. Without a succeeding explicit
 phase, the existing timing and order progression applies. A separate unlabelled
 native can be inferred from compatible perfusion context. Groups match on
-`patient_key`, `date`, `study_id`, `StudyInstanceUID`, `ImageType`, sequence family,
-plane, and Dixon component. `ImageType` uses its full ordered token sequence,
-normalized for case and representation (lists, serialized lists, or separated
-strings). Missing image types group together separately from populated values.
-Different image types have independent phase progressions and `time_delta`
-references. Series IDs and time gaps do not split these groups.
+`patient_key`, `date`, `study_id`, `StudyInstanceUID`, sequence family, plane, and
+Dixon component. `ImageType` does not split these groups: compatible acquisitions
+share phase context, phase progression, and `time_delta` references across
+different or missing image types. Structured `ImageType` tokens still identify
+Dixon components and excluded products. Series IDs and time gaps do not split
+these groups.
 
 The separate-native fallback accepts all diagnostic T1 sequences, including
 conventional T1 and protocols classified from TR/TE metadata. GRE or Dixon
@@ -631,7 +631,7 @@ same configured text field, normalizing case and separators. Two distinct,
 reliably ordered matching acquisitions are sufficient: the earliest unlabelled
 diagnostic T1 acquisition becomes native even without perfusion-phase wording.
 Later unlabelled acquisitions remain unresolved. This route retains the same
-study, image type, family, plane, and Dixon component boundaries and preserves
+study, family, plane, and Dixon component boundaries and preserves
 resolved phases and existing natives. Missing chronology, input-order ranks,
 postcontrast candidates, and excluded derived products cannot establish native.
 Dynamic and mixed pre/post descriptions retain their dedicated inference routes.

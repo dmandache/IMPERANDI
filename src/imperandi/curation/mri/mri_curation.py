@@ -1074,6 +1074,8 @@ def _dynamic_series_id(row: pd.Series) -> str:
 
 
 def _generic_dynamic_key(row: pd.Series) -> tuple:
+    """Group compatible acquisitions independently of ImageType reconstruction tags."""
+
     sequence_patterns = (
         rules.RX_LOCALIZER,
         rules.RX_KEY_IMAGES,
@@ -1104,7 +1106,6 @@ def _generic_dynamic_key(row: pd.Series) -> tuple:
             common.stable_text(row.get(col))
             for col in ("patient_key", "date", "study_id", "StudyInstanceUID")
         ),
-        tuple(parse_image_type_tokens(row.get("ImageType"))),
         family,
         plane,
         norm_label(row.get("dixon_component"), "NOT_DIXON"),

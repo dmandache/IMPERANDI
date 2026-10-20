@@ -198,6 +198,53 @@ def test_several_named_perfusion_phases_support_one_native_fallback():
     assert out.phase.eq("NATIVE").sum() == 1
 
 
+def test_lava_flex_water_native_matches_perfusion_across_image_types():
+    rows = frame(
+        [
+            "water: ax lava-flex apnee",
+            "ax lava portal 1.10min",
+            "ax lava tardif 3min",
+            "fat: ax lava-flex apnee",
+            "inphase: ax lava-flex apnee",
+            "outphase: ax lava-flex apnee",
+            "ph1/ax lava multi arteriel",
+            "ph2/ax lava multi arteriel",
+            "ph3/ax lava multi arteriel",
+        ]
+    )
+    rows["ImageType"] = [
+        ["DERIVED", "PRIMARY", "DIXON", "WATER"],
+        ["ORIGINAL", "PRIMARY", "OTHER"],
+        ["ORIGINAL", "PRIMARY", "OTHER"],
+        ["DERIVED", "PRIMARY", "DIXON", "FAT"],
+        ["ORIGINAL", "PRIMARY", "OTHER", "NONE"],
+        ["ORIGINAL", "PRIMARY", "OTHER", "NONE"],
+        ["ORIGINAL", "PRIMARY", "OTHER"],
+        ["ORIGINAL", "PRIMARY", "OTHER"],
+        ["ORIGINAL", "PRIMARY", "OTHER"],
+    ]
+    rows["acquisition_order"] = [5, 6, 7, 12, 13, 14, 16, 17, 18]
+
+    result = mc.curate_mri(rows.sample(frac=1, random_state=8))
+    out = result["curated"].set_index("volume_id").loc[rows.volume_id]
+
+    assert out.phase.tolist() == [
+        "NATIVE",
+        "PORTAL_VENOUS",
+        "DELAYED",
+        "OTHER",
+        "OTHER",
+        "OTHER",
+        "ARTERIAL",
+        "ARTERIAL",
+        "ARTERIAL",
+    ]
+    assert out.loc["v0", "mri_perfusion_source"] == "exam_context"
+    assert out.loc["v0", "mri_perfusion_confidence"] == "fallback"
+    selected = result["selected_long"].set_index("selection_slot")
+    assert selected.loc["T1_NATIVE", "volume_id"] == "v0"
+
+
 @pytest.mark.parametrize("source", ["dicom", "ontology"])
 @pytest.mark.parametrize("perfusion_description", ["AX LAVA", "Ph1/AX LAVA"])
 def test_resolved_metadata_phase_supports_native_without_dynamic_text(
@@ -343,7 +390,6 @@ def test_repeated_protocol_uses_canonical_time_before_acquisition_order():
         ("study_id", "other-study"),
         ("StudyInstanceUID", "other-uid"),
         ("date", "2020-01-02"),
-        ("ImageType", "ORIGINAL PRIMARY OTHER"),
         ("acquisition_plane", "CORONAL"),
         ("SeriesDescription", "AX T1 MPRAGE"),
     ],
@@ -352,6 +398,13 @@ def test_repeated_protocol_keeps_acquisition_and_protocol_boundaries(column, val
     rows = frame(["AX T1 SE"] * 2)
     rows.loc[1, column] = value
     assert annotate(rows).phase.tolist() == ["OTHER", "OTHER"]
+
+
+@pytest.mark.parametrize("image_type", ["DERIVED PRIMARY", None])
+def test_repeated_protocol_matches_across_image_types(image_type):
+    rows = frame(["AX T1 SE"] * 2)
+    rows.loc[1, "ImageType"] = image_type
+    assert annotate(rows).phase.tolist() == ["NATIVE", "OTHER"]
 
 
 @pytest.mark.parametrize("protocol", ["AX T1 SE post", "AX T1 SE MPR", "AX T2", "AX DWI"])
@@ -439,7 +492,6 @@ def test_matching_unnumbered_native_anchors_numbered_postcontrast_progression():
     "column,value",
     [
         ("study_id", "other-exam"),
-        ("ImageType", "DERIVED PRIMARY"),
         ("acquisition_plane", "CORONAL"),
         ("date", "2020-01-02"),
     ],
@@ -448,6 +500,13 @@ def test_matching_numbered_protocol_cannot_cross_acquisition_boundaries(column, 
     rows = frame(["AX LAVA dynamic", "Ph2/AX LAVA dynamic"])
     rows.loc[1, column] = value
     assert not annotate(rows).phase.eq("NATIVE").any()
+
+
+@pytest.mark.parametrize("image_type", ["DERIVED PRIMARY", None])
+def test_matching_numbered_protocol_matches_across_image_types(image_type):
+    rows = frame(["AX LAVA dynamic", "Ph2/AX LAVA dynamic"])
+    rows.loc[1, "ImageType"] = image_type
+    assert annotate(rows).phase.tolist() == ["NATIVE", "OTHER"]
 
 
 def test_numbered_protocol_match_requires_same_description_not_just_sequence_family():

@@ -74,23 +74,18 @@ def test_four_dynamic_acquisitions_restore_full_phase_sequence(
         ("AX T1 LAVA Mask+Multiart", ["NATIVE", "ARTERIAL", "ARTERIAL", "ARTERIAL"]),
     ],
 )
-def test_different_image_types_have_independent_dynamic_progressions(
-    description, expected
-):
-    first = acquisitions(description, same_series=False, clocks=False)
-    first["ImageType"] = "ORIGINAL PRIMARY M"
-    first["acquisition_order"] *= 2
-    second = first.copy()
-    second["ImageType"] = "ORIGINAL PRIMARY P"
-    second["volume_id"] = "second_" + second.volume_id
-    second["series_id"] = "second_" + second.series_id
-    second["acquisition_order"] += 1
-    rows = pd.concat([first, second], ignore_index=True)
+def test_different_image_types_share_dynamic_progression(description, expected):
+    rows = acquisitions(description, same_series=False, clocks=False)
+    rows["ImageType"] = [
+        "ORIGINAL PRIMARY M",
+        "DERIVED PRIMARY M",
+        None,
+        "ORIGINAL PRIMARY P",
+    ]
 
     out = mc.annotate_mri(rows.sample(frac=1, random_state=11)).set_index("volume_id")
 
-    assert out.loc[first.volume_id, "phase"].tolist() == expected
-    assert out.loc[second.volume_id, "phase"].tolist() == expected
+    assert out.loc[rows.volume_id, "phase"].tolist() == expected
 
 
 @pytest.mark.parametrize(
