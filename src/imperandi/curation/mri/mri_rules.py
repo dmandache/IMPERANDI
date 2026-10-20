@@ -175,7 +175,7 @@ T1_PHASE_PRIORITY = {**shared.PHASE_PRIORITY, "HEPATOBILIARY": 90}
 # Explicit phase labels should beat phases inferred from a dynamic container.
 T1_PHASE_SOURCE_PRIORITY = {
     "time_delta": 15,
-    "explicit_duration": 10,
+    "explicit_duration": 5,
     "explicit_text": 40,
     "dicom_phase": 40,
     "acquisition_phase": 15,
