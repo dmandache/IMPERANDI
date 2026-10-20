@@ -194,7 +194,9 @@ starting from scratch unless you pass `--no_resume`.
 MRI resolves named phases and combined dynamic profiles before numeric durations.
 For example, `axial t1 caipi fs art port 90s` uses the ART-PORT profile rather than
 assigning every volume portal from `90s`. Durations supply phase evidence only
-when no phase/profile text matches.
+when no phase/profile text matches, except that an unambiguous hepatobiliary
+duration overrides generic delayed wording: `tardif 2h` is HEPATOBILIARY,
+while `tardif 5min` remains DELAYED.
 
 ART-PORT uses ARTERIAL for the first acquisition and
 PORTAL_VENOUS for the last. ART/PORT/LATE uses ARTERIAL for the first and DELAYED

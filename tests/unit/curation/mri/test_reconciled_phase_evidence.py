@@ -258,14 +258,19 @@ def test_grasp_and_conventional_vibe_do_not_form_one_dynamic_run():
     "text,expected",
     [
         ("AX T1 5min tardif", "DELAYED"),
-        ("AX T1 tardif 2h", "DELAYED"),
-        ("AX T1 2h tardif", "DELAYED"),
+        ("AX T1 tardif 2h", "HEPATOBILIARY"),
+        ("AX T1 2h tardif", "HEPATOBILIARY"),
+        ("AX T1 delayed 120min", "HEPATOBILIARY"),
+        ("AX T1 late 20min", "HEPATOBILIARY"),
+        ("AX T1 tardif 15min", "DELAYED"),
+        ("AX T1 tardif 19min59s", "DELAYED"),
+        ("AX T1 tardif 2h59min59s", "HEPATOBILIARY"),
         ("AX T1 3h tardif", "DELAYED"),
         ("AX T1 2h", "HEPATOBILIARY"),
         ("AX T1 3h", "OTHER"),
     ],
 )
-def test_named_late_precedes_duration_and_duration_only_keeps_hepatobiliary_window(
+def test_hepatobiliary_timing_overrides_generic_late_within_configured_windows(
     text, expected
 ):
     assert annotate(volumes(1, text)).loc["v0", "phase"] == expected

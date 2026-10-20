@@ -627,7 +627,7 @@ def detect_ordinal_phase_index(row: pd.Series) -> int | None:
 
 
 def detect_explicit_phase_from_text(row: pd.Series) -> tuple[str | None, str, str, str]:
-    """Resolve named phases first, using duration only when no phase word matches."""
+    """Prefer named phases, except hepatobiliary timing overrides generic delayed text."""
 
     def match_text_then_duration(text):
         for rule in rules.PHASE_RULES:
@@ -636,6 +636,15 @@ def detect_explicit_phase_from_text(row: pd.Series) -> tuple[str | None, str, st
             ):
                 continue
             if re.search(rule.pattern, text):
+                if rule.label == "DELAYED":
+                    timed_match = match_phase(
+                        text,
+                        rules.PHASE_RULES,
+                        post=rules.RX_PHASE_POST_CONTRAST,
+                        prefer_delayed_time=True,
+                    )
+                    if timed_match is not None and timed_match[0] == "HEPATOBILIARY":
+                        return timed_match
                 return rule.label, rule.description
         return match_phase(
             text,

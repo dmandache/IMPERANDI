@@ -558,8 +558,10 @@ Conflicting durations without an explicit phase label remain unresolved.
 For CT, an adjacent duration on a named delayed phase must also fit the delayed
 window. MRI resolves named phases and combined profiles before durations:
 `tardif 90s` is delayed, and `ART-PORT 90s` follows the ART-PORT profile. Durations
-are a fallback when no phase/profile text matches; duration-only hepatobiliary
-windows remain unchanged.
+are a fallback when no phase/profile text matches, with one exception:
+an unambiguous duration in a hepatobiliary window overrides generic
+`tardif`/`delayed`/`late` wording (`tardif 2h` is hepatobiliary).
+The existing hepatobiliary windows remain unchanged.
 These windows are curation heuristics, not universal acquisition standards.
 
 MRI phase delays and protocol mappings are built into the rule engine.

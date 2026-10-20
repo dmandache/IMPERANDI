@@ -219,8 +219,8 @@ def test_art_port_text_precedes_90s_duration(same_series):
         ("mDIXON tardif", "DELAYED"),
         ("mDIXON 10 min", "DELAYED"),
         ("mDIXON 15 min", "DELAYED"),
-        ("mDIXON tardif 2h", "DELAYED"),
-        ("mDIXON tardif+2h", "DELAYED"),
+        ("mDIXON tardif 2h", "HEPATOBILIARY"),
+        ("mDIXON tardif+2h", "HEPATOBILIARY"),
         ("mDIXON primovist 20 min", "HEPATOBILIARY"),
     ],
 )
@@ -260,7 +260,6 @@ def test_low_level_phase_regexes_do_not_classify_ordinal_phases():
                 "15 mn",
                 "tardif",
                 "tardif 2 min",
-                "tardif 20 min",
             ],
             ["2 min", "16 min"],
         ),
@@ -413,10 +412,11 @@ def test_single_numbered_dynamic_requires_phase_context(number):
     assert out.loc[0, "mri_perfusion_source"] == mc.GENERIC_DYNAMIC_CONTEXT_PENDING
 
 
-def test_delayed_tardif_text_takes_priority_over_hepatobiliary_duration():
+def test_hepatobiliary_duration_takes_priority_over_generic_tardif_text():
     out = mc.annotate_mri(pd.DataFrame([row("mDIXON tardif 2h")]))
-    assert out.loc[0, "mri_perfusion_label"] == "DELAYED"
-    assert "delayed/tardif" in out.loc[0, "mri_perfusion_reason"].lower()
+    assert out.loc[0, "mri_perfusion_label"] == "HEPATOBILIARY"
+    assert "hepatobiliary" in out.loc[0, "mri_perfusion_reason"].lower()
+    assert "7200.0" in out.loc[0, "mri_perfusion_reason"]
 
 
 def test_explicit_phase_matching_uses_first_matching_text_column(monkeypatch):
