@@ -191,16 +191,16 @@ starting from scratch unless you pass `--no_resume`.
 
 ### MRI combined dynamic labels
 
-Explicit duration metadata or acquisition time relative to `ContrastBolusStartTime`
-is checked before order-based assignment. Timing outside supported windows or
-conflicting delays remains `OTHER`; endpoint fallback cannot override it. A shared
-multivolume container clock is not treated as a per-frame injection delay.
+MRI resolves named phases and combined dynamic profiles before numeric durations.
+For example, `axial t1 caipi fs art port 90s` uses the ART-PORT profile rather than
+assigning every volume portal from `90s`. Durations supply phase evidence only
+when no phase/profile text matches.
 
-Without exact timing, ART-PORT uses ARTERIAL for the first acquisition and
+ART-PORT uses ARTERIAL for the first acquisition and
 PORTAL_VENOUS for the last. ART/PORT/LATE uses ARTERIAL for the first and DELAYED
 for the last; its middle acquisition is PORTAL_VENOUS only for a three-acquisition
-profile. Other intermediate acquisitions require timing evidence. An isolated
-combined label remains unresolved.
+profile. Other intermediate acquisitions remain unresolved from profile order.
+An isolated combined label remains unresolved.
 
 Across series, endpoint assignment requires a complete, distinct acquisition-order
 or clock field. Studies, sequence families, planes and Dixon components remain

@@ -627,15 +627,23 @@ def detect_ordinal_phase_index(row: pd.Series) -> int | None:
 
 
 def detect_explicit_phase_from_text(row: pd.Series) -> tuple[str | None, str, str, str]:
-    match = _first_phase_text_value(
-        row,
-        lambda text: match_phase(
+    """Resolve named phases first, using duration only when no phase word matches."""
+
+    def match_text_then_duration(text):
+        for rule in rules.PHASE_RULES:
+            if rule.label == "NATIVE" and shared_rules.has_pre_post_contrast_text(
+                text, rule.pattern, rules.RX_PHASE_POST_CONTRAST
+            ):
+                continue
+            if re.search(rule.pattern, text):
+                return rule.label, rule.description
+        return match_phase(
             text,
             rules.PHASE_RULES,
             post=rules.RX_PHASE_POST_CONTRAST,
-            prefer_delayed_time=True,
-        ),
-    )
+        )
+
+    match = _first_phase_text_value(row, match_text_then_duration)
     if match is not None:
         label, description = match
         return (
@@ -735,10 +743,11 @@ def detect_t1_perfusion_phase(row: pd.Series) -> tuple[str, str, str, str]:
     Volume-aware T1 phase classifier.
 
     Priority:
-      1. Direct DICOM phase labels and pure named phase evidence.
-      2. Established ART/PORT/LATE, ART-PORT, and Mask+Multiart inference.
-      3. Defer generic dynamics and PhN prefixes to compatible chronology.
-      4. OTHER.
+      1. Direct DICOM phase labels.
+      2. Named dynamic profiles and pure named phase evidence.
+      3. Explicit duration when no phase/profile text matches.
+      4. Defer generic dynamics and PhN prefixes to compatible chronology.
+      5. OTHER.
     """
     seq = norm_label(row.get("mri_sequence"))
 
@@ -777,39 +786,6 @@ def detect_t1_perfusion_phase(row: pd.Series) -> tuple[str, str, str, str]:
     if len(supported) == 1:
         label = next(iter(supported))
         return label, "explicit ContrastBolusAgentPhase", "explicit", "dicom_phase"
-    special_profile = (
-        text_matches_art_port(row)
-        or text_matches_art_port_late(row)
-        or text_matches_mask_multiart(row)
-    )
-    if not special_profile:
-        explicit = detect_explicit_phase_from_text(row)
-        if explicit[0] is not None:
-            return explicit
-    if special_profile:
-        text_column, text = _phase_text_column(row) or ("", "")
-        durations = shared_rules._durations(text)
-        if durations:
-            labels = []
-            for _, seconds in durations:
-                matches = {
-                    rule.label
-                    for rule in rules.PHASE_RULES
-                    if rule.accepts_time(seconds)
-                }
-                labels.append(next(iter(matches)) if len(matches) == 1 else "OTHER")
-            label = labels[0] if len(set(labels)) == 1 else "OTHER"
-            return (
-                label,
-                f"explicit duration in {text_column}={text!r}"
-                + (
-                    "; unsupported duration; order fallback blocked"
-                    if label == "OTHER"
-                    else ""
-                ),
-                "explicit" if label != "OTHER" else "unknown",
-                "explicit_duration",
-            )
 
     # A single derived product is not another acquisition in an ART/PORT
     # container. Only a real multivolume order can disambiguate its phase here;
@@ -880,6 +856,10 @@ def detect_t1_perfusion_phase(row: pd.Series) -> tuple[str, str, str, str]:
             "unknown",
             MASK_MULTIART_CONTEXT_PENDING,
         )
+
+    explicit = detect_explicit_phase_from_text(row)
+    if explicit[0] is not None:
+        return explicit
 
     ordinal_index = detect_ordinal_phase_index(row)
     if ordinal_index is not None:

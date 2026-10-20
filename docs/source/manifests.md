@@ -555,9 +555,11 @@ complete durations: `1 min 31 sec` is 91 seconds and does not match the arterial
 window through its seconds component. Colon notation denotes minutes and
 seconds (`1:30 min`); decimal notation denotes fractional units (`1.5 min`).
 Conflicting durations without an explicit phase label remain unresolved.
-An adjacent duration on a named delayed phase must also fit the delayed window.
-For MRI, an explicit duration overrides generic `late`/`tardif` wording regardless
-of word order; the existing hepatobiliary timing window remains unchanged.
+For CT, an adjacent duration on a named delayed phase must also fit the delayed
+window. MRI resolves named phases and combined profiles before durations:
+`tardif 90s` is delayed, and `ART-PORT 90s` follows the ART-PORT profile. Durations
+are a fallback when no phase/profile text matches; duration-only hepatobiliary
+windows remain unchanged.
 These windows are curation heuristics, not universal acquisition standards.
 
 MRI phase delays and protocol mappings are built into the rule engine.
@@ -638,11 +640,11 @@ Dynamic and mixed pre/post descriptions retain their dedicated inference routes.
 ART-PORT profiles use arterial at the first volume and portal at the last.
 ART/PORT/LATE profiles use arterial first and delayed last; the middle of a
 three-volume profile is portal. Other intermediate positions remain unresolved
-unless explicit text supplies a phase. Multiart assigns arterial throughout;
+from profile order. Multiart assigns arterial throughout;
 Mask+Multiart assigns native first and arterial thereafter. These mappings use
-volume rank/count or exam acquisition order. Textual phase names and durations
-remain explicit rule evidence. Raw injection times, frame windows, clock domains,
-and estimated injection intervals are not used.
+volume rank/count or exam acquisition order. Textual phase names and profiles
+take precedence over duration fallback. Raw injection times, frame windows,
+clock domains, and estimated injection intervals are not used.
 
 Assignments with explicit context record `dynamic_explicit_anchor`; other ordered
 dynamics use `volume_order` or `acquisition_order_dixon_component`. Unresolved
