@@ -1088,7 +1088,7 @@ def _generic_dynamic_key(row: pd.Series) -> tuple:
         ),
         family,
         plane,
-        norm_label(row.get("dixon_component"), "NOT_DIXON"),
+        #norm_label(row.get("dixon_component"), "NOT_DIXON"),
     )
 
 
