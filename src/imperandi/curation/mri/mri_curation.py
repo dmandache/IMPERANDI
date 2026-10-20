@@ -1063,7 +1063,7 @@ def _dynamic_series_id(row: pd.Series) -> str:
 
 
 def _generic_dynamic_key(row: pd.Series) -> tuple:
-    """Group compatible acquisitions independently of ImageType reconstruction tags."""
+    """Group compatible protocols separately by MIP/MPR and subtraction flags."""
 
     sequence_patterns = (
         rules.RX_LOCALIZER,
@@ -1097,25 +1097,22 @@ def _generic_dynamic_key(row: pd.Series) -> tuple:
         ),
         family,
         plane,
-        #norm_label(row.get("dixon_component"), "NOT_DIXON"),
+        (
+            bool(row.get("is_mip_mpr", False))
+            if not common.is_missing(row.get("is_mip_mpr"))
+            else False
+        ),
+        (
+            bool(row.get("is_subtraction", False))
+            if not common.is_missing(row.get("is_subtraction"))
+            else False
+        ),
     )
 
 
-def _matches_dynamic_group(row: pd.Series, key: tuple, series_ids: set[str]) -> bool:
+def _matches_dynamic_group(row: pd.Series, key: tuple) -> bool:
     """Keep native/context matching consistent with the target dynamic protocol."""
-    row_key = _generic_dynamic_key(row)
-    if row_key == key:
-        return True
-    if row_key[:-1] != key[:-1]:
-        return False
-    # An explicitly identified water reconstruction can support an unidentified
-    # Dixon reconstruction of the same protocol, never a known fat component.
-    if row_key[-1] == "WATER" and key[-1] in {"DIXON_UNKNOWN", "NOT_DIXON"}:
-        return True
-    return (
-        row_key[-1] in {"NOT_DIXON", "DIXON_UNKNOWN"}
-        and _dynamic_series_id(row) in series_ids
-    )
+    return _generic_dynamic_key(row) == key
 
 
 def _series_temporal_order(rows: pd.DataFrame):
@@ -1323,7 +1320,7 @@ def infer_generic_dynamic_phases_from_exam_context(
         series_ids = set(candidates.apply(_dynamic_series_id, axis=1)) - {""}
         matched_anchors = anchors.loc[
             anchors.apply(
-                lambda row: _matches_dynamic_group(row, key, series_ids), axis=1
+                lambda row: _matches_dynamic_group(row, key), axis=1
             )
         ]
         context = pd.concat([candidates, matched_anchors])
@@ -1409,7 +1406,8 @@ def infer_generic_dynamic_phases_from_exam_context(
                         else f"inferred {label}; "
                     )
                     + reason
-                    + f"; ordered by {order_source}, family={key[-3]}, plane={key[-2]}, component={key[-1]}"
+                    + f"; ordered by {order_source}, family={key[-4]}, plane={key[-3]}, "
+                    f"is_mip_mpr={key[-2]}, is_subtraction={key[-1]}"
                     + (f"; explicit anchors={anchor_ids}" if anchor_ids else "")
                     + (
                         f"; native context={native_context_ids}"
@@ -1693,7 +1691,7 @@ def _infer_same_protocol_natives(rows: pd.DataFrame):
                     idx,
                     "inferred NATIVE from repeated matching protocol: "
                     f"{column}={name!r}; {len(indices)} matching rows with the "
-                    "same exam, sequence family, plane and Dixon component; "
+                    "same exam, sequence family, plane, MIP/MPR and subtraction flags; "
                     "eligible unresolved T1 candidate "
                     "without explicit precontrast evidence; acquisition order "
                     "not used",
@@ -1785,9 +1783,8 @@ def _apply_numbered_postcontrast_context(rows: pd.DataFrame) -> pd.DataFrame:
         if ordinal is None or row.mri_sequence != "T1":
             continue
         key = _generic_dynamic_key(row)
-        series_ids = {_dynamic_series_id(row)} - {""}
         if not natives.apply(
-            lambda native: _matches_dynamic_group(native, key, series_ids), axis=1
+            lambda native: _matches_dynamic_group(native, key), axis=1
         ).any():
             continue
         rows.loc[idx, "_numbered_postcontrast"] = True
@@ -1830,14 +1827,13 @@ def _infer_missing_native_fallbacks(
     for key, rows in phase_context.groupby(
         phase_context.apply(_generic_dynamic_key, axis=1), sort=False
     ):
-        series_ids = set(rows.apply(_dynamic_series_id, axis=1)) - {""}
         context = eligible.loc[
             eligible.apply(
-                lambda row: _matches_dynamic_group(row, key, series_ids), axis=1
+                lambda row: _matches_dynamic_group(row, key), axis=1
             )
         ]
         contexts = [context]
-        if key[-3] == "UNSPECIFIED_T1":
+        if key[-4] == "UNSPECIFIED_T1":
             # An unrecognized T1 family alone does not identify a common protocol.
             names = dict.fromkeys(
                 name

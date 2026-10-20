@@ -581,7 +581,7 @@ native context, conflicting numbered native assignments remain unresolved.
 When an otherwise unlabelled T1 acquisition matches a numbered acquisition's
 protocol after removing `PhN`, the unnumbered acquisition is native. Matching
 uses the same configured text field, normalizes case and separators, and retains
-study, sequence, plane, and Dixon component boundaries. This naming
+study, sequence, plane, MIP/MPR, and subtraction boundaries. This naming
 evidence does not require three acquisitions or comparable chronology; assigning
 specific postcontrast phases still follows the timing and order rules. A native
 created solely by the numbered group's generic order fallback does not turn that
@@ -612,8 +612,9 @@ the reserved phase. Order fallback can repeat a preceding phase, or stay unresol
 when no compatible postcontrast phase remains. Without a succeeding explicit
 phase, the existing timing and order progression applies. A separate unlabelled
 native can be inferred from compatible perfusion context. Groups match on
-`patient_key`, `date`, `study_id`, `StudyInstanceUID`, sequence family, plane, and
-Dixon component. `ImageType` does not split these groups: compatible acquisitions
+`patient_key`, `date`, `study_id`, `StudyInstanceUID`, sequence family, plane,
+`is_mip_mpr`, and `is_subtraction`. Dixon component does not split these groups.
+Raw `ImageType` does not split these groups: compatible acquisitions
 share phase context, phase progression, and `time_delta` references across
 different or missing image types. Structured `ImageType` tokens still identify
 Dixon components and excluded products. Series IDs and time gaps do not split
@@ -635,7 +636,7 @@ same configured text field, normalizing case and separators. With at least two
 matching rows, every eligible unlabelled diagnostic T1 match becomes native,
 even without perfusion-phase wording or chronology. Phase labelling retains all
 eligible matches; best-candidate selection happens later. This route retains
-study, family, plane, and Dixon component boundaries and preserves resolved
+study, family, plane, MIP/MPR, and subtraction boundaries and preserves resolved
 phases. Postcontrast candidates and excluded derived products remain ineligible.
 Dynamic and mixed pre/post descriptions retain their dedicated inference routes.
 
