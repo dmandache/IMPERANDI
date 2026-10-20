@@ -1581,7 +1581,7 @@ def _sort_key_for_native_fallback(row: pd.Series) -> tuple:
 
 
 def infer_missing_native_fallback(exam_rows: pd.DataFrame) -> tuple[int | None, str]:
-    """Find a separate native before dynamics in one compatible protocol group."""
+    """Find a separate native before compatible dynamics or resolved perfusion phases."""
     if exam_rows.mri_perfusion_label.eq("NATIVE").any():
         return None, "native/precontrast already resolved in compatible protocol"
     candidates = exam_rows.loc[
@@ -1599,14 +1599,15 @@ def infer_missing_native_fallback(exam_rows: pd.DataFrame) -> tuple[int | None, 
             axis=1,
         )
     ]
-    if dynamics.empty:
-        return None, "no dynamic context"
     known_phases = exam_rows.loc[
         exam_rows.mri_perfusion_label.isin({"ARTERIAL", "PORTAL_VENOUS", "DELAYED"})
     ]
     context = pd.concat([dynamics, known_phases]).loc[
         lambda frame: ~frame.index.duplicated()
     ]
+    if context.empty:
+        return None, "no dynamic or resolved perfusion phase context"
+    minimum_acquisitions = 2 if not known_phases.empty else 3
     ranked = sorted(
         candidates.index,
         key=lambda idx: _sort_key_for_native_fallback(candidates.loc[idx]),
@@ -1618,7 +1619,7 @@ def infer_missing_native_fallback(exam_rows: pd.DataFrame) -> tuple[int | None, 
         if (
             chronology is None
             or chronology.order.isna().any()
-            or chronology.order.nunique() < 3
+            or chronology.order.nunique() < minimum_acquisitions
         ):
             continue
         if chronology.loc[idx, "order"] >= chronology.loc[context.index, "order"].min():
@@ -1626,7 +1627,7 @@ def infer_missing_native_fallback(exam_rows: pd.DataFrame) -> tuple[int | None, 
         desc = candidates.loc[idx].get("SeriesDescription")
         return idx, (
             "selected fallback native/precontrast from compatible protocol context: "
-            f"a separate candidate precedes the ordered dynamic acquisitions: {desc}"
+            f"a separate candidate precedes compatible perfusion acquisitions: {desc}"
         )
     return None, "no supported native candidate before compatible dynamics"
 
@@ -1644,17 +1645,18 @@ def _infer_missing_native_fallbacks(
             eligible = eligible.loc[~eligible[column].fillna(False)]
     if eligible.empty:
         return []
-    dynamics = eligible.loc[
-        eligible.apply(
+    phase_context = eligible.loc[
+        eligible.mri_perfusion_label.isin({"ARTERIAL", "PORTAL_VENOUS", "DELAYED"})
+        | eligible.apply(
             lambda row: _phase_matches_pattern(row, rules.RX_PHASE_GENERIC_DYNAMIC),
             axis=1,
         )
     ]
     assignments = []
-    if dynamics.empty:
+    if phase_context.empty:
         return assignments
-    for key, rows in dynamics.groupby(
-        dynamics.apply(_generic_dynamic_key, axis=1), sort=False
+    for key, rows in phase_context.groupby(
+        phase_context.apply(_generic_dynamic_key, axis=1), sort=False
     ):
         series_ids = set(rows.apply(_dynamic_series_id, axis=1)) - {""}
         context = eligible.loc[
@@ -1799,6 +1801,16 @@ def add_mri_perfusion_columns(
             ]
         return context
 
+    def apply_native_fallbacks(indices):
+        for fallback_idx, reason in _infer_missing_native_fallbacks(
+            context_rows(indices)
+        ):
+            logger.info("Fallback native selected for MRI protocol: %s", reason)
+            out.loc[fallback_idx, "mri_perfusion_label"] = "NATIVE"
+            out.loc[fallback_idx, "mri_perfusion_reason"] = reason
+            out.loc[fallback_idx, "mri_perfusion_confidence"] = "fallback"
+            out.loc[fallback_idx, "mri_perfusion_source"] = "exam_context"
+
     for idx in grouped:
         out.loc[idx, "time_delta"] = _dynamic_time_deltas(out.loc[idx])
         shared = _share_acquisition_phase_evidence(context_rows(idx))
@@ -1846,13 +1858,7 @@ def add_mri_perfusion_columns(
             )
             out.loc[row_idx, "mri_perfusion_source"] = "acquisition_order_mask_multiart"
 
-        exam_rows = context_rows(idx)
-        for fallback_idx, reason in _infer_missing_native_fallbacks(exam_rows):
-            logger.info("Fallback native selected for MRI protocol: %s", reason)
-            out.loc[fallback_idx, "mri_perfusion_label"] = "NATIVE"
-            out.loc[fallback_idx, "mri_perfusion_reason"] = reason
-            out.loc[fallback_idx, "mri_perfusion_confidence"] = "fallback"
-            out.loc[fallback_idx, "mri_perfusion_source"] = "exam_context"
+        apply_native_fallbacks(idx)
 
         exam_rows = context_rows(idx)
 
@@ -1871,6 +1877,8 @@ def add_mri_perfusion_columns(
             out.loc[row_idx, "mri_perfusion_source"] = source
             out.loc[row_idx, "mri_dynamic_order_source"] = order_source
 
+        # Timing can resolve perfusion evidence that was unavailable in the first pass.
+        apply_native_fallbacks(idx)
         exam_rows = context_rows(idx)
 
         eligible = exam_rows.loc[

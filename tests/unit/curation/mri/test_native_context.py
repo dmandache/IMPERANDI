@@ -168,3 +168,98 @@ def test_separate_native_and_one_dynamic_with_known_delayed_anchor_meet_minimum(
     out = annotate(rows)
     assert out.phase.tolist() == ["NATIVE", "ARTERIAL", "DELAYED"]
     assert out.loc["v0", "mri_perfusion_source"] == "exam_context"
+
+
+@pytest.mark.parametrize(
+    "phase_text,expected",
+    [("arterial", "ARTERIAL"), ("portal", "PORTAL_VENOUS"), ("delayed", "DELAYED")],
+)
+def test_named_perfusion_phase_supports_native_without_postcontrast_marker(
+    phase_text, expected
+):
+    out = annotate(frame(["AX LAVA", f"AX LAVA {phase_text}"]))
+    assert out.phase.tolist() == ["NATIVE", expected]
+    assert out.loc["v0", "mri_perfusion_source"] == "exam_context"
+    assert out.loc["v0", "mri_perfusion_confidence"] == "fallback"
+    assert out.loc["v1", "mri_perfusion_source"] == "explicit_text"
+
+
+def test_several_named_perfusion_phases_support_one_native_fallback():
+    rows = frame(["AX LAVA", "AX LAVA arterial", "AX LAVA portal", "AX LAVA delayed"])
+    out = annotate(rows.sample(frac=1, random_state=5)).loc[rows.volume_id]
+    assert out.phase.tolist() == ["NATIVE", "ARTERIAL", "PORTAL_VENOUS", "DELAYED"]
+    assert out.phase.eq("NATIVE").sum() == 1
+
+
+@pytest.mark.parametrize("source", ["dicom", "ontology"])
+@pytest.mark.parametrize("perfusion_description", ["AX LAVA", "Ph1/AX LAVA"])
+def test_resolved_metadata_phase_supports_native_without_dynamic_text(
+    source, perfusion_description
+):
+    rows = frame(["AX LAVA", perfusion_description])
+    config = None
+    if source == "dicom":
+        rows["ContrastBolusAgentPhase"] = [None, "PORTAL_VENOUS"]
+    else:
+        rows["site_phase"] = [None, "portal"]
+        config = {
+            "strategies": [
+                {
+                    "type": "ontology",
+                    "columns": ["site_phase"],
+                    "mapping": {"portal": "PORTAL_VENOUS"},
+                },
+                {"type": "rules"},
+            ]
+        }
+    out = annotate(rows, config)
+    assert out.phase.tolist() == ["NATIVE", "PORTAL_VENOUS"]
+    assert out.loc["v0", "mri_perfusion_source"] == "exam_context"
+
+
+@pytest.mark.parametrize("description", ["AX LAVA dynamic", "Ph1/AX LAVA dynamic"])
+def test_phase_resolved_from_elapsed_time_supports_native_fallback(description):
+    rows = frame(["AX LAVA", description])
+    rows["time"] = ["120000", "120115"]
+    out = annotate(rows)
+    assert out.phase.tolist() == ["NATIVE", "PORTAL_VENOUS"]
+    assert out.loc["v0", "mri_perfusion_source"] == "exam_context"
+    assert out.loc["v1", "mri_perfusion_source"] == "time_delta"
+
+
+@pytest.mark.parametrize(
+    "descriptions",
+    [
+        ["AX LAVA", "AX LAVA"],
+        ["AX LAVA", "AX LAVA post"],
+        ["AX LAVA", "AX LAVA dynamic"],
+        ["AX LAVA portal", "AX LAVA"],
+        ["AX LAVA", "AX VIBE portal"],
+        ["AX LAVA post", "AX LAVA portal"],
+        ["AX LAVA MPR", "AX LAVA portal"],
+        ["AX LAVA Ph1", "AX LAVA portal"],
+    ],
+)
+def test_permissive_native_fallback_keeps_candidate_and_context_guards(descriptions):
+    assert not annotate(frame(descriptions)).phase.eq("NATIVE").any()
+
+
+@pytest.mark.parametrize("order", [[None, None], [1, 1]])
+def test_named_phase_without_comparable_order_does_not_establish_native(order):
+    rows = frame(["AX LAVA", "AX LAVA portal"])
+    rows["acquisition_order"] = order
+    assert annotate(rows).phase.tolist() == ["OTHER", "PORTAL_VENOUS"]
+
+
+def test_ph1_alone_does_not_supply_perfusion_evidence_for_native_fallback():
+    out = annotate(frame(["AX LAVA", "Ph1/AX LAVA"]))
+    assert out.phase.tolist() == ["OTHER", "OTHER"]
+
+
+@pytest.mark.parametrize(
+    "expected",
+    [["NATIVE", "OTHER"], ["NATIVE", "ARTERIAL", "PORTAL_VENOUS", "DELAYED"]],
+)
+def test_numbered_mixed_pre_post_context_uses_native_order(expected):
+    rows = frame([f"Ph{i+1}/AX LAVA pre/post dynamic" for i in range(len(expected))])
+    assert annotate(rows).phase.tolist() == expected

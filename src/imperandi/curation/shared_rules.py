@@ -77,7 +77,7 @@ RX_PHASE_NATIVE = token(
     rf"|ss{SEP}(?:iv|i)|si|siv|blanc|c-"
     rf"|w/o(?:{SEP}(?:{INJECTION}|{CONTRAST}))?|wo|w/o"
 )
-ARTERIAL = r"art|art(?:erial|[eé]riel(?:le)?)?"
+ARTERIAL = r"art(?:erial|[eé]riel(?:le)?)?"
 RX_PHASE_ARTERIAL = token(
     rf"{ARTERIAL}|artery|aort(?:e|ic|ique)|hepatic{SEP}arter(?:y|ial)?"
     rf"|(?:early|late|multi){SEP}{ARTERIAL}"

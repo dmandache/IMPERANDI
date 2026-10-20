@@ -344,8 +344,20 @@ def test_explicit_portal_overrides_ordinal_phase_text():
     assert out.loc[0, "mri_perfusion_source"] == "explicit_text"
 
 
-def test_single_numbered_dynamic_does_not_bypass_generic_minimum():
-    out = mc.annotate_mri(pd.DataFrame([row("Ph1/Ax LAVA Gado MPh Turbo")]))
+@pytest.mark.parametrize(
+    "description",
+    ["Ph1/Ax LAVA Gado MPh Turbo", "AX T1 PH1", "AX T1 phase 1", "AX T1 ph_1"],
+)
+def test_single_ph1_remains_unresolved_without_phase_evidence(description):
+    out = mc.annotate_mri(pd.DataFrame([row(description)]))
+
+    assert out.loc[0, "phase"] == "OTHER"
+    assert out.loc[0, "mri_perfusion_confidence"] == "unknown"
+
+
+@pytest.mark.parametrize("number", [1, 2, 3, 4, 10, 11])
+def test_single_numbered_dynamic_requires_phase_context(number):
+    out = mc.annotate_mri(pd.DataFrame([row(f"Ph{number}/Ax LAVA dynamic")]))
 
     assert out.loc[0, "mri_perfusion_label"] == "OTHER"
     assert out.loc[0, "mri_perfusion_confidence"] == "unknown"
