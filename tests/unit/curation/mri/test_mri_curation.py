@@ -1235,7 +1235,9 @@ def test_derived_mri_description_selection_depends_on_product(
 
     assert result["curated"].iloc[0]["phase_status"] == "RESOLVED"
     assert result["curated"].iloc[0]["phase"] == phase
-    assert len(selected_for_slot(result, f"T1_{phase}")) == (1 if marker == "MIP" else 0)
+    assert len(selected_for_slot(result, f"T1_{phase}")) == (
+        1 if marker in {"MIP", "SECONDARY"} else 0
+    )
 
 
 def test_explicit_mpr_postcontrast_phases_fill_slots_when_repeats_are_native():

@@ -198,6 +198,62 @@ def test_several_named_perfusion_phases_support_one_native_fallback():
     assert out.phase.eq("NATIVE").sum() == 1
 
 
+@pytest.mark.parametrize(
+    "image_type",
+    [
+        ["ORIGINAL", "SECONDARY", "M", "NORM", "DIS2D", "FM3_4", "FIL"],
+        "['ORIGINAL', 'SECONDARY', 'M', 'NORM', 'DIS2D', 'FM3_4', 'FIL']",
+    ],
+)
+def test_secondary_image_type_allows_repeated_protocol_natives(image_type):
+    rows = frame(["t1 fl2d in_opp tra 5mm"] * 4)
+    rows["ImageType"] = [image_type] * len(rows)
+    rows["series_id"] = ["fl0", "fl0", "fl1", "fl1"]
+    rows["volume_order_in_series"] = [1, 2, 1, 2]
+    rows["n_volumes_in_series"] = 2
+
+    out = annotate(rows.sample(frac=1, random_state=3)).loc[rows.volume_id]
+
+    assert out.mri_sequence.eq("T1").all()
+    assert not out.is_derived_low_value.any()
+    assert out.phase.eq("NATIVE").all()
+    assert out.mri_perfusion_source.eq("exam_context").all()
+    assert out.mri_perfusion_confidence.eq("fallback").all()
+
+
+def test_secondary_image_type_allows_separate_native_fallback():
+    rows = frame(
+        [
+            "t1 vibe tra fs",
+            "t1 vibe tra fs art",
+            "t1 vibe tra fs portal",
+            "t1 vibe tra fs 5min",
+            "t1 vibe tra fs art_sub",
+        ]
+    )
+    rows["ImageType"] = [
+        ["ORIGINAL", "SECONDARY", "M", "NORM", "DIS2D", "FM4_4", "FIL"]
+        for _ in range(len(rows))
+    ]
+
+    result = mc.curate_mri(rows.sample(frac=1, random_state=4))
+    out = result["curated"].set_index("volume_id").loc[rows.volume_id]
+
+    assert out.phase.tolist() == [
+        "NATIVE",
+        "ARTERIAL",
+        "PORTAL_VENOUS",
+        "DELAYED",
+        "ARTERIAL",
+    ]
+    assert not out.loc["v0", "is_derived_low_value"]
+    assert out.loc["v0", "mri_perfusion_source"] == "exam_context"
+    assert out.loc["v4", "is_derived_low_value"]
+    selected = result["selected_long"].set_index("selection_slot")
+    assert selected.loc["T1_NATIVE", "volume_id"] == "v0"
+    assert "v4" not in selected.volume_id.tolist()
+
+
 def test_lava_flex_water_native_matches_perfusion_across_image_types():
     rows = frame(
         [

@@ -129,7 +129,7 @@ def test_diagnostic_derived_ct_remains_phaseable_and_selectable(image_type):
         ("delayed", "DELAYED"),
     ],
 )
-def test_derived_ct_product_keeps_phase_but_is_not_selected(marker, phase_text, phase):
+def test_derived_ct_product_selection_depends_on_product(marker, phase_text, phase):
     result = curate_ct(
         pd.DataFrame(
             [_base(f"Abdomen {phase_text}", ImageType=["DERIVED", "PRIMARY", marker])]
@@ -141,23 +141,29 @@ def test_derived_ct_product_keeps_phase_but_is_not_selected(marker, phase_text, 
     assert annotated["phase_status"] == "RESOLVED"
     assert annotated["phase"] == phase
     assert annotated["rule_phase"] == phase
-    assert result["selected_long"].empty
+    assert result["selected_long"].selection_slot.tolist() == (
+        [f"CT_{phase}"] if marker == "SECONDARY" else []
+    )
 
 
 @pytest.mark.parametrize("marker", ["MIP", "MPR", "SUBTRACTION", "SECONDARY", "MAP"])
-def test_derived_ct_description_keeps_phase_but_is_not_selected(marker):
+def test_derived_ct_description_selection_depends_on_product(marker):
     result = curate_ct(pd.DataFrame([_base(f"Abdomen portal venous {marker}")]))
 
     assert result["curated"].iloc[0]["phase"] == "PORTAL_VENOUS"
-    assert result["selected_long"].empty
+    assert result["selected_long"].selection_slot.tolist() == (
+        ["CT_PORTAL_VENOUS"] if marker == "SECONDARY" else []
+    )
 
 
 @pytest.mark.parametrize("marker", ["MIP", "MPR", "SUBTRACTION", "SECONDARY", "MAP"])
-def test_derived_ct_product_without_phase_is_unresolved_and_not_selected(marker):
+def test_derived_ct_without_phase_selection_depends_on_product(marker):
     result = curate_ct(pd.DataFrame([_base("Abdomen", ImageType=["DERIVED", marker])]))
 
     assert result["curated"].iloc[0]["phase_status"] == "UNRESOLVED"
-    assert result["selected_long"].empty
+    assert result["selected_long"].selection_slot.tolist() == (
+        ["CT_OTHER"] if marker == "SECONDARY" else []
+    )
 
 
 def test_derived_ct_without_phase_evidence_remains_unresolved():
