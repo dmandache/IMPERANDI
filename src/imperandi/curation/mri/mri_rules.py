@@ -107,6 +107,7 @@ RX_PHASE_GENERIC_DYNAMIC = token(
     shared.RX_PHASE_GENERIC_DYNAMIC,
     RX_PHASE_ART_PORT_DYNAMIC,
     RX_PHASE_MASK_MULTIART_DYNAMIC,
+    rf"multi{SEP}(?:{GADOLINIUM})",
     rf"twist|twist{SEP}vibe|grasp",
 )
 RX_T1_DYNAMIC = token(

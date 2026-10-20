@@ -44,6 +44,8 @@ def annotate(df):
         "AX T1 VIBE GRASP",
         "AX T1 TWIST",
         "AX T1 DISCO dynamic",
+        "t1 vibe fs multi gado",
+        "AX T1 VIBE MULTI_GADOLINIUM",
     ],
 )
 @pytest.mark.parametrize("same_series", [False, True])
@@ -149,8 +151,9 @@ def test_long_gaps_do_not_delete_an_ordered_four_acquisition_template():
     ]
 
 
-def test_no_permanent_blocked_state_survives_in_missing_order_case():
-    rows = acquisitions("AX T1 LAVA dynamic", same_series=False, clocks=False)
+@pytest.mark.parametrize("description", ["AX T1 LAVA dynamic", "t1 vibe fs multi gado"])
+def test_no_permanent_blocked_state_survives_in_missing_order_case(description):
+    rows = acquisitions(description, same_series=False, clocks=False)
     rows = rows.drop(columns=["acquisition_order", "TemporalPositionIdentifier"])
     out = annotate(rows)
     assert out.mri_perfusion_label.eq("OTHER").all()

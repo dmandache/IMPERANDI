@@ -1240,7 +1240,7 @@ def test_derived_mri_description_selection_depends_on_product(
     )
 
 
-def test_explicit_mpr_postcontrast_phases_fill_slots_when_repeats_are_native():
+def test_explicit_mpr_phases_fill_slots_when_dynamic_order_is_missing():
     phases = [
         ("sans iv", "NATIVE"),
         ("arteriel", "ARTERIAL"),
@@ -1275,15 +1275,13 @@ def test_explicit_mpr_postcontrast_phases_fill_slots_when_repeats_are_native():
     result = curate(rows)
 
     selected = result["selected_long"].set_index("selection_slot")
-    assert selected.loc["T1_NATIVE", "volume_id"] in {
-        f"original_{acquisition}" for acquisition in range(1, 5)
-    }
-    for acquisition, (_, phase) in enumerate(phases[1:], start=2):
+    for acquisition, (_, phase) in enumerate(phases, start=1):
         assert selected.loc[f"T1_{phase}", "volume_id"] == f"mpr_{acquisition}"
     originals = result["curated"].loc[
         result["curated"].volume_id.str.startswith("original_")
     ]
-    assert originals.phase.eq("NATIVE").all()
+    assert originals.phase.eq("OTHER").all()
+    assert originals.mri_perfusion_source.eq(mc.GENERIC_DYNAMIC_CONTEXT_PENDING).all()
     assert set(result["selected_long"]["phase"]) == {phase for _, phase in phases}
 
 
