@@ -30,7 +30,7 @@ RX_LOCALIZER = token(
 RX_KEY_IMAGES = token(
     rf"key{SEP}(?:images?|objects?)|key{SEP}object{SEP}selection"
     rf"|ko|kos|kin|kon|snapshot|screen(?:{SEP}saves?)?|capture"
-    rf"|processed(?:{SEP}images?)?|secondary"
+    rf"|processed(?:{SEP}images?)?"
     rf"|images?{SEP}cl[eé]s?|objets?{SEP}cl[eé]s?"
 )
 RX_SUBTRACTION = token(r"s?sub(?:traction)?|s?soustr(?:ac|a)tion|s?sous")
