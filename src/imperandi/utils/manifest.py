@@ -40,8 +40,19 @@ def load_manifest(manifest_arg: Optional[str], *, base_path: Path) -> dict:
             f"Manifest *{manifest_arg}* not found at {manifest_path}"
         )
 
-    with manifest_path.open("r", encoding="utf-8") as handle:
-        manifest = yaml.safe_load(handle)
+    try:
+        with manifest_path.open("r", encoding="utf-8") as handle:
+            manifest = yaml.safe_load(handle)
+    except yaml.YAMLError as exc:
+        mark = getattr(exc, "problem_mark", None)
+        location = (
+            f" at line {mark.line + 1}, column {mark.column + 1}"
+            if mark is not None
+            else ""
+        )
+        raise ValueError(
+            f"Invalid YAML in manifest {manifest_path}{location}:\n{exc}"
+        ) from exc
 
     if not isinstance(manifest, dict):
         raise ValueError(f"Manifest must contain a YAML mapping: {manifest_path}")
