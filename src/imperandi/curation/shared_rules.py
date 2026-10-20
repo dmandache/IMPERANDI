@@ -199,6 +199,11 @@ def _durations(text: str) -> list[tuple[re.Match, float]]:
     return result
 
 
+def duration_seconds(text: str) -> list[float]:
+    """Parse complete durations into seconds without matching component fragments."""
+    return [seconds for _, seconds in _durations(text)]
+
+
 def match_plane(text: str) -> str | None:
     return next(
         (label for label, pattern in PLANE_RULES if re.search(pattern, text)), None

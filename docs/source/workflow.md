@@ -118,6 +118,11 @@ and its canonical `time`, `acquisition_order`, or series-local volume rank.
 Raw DICOM clocks and bolus metadata do not calibrate phase delays. Wide QC cells
 include volume identifiers and phase provenance.
 Selection scores rank candidates; they are not calibrated phase confidence.
+Within the MRI delayed slot, candidates timed at 5-10 minutes (inclusive) are
+preferred before the usual score and coverage ranking. Timing comes from an
+unambiguous duration in the phase-evidence text, otherwise from `time_delta`.
+If no candidate is in that interval, the usual ranking applies. This preference
+does not change phase classification or its duration windows.
 
 ## Example Slurm batch script
 

@@ -2520,9 +2520,21 @@ def add_scores(df: pd.DataFrame) -> pd.DataFrame:
 # -----------------------------------------------------------------------------
 
 
+def _delayed_in_preferred_window(row: pd.Series) -> bool:
+    """Prefer 5-10 minute delayed acquisitions, using text timing before elapsed time."""
+    if norm_label(row.get("phase", row.get("mri_perfusion_label"))) != "DELAYED":
+        return False
+    durations = _first_phase_text_value(row, shared_rules.duration_seconds)
+    if durations:
+        return len(set(durations)) == 1 and 300 <= durations[0] <= 600
+    seconds = safe_float(row.get("time_delta"))
+    return bool(pd.notna(seconds) and 300 <= seconds <= 600)
+
+
 def add_tiebreaker_columns(df: pd.DataFrame, time_col: str = "time") -> pd.DataFrame:
     out = df.copy()
     out["_row_order"] = np.arange(len(out))
+    out["_delayed_in_preferred_window"] = out.apply(_delayed_in_preferred_window, axis=1)
 
     if time_col in out.columns:
         out["_time_seconds"] = out[time_col].apply(parse_time_to_seconds)
@@ -2632,6 +2644,7 @@ def select_best_candidates(
     sort_cols = [
         *exam_cols,
         "selection_slot",
+        "_delayed_in_preferred_window",
         "selection_score",
         "_volume_proxy",
         "_z_coverage_proxy",
@@ -2639,7 +2652,7 @@ def select_best_candidates(
         "_time_seconds",
         "_row_order",
     ]
-    ascending = [True] * len(exam_cols) + [True, False, False, False, False, True, True]
+    ascending = [True] * len(exam_cols) + [True, False, False, False, False, False, True, True]
 
     ranked = selectable.sort_values(sort_cols, ascending=ascending, na_position="last")
 
@@ -2659,6 +2672,8 @@ def select_best_candidates(
         if pd.notna(volume_order) and pd.notna(n_volumes):
             details.append(f"vol={volume_order:g}/{n_volumes:g}")
         details.append(f"score={row.get('selection_score'):.1f}")
+        if row.get("_delayed_in_preferred_window"):
+            details.append("preferred delayed interval=5-10min")
         return f"{desc} [{', '.join(details)}] {common.phase_evidence_summary(row)}"
 
     ranked["selected_candidate"] = ranked.apply(_display, axis=1)
