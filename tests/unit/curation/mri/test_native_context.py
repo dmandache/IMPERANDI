@@ -549,6 +549,25 @@ def test_repeated_native_candidates_remain_labelled_with_perfusion_context():
     assert first.loc["v1", "phase"] == second.loc["v1", "phase"] == "NATIVE"
 
 
+@pytest.mark.parametrize("repeated", [False, True])
+def test_repeated_protocol_prefers_sequence_description_over_generic_protocol(repeated):
+    description = "inphase: ax in/out lava-flex"
+    rows = frame([description, description if repeated else description + " apnee"])
+    rows["ProtocolName"] = "Foie NLY"
+    out = annotate(
+        rows,
+        {
+            "strategies": [{"type": "rules"}],
+            "text_columns": {"MR": ["SeriesDescription", "ProtocolName"]},
+        },
+    )
+    expected = ["NATIVE", "NATIVE"] if repeated else ["OTHER", "OTHER"]
+    assert out.phase.tolist() == expected
+    if repeated:
+        assert out.mri_perfusion_reason.str.contains("SeriesDescription=").all()
+        assert not out.mri_perfusion_reason.str.contains("ProtocolName=").any()
+
+
 def test_repeated_protocol_uses_configured_protocol_name_field():
     rows = frame(["unlabelled", "unlabelled"])
     rows["ProtocolName"] = "AX T1 SE"

@@ -1053,9 +1053,8 @@ def _dynamic_series_id(row: pd.Series) -> str:
     )
 
 
-def _generic_dynamic_key(row: pd.Series) -> tuple:
-    """Group compatible acquisitions independently of ImageType reconstruction tags."""
-
+def _sequence_text_column(row: pd.Series):
+    """Choose the first configured field containing sequence evidence."""
     sequence_patterns = (
         rules.RX_LOCALIZER,
         rules.RX_KEY_IMAGES,
@@ -1065,11 +1064,16 @@ def _generic_dynamic_key(row: pd.Series) -> tuple:
         rules.RX_SEQUENCE_T2,
         *(pattern for _, pattern in rules.GENERIC_DYNAMIC_FAMILIES),
     )
-    evidence = common.first_text_column(
+    return common.first_text_column(
         row,
         lambda text: any(re.search(pattern, text) for pattern in sequence_patterns),
         _resolve_text_cols(),
     )
+
+
+def _generic_dynamic_key(row: pd.Series) -> tuple:
+    """Group compatible acquisitions independently of ImageType reconstruction tags."""
+    evidence = _sequence_text_column(row)
     family = next(
         (
             name
@@ -1561,8 +1565,8 @@ def _sort_key_for_native_fallback(row: pd.Series) -> tuple:
 
 
 def _native_protocol_texts(row: pd.Series, *, strip_phase: bool = False):
-    """Use acquisition text in its configured phase-evidence field, when present."""
-    evidence = _phase_text_column(row)
+    """Use one field, preferring phase evidence, then sequence evidence."""
+    evidence = _phase_text_column(row) or _sequence_text_column(row)
     for column, text in iter_series_text_columns(row):
         if column in {"StudyDescription", "ImageType"}:
             continue
@@ -1580,6 +1584,7 @@ def _native_protocol_texts(row: pd.Series, *, strip_phase: bool = False):
         name = re.sub(rf"{SEP_CHARS}+", " ", text).strip()
         if name:
             yield column, name
+            return
 
 
 def infer_missing_native_fallback(exam_rows: pd.DataFrame) -> tuple[int | None, str]:
