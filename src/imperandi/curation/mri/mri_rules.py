@@ -64,6 +64,7 @@ RX_SEQUENCE_T1_CONTRAST = token(
     GADOLINIUM,
     rf"t1{SEP}(?:{GADOLINIUM}|{shared.CONTRAST}|post|c\+|fs{SEP}post)",
     rf"post{SEP}(?:iv|{GADOLINIUM}|{shared.CONTRAST})",
+    rf"multi{SEP}(?:iv|{GADOLINIUM}|{shared.CONTRAST})",
     rf"(?:post|ce){SEP}t1",
 )
 RX_SEQUENCE_T2 = token(
