@@ -2643,12 +2643,23 @@ def select_best_candidates(
         "_delayed_in_preferred_window",
         "selection_score",
         "_volume_proxy",
+        "_slice_thickness",
         "_z_coverage_proxy",
         "_n_rows_proxy",
         "_time_seconds",
         "_row_order",
     ]
-    ascending = [True] * len(exam_cols) + [True, False, False, False, False, False, True, True]
+    ascending = [True] * len(exam_cols) + [
+        True,
+        False,
+        False,
+        False,
+        True,
+        False,
+        False,
+        True,
+        True,
+    ]
 
     ranked = selectable.sort_values(sort_cols, ascending=ascending, na_position="last")
 
