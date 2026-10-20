@@ -35,7 +35,7 @@ def annotate(rows, config=None):
     "numbers", [[1, 2, 3, 4], [2, 3, 4, 5], [None, 1, 2, 3], [None, 3, None, 7]]
 )
 @pytest.mark.parametrize("agent", ["", "gado", "primovist"])
-def test_numbering_and_agent_alone_do_not_block_native_fallback(numbers, agent):
+def test_numbering_needs_native_context_before_becoming_strictly_postcontrast(numbers, agent):
     rows = frame(
         [
             f"{'ph'+str(number)+'/' if number is not None else ''}AX LAVA dyn 4 {agent}"
@@ -43,7 +43,12 @@ def test_numbering_and_agent_alone_do_not_block_native_fallback(numbers, agent):
         ]
     )
     out = annotate(rows.sample(frac=1, random_state=4)).loc[[f"v{i}" for i in range(4)]]
-    assert out.phase.tolist() == ["NATIVE", "ARTERIAL", "PORTAL_VENOUS", "DELAYED"]
+    expected = (
+        ["NATIVE", "OTHER", "NATIVE", "OTHER"]
+        if numbers.count(None) > 1
+        else ["NATIVE", "ARTERIAL", "PORTAL_VENOUS", "DELAYED"]
+    )
+    assert out.phase.tolist() == expected
 
 
 @pytest.mark.parametrize(
@@ -55,11 +60,11 @@ def test_numbering_and_agent_alone_do_not_block_native_fallback(numbers, agent):
         ("AX LAVA gado", "exam_context"),
     ],
 )
-def test_compatible_native_is_resolved_before_numbered_or_unnumbered_dynamics(
+def test_compatible_native_is_resolved_before_numbered_dynamics(
     native, source
 ):
     rows = frame(
-        [native, "AX LAVA dyn gado", "Ph1/AX LAVA dyn gado", "Ph3/AX LAVA dyn gado"]
+        [native, "Ph1/AX LAVA dyn gado", "Ph2/AX LAVA dyn gado", "Ph3/AX LAVA dyn gado"]
     )
     out = annotate(rows)
     assert out.phase.tolist() == ["NATIVE", "ARTERIAL", "PORTAL_VENOUS", "DELAYED"]
@@ -69,7 +74,7 @@ def test_compatible_native_is_resolved_before_numbered_or_unnumbered_dynamics(
 
 def test_exam_level_injection_description_does_not_exclude_a_separate_native_candidate():
     rows = frame(
-        ["AX LAVA", "AX LAVA dyn gado", "Ph2/AX LAVA dyn gado", "Ph3/AX LAVA dyn gado"]
+        ["AX LAVA", "Ph1/AX LAVA dyn gado", "Ph2/AX LAVA dyn gado", "Ph3/AX LAVA dyn gado"]
     )
     rows["StudyDescription"] = "IRM hépatique avec injection"
     out = annotate(
@@ -110,11 +115,11 @@ def test_two_protocol_groups_resolve_their_own_separate_native_candidates():
     rows = frame(
         [
             "AX LAVA",
-            "AX LAVA dyn gado",
+            "Ph1/AX LAVA dyn gado",
             "Ph2/AX LAVA dyn gado",
             "Ph3/AX LAVA dyn gado",
             "AX DISCO",
-            "AX DISCO dynamic",
+            "Ph2/AX DISCO dynamic",
             "Ph3/AX DISCO dynamic",
             "Ph4/AX DISCO dynamic",
         ]
@@ -251,15 +256,151 @@ def test_named_phase_without_comparable_order_does_not_establish_native(order):
     assert annotate(rows).phase.tolist() == ["OTHER", "PORTAL_VENOUS"]
 
 
-def test_ph1_alone_does_not_supply_perfusion_evidence_for_native_fallback():
+def test_ph1_identifies_matching_unnumbered_protocol_as_native():
     out = annotate(frame(["AX LAVA", "Ph1/AX LAVA"]))
-    assert out.phase.tolist() == ["OTHER", "OTHER"]
+    assert out.phase.tolist() == ["NATIVE", "OTHER"]
+    assert "matching protocol without PhN" in out.loc["v0", "mri_perfusion_reason"]
 
 
 @pytest.mark.parametrize(
     "expected",
     [["NATIVE", "OTHER"], ["NATIVE", "ARTERIAL", "PORTAL_VENOUS", "DELAYED"]],
 )
-def test_numbered_mixed_pre_post_context_uses_native_order(expected):
+def test_numbered_mixed_pre_post_text_keeps_native_fallback_without_native_context(expected):
     rows = frame([f"Ph{i+1}/AX LAVA pre/post dynamic" for i in range(len(expected))])
     assert annotate(rows).phase.tolist() == expected
+
+
+@pytest.mark.parametrize("number", [1, 2, 10])
+@pytest.mark.parametrize("ordered", [True, False])
+def test_matching_dynamic_protocol_without_number_is_native_even_without_order(
+    number, ordered
+):
+    rows = frame(["AX LAVA dynamic gado", f"Ph{number}/AX LAVA dynamic gado"])
+    if not ordered:
+        rows = rows.drop(columns="acquisition_order")
+    out = annotate(rows.sample(frac=1, random_state=3)).loc[rows.volume_id]
+    assert out.phase.tolist() == ["NATIVE", "OTHER"]
+    assert out.loc["v0", "mri_perfusion_source"] == "exam_context"
+
+
+@pytest.mark.parametrize("description", ["PH2/AX T1", "AX T1 phase_2", "Ax.T1.Ph10"])
+def test_numbered_protocol_matching_normalizes_case_separators_and_token_position(
+    description,
+):
+    out = annotate(frame(["AX T1", description]).drop(columns="acquisition_order"))
+    assert out.phase.tolist() == ["NATIVE", "OTHER"]
+
+
+def test_matching_unnumbered_native_anchors_numbered_postcontrast_progression():
+    rows = frame(["AX LAVA dynamic"] + [f"Ph{i}/AX LAVA dynamic" for i in (2, 3, 4)])
+    out = annotate(rows.sample(frac=1, random_state=7)).loc[rows.volume_id]
+    assert out.phase.tolist() == ["NATIVE", "ARTERIAL", "PORTAL_VENOUS", "DELAYED"]
+
+
+@pytest.mark.parametrize(
+    "column,value",
+    [
+        ("study_id", "other-exam"),
+        ("ImageType", "DERIVED PRIMARY"),
+        ("acquisition_plane", "CORONAL"),
+        ("date", "2020-01-02"),
+    ],
+)
+def test_matching_numbered_protocol_cannot_cross_acquisition_boundaries(column, value):
+    rows = frame(["AX LAVA dynamic", "Ph2/AX LAVA dynamic"])
+    rows.loc[1, column] = value
+    assert not annotate(rows).phase.eq("NATIVE").any()
+
+
+def test_numbered_protocol_match_requires_same_description_not_just_sequence_family():
+    out = annotate(frame(["AX LAVA breath hold", "Ph2/AX LAVA dynamic"]))
+    assert out.phase.tolist() == ["OTHER", "OTHER"]
+
+
+@pytest.mark.parametrize("evidence", ["text", "dicom", "profile"])
+@pytest.mark.parametrize("valid_native", [False, True])
+def test_numbered_native_evidence_is_blocked_only_with_valid_native_context(
+    evidence, valid_native
+):
+    description = "Ph2/AX LAVA pre" if evidence == "text" else "Ph2/AX LAVA"
+    if evidence == "profile":
+        description = "Ph2/AX LAVA Mask Multiart"
+    rows = frame((["AX LAVA pre"] if valid_native else []) + [description])
+    if evidence == "dicom":
+        rows["ContrastBolusAgentPhase"] = (
+            [None, "PRE_CONTRAST"] if valid_native else ["PRE_CONTRAST"]
+        )
+    assert annotate(rows).phase.tolist() == (
+        ["NATIVE", "OTHER"] if valid_native else ["NATIVE"]
+    )
+
+
+@pytest.mark.parametrize("native", ["AX LAVA", "AX LAVA pre"])
+def test_protocol_match_precedes_weaker_fallback_and_repeated_natives_count_once(native):
+    rows = frame([native, "AX LAVA dynamic", "Ph1/AX LAVA dynamic", "Ph2/AX LAVA dynamic"])
+    out = annotate(rows)
+    assert out.phase.tolist() == [
+        "NATIVE" if native.endswith("pre") else "OTHER",
+        "NATIVE",
+        "ARTERIAL",
+        "PORTAL_VENOUS",
+    ]
+
+
+@pytest.mark.parametrize("series", ["AX LAVA", "AX LAVA post"])
+def test_protocol_name_match_respects_higher_priority_phase_field(series):
+    rows = frame([series, "AX LAVA"])
+    rows["ProtocolName"] = ["AX LAVA", "Ph2/AX LAVA"]
+    out = annotate(rows, {
+        "strategies": [{"type": "rules"}],
+        "text_columns": {"MR": ["SeriesDescription", "ProtocolName"]},
+    })
+    assert out.phase.tolist() == ["OTHER" if series.endswith("post") else "NATIVE", "OTHER"]
+
+
+@pytest.mark.parametrize("native", ["AX LAVA pre", "AX VIBE pre"])
+def test_numbered_postcontrast_constraint_requires_compatible_native(native):
+    rows = frame([native] + [f"Ph{i}/AX LAVA dynamic" for i in (2, 3, 4)])
+    out = annotate(rows)
+    assert out.phase.tolist() == (
+        ["NATIVE", "ARTERIAL", "PORTAL_VENOUS", "DELAYED"]
+        if "LAVA" in native
+        else ["NATIVE", "NATIVE", "ARTERIAL", "PORTAL_VENOUS"]
+    )
+
+
+def test_numbered_native_order_fallback_does_not_become_its_own_postcontrast_proof():
+    rows = frame([f"Ph{i}/AX LAVA dynamic" for i in (1, 2, 3)])
+    first = annotate(rows)
+    again = annotate(first.reset_index())
+    assert first.phase.tolist() == ["NATIVE", "ARTERIAL", "PORTAL_VENOUS"]
+    assert again.phase.tolist() == first.phase.tolist()
+    assert "_numbered_postcontrast" not in first.columns
+
+
+def test_native_found_from_mixed_context_enables_numbered_postcontrast_constraint():
+    rows = frame(["AX LAVA pre/post", "Ph2/AX LAVA Mask Multiart"])
+    out = annotate(rows)
+    assert out.phase.tolist() == ["NATIVE", "OTHER"]
+    assert out.loc["v0", "mri_perfusion_source"] == "group_pre_post_order"
+    assert out.loc["v1", "mri_perfusion_source"] == "ordinal_phase_conflict"
+
+
+@pytest.mark.parametrize("source", ["dicom", "ontology"])
+def test_valid_metadata_native_anchors_numbered_postcontrast_progression(source):
+    rows = frame(["AX LAVA"] + [f"Ph{i}/AX LAVA dynamic" for i in (2, 3, 4)])
+    config = None
+    if source == "dicom":
+        rows["ContrastBolusAgentPhase"] = ["PRE_CONTRAST", None, None, None]
+    else:
+        rows["site_phase"] = ["pre", None, None, None]
+        config = {
+            "strategies": [
+                {"type": "ontology", "columns": ["site_phase"], "mapping": {"pre": "NATIVE"}},
+                {"type": "rules"},
+            ]
+        }
+    assert annotate(rows, config).phase.tolist() == [
+        "NATIVE", "ARTERIAL", "PORTAL_VENOUS", "DELAYED"
+    ]

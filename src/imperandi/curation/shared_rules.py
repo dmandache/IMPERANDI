@@ -109,7 +109,7 @@ RX_PHASE_MIXED_PRE_POST = token(
     rf"|(?:{_MIXED_WITHOUT}){_MIXED_W_JOIN}(?:w|with)"
     rf"|pr[eé]{_MIXED_PHASE_JOIN}post|post{_MIXED_PHASE_JOIN}pr[eé]"
 )
-RX_PHASE_ORDINAL = token(rf"ph(?:ase)?{SEP}([1-9])(?!\d)")
+RX_PHASE_ORDINAL = token(rf"ph(?:ase)?{SEP}([1-9]\d*)(?!\d)")
 DYNAMIC = (
     rf"dyn(?:amic|amique)?|dce|dsc|pwi|perf(?:usion)?"
     rf"|multi{SEP}phas(?:e|ic|ique)|mph|m{SEP}ph|ph{SEP}\d+"

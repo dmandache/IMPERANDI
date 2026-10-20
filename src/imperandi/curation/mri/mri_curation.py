@@ -593,6 +593,8 @@ def has_post_contrast_text(row: pd.Series) -> bool:
 
 def has_pure_post_contrast_text(row: pd.Series) -> bool:
     """Recognize acquisition postcontrast wording, not an agent or exam mention."""
+    if bool(row.get("_numbered_postcontrast", False)):
+        return True
     evidence = _phase_text_column(row)
     if evidence is None or evidence[0] == "StudyDescription":
         return False
@@ -1242,6 +1244,7 @@ def _dynamic_time_deltas(rows: pd.DataFrame) -> pd.Series:
     ):
         if not group.apply(
             lambda row: _phase_matches_pattern(row, rules.RX_PHASE_GENERIC_DYNAMIC)
+            or detect_ordinal_phase_index(row) is not None
             or _phase_matches_pattern(row, rules.RX_PHASE_MULTIART_DYNAMIC),
             axis=1,
         ).any():
@@ -1279,7 +1282,10 @@ def infer_generic_dynamic_phases_from_exam_context(
             {GENERIC_DYNAMIC_CONTEXT_PENDING, "none", "volume_order", "ordinal_context"}
         )
         & eligible.apply(
-            lambda row: _phase_matches_pattern(row, rules.RX_PHASE_GENERIC_DYNAMIC)
+            lambda row: (
+                _phase_matches_pattern(row, rules.RX_PHASE_GENERIC_DYNAMIC)
+                or detect_ordinal_phase_index(row) is not None
+            )
             and not text_matches_art_port(row)
             and not text_matches_mask_multiart(row)
             and not _phase_matches_pattern(row, rules.RX_PHASE_MULTIART_DYNAMIC)
@@ -1595,7 +1601,8 @@ def infer_missing_native_fallback(exam_rows: pd.DataFrame) -> tuple[int | None, 
         return None, "no suitable separate native fallback candidate"
     dynamics = exam_rows.loc[
         exam_rows.apply(
-            lambda row: _phase_matches_pattern(row, rules.RX_PHASE_GENERIC_DYNAMIC),
+            lambda row: _phase_matches_pattern(row, rules.RX_PHASE_GENERIC_DYNAMIC)
+            or detect_ordinal_phase_index(row) is not None,
             axis=1,
         )
     ]
@@ -1632,6 +1639,105 @@ def infer_missing_native_fallback(exam_rows: pd.DataFrame) -> tuple[int | None, 
     return None, "no supported native candidate before compatible dynamics"
 
 
+def _infer_unnumbered_protocol_natives(rows: pd.DataFrame):
+    """Match protocol text exactly after removing its numbered postcontrast token."""
+
+    def protocol_name(text):
+        return re.sub(
+            rf"{SEP_CHARS}+", " ", re.sub(rules.RX_PHASE_ORDINAL, " ", text)
+        ).strip()
+
+    numbered = {}
+    for idx, row in rows.iterrows():
+        if detect_ordinal_phase_index(row) is None:
+            continue
+        if row.mri_perfusion_source in {"dicom_phase_conflict", "ordinal_phase_conflict"}:
+            continue
+        if row.mri_perfusion_label == "NATIVE" or bool(row.get("is_derived_low_value")):
+            continue
+        column, text = _phase_text_column(row)
+        if column in {"StudyDescription", "ImageType"}:
+            continue
+        name = protocol_name(text)
+        if name:
+            key = (_generic_dynamic_key(row), column, name)
+            numbered.setdefault(key, []).append(str(row.get("volume_id", idx)))
+
+    if not numbered:
+        return []
+    assignments = []
+    for idx, row in rows.iterrows():
+        if (
+            row.mri_perfusion_label != "OTHER"
+            or row.mri_perfusion_source in {"dicom_phase_conflict", "ordinal_phase_conflict"}
+            or bool(row.get("is_derived_low_value"))
+            or detect_ordinal_phase_index(row) is not None
+            or has_pure_post_contrast_text(row)
+            or detect_explicit_phase_from_text(row)[0] is not None
+        ):
+            continue
+        evidence = _phase_text_column(row)
+        for column, text in iter_series_text_columns(row):
+            if evidence is not None and evidence[0] != column:
+                continue
+            key = (_generic_dynamic_key(row), column, protocol_name(text))
+            if key in numbered:
+                assignments.append(
+                    (
+                        idx,
+                        "inferred NATIVE from matching protocol without PhN: "
+                        f"{column}={text!r}; numbered postcontrast volumes="
+                        + ", ".join(numbered[key]),
+                    )
+                )
+                break
+    return assignments
+
+
+def _apply_numbered_postcontrast_context(rows: pd.DataFrame) -> pd.DataFrame:
+    """Require a distinct, supported unnumbered native before restricting PhN."""
+    rows["_numbered_postcontrast"] = False
+    native_sources = {
+        "explicit_text",
+        "dicom_phase",
+        "strategy_context",
+        "acquisition_phase",
+        "exam_context",
+        "group_pre_post_order",
+        "volume_order_mask_multiart",
+        "acquisition_order_mask_multiart",
+    }
+    natives = rows.loc[
+        rows.mri_sequence.eq("T1")
+        & rows.mri_perfusion_label.eq("NATIVE")
+        & rows.mri_perfusion_source.isin(native_sources)
+        & ~rows.get("is_derived_low_value", pd.Series(False, index=rows.index)).fillna(False)
+        & rows.apply(lambda row: detect_ordinal_phase_index(row) is None, axis=1)
+    ]
+    if natives.empty:
+        return rows
+    for idx, row in rows.iterrows():
+        ordinal = detect_ordinal_phase_index(row)
+        if ordinal is None or row.mri_sequence != "T1":
+            continue
+        key = _generic_dynamic_key(row)
+        series_ids = {_dynamic_series_id(row)} - {""}
+        if not natives.apply(
+            lambda native: _matches_dynamic_group(native, key, series_ids), axis=1
+        ).any():
+            continue
+        rows.loc[idx, "_numbered_postcontrast"] = True
+        if row.mri_perfusion_label == "NATIVE":
+            rows.loc[idx, "mri_perfusion_label"] = "OTHER"
+            rows.loc[idx, "mri_perfusion_confidence"] = "unknown"
+            rows.loc[idx, "mri_perfusion_source"] = "ordinal_phase_conflict"
+            rows.loc[idx, "mri_perfusion_reason"] = (
+                f"Ph{ordinal} is postcontrast after resolving a compatible native; "
+                "conflicting native phase evidence"
+            )
+    return rows
+
+
 def _infer_missing_native_fallbacks(
     exam_rows: pd.DataFrame,
 ) -> list[tuple[object, str]]:
@@ -1645,14 +1751,18 @@ def _infer_missing_native_fallbacks(
             eligible = eligible.loc[~eligible[column].fillna(False)]
     if eligible.empty:
         return []
+    assignments = _infer_unnumbered_protocol_natives(eligible)
+    for idx, _ in assignments:
+        eligible.loc[idx, "mri_perfusion_label"] = "NATIVE"
+        eligible.loc[idx, "mri_perfusion_source"] = "exam_context"
     phase_context = eligible.loc[
         eligible.mri_perfusion_label.isin({"ARTERIAL", "PORTAL_VENOUS", "DELAYED"})
         | eligible.apply(
-            lambda row: _phase_matches_pattern(row, rules.RX_PHASE_GENERIC_DYNAMIC),
+            lambda row: _phase_matches_pattern(row, rules.RX_PHASE_GENERIC_DYNAMIC)
+            or detect_ordinal_phase_index(row) is not None,
             axis=1,
         )
     ]
-    assignments = []
     if phase_context.empty:
         return assignments
     for key, rows in phase_context.groupby(
@@ -1799,7 +1909,7 @@ def add_mri_perfusion_columns(
             context.loc[selected, "mri_perfusion_confidence"] = authority.loc[
                 selected, "phase_confidence"
             ]
-        return context
+        return _apply_numbered_postcontrast_context(context)
 
     def apply_native_fallbacks(indices):
         for fallback_idx, reason in _infer_missing_native_fallbacks(
@@ -1900,6 +2010,8 @@ def add_mri_perfusion_columns(
             phase_rules=rules.PHASE_RULES,
             extra_patterns=(rules.RX_PHASE_GENERIC_DYNAMIC,),
         ):
+            if bool(exam_rows.loc[row_idx, "_numbered_postcontrast"]):
+                continue
             label = norm_label(out.loc[row_idx, "mri_perfusion_label"])
             source = out.loc[row_idx, "mri_perfusion_source"]
             if source == "dicom_phase_conflict":
@@ -1913,6 +2025,19 @@ def add_mri_perfusion_columns(
             out.loc[row_idx, "mri_perfusion_reason"] = reason
             out.loc[row_idx, "mri_perfusion_confidence"] = "inferred"
             out.loc[row_idx, "mri_perfusion_source"] = "group_pre_post_order"
+
+        # Mixed pre/post inference can establish the native context at this stage.
+        exam_rows = context_rows(idx)
+        conflicts = exam_rows.index[
+            exam_rows.mri_perfusion_source.eq("ordinal_phase_conflict")
+        ]
+        for column in (
+            "mri_perfusion_label",
+            "mri_perfusion_confidence",
+            "mri_perfusion_source",
+            "mri_perfusion_reason",
+        ):
+            out.loc[conflicts, column] = exam_rows.loc[conflicts, column]
 
     for row_idx, row in out.iterrows():
         if row.phase_text_column and row.phase_text_value:

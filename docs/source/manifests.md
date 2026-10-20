@@ -567,10 +567,22 @@ Standard `ContrastBolusAgentPhase` metadata is direct evidence; conflicting
 values within a volume remain unresolved instead of receiving an order-based
 phase. Strategies before `rules`, including ontology, contribute native and
 named phase context before generic dynamic progression. Repeated natives count
-once. Vendor `PhN` prefixes do not define physiological phases or require a
-`Ph1`. Without compatible native context, the first ordered generic dynamic
-acquisition falls back to native, even if its prefix is `Ph2` or `Ph3`, unless
-stronger phase evidence establishes otherwise. Bare agent names such as `gado`
+once. Vendor `PhN` labels become strictly postcontrast only after a valid,
+compatible unnumbered native acquisition is resolved. Numbering alone does not
+establish postcontrast status, including when `Ph1` is missing. Without valid
+native context, named phases, native-first profiles, and generic order fallback
+keep their existing behavior. `Ph1` alone does not assign arterial. With valid
+native context, conflicting numbered native assignments remain unresolved.
+
+When an otherwise unlabelled T1 acquisition matches a numbered acquisition's
+protocol after removing `PhN`, the unnumbered acquisition is native. Matching
+uses the same configured text field, normalizes case and separators, and retains
+study, sequence, plane, image type, and Dixon component boundaries. This naming
+evidence does not require three acquisitions or comparable chronology; assigning
+specific postcontrast phases still follows the timing and order rules. A native
+created solely by the numbered group's generic order fallback does not turn that
+same group into postcontrast-only context. An unrelated or excluded native
+acquisition does not establish the restriction. Bare agent names such as `gado`
 and exam-level injection descriptions are protocol context; clear acquisition
 postcontrast wording such as `post` or `C+` still establishes post-only context.
 

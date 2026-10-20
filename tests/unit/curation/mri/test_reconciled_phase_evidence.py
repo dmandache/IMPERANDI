@@ -117,7 +117,7 @@ def test_container_frame_clock_cannot_supply_distinct_volume_delays():
     assert out.phase.tolist() == ["NATIVE", "ARTERIAL", "PORTAL_VENOUS", "DELAYED"]
 
 
-def test_missing_ph1_does_not_block_first_dynamic_native_fallback():
+def test_missing_ph1_does_not_block_native_fallback_without_valid_native_context():
     frame = volumes(3)
     frame["SeriesDescription"] = [
         "AX T1 VIBE dynamic Ph2",
