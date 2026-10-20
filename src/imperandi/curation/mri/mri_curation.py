@@ -1551,11 +1551,7 @@ def is_native_fallback_candidate(row: pd.Series) -> bool:
     if dixon_component in {"FAT", "FAT_FRACTION", "R2STAR", "DIXON_ALL"}:
         return False
 
-    return bool(
-        row.get("is_3d_gre")
-        or _sequence_matches_pattern(row, rules.RX_T1_3D_GRE)
-        or dixon_component in {"WATER", "IN_PHASE", "DIXON_UNKNOWN"}
-    )
+    return True
 
 
 def _sort_key_for_native_fallback(row: pd.Series) -> tuple:
@@ -1576,18 +1572,37 @@ def _sort_key_for_native_fallback(row: pd.Series) -> tuple:
     )
     quality_score += 1 if bool(row.get("is_breath_hold")) else 0
 
-    time_seconds = parse_time_to_seconds(row.get("time"))
-    acquisition_order = safe_float(row.get("acquisition_order"))
     return (
         -quality_score,
         -component_score,
-        time_seconds if pd.notna(time_seconds) else np.inf,
-        acquisition_order if pd.notna(acquisition_order) else np.inf,
+        common.stable_text(row.get("volume_id")) or _dynamic_series_id(row),
     )
 
 
+def _native_protocol_texts(row: pd.Series, *, strip_phase: bool = False):
+    """Use acquisition text in its configured phase-evidence field, when present."""
+    evidence = _phase_text_column(row)
+    for column, text in iter_series_text_columns(row):
+        if column in {"StudyDescription", "ImageType"}:
+            continue
+        if evidence is not None and evidence[0] != column:
+            continue
+        if strip_phase:
+            for pattern in (
+                rules.RX_PHASE_ORDINAL,
+                shared_rules.RX_DURATION,
+                *(rule.pattern for rule in rules.PHASE_RULES),
+                rules.RX_PHASE_POST_CONTRAST,
+                rules.RX_PHASE_GENERIC_DYNAMIC,
+            ):
+                text = re.sub(pattern, " ", text)
+        name = re.sub(rf"{SEP_CHARS}+", " ", text).strip()
+        if name:
+            yield column, name
+
+
 def infer_missing_native_fallback(exam_rows: pd.DataFrame) -> tuple[int | None, str]:
-    """Find a separate native before compatible dynamics or resolved perfusion phases."""
+    """Find a separate native using compatible perfusion context, without chronology."""
     if exam_rows.mri_perfusion_label.eq("NATIVE").any():
         return None, "native/precontrast already resolved in compatible protocol"
     candidates = exam_rows.loc[
@@ -1620,23 +1635,95 @@ def infer_missing_native_fallback(exam_rows: pd.DataFrame) -> tuple[int | None, 
         key=lambda idx: _sort_key_for_native_fallback(candidates.loc[idx]),
     )
     for idx in ranked:
-        chronology, _ = _generic_dynamic_chronology(
-            pd.concat([candidates.loc[[idx]], context])
-        )
-        if (
-            chronology is None
-            or chronology.order.isna().any()
-            or chronology.order.nunique() < minimum_acquisitions
-        ):
-            continue
-        if chronology.loc[idx, "order"] >= chronology.loc[context.index, "order"].min():
+        evidence = pd.concat([candidates.loc[[idx]], context])
+        acquisitions = set()
+        for evidence_idx, row in evidence.iterrows():
+            identity = next(
+                (
+                    (column, common.stable_text(row.get(column)))
+                    for column in ("acquisition_id", "volume_id")
+                    if not common.is_missing(row.get(column))
+                    and common.stable_text(row.get(column))
+                ),
+                ("row", evidence_idx),
+            )
+            acquisitions.add(identity)
+        if len(acquisitions) < minimum_acquisitions:
             continue
         desc = candidates.loc[idx].get("SeriesDescription")
         return idx, (
             "selected fallback native/precontrast from compatible protocol context: "
-            f"a separate candidate precedes compatible perfusion acquisitions: {desc}"
+            f"a separate candidate matches compatible perfusion acquisitions: {desc}"
         )
-    return None, "no supported native candidate before compatible dynamics"
+    return None, "no supported native candidate with sufficient compatible context"
+
+
+def _infer_same_protocol_natives(rows: pd.DataFrame):
+    """Resolve the first acquisition of a repeated protocol without phase wording."""
+    protocols = {}
+    native_protocols = set()
+    for idx, row in rows.iterrows():
+        if bool(row.get("is_derived_low_value")) or row.mri_perfusion_source in {
+            "dicom_phase_conflict", "ordinal_phase_conflict", "dynamic_profile_guard",
+        }:
+            continue
+        if row.mri_perfusion_label == "NATIVE":
+            native_protocols.update(
+                (_generic_dynamic_key(row), column, name)
+                for column, name in _native_protocol_texts(row, strip_phase=True)
+            )
+        for column, name in _native_protocol_texts(row):
+            key = (_generic_dynamic_key(row), column, name)
+            protocols.setdefault(key, []).append(idx)
+
+    assignments = []
+    resolved = set()
+    for (key, column, name), indices in protocols.items():
+        group = rows.loc[indices]
+        if (
+            (key, column, name) in native_protocols
+            or group.mri_perfusion_label.eq("NATIVE").any()
+            or resolved.intersection(indices)
+        ):
+            continue
+        chronology, _ = _generic_dynamic_chronology(group)
+        if (
+            chronology is None
+            or chronology.order.isna().any()
+            or chronology.order.nunique() < 2
+        ):
+            continue
+        first = group.loc[chronology.order.eq(chronology.order.min())]
+        if not first.apply(
+            lambda row: is_native_fallback_candidate(row)
+            and row.mri_perfusion_source == "none"
+            and not _phase_matches_pattern(row, rules.RX_PHASE_GENERIC_DYNAMIC),
+            axis=1,
+        ).all():
+            continue
+        if first.apply(
+            lambda row: bool(
+                _first_phase_text_value(
+                    row,
+                    lambda text: shared_rules.has_pre_post_contrast_text(
+                        text, native=rules.RX_PHASE_NATIVE,
+                        post=rules.RX_PHASE_POST_CONTRAST,
+                    ),
+                )
+            ),
+            axis=1,
+        ).any():
+            continue
+        for idx in first.index:
+            assignments.append(
+                (
+                    idx,
+                    "inferred NATIVE from first acquisition of matching protocol: "
+                    f"{column}={name!r}; order={chronology.loc[idx, 'order_source']}",
+                )
+            )
+            resolved.add(idx)
+    return assignments
 
 
 def _infer_unnumbered_protocol_natives(rows: pd.DataFrame):
@@ -1763,8 +1850,6 @@ def _infer_missing_native_fallbacks(
             axis=1,
         )
     ]
-    if phase_context.empty:
-        return assignments
     for key, rows in phase_context.groupby(
         phase_context.apply(_generic_dynamic_key, axis=1), sort=False
     ):
@@ -1774,11 +1859,30 @@ def _infer_missing_native_fallbacks(
                 lambda row: _matches_dynamic_group(row, key, series_ids), axis=1
             )
         ]
-        idx, reason = infer_missing_native_fallback(context)
-        if idx is not None:
-            assignments.append((idx, reason))
-            eligible.loc[idx, "mri_perfusion_label"] = "NATIVE"
-            eligible.loc[idx, "mri_perfusion_source"] = "exam_context"
+        contexts = [context]
+        if key[-3] == "UNSPECIFIED_T1":
+            # An unrecognized T1 family alone does not identify a common protocol.
+            names = dict.fromkeys(
+                name
+                for _, row in rows.iterrows()
+                for name in _native_protocol_texts(row, strip_phase=True)
+            )
+            contexts = [
+                context.loc[
+                    context.apply(
+                        lambda row: name in set(_native_protocol_texts(row, strip_phase=True)),
+                        axis=1,
+                    )
+                ]
+                for name in names
+            ]
+        for compatible in contexts:
+            idx, reason = infer_missing_native_fallback(compatible)
+            if idx is not None and idx not in {assigned for assigned, _ in assignments}:
+                assignments.append((idx, reason))
+                eligible.loc[idx, "mri_perfusion_label"] = "NATIVE"
+                eligible.loc[idx, "mri_perfusion_source"] = "exam_context"
+    assignments.extend(_infer_same_protocol_natives(eligible))
     return assignments
 
 

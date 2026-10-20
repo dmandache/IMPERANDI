@@ -607,13 +607,34 @@ volumes must remain below that phase, including when a `time_delta` window match
 the reserved phase. Order fallback can repeat a preceding phase, or stay unresolved
 when no compatible postcontrast phase remains. Without a succeeding explicit
 phase, the existing timing and order progression applies. A separate unlabelled
-native can be inferred when it precedes compatible dynamics. Groups match on
+native can be inferred from compatible perfusion context. Groups match on
 `patient_key`, `date`, `study_id`, `StudyInstanceUID`, `ImageType`, sequence family,
 plane, and Dixon component. `ImageType` uses its full ordered token sequence,
 normalized for case and representation (lists, serialized lists, or separated
 strings). Missing image types group together separately from populated values.
 Different image types have independent phase progressions and `time_delta`
 references. Series IDs and time gaps do not split these groups.
+
+The separate-native fallback accepts all diagnostic T1 sequences, including
+conventional T1 and protocols classified from TR/TE metadata. GRE or Dixon
+wording is not required. A resolved arterial, portal, or delayed phase supports
+an unlabelled native with two distinct acquisitions; unresolved dynamic
+context still requires three. This separate-native route does not require
+chronology or a candidate before the perfusion acquisitions. Candidate ranking
+uses image quality and component preferences, with stable identifiers breaking
+ties. Supplied acquisition identities are counted once. For sequence families
+without a recognized vendor name, matching protocol text after removing phase
+terms keeps unrelated T1 protocols separate.
+
+A further generic native fallback checks repeated acquisition protocols in the
+same configured text field, normalizing case and separators. Two distinct,
+reliably ordered matching acquisitions are sufficient: the earliest unlabelled
+diagnostic T1 acquisition becomes native even without perfusion-phase wording.
+Later unlabelled acquisitions remain unresolved. This route retains the same
+study, image type, family, plane, and Dixon component boundaries and preserves
+resolved phases and existing natives. Missing chronology, input-order ranks,
+postcontrast candidates, and excluded derived products cannot establish native.
+Dynamic and mixed pre/post descriptions retain their dedicated inference routes.
 
 ART-PORT profiles use arterial at the first volume and portal at the last.
 ART/PORT/LATE profiles use arterial first and delayed last; the middle of a

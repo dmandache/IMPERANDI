@@ -283,7 +283,7 @@ def test_extra_dynamic_acquisitions_remain_delayed_after_standard_progression(
     ]
 
 
-def test_late_unlabelled_candidate_does_not_steal_native_from_dynamic_start():
+def test_separate_native_candidate_is_resolved_independently_of_acquisition_order():
     rows = acquisitions("AX T1 LAVA dynamic", same_series=False).iloc[:3].copy()
     late = rows.iloc[-1].copy()
     late.update(
@@ -299,11 +299,12 @@ def test_late_unlabelled_candidate_does_not_steal_native_from_dynamic_start():
         pd.concat([rows, pd.DataFrame([late])], ignore_index=True)
     ).set_index("volume_id")
     assert out.loc[["v0", "v1", "v2"], "mri_perfusion_label"].tolist() == [
-        "NATIVE",
-        "ARTERIAL",
-        "PORTAL_VENOUS",
+        "OTHER",
+        "OTHER",
+        "OTHER",
     ]
-    assert out.loc["late", "mri_perfusion_label"] == "OTHER"
+    assert out.loc["late", "mri_perfusion_label"] == "NATIVE"
+    assert out.loc["late", "mri_perfusion_source"] == "exam_context"
 
 
 def test_unlabelled_candidate_cannot_anchor_a_different_study():
