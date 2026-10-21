@@ -85,7 +85,7 @@ RX_PHASE_ARTERIAL = token(
 RX_PHASE_PORTAL = token(
     rf"port(?:al(?:e)?|o)?|porte|porto{SEP}venous|portal{SEP}venous"
     rf"|vein(?:e)?|venous|veneux|veineux|veineuse|vx|vp|pv"
-    rf"|parenchymateux|parenchymal|phase{SEP}p"
+    rf"|parenchymateux|parenchymal|parenchyme|phase{SEP}p"
 )
 RX_PHASE_DELAYED = token(
     rf"tard(?:if|ive)?|delay(?:ed)?|d[eé]lai|late|equilibrium|[eé]quilibre"
@@ -257,6 +257,55 @@ def has_phase_text_evidence(
     )
 
 
+def _named_phase_matches(text, rules, post, prefer_delayed_time, durations):
+    """Yield every valid named match, retaining spans for compound labels."""
+    for rule in rules:
+        if rule.label == "NATIVE" and has_pre_post_contrast_text(
+            text, rule.pattern, post
+        ):
+            continue
+        for match in re.finditer(rule.pattern, text):
+            if rule.label == "DELAYED" and prefer_delayed_time and durations:
+                continue
+            if rule.label == "DELAYED" and any(
+                duration.start() >= match.end()
+                and re.fullmatch(SEP, text[match.end() : duration.start()])
+                and not rule.accepts_time(seconds)
+                for duration, seconds in durations
+            ):
+                continue
+            yield rule, match
+
+
+def match_phases(
+    text: str, rules: Sequence[PhaseRule] = PHASE_RULES
+) -> list[tuple[str, str]]:
+    """Collect distinct named phases in text order, then fall back to timing.
+
+    A compound label such as 'late arterial' owns its full span: its nested
+    'late' token is not a second, delayed phase.
+    """
+    matches = list(
+        _named_phase_matches(
+            text, rules, RX_PHASE_POST_CONTRAST, False, _durations(text)
+        )
+    )
+    phases = {}
+    for rule, match in sorted(matches, key=lambda item: item[1].start()):
+        if any(
+            other.start() <= match.start()
+            and other.end() >= match.end()
+            and other.end() - other.start() > match.end() - match.start()
+            for _, other in matches
+        ):
+            continue
+        phases.setdefault(rule.label, rule.description)
+    if phases:
+        return list(phases.items())
+    timed = match_phase(text, rules)
+    return [timed] if timed else []
+
+
 def match_phase(
     text: str,
     rules: Sequence[PhaseRule] = PHASE_RULES,
@@ -271,25 +320,10 @@ def match_phase(
     durations do not identify a pure phase.
     """
     durations = _durations(text)
-    for rule in rules:
-        if rule.label == "NATIVE" and has_pre_post_contrast_text(
-            text, rule.pattern, post
-        ):
-            continue
-        for match in re.finditer(rule.pattern, text):
-            if rule.label == "DELAYED" and prefer_delayed_time and durations:
-                # MRI's generic tardif/late wording must yield to its explicit
-                # delay, even when the number precedes the word or is separated
-                # by other protocol text.
-                continue
-            if rule.label == "DELAYED" and any(
-                duration.start() >= match.end()
-                and re.fullmatch(SEP, text[match.end() : duration.start()])
-                and not rule.accepts_time(seconds)
-                for duration, seconds in durations
-            ):
-                continue
-            return rule.label, rule.description
+    for rule, _ in _named_phase_matches(
+        text, rules, post, prefer_delayed_time, durations
+    ):
+        return rule.label, rule.description
 
     timed_matches = set()
     for _, seconds in durations:
