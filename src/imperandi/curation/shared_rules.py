@@ -84,7 +84,7 @@ RX_PHASE_ARTERIAL = token(
 )
 RX_PHASE_PORTAL = token(
     rf"port(?:al(?:e)?|o)?|porte|porto{SEP}venous|portal{SEP}venous"
-    rf"|vein(?:e)?|venous|veneux|veineux|veineuse|vp|pv"
+    rf"|vein(?:e)?|venous|veneux|veineux|veineuse|vx|vp|pv"
     rf"|parenchymateux|parenchymal|phase{SEP}p"
 )
 RX_PHASE_DELAYED = token(
