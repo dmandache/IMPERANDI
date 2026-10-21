@@ -80,7 +80,7 @@ RX_PHASE_NATIVE = token(
 ARTERIAL = r"art(?:erial|[eé]riel(?:le)?)?"
 RX_PHASE_ARTERIAL = token(
     rf"{ARTERIAL}|artery|aort(?:e|ic|ique)|hepatic{SEP}arter(?:y|ial)?"
-    rf"|(?:early|late|multi){SEP}{ARTERIAL}"
+    rf"|(?:early|late|multi){SEP}{ARTERIAL}|ta"
 )
 RX_PHASE_PORTAL = token(
     rf"port(?:al(?:e)?|o)?|porte|porto{SEP}venous|portal{SEP}venous"
