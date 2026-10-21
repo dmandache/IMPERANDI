@@ -74,7 +74,7 @@ RX_PHASE_NATIVE = token(
     rf"|without{SEP}(?:{CONTRAST}|{INJECTION})"
     rf"|non{SEP}(?:{INJECTION}|{CONTRAST})"
     rf"|wo{SEP}(?:{INJECTION}|{CONTRAST})"
-    rf"|ss{SEP}(?:iv|i)|si|siv|blanc|c-"
+    rf"|ss{SEP}(?:iv|i)|si|siv|spc|blanc|c-"
     rf"|w/o(?:{SEP}(?:{INJECTION}|{CONTRAST}))?|wo|w/o"
 )
 ARTERIAL = r"art(?:erial|[eé]riel(?:le)?)?"
@@ -84,8 +84,7 @@ RX_PHASE_ARTERIAL = token(
 )
 RX_PHASE_PORTAL = token(
     rf"port(?:al(?:e)?|o)?|porte|porto{SEP}venous|portal{SEP}venous"
-    rf"|vein(?:e)?|venous|veneux|veineux|veineuse|vx|vp|pv"
-    rf"|parenchymateux|parenchymal|parenchyme|phase{SEP}p"
+    rf"|vein(?:e)?|venous|veneux|veineux|veineuse|vx|vp|pv|phase{SEP}p"
 )
 RX_PHASE_DELAYED = token(
     rf"tard(?:if|ive)?|delay(?:ed)?|d[eé]lai|late|equilibrium|[eé]quilibre"
