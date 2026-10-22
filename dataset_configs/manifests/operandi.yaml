@@ -34,23 +34,311 @@ derived_columns:
 # Ordered resolution precedence. Supported types: ontology, rules, and
 # totalsegmentator, with each type appearing at most once.
 phase_curation:
-  # Together these identify each group that gets one best candidate per slot.
-  best_candidate_group_columns: [patient_key, study_id, date]
+  best_candidate_group_columns: [patient_key, exam_stage]
+  text_columns:
+    CT: [SeriesDescription, StudyDescription, ProtocolName]
+    MR: [SeriesDescription, StudyDescription, ProtocolName]
   strategies:
+    - type: explicit
+      name: reviewed_assignments
+      confidence: high
+      assignments:
+        - name: t1_generic
+          phase: NATIVE
+          rules:
+            - {column: SeriesDescription, op: icontains, value: ax t1 in + out + w apnee}
+        - name: parenchymateux_generic
+          phase: DELAYED
+          logic: and
+          rules:
+            - {column: Modality, op: eq, value: MR}
+            - {column: SeriesDescription, op: icontains, value: parenchym}
+        - name: 1-2-13-2_art
+          phase: ARTERIAL
+          logic: and
+          rules:
+            - {column: patient_key, op: eq, value: "1-2-13-2"}
+            # Match ISO dates represented as either CSV strings or Python dates.
+            - {column: date, op: regex, value: "^2017-04-01$"}
+            - {column: Modality, op: eq, value: MR}
+            - {column: SeriesDescription, op: icontains, value: ph1}
+        - name: 1-2-13-2_port
+          phase: PORTAL_VENOUS
+          logic: and
+          rules:
+            - {column: patient_key, op: eq, value: "1-2-13-2"}
+            - {column: date, op: regex, value: "^2017-04-01$"}
+            - {column: Modality, op: eq, value: MR}
+            - {column: SeriesDescription, op: icontains, value: ph3}
+        - name: 1-2-13-2_tard
+          phase: DELAYED
+          logic: and
+          rules:
+            - {column: patient_key, op: eq, value: "1-2-13-2"}
+            - {column: date, op: regex, value: "^2017-04-01$"}
+            - {column: Modality, op: eq, value: MR}
+            - {column: SeriesDescription, op: icontains, value: ph4}
+        - name: 1-2-14-2_grasp_perf_art
+          phase: ARTERIAL
+          rules:
+            - {column: patient_key, op: eq, value: "1-2-14-2"}
+            - {column: date, op: regex, value: "^2017-11-29$"}
+            - {column: Modality, op: eq, value: MR}
+            - {column: SeriesNumber, op: eq, value: 12008}
+        - name: 1-2-14-2_grasp_perf_port
+          phase: PORTAL_VENOUS
+          rules:
+            - {column: patient_key, op: eq, value: "1-2-14-2"}
+            - {column: date, op: regex, value: "^2017-11-29$"}
+            - {column: Modality, op: eq, value: MR}
+            - {column: SeriesNumber, op: eq, value: 12022}
+        - name: 1-2-15-2_to_confirm_art
+          phase: ARTERIAL
+          logic: and
+          rules:
+            - {column: patient_key, op: eq, value: "1-2-15-2"}
+            - {column: date, op: regex, value: "^2017-12-14$"}
+            - {column: Modality, op: eq, value: MR}
+            - {column: SeriesDescription, op: icontains, value: ph2}
+        - name: 1-2-15-2_to_confirm_port
+          phase: PORTAL_VENOUS
+          logic: and
+          rules:
+            - {column: patient_key, op: eq, value: "1-2-15-2"}
+            - {column: date, op: regex, value: "^2017-12-14$"}
+            - {column: Modality, op: eq, value: MR}
+            - {column: SeriesDescription, op: icontains, value: ph3}
+        - name: 1-2-15-2_to_confirm_tard
+          phase: DELAYED
+          logic: and
+          rules:
+            - {column: patient_key, op: eq, value: "1-2-15-2"}
+            - {column: date, op: regex, value: "^2017-12-14$"}
+            - {column: Modality, op: eq, value: MR}
+            - {column: SeriesDescription, op: icontains, value: ph4}
+        - name: 1-2-19-2_art
+          phase: ARTERIAL
+          logic: and
+          rules:
+            - {column: patient_key, op: eq, value: "1-2-19-2"}
+            - {column: date, op: regex, value: "^2017-08-02$"}
+            - {column: Modality, op: eq, value: MR}
+            - {column: SeriesDescription, op: icontains, value: ax t1 dixon dyn apnee 4 phases apnee}
+        - name: 1-2-34-2_art
+          phase: ARTERIAL
+          logic: and
+          rules:
+            - {column: patient_key, op: eq, value: "1-2-34-2"}
+            - {column: date, op: regex, value: "^2018-06-05$"}
+            - {column: Modality, op: eq, value: MR}
+            - {column: SeriesNumber, op: eq, value: 12}
+        - name: 1-2-34-2_port
+          phase: PORTAL_VENOUS
+          logic: and
+          rules:
+            - {column: patient_key, op: eq, value: "1-2-34-2"}
+            - {column: date, op: regex, value: "^2018-06-05$"}
+            - {column: Modality, op: eq, value: MR}
+            - {column: SeriesNumber, op: eq, value: 13}
+        - name: 1-2-34-2_tard
+          phase: DELAYED
+          logic: and
+          rules:
+            - {column: patient_key, op: eq, value: "1-2-34-2"}
+            - {column: date, op: regex, value: "^2018-06-05$"}
+            - {column: Modality, op: eq, value: MR}
+            - {column: SeriesNumber, op: eq, value: 14}
+        - name: 1-2-57-2_art
+          phase: ARTERIAL
+          logic: and
+          rules:
+            - {column: patient_key, op: eq, value: "1-2-57-2"}
+            - {column: date, op: regex, value: "^2019-02-28$"}
+            - {column: Modality, op: eq, value: MR}
+            - {column: SeriesDescription, op: icontains, value: ph1}
+        - name: 1-2-57-2_port
+          phase: PORTAL_VENOUS
+          logic: and
+          rules:
+            - {column: patient_key, op: eq, value: "1-2-57-2"}
+            - {column: date, op: regex, value: "^2019-02-28$"}
+            - {column: Modality, op: eq, value: MR}
+            - {column: SeriesDescription, op: icontains, value: ph2}
+        - name: 1-2-86-2_nat
+          phase: NATIVE
+          logic: and
+          rules:
+            - {column: patient_key, op: eq, value: "1-2-86-2"}
+            - {column: date, op: regex, value: "^2019-10-08$"}
+            - {column: Modality, op: eq, value: MR}
+            - {column: SeriesNumber, op: eq, value: 1001}
+            - {column: volume_order_in_series, op: eq, value: 1}
+        - name: 1-2-86-2_art
+          phase: ARTERIAL
+          logic: and
+          rules:
+            - {column: patient_key, op: eq, value: "1-2-86-2"}
+            - {column: date, op: regex, value: "^2019-10-08$"}
+            - {column: Modality, op: eq, value: MR}
+            - {column: SeriesNumber, op: eq, value: 1001}
+            - {column: volume_order_in_series, op: eq, value: 3} 
+        - name: 1-2-86-2_port
+          phase: PORTAL_VENOUS
+          logic: and
+          rules:
+            - {column: patient_key, op: eq, value: "1-2-86-2"}
+            - {column: date, op: regex, value: "^2019-10-08$"}
+            - {column: Modality, op: eq, value: MR}
+            - {column: SeriesNumber, op: eq, value: 1001}
+            - {column: volume_order_in_series, op: eq, value: 4}
+        - name: 1-6-16-2_art
+          phase: ARTERIAL
+          logic: and
+          rules:
+            - {column: patient_key, op: eq, value: "1-6-16-2"}
+            - {column: date, op: regex, value: "^2021-03-22$"}
+            - {column: Modality, op: eq, value: MR}
+            - {column: SeriesDescription, op: icontains, value: ph3}
+        - name: 1-6-16-2_port
+          phase: PORTAL_VENOUS
+          logic: and
+          rules:
+            - {column: patient_key, op: eq, value: "1-6-16-2"}
+            - {column: date, op: regex, value: "^2021-03-22$"}
+            - {column: Modality, op: eq, value: MR}
+            - {column: SeriesDescription, op: icontains, value: ph4}
+        - name: 6-2-2-2_art
+          phase: ARTERIAL
+          logic: and
+          rules:
+            - {column: patient_key, op: eq, value: "6-2-2-2"}
+            - {column: date, op: regex, value: "^2019-10-28$"}
+            - {column: Modality, op: eq, value: MR}
+            - {column: SeriesNumber, op: eq, value: 9}
+        - name: 6-2-2-2_port
+          phase: PORTAL_VENOUS
+          logic: and
+          rules:
+            - {column: patient_key, op: eq, value: "6-2-2-2"}
+            - {column: date, op: regex, value: "^2019-10-28$"}
+            - {column: Modality, op: eq, value: MR}
+            - {column: SeriesNumber, op: eq, value: 11}
+        - name: 7-2-3-2_dyn_1
+          phase: NATIVE
+          logic: and
+          rules:
+            - {column: patient_key, op: eq, value: "7-2-3-2"}
+            - {column: date, op: regex, value: "^2017-11-08$"}
+            - {column: Modality, op: eq, value: MR}
+            - {column: SeriesNumber, op: eq, value: 801}
+            - {column: volume_order_in_series, op: eq, value: 1}
+        - name: 7-2-3-2_dyn_2
+          phase: ARTERIAL
+          logic: and
+          rules:
+            - {column: patient_key, op: eq, value: "7-2-3-2"}
+            - {column: date, op: regex, value: "^2017-11-08$"}
+            - {column: Modality, op: eq, value: MR}
+            - {column: SeriesNumber, op: eq, value: 801}
+            - {column: volume_order_in_series, op: eq, value: 2}
+        - name: 7-2-3-2_dyn_3
+          phase: PORTAL_VENOUS
+          logic: and
+          rules:
+            - {column: patient_key, op: eq, value: "7-2-3-2"}
+            - {column: date, op: regex, value: "^2017-11-08$"}
+            - {column: Modality, op: eq, value: MR}
+            - {column: SeriesNumber, op: eq, value: 801}
+            - {column: volume_order_in_series, op: eq, value: 3}
+        - name: 7-2-3-2_dyn_4
+          phase: DELAYED
+          logic: and
+          rules:
+            - {column: patient_key, op: eq, value: "7-2-3-2"}
+            - {column: date, op: regex, value: "^2017-11-08$"}
+            - {column: Modality, op: eq, value: MR}
+            - {column: SeriesNumber, op: eq, value: 801}
+            - {column: volume_order_in_series, op: eq, value: 4}
+        - name: 7-2-19-2_mph_art
+          phase: ARTERIAL
+          logic: and
+          rules:
+            - {column: patient_key, op: eq, value: "7-2-19-2"}
+            - {column: date, op: regex, value: "^2019-09-06$"}
+            - {column: Modality, op: eq, value: MR}
+            - {column: SeriesNumber, op: eq, value: 10}
+            - {column: volume_order_in_series, op: eq, value: 3}
+        - name: 7-2-19-2_mph_port
+          phase: PORTAL_VENOUS
+          logic: and
+          rules:
+            - {column: patient_key, op: eq, value: "7-2-19-2"}
+            - {column: date, op: regex, value: "^2019-09-06$"}
+            - {column: Modality, op: eq, value: MR}
+            - {column: SeriesNumber, op: eq, value: 10}
+            - {column: volume_order_in_series, op: eq, value: 4}
+        # CT phase overrides
+        - name: 7-2-3-2_2017-09-28_ct_native
+          phase: NATIVE
+          logic: and
+          rules:
+            - {column: patient_key, op: eq, value: "7-2-3-2"}
+            - {column: date, op: regex, value: "^2017-09-28$"}
+            - {column: Modality, op: eq, value: CT}
+            - {column: SeriesNumber, op: eq, value: 3}
+        - name: 7-2-3-2_2017-09-28_ct_art
+          phase: ARTERIAL
+          logic: and
+          rules:
+            - {column: patient_key, op: eq, value: "7-2-3-2"}
+            - {column: date, op: regex, value: "^2017-09-28$"}
+            - {column: Modality, op: eq, value: CT}
+            - {column: SeriesNumber, op: eq, value: 6}
+        - name: 7-2-3-2_2017-09-28_ct_port
+          phase: PORTAL_VENOUS
+          logic: and
+          rules:
+            - {column: patient_key, op: eq, value: "7-2-3-2"}
+            - {column: date, op: regex, value: "^2017-09-28$"}
+            - {column: Modality, op: eq, value: CT}
+            - {column: SeriesNumber, op: eq, value: 7}
+        - name: 7-2-6-2_2018-01-08_ct_native
+          phase: NATIVE
+          logic: and
+          rules:
+            - {column: patient_key, op: eq, value: "7-2-6-2"}
+            - {column: date, op: regex, value: "^2018-01-08$"}
+            - {column: Modality, op: eq, value: CT}
+            - {column: SeriesNumber, op: eq, value: 3}
+        - name: 7-2-6-2_2018-01-08_ct_art
+          phase: ARTERIAL
+          logic: and
+          rules:
+            - {column: patient_key, op: eq, value: "7-2-6-2"}
+            - {column: date, op: regex, value: "^2018-01-08$"}
+            - {column: Modality, op: eq, value: CT}
+            - {column: SeriesNumber, op: eq, value: 6}
+        - name: 7-2-6-2_2018-01-08_ct_port
+          phase: PORTAL_VENOUS
+          logic: and
+          rules:
+            - {column: patient_key, op: eq, value: "7-2-6-2"}
+            - {column: date, op: regex, value: "^2018-01-08$"}
+            - {column: Modality, op: eq, value: CT}
+            - {column: SeriesNumber, op: eq, value: 7}
+            
     - type: ontology
       name: operandi_phase_ontology
       columns: [ontology_phase]
       confidence: high
-      # Exact, case-insensitive source labels mapped to canonical phase labels.
       mapping:
-        native: NATIVE
-        sans injection: NATIVE
+        inconnu: UNKNOWN
+        sans_injection: NATIVE
         arterial: ARTERIAL
         arteriel: ARTERIAL
         artériel: ARTERIAL
         portal: PORTAL_VENOUS
         portale: PORTAL_VENOUS
-        delayed: DELAYED
         tardif: DELAYED
     - type: rules
       name: metadata_rules
@@ -63,13 +351,9 @@ phase_curation:
         - totalseg_confidence
       mapping:
         native: NATIVE
-        non_contrast: NATIVE
-        no_contrast: NATIVE
         arterial: ARTERIAL
         arterial_early: ARTERIAL
         arterial_late: ARTERIAL
-        portal: PORTAL_VENOUS
-        venous: PORTAL_VENOUS
         portal_venous: PORTAL_VENOUS
         delayed: DELAYED
   unresolved_labels:
@@ -78,38 +362,46 @@ phase_curation:
     - UNKNOWN
     - UNCLASSIFIED
     - NONE
-  fallback: OTHER
+  fallback: UNKNOWN
 
-# Ordered cleaning workflow. Hook functions use `module:function` syntax
-# and must declare outputs with @clean_hook.
+# Ordered cleaning workflow; version must currently be 1. Hook functions use
+# `module:function` syntax and must declare outputs with @clean_hook.
 cleaning:
   steps:
-    - type: hook
-      function: "dataset_configs.hooks.operandi:standardize_operandi_patient_key"
-      source_columns: [patient_key]
-    - type: hook
-      function: "dataset_configs.hooks.operandi:extract_from_patient_key"
-      source_columns: [patient_key]
+    # - type: hook
+    #   function: "dataset_configs.hooks.operandi:standardize_operandi_patient_key"
+    #   source_columns: [patient_key]
+    # - type: hook
+    #   function: "dataset_configs.hooks.operandi:extract_from_patient_key"
+    #   source_columns: [patient_key]
     - type: coalesce_date
+      candidates: [AcquisitionDate, AcquisitionDateTime, SeriesDate, StudyDate]
     - type: coalesce_time
+      candidates: [FrameAcquisitionDateTime, AcquisitionTime, AcquisitionDateTime, SeriesTime, StudyTime]
     - type: sop_class
-    - type: parse_image_type
     - type: filter
-      name: scan_size_quality
+      name: discard_large_slice_thickness_CT
       kind: discard
       scope: row
-      logic: or
+      logic: and
+      keep_null: true
       rules:
-        - {column: Rows, op: is_null}
-        - {column: Columns, op: is_null}
-        - {column: SliceThickness, op: gt, value: 3.0}
+        - {column: SliceThickness, op: gt, value: 5.0}
+        - {column: Modality, op: eq, value: CT}
     - type: filter
-      # kind: keep|discard; scope: row|volume; logic: and|or.
-      # Operators: eq, ne, in, not_in, contains, icontains, regex, lt, lte,
-      # gt, gte, is_null, not_null. keep_null preserves incomplete rows.
-      kind: keep
+      name: discard_large_slice_thickness_MR
+      kind: discard
       scope: row
       logic: and
+      keep_null: true
+      rules:
+        - {column: SliceThickness, op: gt, value: 10.0}
+        - {column: Modality, op: eq, value: MR}
+    - type: filter
+      name: keep_CT_MRI_only
+      kind: keep
+      scope: row
+      logic: or
       rules:
         - column: Modality
           op: in
@@ -121,7 +413,10 @@ cleaning:
             - EnhancedCTImageStorage
             - MRImageStorage
             - EnhancedMRImageStorage
+            - LegacyConvertedEnhancedMRImageStorage
+            - EnhancedMRColorImageStorage
     - type: filter
+      name: discard_PET_CT
       kind: discard
       scope: row
       logic: or
@@ -129,42 +424,57 @@ cleaning:
         - {column: ModalitiesInStudy, op: contains, value: PT}
         - {column: ModalitiesInStudy, op: contains, value: NM}
     - type: filter
+      name: discard_scouts_localizers
       kind: discard
       scope: row
       logic: or
       rules:
         - {column: ImageType, op: contains, value: LOCALIZER}
         - {column: SeriesDescription, op: icontains, value: scout}
+        - {column: SeriesDescription, op: icontains, value: localizer}
     - type: normalize_string
       column: SeriesDescription
     - type: filter
+      name: discard_other_organs
       kind: discard
       scope: row
       logic: or
       rules:
-        - {column: SeriesDescription, op: contains, value: pelvis}
-        - {column: SeriesDescription, op: contains, value: crane}
-        - {column: SeriesDescription, op: contains, value: rachis}
-        - {column: SeriesDescription, op: contains, value: prostate}
-        - {column: SeriesDescription, op: contains, value: phlebo}
-        - {column: SeriesDescription, op: contains, value: meckel}
-        - {column: SeriesDescription, op: contains, value: femur}
-        - {column: SeriesDescription, op: contains, value: orl}
+        - {column: SeriesDescription, op: icontains, value: crane}
+        - {column: SeriesDescription, op: icontains, value: rachis}
+        - {column: SeriesDescription, op: icontains, value: prostate}
+        - {column: SeriesDescription, op: icontains, value: phlebo}
+        - {column: SeriesDescription, op: icontains, value: meckel}
+        - {column: SeriesDescription, op: icontains, value: femur}
+        - {column: SeriesDescription, op: icontains, value: orl}
+        - {column: BodyPartExamined, op: in, value: [BRAIN,HEAD,SKULL,NECK,ORBIT,EXTREMITY]}
     - type: pixel_spacing_xy
     - type: filter
-      name: pixel_spacing_quality
-      kind: keep
+      name: pixel_spacing_quality_CT
+      kind: discard
       scope: row
       logic: and
       keep_null: true
       rules:
-        - {column: PixelSpacingXY, op: lte, value: 1.25}
+        - {column: PixelSpacingXY, op: gt, value: 1.5}
+        - {column: Modality, op: eq, value: CT}
+    - type: filter
+      name: pixel_spacing_quality_MR
+      kind: discard
+      scope: row
+      logic: and
+      keep_null: true
+      rules:
+        - {column: PixelSpacingXY, op: gt, value: 1.8}
+        - {column: Modality, op: eq, value: MR}
     - type: standardize_iop
     - type: classify_acquisition_plane
     - type: filter
+      name: keep_axial_acquisition
       kind: keep
       scope: row
       logic: and
+      keep_null: true
       rules:
         - {column: acquisition_axis, op: eq, value: Z}
     - type: build_volume_id
@@ -182,7 +492,7 @@ cleaning:
       fallback_columns: [patient_key, study_id, series_id]
       series_group_columns: [patient_key, study_id, series_id]
       split_z_tolerance: 0.01
-      min_slices: 8
+      min_slices: 7
       min_repeated_slice_fraction: 0.7
       merge_group_columns:
         - patient_key
@@ -197,103 +507,268 @@ cleaning:
     - type: group_volumes
     - type: compute_volume_length
     - type: filter
+      name: remove_volumes_with_few_slices
+      kind: discard
+      scope: volume
+      rules:
+        - {column: n_files, op: lt, value: 3}
+    - type: filter
       name: volume_length_quality
       kind: keep
       scope: volume
       logic: and
       keep_null: true
       rules:
-        - {column: volume_length, op: gte, value: 30.0}
+        - {column: volume_length, op: gte, value: 10.0}
         - {column: volume_length, op: lte, value: 1700.0}
     - type: compute_visit_order
     - type: compute_acquisition_order
     - type: modality_curation
-    - type: phase_curation
+    - type: filter
+      name: keep_MRI_T1_T2_only
+      kind: keep
+      scope: row
+      logic: and
+      keep_null: true
+      rules:
+        - {column: Modality, op: eq, value: MR}
+        - {column: mri_sequence, op: in, value: [T1, T2]}
+    - type: filter
+      name: discard_mip_mpr
+      kind: discard
+      scope: row
+      keep_null: true
+      rules:
+        - {column: is_mip_mpr, op: eq, value: true}         
     - type: finalize
 
 # TotalSegmentator configuration by modality. MRI is accepted as an alias for
 # MR. Backend kwargs under extra are passed through to TotalSegmentator.
 segmentation:
   backend: totalsegmentator
-  crop: false
+  crop: true
   crop_margin_mm: 50.0
+  # Operations run in order; output == input updates the mask in place.
+  # radius_mm specifies a physical radius, not a diameter.
   modalities:
     CT:
       tasks:
+        # Segment liver anatomy on CT.
         - task: total
           extra:
-            roi_subset_robust: [liver]
+            roi_subset_robust: [liver]  # Liver only, with robust ROI localization.
+            nr_thr_resamp: 2           # CPU threads for image resampling.
+
+        # Detect liver lesions, including benign lesions.
         - task: liver_lesions
-          output: liver_tumor
-          fetch_output: liver_lesions
-      postprocess:
-        on_failure: warn_only
-        operations:
-          - op: union
-            inputs: [liver, liver_tumor]
-            output: liver
-          - op: close
-            input: liver
-            output: liver
-            radius_mm: 5.0
-          - op: fill_holes
-            input: liver
-            output: liver
-          - op: largest_cc
-            input: liver
-            output: liver
-          - op: intersection
-            inputs: [liver_tumor, liver]
-            output: liver_tumor
-    MR:
-      tasks:
-        - task: total_mr
           extra:
-            roi_subset_robust: [liver]
-        - task: liver_lesions_mr
-          output: liver_tumor
-          fetch_output: liver_lesions
+            nr_thr_resamp: 2
+          output: liver_tumor          # Logical name used by IMPERANDI.
+          fetch_output: liver_lesions  # Backend mask name
+
       postprocess:
+        # On geometry errors, warn and retain the input masks.
+        # Missing/unreadable masks still fail the row.
         on_failure: warn_only
         operations:
-          - op: union
-            inputs: [liver, liver_tumor]
-            output: liver
+          # Repair gaps and smooth indentations in the liver mask.
           - op: close
             input: liver
             output: liver
-            radius_mm: 5.0
+            radius_mm: 7.0
+
+          # Fill enclosed cavities inside the liver.
           - op: fill_holes
             input: liver
             output: liver
+
+          # Keep the main liver component; remove detached islands.
           - op: largest_cc
             input: liver
             output: liver
+
+          # Keep lesion voxels inside the processed liver mask.
+          # Strict clipping can truncate peripheral/exophytic lesions.
           - op: intersection
             inputs: [liver_tumor, liver]
             output: liver_tumor
 
+          # Remove speckles and thin extensions from the lesion mask.
+          # 3 mm can remove small lesions
+          - op: open 
+            input: liver_tumor
+            output: liver_tumor
+            radius_mm: 3.0
+
+          # Fill enclosed lesion cavities, including possible necrotic regions.
+          # Appropriate for whole-lesion ROIs; reconsider for viable-tumor ROIs.
+          - op: fill_holes
+            input: liver_tumor
+            output: liver_tumor
+
+    MR:
+      tasks:
+        # Segment liver anatomy with the MRI-specific model.
+        - task: total_mr
+          extra:
+            roi_subset_robust: [liver]  # Liver only, with robust ROI localization.
+            nr_thr_resamp: 2           # CPU threads for image resampling.
+
+        # Detect liver lesions on MRI, including benign lesions.
+        - task: liver_lesions_mr
+          extra:
+            nr_thr_resamp: 2
+          output: liver_tumor          # Same logical name as for CT.
+          fetch_output: liver_lesions  # MRI task also outputs "liver_lesions".
+
+      postprocess:
+        # On geometry errors, warn and retain the input masks.
+        # Missing/unreadable masks still fail the row.
+        on_failure: warn_only
+        operations:
+          # Repair gaps and smooth indentations in the liver mask.
+          - op: close
+            input: liver
+            output: liver
+            radius_mm: 7.0
+
+          # Fill enclosed cavities inside the liver.
+          - op: fill_holes
+            input: liver
+            output: liver
+
+          # Keep the main liver component; remove detached islands.
+          # Applied to liver only, preserving multiple lesion components.
+          - op: largest_cc
+            input: liver
+            output: liver
+
+          # Keep lesion voxels inside the processed liver mask.
+          # Strict clipping can truncate peripheral/exophytic lesions.
+          - op: intersection
+            inputs: [liver_tumor, liver]
+            output: liver_tumor
+
+          # Remove speckles and thin extensions from the lesion mask.
+          # 3 mm can remove small lesions
+          - op: open
+            input: liver_tumor
+            output: liver_tumor
+            radius_mm: 3.0
+
+          # Fill enclosed lesion cavities, including possible necrotic regions.
+          # Appropriate for whole-lesion ROIs; reconsider for viable-tumor ROIs.
+          - op: fill_holes
+            input: liver_tumor
+            output: liver_tumor
+    
+# Intra-visit, intra-modal organ registration and shared tumor segmentation.
+# CLI method, linear/elastic toggles, spacing, and visit options override these settings.
+registration:
+  # Rows sharing every listed value form one registration group. Include
+  # Modality for separate CT/MR groups; omit it to permit cross-modality groups.
+  grouping_columns: [patient_key, exam_stage]
+  # Publish results on each source scan grid or on the selected reference grid.
+  output_space: reference # reference or moving
+  # Mask-path columns; missing/empty organs skip the series, while missing/empty
+  # tumors are omitted from fusion. Originals are retained as source_<column>.
+  organ_mask_column: mask_liver
+  tumor_mask_column: mask_liver_tumor
+  # Organ fusion: anchor or majority.
+  organ_consensus_method: majority
+  # Tumor fusion: anchor, majority, intersection, union, or staple.
+  tumor_consensus_method: union
+  # Run masked MI affine only when earlier stages do not meet the Dice target.
+  enable_affine_stage: true
+  enable_elastic_stage: false
+  # Stop the cascade as soon as a selected transform reaches this liver Dice.
+  early_stop_organ_dice: 0.98
+  minimum_consensus_dice: 0.92
+  # Completeness heuristics; tune for the dataset and organ, not clinical cutoffs.
+  partial_mask_boundary_margin_mm: 1.0
+  accept_partial_organ_masks: true
+  minimum_largest_component_fraction: 0.8
+  minimum_accepted_organ_dice: 0.5
+  minimum_common_field_of_view_fraction: 0.05
+  # Reject PCA orientation candidates requiring a larger rigid rotation.
+  maximum_pca_rotation_degrees: 45.0
+  # Minimum Dice improvement required to select each registration stage.
+  minimum_stage_dice_improvement:
+    geometry: 0.001
+    pca: 0.001
+    mask_rigid: 0.001
+    mask_elastic: 0.001
+  minimum_stage_mi_improvement:
+    mi_affine: 0.0
+  maximum_mi_stage_dice_decrease: 0.05
+  # Maximum iterations per optimization stage.
+  maximum_optimizer_iterations: 100
+  # Elastic transform acceptability criteria  
+  maximum_elastic_displacement_p95_mm: 18.0
+  maximum_elastic_displacement_mm: 50.0
+  minimum_elastic_jacobian_determinant: 0.1
+  maximum_elastic_jacobian_determinant: 2.5
+  # Distance-map crop margin in mm.
+  distance_map_crop_padding_mm: 25.0
+  # Signed-distance clamp and MI boundary-band half-width in mm.
+  organ_boundary_band_half_width_mm: 15.0
+  # Keep original organ masks while mapping tumor consensus.
+  preserve_source_organ_mask: false
+  # Clip transferred tumors to the registered organ.
+  clip_tumor_consensus_to_organ: true
+  # Majority/STAPLE probability cutoff.
+  consensus_probability_threshold: 0.5
+  # Criteria are evaluated in list order, one column per item. A category list
+  # gives most-to-least preferred values; min/max orders finite numeric values.
+  reference_selection_priority:
+    - Modality: [CT, MR]
+    - phase: [PORTAL_VENOUS, ARTERIAL, DELAYED, NATIVE]
+    - mri_sequence: [T1, T2]
+    - PixelSpacingXY: min
+    - SliceThickness: min
+    - registration_organ_volume_mm3: max
+
+
 radiomics:
-  # Native PyRadiomics parameter mapping plus cohort filters applied before
-  # extraction. Multiple filter columns are combined with AND.
   modalities:
     CT:
       pyradiomics:
         setting:
+          # CT intensities are quantitative (HU): do NOT normalize.
+          normalize: false
+          # Standard fixed HU discretization.
           binWidth: 25
+          # Harmonize voxel geometry before texture extraction.
           resampledPixelSpacing: [1, 1, 1]
-          resegmentRange: [-150, 250]
+          interpolator: sitkBSpline
+          # Remove clearly non-soft-tissue voxels accidentally included in
+          # liver / lesion masks while retaining fat, liver and tumor tissue.
+          resegmentRange: [-100, 400]
+          # Allow small image/mask geometry inconsistencies to be corrected.
           correctMask: true
         imageType:
           Original: {}
+
     MR:
       pyradiomics:
         setting:
-          binWidth: 25
-          resampledPixelSpacing: [1, 1, 1]
-          # MR intensities do not use the CT HU resegmentation range.
+          # MRI signal intensities are arbitrary and scanner/sequence dependent.
+          # PyRadiomics performs z-score normalization before resampling.
+          normalize: true
+          normalizeScale: 100
+          # Limit the influence of extreme intensity outliers after
+          # normalization.
+          removeOutliers: 3
+          # After normalization to SD ~= 100, use a substantially smaller
+          # fixed bin width than for CT.
+          binWidth: 5
+          # Avoid aggressive upsampling of typical liver MRI acquisitions,
+          # especially those with relatively thick slices.
+          resampledPixelSpacing: [2, 2, 2]
+          interpolator: sitkBSpline
           correctMask: true
+
         imageType:
           Original: {}
   filters:
-    phase: [ARTERIAL, PORTAL_VENOUS]
+    #phase: [ARTERIAL, PORTAL_VENOUS]
