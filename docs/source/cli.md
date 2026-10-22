@@ -99,8 +99,10 @@ strategies. The command applies CT/MR modality curation to rows without
 `rule_phase` evidence, so cleaning does not need a `modality_curation` step.
 Existing rule evidence is retained. Rows matched by ontology or metadata rules
 do not invoke TotalSegmentator when prediction is a later fallback. Prediction
-requires `imperandi[segment]` and `nifti_path`; it defaults to CT rows only, and
-`--force` recomputes existing predictions. The command writes canonical
+requires `imperandi[segment]` and defaults to CT rows only. Enable
+`--force-nifti-conversion` to temporarily convert `dicom_path` when `nifti_path`
+is missing or unavailable; conversion is disabled by default. An existing NIfTI
+is reused. `--force` recomputes existing predictions. The command writes canonical
 `phase` and provenance columns. Failures default to `phase_errors.csv`.
 
 Automatically saves `selected_long`, the best eligible series per exam, to

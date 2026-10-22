@@ -292,13 +292,14 @@ def test_main_resume_skips_completed_rows(tmp_path, monkeypatch, caplog):
     calls = {"count": 0}
     extractor_loads = {"count": 0}
 
-    def fake_process_single_volume(idx, row, *, phase_extractor, verbose=False):
+    def fake_process_single_volume(idx, row, *, phase_extractor, verbose=False, **kwargs):
         calls["count"] += 1
+        phase_extractor(object(), quiet=not verbose)
         return idx, {"totalseg_phase": "portal"}, None
 
     def fake_load_phase_extractor():
         extractor_loads["count"] += 1
-        return lambda _: {}
+        return lambda _, quiet=True: {}
 
     monkeypatch.setattr(
         phase_module, "_load_phase_extractor", fake_load_phase_extractor
@@ -352,7 +353,7 @@ def test_main_skips_rows_with_existing_totalseg_phase_when_not_forced(
         lambda: lambda _, quiet=True: {"phase": "arterial"},
     )
 
-    def fake_process_single_volume(idx, row, *, phase_extractor, verbose=False):
+    def fake_process_single_volume(idx, row, *, phase_extractor, verbose=False, **kwargs):
         calls["count"] += 1
         return idx, {"totalseg_phase": "arterial"}, None
 
@@ -400,7 +401,7 @@ def test_main_force_recomputes_existing_totalseg_phase(tmp_path, monkeypatch):
         lambda: lambda _, quiet=True: {"phase": "arterial"},
     )
 
-    def fake_process_single_volume(idx, row, *, phase_extractor, verbose=False):
+    def fake_process_single_volume(idx, row, *, phase_extractor, verbose=False, **kwargs):
         calls["count"] += 1
         return idx, {"totalseg_phase": "arterial"}, None
 

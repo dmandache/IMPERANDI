@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 import traceback
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Tuple
 
@@ -32,6 +33,7 @@ from imperandi.curation.selection_export import (
     save_selected_candidates,
     selected_output_path,
 )
+from imperandi.process.convert import temporary_nifti_from_dicom
 from imperandi.utils.manifest import load_manifest
 from imperandi.utils.logging import setup_logging
 from imperandi.utils.misc import print_args
@@ -117,8 +119,9 @@ def add_phase_arguments(
         type=str,
         default=None,
         help=(
-            "Path to input CSV. Only TotalSegmentator prediction requires "
-            "`nifti_path`; metadata curation does not. Defaults to ./nifti_index.csv."
+            "Path to input CSV. TotalSegmentator uses `nifti_path`; enable "
+            "--force-nifti-conversion to convert missing images from `dicom_path`. "
+            "Defaults to ./nifti_index.csv."
         ),
     )
     parser.add_argument(
@@ -151,6 +154,13 @@ def add_phase_arguments(
         action="store_true",
         default=False,
         help="Recompute phase even when `totalseg_phase` is already populated.",
+    )
+    parser.add_argument(
+        "--force-nifti-conversion",
+        "--force_nifti_conversion",
+        action="store_true",
+        default=False,
+        help="Temporarily convert DICOM when NIfTI is missing (default: disabled).",
     )
     parser.add_argument(
         "--manifest",
@@ -275,6 +285,7 @@ def process_single_volume(
     *,
     phase_extractor: Callable[..., Any] | None,
     verbose: bool = False,
+    force_nifti_conversion: bool = False,
 ) -> Tuple[int, Dict[str, Any] | None, str | None]:
     """Extract phase metadata for one cohort row without raising row errors.
 
@@ -283,13 +294,23 @@ def process_single_volume(
         with ``totalseg_``; failures return an error string instead.
     """
     nifti_path, path_error = _validate_nifti_path(row)
-    if path_error is not None:
+    dicom_paths = row.get("dicom_path")
+    has_dicom = (isinstance(dicom_paths, str) and bool(dicom_paths.strip())) or (
+        isinstance(dicom_paths, list) and bool(dicom_paths)
+    )
+    if path_error is not None and (not force_nifti_conversion or not has_dicom):
         return idx, None, path_error
 
     try:
-        nifti_image = nib.load(str(nifti_path))
-        raw_phase_info = phase_extractor(nifti_image, quiet=not verbose)
-        phase_info = _normalize_phase_extractor_output(raw_phase_info)
+        with ExitStack() as stack:
+            if path_error is not None:
+                logger.info("Converting DICOM input temporarily for phase row %s", idx)
+                nifti_path = stack.enter_context(
+                    temporary_nifti_from_dicom(row, verbose=verbose)
+                )
+            nifti_image = nib.load(str(nifti_path))
+            raw_phase_info = phase_extractor(nifti_image, quiet=not verbose)
+            phase_info = _normalize_phase_extractor_output(raw_phase_info)
     except Exception as exc:
         logger.debug("Traceback for %s:\n%s", nifti_path, traceback.format_exc())
         return idx, None, str(exc)
@@ -370,12 +391,24 @@ def main(args: argparse.Namespace) -> None:
         strategy["type"] == "totalsegmentator"
         for strategy in phase_curation["strategies"]
     )
-    if has_totalseg_strategy and "nifti_path" not in semantic_columns:
-        semantic_columns.append("nifti_path")
+    force_nifti_conversion = bool(
+        getattr(args, "force_nifti_conversion", False)
+        or any(
+            strategy.get("force_nifti_conversion", False)
+            for strategy in phase_curation["strategies"]
+            if strategy["type"] == "totalsegmentator"
+        )
+    )
+    artifact_columns = ["nifti_path"] if has_totalseg_strategy else []
+    if has_totalseg_strategy:
+        semantic_columns = sorted(set(semantic_columns) | {"nifti_path"})
+        if force_nifti_conversion:
+            semantic_columns = sorted(set(semantic_columns) | {"dicom_path"})
+            artifact_columns.append("dicom_path")
     semantic_fp = fingerprint_csv_semantic(
         args.csv_path,
         columns=semantic_columns,
-        artifact_columns=["nifti_path"] if has_totalseg_strategy else [],
+        artifact_columns=artifact_columns,
         strict=bool(getattr(args, "strict_resume", False)),
     )
     resume_ctx = prepare_resume_context(
@@ -558,21 +591,25 @@ def main(args: argparse.Namespace) -> None:
         and normalize_source_id(df.at[idx, "_source_idx"]) not in completed_indices
     ]
     phase_extractor = None
+
+    def predict_phase(image, **kwargs):
+        nonlocal phase_extractor
+        if phase_extractor is None:
+            phase_extractor = _load_phase_extractor()
+        return phase_extractor(image, **kwargs)
+
     processed_source_ids = {
         normalize_source_id(df.at[idx, "_source_idx"]) for idx in row_indices
     }
     for idx in tqdm(row_indices, total=len(row_indices), desc="TotalSegmentator phase"):
         src_idx = normalize_source_id(df.at[idx, "_source_idx"])
         row = df.loc[idx].to_dict()
-        if phase_extractor is None:
-            _, path_error = _validate_nifti_path(row)
-            if path_error is None:
-                phase_extractor = _load_phase_extractor()
         _, phase_info, err_msg = process_single_volume(
             idx,
             row,
-            phase_extractor=phase_extractor,
+            phase_extractor=predict_phase,
             verbose=args.verbose,
+            force_nifti_conversion=force_nifti_conversion,
         )
         if phase_info:
             for key, value in phase_info.items():
@@ -623,7 +660,7 @@ def main(args: argparse.Namespace) -> None:
         final_semantic_fp = fingerprint_csv_semantic(
             output_path,
             columns=semantic_columns,
-            artifact_columns=["nifti_path"] if has_totalseg_strategy else [],
+            artifact_columns=artifact_columns,
             strict=bool(getattr(args, "strict_resume", False)),
         )
     ckpt.finalize_state(
