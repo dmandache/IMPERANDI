@@ -404,7 +404,9 @@ def main(args: argparse.Namespace) -> None:
         semantic_columns = sorted(set(semantic_columns) | {"nifti_path"})
         if force_nifti_conversion:
             semantic_columns = sorted(set(semantic_columns) | {"dicom_path"})
-            artifact_columns.append("dicom_path")
+            # Do not add dicom_path to artifact_columns.
+            # Fingerprint its CSV value without accessing DICOM files.
+            # artifact_columns.append("dicom_path")
     semantic_fp = fingerprint_csv_semantic(
         args.csv_path,
         columns=semantic_columns,
