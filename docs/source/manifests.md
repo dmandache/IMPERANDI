@@ -499,206 +499,8 @@ phase_curation:
 
 ### Metadata rules
 
-Use `type: rules` to consume IMPERANDI's CT and MRI metadata rule engines.
-These rules use sequence descriptions, timing, acquisition order, and other
-DICOM-derived features. An optional `mapping` can rename their canonical
-outputs, although the built-in labels normally need no mapping.
-
-CT and MR share phase vocabulary, localizer and derived-image exclusions,
-anatomical planes, and selection priorities. Matching is case-insensitive and
-uses whole tokens, including accented letters. Spaces, underscores, dots,
-pluses, hyphens, and slashes are interchangeable separators within compound
-terms; compact spellings such as `noninjected` also match.
-
-Explicit phase names take precedence over timing. Within one text field,
-pure native takes precedence over post-contrast phases, portal over arterial, and
-arterial over generic delayed terms such as `late`. Fields are evaluated
-separately in their configured order. The same selected phase field controls
-explicit labels, dynamic profiles, ordinal context, native fallback, and phase
-scoring features. Generic postcontrast, mixed pre/post, dynamic, ordinal, and
-duration evidence select a field even when they cannot identify an exact phase.
-For example, `SeriesDescription: T1 VIBE post` followed by
-`StudyDescription: MRI abdomen w/o contrast` remains unresolved rather than
-becoming native. A later protocol's ART-PORT profile likewise cannot replace
-an earlier series' named native or portal phase. `phase_text_column` records
-the selected field (empty when no field contains phase evidence).
-
-Mixed pre/postcontrast text is group context, not an explicit native label.
-Direct whole-term rules recognize `w/wo`, `w+wo`, `wo&w`, `w&w/o`, reverse
-forms such as `wo/w` and `wo+w`, `with/without`, and `pre/post`. They also
-accept spaces and conjunctions such as `with and without`. These explicit
-patterns are checked before combining the native and postcontrast rules
-(for example `nonenhanced & enhanced` or `sans et avec injection`). A single
-`w/o`, `wo`, or a Dixon water suffix does not establish mixed context.
-When one configured scalar text value contains both conditions, the first
-ordered acquisition in the compatible CT or T1 MR group is inferred as `NATIVE`,
-unless it already has an explicit or special-profile phase assignment or pure
-postcontrast evidence in its selected phase field. Lower-priority fields cannot
-supply mixed context or a contradictory blocker once an earlier phase field
-has been selected. Ordering uses acquisition time when complete, then
-acquisition/temporal rank; volume rank is a fallback within one series only.
-Study and plane boundaries are preserved, and MR groups remain separate by
-Dixon component. Ranking includes explicitly labelled acquisitions before best
-candidate selection, so an explicitly postcontrast first acquisition does not
-shift the native fallback onto the second acquisition. Missing or indistinguishable
-chronology leaves the fallback unresolved. Later phases keep their existing rules.
-The inferred confidence and reason record the matching field and text; MR also
-records `mri_perfusion_source=group_pre_post_order`. Generic post-only dynamic
-MR containers use arterial/portal/delayed order inference without requiring an
-explicit phase anchor; their first acquisition is not assumed to be native.
-Both keywords must occur in the same scalar value, not separate fields or
-separate entries of a list.
-
-The shared timing policy recognizes arterial delays of 20–35 seconds, portal
-delays of 60–90 seconds, and delayed acquisitions at 3–15 minutes. It parses
-complete durations: `1 min 31 sec` is 91 seconds and does not match the arterial
-window through its seconds component. Colon notation denotes minutes and
-seconds (`1:30 min`); decimal notation denotes fractional units (`1.5 min`).
-Conflicting durations without an explicit phase label remain unresolved.
-For CT, an adjacent duration on a named delayed phase must also fit the delayed
-window. MRI resolves named phases and combined profiles before durations:
-`tardif 90s` is delayed, and `ART-PORT 90s` follows the ART-PORT profile. Durations
-are a fallback when no phase/profile text matches, with one exception:
-an unambiguous duration in a hepatobiliary window overrides generic
-`tardif`/`delayed`/`late` wording (`tardif 2h` is hepatobiliary).
-The existing hepatobiliary windows remain unchanged.
-These windows are curation heuristics, not universal acquisition standards.
-
-MRI phase delays and protocol mappings are built into the rule engine.
-The manifest does not expose `mri_dynamic`, configurable profiles, or timing
-windows. Keep site-specific controlled labels in an ontology strategy.
-Standard `ContrastBolusAgentPhase` metadata is direct evidence; conflicting
-values within a volume remain unresolved instead of receiving an order-based
-phase. Strategies before `rules`, including ontology, contribute native and
-named phase context before generic dynamic progression. Repeated natives count
-once. Vendor `PhN` labels become strictly postcontrast only after a valid,
-compatible unnumbered native acquisition is resolved. Numbering alone does not
-establish postcontrast status, including when `Ph1` is missing. Without valid
-native context, named phases, native-first profiles, and generic order fallback
-keep their existing behavior. `Ph1` alone does not assign arterial. With valid
-native context, conflicting numbered native assignments remain unresolved.
-
-When an otherwise unlabelled T1 acquisition matches a numbered acquisition's
-protocol after removing `PhN`, the unnumbered acquisition is native. Matching
-uses the same configured text field, normalizes case and separators, and retains
-study, sequence, plane, MIP/MPR, and subtraction boundaries. This naming
-evidence does not require three acquisitions or comparable chronology; assigning
-specific postcontrast phases still follows the timing and order rules. A native
-created solely by the numbered group's generic order fallback does not turn that
-same group into postcontrast-only context. An unrelated or excluded native
-acquisition does not establish the restriction. Bare agent names such as `gado`
-and exam-level injection descriptions are protocol context; clear acquisition
-postcontrast wording such as `post` or `C+` still establishes post-only context.
-
-Generic MR dynamics use compatible acquisitions ordered by canonical `time`,
-then `acquisition_order` to refine ties or replace missing times. Supplied
-`volume_order_in_series` and `n_volumes_in_series` provide local order within
-one series; local ranks are never compared across unrelated series. A shared
-series time can be refined by its local volume rank. Incomplete or ambiguous
-order leaves the affected acquisitions unresolved; lexical volume IDs never
-establish chronology. Computed volume ranks record `volume_order_source=computed`
-when time/order evidence is available, or `input_order` for a neutral input-order
-fallback, which does not establish dynamic chronology.
-
-Three distinct acquisitions, including compatible explicitly named phases,
-are required for the generic order template. Full dynamics follow `NATIVE`,
-`ARTERIAL`, `PORTAL_VENOUS`, then `DELAYED` for later acquisitions. Post-only groups start
-at arterial. A compatible native anchors the progression and counts once;
-repeated native acquisitions do not consume postcontrast positions. Explicit
-phase labels retain their positions and provenance. A succeeding explicit phase
-in the compatible group is reserved for its named acquisition. Earlier generic
-volumes must remain below that phase, including when a `time_delta` window matches
-the reserved phase. Order fallback can repeat a preceding phase, or stay unresolved
-when no compatible postcontrast phase remains. Without a succeeding explicit
-phase, the existing timing and order progression applies. A separate unlabelled
-native can be inferred from compatible perfusion context. Groups match on
-`patient_key`, `date`, `study_id`, `StudyInstanceUID`, sequence family, plane,
-`is_mip_mpr`, and `is_subtraction`. Dixon component does not split these groups.
-Raw `ImageType` does not split these groups: compatible acquisitions
-share phase context, phase progression, and `time_delta` references across
-different or missing image types. Structured `ImageType` tokens still identify
-Dixon components and excluded products. Series IDs and time gaps do not split
-these groups.
-
-The separate-native fallback accepts all diagnostic T1 sequences, including
-conventional T1 and protocols classified from TR/TE metadata. GRE or Dixon
-wording is not required. A resolved arterial, portal, or delayed phase supports
-an unlabelled native with two distinct acquisitions; unresolved dynamic
-context still requires three. This separate-native route does not require
-chronology or a candidate before the perfusion acquisitions. Candidate ranking
-uses image quality and component preferences, with stable identifiers breaking
-ties. Supplied acquisition identities are counted once. For sequence families
-without a recognized vendor name, matching protocol text after removing phase
-terms keeps unrelated T1 protocols separate.
-
-After all contextual phase inference, every remaining eligible diagnostic T1
-acquisition without acquisition-level perfusion or postcontrast evidence falls
-back to native. A single acquisition is sufficient: repeated protocols, matching
-descriptions, and chronology are not required. The fallback records
-`mri_perfusion_source=native_no_perfusion_evidence` and confidence `fallback`.
-It does not supply anchors or change the progression of dynamic acquisitions.
-Phase labelling retains all eligible matches; best-candidate selection happens
-later, with this fallback ranked below context-supported native evidence.
-Bare contrast-agent names alone do not establish an acquisition's postcontrast
-phase. Configured study-level phase context is preserved. Explicit or conflicting
-phase metadata, unresolved dynamics, numbered phases, mixed pre/post descriptions,
-and unsupported or conflicting text durations retain their dedicated inference
-routes. Postcontrast candidates and excluded image products remain ineligible.
-
-ART-PORT profiles use arterial at the first volume and portal at the last.
-ART/PORT/LATE profiles use arterial first and delayed last; the middle of a
-three-volume profile is portal. Other intermediate positions remain unresolved
-from profile order. Multiart assigns arterial throughout;
-Mask+Multiart assigns native first and arterial thereafter. These mappings use
-volume rank/count or exam acquisition order. Textual phase names and profiles
-take precedence over duration fallback. Raw injection times, frame windows,
-clock domains, and estimated injection intervals are not used.
-
-Assignments with explicit context record `dynamic_explicit_anchor`; other ordered
-dynamics use `volume_order` or `acquisition_order_dixon_component`. Unresolved
-dynamics retain `generic_dynamic_context_pending` with a reason.
-`mri_dynamic_order_source` records the canonical columns used to order them.
-Dynamic groups also receive `time_delta`, measured in seconds as the volume's
-canonical `time` minus the first volume's `time` in that group. Compatible native
-and explicitly labelled acquisitions participate in the reference group. Missing
-or invalid current/reference times leave the value empty; acquisition or volume
-ranks do not supply elapsed seconds. Groups with a shared populated time have
-zero deltas. For generic dynamics, a valid `time_delta` matching one default
-phase-delay window takes precedence over the order template: arterial at
-20–35 seconds, portal at 60–90 seconds, delayed at 180–900 seconds, and the
-existing MR hepatobiliary windows. Boundaries are inclusive. Missing, invalid,
-negative, non-finite, out-of-window deltas, or matches at/above a succeeding
-explicit phase use the existing order fallback within the explicit bounds.
-Explicit phase labels and the special dynamic profiles keep their precedence.
-Matching elapsed-time evidence can resolve a phase even when fewer than three
-acquisitions prevent the generic order template from resolving it.
-These deltas remain relative to the first volume in the group; bolus-time
-calibration is not used. Reasons record the matched delta and
-`mri_perfusion_source=time_delta` identifies assignments made from these windows.
-
-CT adds angiography/CTA terms. MR adds gadolinium-related terms, hepatobiliary
-labels and timing (20 minutes or 2 hours through 2h59m59s), sequence families,
-Dixon components, and dynamic acquisition-order inference. MR hepatobiliary
-names precede portal, arterial, and delayed names. The common vocabulary and
-timing policy live in `imperandi.curation.shared_rules`;
-`imperandi.curation.ct.ct_rules` and `imperandi.curation.mri.mri_rules` contain
-their respective extensions. `RX_PHASE_*` patterns match words;
-`match_phase` combines them with complete-duration matching.
-
-Dixon water classification accepts exact structured `ImageType` tokens (`W` or
-`WATER`) and explicit water names (`water`, `wat`, `eau`). A short free-text `W`
-requires Dixon-family context in the same field and a reconstruction suffix such
-as `CAIPI_W`, `mDIXON-W`, or a final `mDIXON W`. Contrast shorthand such as
-`w/wo`, `w+wo`, `wo&w`, and `w contrast` does not count as water evidence, even
-with Dixon context. A generic Dixon description without a component remains
-`DIXON_UNKNOWN`; a bare `W` without Dixon context remains `NOT_DIXON`.
-The first field with Dixon component/context or quantitative evidence controls
-all text-based component matching. A later PDFF/R2* label cannot replace an
-earlier water/fat reconstruction or change its product-scoring flags. Structured
-component tokens take precedence over reconstruction names in the selected
-text field; quantitative PDFF and R2* evidence in that field takes precedence
-over both. Structured `ImageType` product markers continue to be evaluated
-independently of text order.
+Use `type: rules` to infer CT and MRI phases from descriptions, timing,
+acquisition order, and other DICOM-derived features:
 
 ```yaml
 phase_curation:
@@ -706,6 +508,115 @@ phase_curation:
     - type: rules
   fallback: OTHER
 ```
+
+An optional `mapping` can rename the canonical outputs. Timing windows and MRI
+profiles are built in; use `type: ontology` for site-specific controlled labels.
+
+#### Evidence and precedence
+
+Text matching is case-insensitive and uses whole terms, including accented
+letters and common separators. Fields are checked in the configured
+`phase_curation.text_columns` order. The first field with phase
+evidence controls phase matching and context, even when it only says `post` or
+`dynamic`. A later field cannot override it with a contradictory phase.
+
+Standard `ContrastBolusAgentPhase` values provide direct phase evidence.
+Conflicting values within a volume remain unresolved. Explicit phases and
+resolved strategies before `rules` also provide context for MRI dynamics;
+order-based inference preserves their labels.
+
+Mixed descriptions such as `w/wo` or `pre/post` describe a group containing both
+conditions. Both conditions must occur in the same scalar value. They can make
+the first ordered acquisition native when it has no conflicting phase evidence;
+ambiguous order leaves it unresolved. A single `w/o` or a Dixon water suffix
+does not establish mixed context.
+
+#### Timing
+
+The built-in duration windows are:
+
+| Phase | Duration |
+| --- | --- |
+| `ARTERIAL` | 20–35 seconds |
+| `PORTAL_VENOUS` | 60–90 seconds |
+| `DELAYED` | 3–15 minutes |
+| `HEPATOBILIARY` (MRI only) | 20 minutes, or 2 hours through 2h59m59s |
+
+Complete durations are parsed together: `1 min 31 sec` is 91 seconds, outside
+the portal window. Conflicting durations without a phase label remain unresolved.
+For CT, a duration attached to a named delayed phase must fit the delayed window.
+MRI resolves named phases and combined profiles before durations, except that an
+unambiguous hepatobiliary duration overrides generic delayed wording: `tardif 2h` is
+hepatobiliary. These windows are curation heuristics.
+
+#### MRI dynamic acquisitions
+
+Dynamics use canonical `time`, then `acquisition_order` to refine ties or replace
+missing times. Supplied volume ranks apply within one series only. Incomplete or
+ambiguous chronology leaves affected acquisitions unresolved.
+
+Generic order inference requires at least three distinct acquisitions, including
+compatible explicit phases. Full dynamics progress through `NATIVE`, `ARTERIAL`,
+`PORTAL_VENOUS`, then `DELAYED`; post-only groups start at arterial. A compatible
+native anchors the progression and counts once. Explicit phases keep their
+positions, and earlier generic acquisitions cannot consume a succeeding named
+phase. A matching `time_delta` window takes precedence over the generic order
+template within these bounds, and can resolve a phase with fewer than three
+acquisitions.
+
+Named profiles use these mappings:
+
+| Profile | Phase progression |
+| --- | --- |
+| ART-PORT | First arterial, last portal; intermediate positions unresolved |
+| ART/PORT/LATE | First arterial, last delayed; middle portal only with three acquisitions |
+| Multiart | All arterial |
+| Mask+Multiart | First native, then arterial |
+
+Vendor `PhN` numbering alone does not identify a phase: `Ph1` is not automatically
+arterial. A compatible unnumbered native establishes postcontrast context for
+numbered acquisitions. An unlabelled acquisition matching the same protocol
+after removing `PhN` can supply that native context. Bare contrast-agent names
+such as `gado` alone do not establish postcontrast status.
+
+#### Protocol and Dixon grouping
+
+Groups preserve patient, date, study, sequence-family, plane, MIP/MPR, and
+subtraction boundaries. Dixon components can share compatible native context,
+but each component has its own acquisition ranks and timing reference.
+Reconstruction volumes therefore do not consume extra phase positions. Sharing
+authoritative phase labels between components requires a compatible, validated
+acquisition identity.
+
+Raw `ImageType` differences do not split protocol groups. Structured tokens still
+identify Dixon components and image products. Component names such as `water` and
+Dixon suffixes such as `mDIXON-W` also identify reconstructions; contrast shorthand
+such as `w/wo` does not identify water.
+
+`time_delta` is the volume's canonical `time` minus the first volume's `time` in
+its component group, in seconds. Compatible native and explicitly labelled
+acquisitions of that component participate in the reference. Missing or invalid
+times leave the value empty; acquisition ranks do not supply elapsed seconds.
+Raw injection clocks do not calibrate these deltas.
+
+#### Native fallback
+
+Compatible perfusion context can identify a separate unlabelled native from any
+diagnostic T1 sequence. This requires two distinct acquisitions when a
+postcontrast phase is resolved, or three when only unresolved dynamic context
+is available.
+
+After contextual inference, an eligible diagnostic T1 acquisition without
+perfusion or postcontrast evidence falls back to `NATIVE`. One acquisition is
+sufficient; repeated descriptions and chronology are not required. This records
+`mri_perfusion_source=native_no_perfusion_evidence` and confidence `fallback`.
+It does not anchor dynamic progression and ranks below context-supported native
+evidence during selection. Phase conflicts, unresolved dynamics, numbered phases,
+mixed descriptions, and unsupported durations retain their dedicated inference
+routes; they do not receive this final fallback.
+
+Inspect `phase_text_column`, `mri_perfusion_source`, `mri_perfusion_reason`, and
+`mri_dynamic_order_source` to trace the selected evidence and acquisition order.
 
 ### TotalSegmentator prediction
 
