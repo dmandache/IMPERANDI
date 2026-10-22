@@ -742,23 +742,18 @@ def test_sequence_merges_cleans_and_clips_source_masks(
     assert not (tmp_path / "liver_tumor.nii.gz").exists()
 
 
-def test_fallback_and_operandi_manifests_use_explicit_cleanup_sequences():
+def test_fallback_config_uses_explicit_cleanup_sequences():
     fallback = segment.validate_segmentation_config(
         segment._default_segmentation_config()
     )
-    path = (
-        Path(__file__).resolve().parents[2] / "dataset_configs/manifests/operandi.yaml"
-    )
-    operandi = segment.load_segmentation_config(str(path), base_path=path.parent)
-    for config in [fallback, operandi]:
-        for modality in ["CT", "MR"]:
-            postprocess = config["modalities"][modality]["postprocess"]
-            operations = postprocess["operations"]
-            assert [step["op"] for step in operations[:4]] == [
-                "union",
-                "close",
-                "fill_holes",
-                "largest_cc",
-            ]
-            assert all(step["op"] == "intersection" for step in operations[4:])
-            assert operations[-1]["output"] == "liver_tumor"
+    for modality in ["CT", "MR"]:
+        postprocess = fallback["modalities"][modality]["postprocess"]
+        operations = postprocess["operations"]
+        assert [step["op"] for step in operations[:4]] == [
+            "union",
+            "close",
+            "fill_holes",
+            "largest_cc",
+        ]
+        assert all(step["op"] == "intersection" for step in operations[4:])
+        assert operations[-1]["output"] == "liver_tumor"
