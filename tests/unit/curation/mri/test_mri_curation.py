@@ -340,7 +340,7 @@ def test_post_gado_ordinal_phases_with_explicit_native_are_context_inferred():
     ) == {"dynamic_explicit_anchor"}
 
 
-def test_missing_native_fallback_uses_water_lava_only_with_dynamic_context():
+def test_water_lava_native_context_preserves_dynamic_phase_progression():
     results = curate(
         [
             row(
