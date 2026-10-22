@@ -227,7 +227,7 @@ def test_phase_command_converts_only_rows_needing_prediction(
 
 
 @pytest.mark.parametrize("failed", [False, True])
-def test_resume_reprocesses_changed_dicom_without_stale_prediction(
+def test_resume_reprocesses_changed_dicom_paths_without_stale_prediction(
     tmp_path, conversion, monkeypatch, failed
 ):
     paths = [dicom_paths(tmp_path / name) for name in ("first", "second")]
@@ -267,13 +267,29 @@ def test_resume_reprocesses_changed_dicom_without_stale_prediction(
     phase.main(args)
     assert predictions == [False, False]
     assert len(conversion["outputs"]) == 2
+
+    # File contents do not affect resume when the CSV path values are unchanged,
+    # even with strict_resume enabled.
+    completed_output = pd.read_csv(output)
     Path(paths[0][0]).write_bytes(b"changed slice")
+    phase.main(args)
+    assert predictions == [False, False]
+    assert len(conversion["outputs"]) == 2
+    pd.testing.assert_frame_equal(pd.read_csv(output), completed_output)
+
+    # A new path value invalidates only its row and must discard old predictions.
+    replacement_paths = dicom_paths(tmp_path / "replacement")
+    Path(replacement_paths[0]).write_bytes(b"changed slice")
+    rows = pd.read_csv(source)
+    rows.loc[0, "dicom_path"] = repr(replacement_paths)
+    rows.to_csv(source, index=False)
 
     phase.main(args)
 
     result = pd.read_csv(output)
     assert predictions == [False, False, True]
     assert len(conversion["outputs"]) == 3
+    assert result.dicom_path.tolist() == [repr(replacement_paths), repr(paths[1])]
     assert result.phase.tolist() == ["OTHER" if failed else "DELAYED", "PORTAL_VENOUS"]
     if failed:
         assert pd.isna(result.loc[0, "totalseg_phase"])
