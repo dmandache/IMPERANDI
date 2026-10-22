@@ -254,7 +254,7 @@ def test_repeated_protocols_can_be_native_alongside_explicit_native():
     assert out.loc[0, "mri_perfusion_source"] == "explicit_text"
     assert (
         out.loc[[1, 2], "mri_perfusion_reason"]
-        .str.contains("repeated matching protocol")
+        .str.contains("without acquisition perfusion")
         .all()
     )
 
@@ -327,7 +327,8 @@ def test_unlabelled_candidate_cannot_anchor_a_different_study():
     out = mc.annotate_mri(
         pd.concat([pd.DataFrame([native]), rows], ignore_index=True)
     ).set_index("volume_id")
-    assert out.loc["native", "mri_perfusion_label"] == "OTHER"
+    assert out.loc["native", "mri_perfusion_label"] == "NATIVE"
+    assert out.loc["native", "mri_perfusion_source"] == "native_no_perfusion_evidence"
     assert out.loc[["v0", "v1", "v2"], "mri_perfusion_label"].tolist() == [
         "NATIVE",
         "ARTERIAL",

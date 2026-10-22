@@ -276,12 +276,13 @@ def test_phase_time_windows_follow_curation_policy(phase, accepted, rejected):
         ), text
 
 
-def test_water_lava_alone_is_not_native():
+def test_water_lava_alone_falls_back_to_native():
     out = mc.annotate_mri(pd.DataFrame([row("WATER: Ax LAVA-Flex APNEE")]))
 
     assert out.loc[0, "mri_sequence"] == "T1"
-    assert out.loc[0, "mri_perfusion_label"] == "OTHER"
-    assert out.loc[0, "mri_perfusion_confidence"] == "unknown"
+    assert out.loc[0, "mri_perfusion_label"] == "NATIVE"
+    assert out.loc[0, "mri_perfusion_confidence"] == "fallback"
+    assert out.loc[0, "mri_perfusion_source"] == "native_no_perfusion_evidence"
 
 
 def test_post_gado_ordinal_phases_with_explicit_native_are_context_inferred():
@@ -705,14 +706,14 @@ def test_art_port_late_multivolume_resolves_arterial_portal_delayed():
 
 
 @pytest.mark.parametrize(
-    "native_description,expected",
+    "native_description,source",
     [
-        ("WATER: Ax LAVA-Flex APNEE", "OTHER"),
-        ("T1 VIBE DIXON WATER", "NATIVE"),
+        ("WATER: Ax LAVA-Flex APNEE", "native_no_perfusion_evidence"),
+        ("T1 VIBE DIXON WATER", "exam_context"),
     ],
 )
 def test_art_port_late_native_fallback_requires_compatible_protocol(
-    native_description, expected
+    native_description, source
 ):
     results = curate(
         [
@@ -744,10 +745,8 @@ def test_art_port_late_native_fallback_requires_compatible_protocol(
     )
     cur = results["curated"].set_index("volume_id")
 
-    assert cur.loc["VPRE", "mri_perfusion_label"] == expected
-    assert cur.loc["VPRE", "mri_perfusion_source"] == (
-        "exam_context" if expected == "NATIVE" else "none"
-    )
+    assert cur.loc["VPRE", "mri_perfusion_label"] == "NATIVE"
+    assert cur.loc["VPRE", "mri_perfusion_source"] == source
 
 
 def test_art_port_late_mixed_multivolume_and_single_volume_uses_acquisition_order():
@@ -1297,11 +1296,17 @@ def test_source_image_is_preferred_to_mpr_for_same_phase():
 @pytest.mark.parametrize(
     "marker", ["SUBTRACTION", "MIP", "PDFF", "SECONDARY", "KEY IMAGES"]
 )
-def test_derived_mri_product_without_phase_is_unresolved_and_not_selected(marker):
+def test_derived_mri_product_without_phase_selection_depends_on_product(marker):
     result = curate([row(f"AX T1 DIXON {marker}")])
 
-    assert result["curated"].iloc[0]["phase_status"] == "UNRESOLVED"
-    assert result["selected_long"].empty
+    annotated = result["curated"].iloc[0]
+    if marker == "SECONDARY":
+        assert annotated["phase"] == "NATIVE"
+        assert annotated["mri_perfusion_source"] == "native_no_perfusion_evidence"
+        assert result["selected_long"].selection_slot.tolist() == ["T1_NATIVE"]
+    else:
+        assert annotated["phase_status"] == "UNRESOLVED"
+        assert result["selected_long"].empty
 
 
 def test_derived_dynamic_product_does_not_shift_source_acquisition_phases():
@@ -1338,13 +1343,14 @@ def test_derived_dynamic_product_does_not_shift_source_acquisition_phases():
     assert set(result["selected_long"]["volume_id"]) == {"V1", "V2"}
 
 
-def test_derived_dixon_without_phase_evidence_remains_unresolved():
+def test_diagnostic_derived_dixon_without_phase_evidence_falls_back_to_native():
     result = curate([row("AX T1 DIXON", image_type=["DERIVED", "PRIMARY", "W"])])
     annotated = result["curated"].iloc[0]
 
-    assert annotated["phase"] == "OTHER"
-    assert annotated["phase_status"] == "UNRESOLVED"
-    assert result["selected_long"].empty
+    assert annotated["phase"] == "NATIVE"
+    assert annotated["phase_status"] == "RESOLVED"
+    assert annotated["mri_perfusion_source"] == "native_no_perfusion_evidence"
+    assert result["selected_long"].selection_slot.tolist() == ["T1_NATIVE"]
 
 
 # -----------------------------------------------------------------------------

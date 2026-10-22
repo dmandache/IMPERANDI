@@ -197,6 +197,7 @@ T1_PHASE_SOURCE_PRIORITY = {
     "volume_order_mask_multiart": 10,
     "volume_order": 0,
     "exam_context": -5,
+    "native_no_perfusion_evidence": -10,
     "none": -20,
 }
 

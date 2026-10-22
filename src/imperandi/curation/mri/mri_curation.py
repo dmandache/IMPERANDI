@@ -1568,7 +1568,8 @@ def _sort_key_for_native_fallback(row: pd.Series) -> tuple:
 
 
 def _native_protocol_texts(row: pd.Series, *, strip_phase: bool = False):
-    """Use acquisition text in its configured phase-evidence field, when present."""
+    """Use one acquisition field, preferring its configured phase evidence."""
+
     evidence = _phase_text_column(row)
     for column, text in iter_series_text_columns(row):
         if column in {"StudyDescription", "ImageType"}:
@@ -1587,6 +1588,7 @@ def _native_protocol_texts(row: pd.Series, *, strip_phase: bool = False):
         name = re.sub(rf"{SEP_CHARS}+", " ", text).strip()
         if name:
             yield column, name
+            return
 
 
 def infer_missing_native_fallback(exam_rows: pd.DataFrame) -> tuple[int | None, str]:
@@ -1646,58 +1648,35 @@ def infer_missing_native_fallback(exam_rows: pd.DataFrame) -> tuple[int | None, 
     return None, "no supported native candidate with sufficient compatible context"
 
 
-def _infer_same_protocol_natives(rows: pd.DataFrame):
-    """Label eligible repeated-protocol matches native without selecting a winner."""
-    protocols = {}
-    for idx, row in rows.iterrows():
-        if bool(row.get("is_derived_low_value")) or row.mri_perfusion_source in {
-            "dicom_phase_conflict",
-            "ordinal_phase_conflict",
-            "dynamic_profile_guard",
-        }:
-            continue
-        for column, name in _native_protocol_texts(row):
-            key = (_generic_dynamic_key(row), column, name)
-            protocols.setdefault(key, []).append(idx)
-
+def _infer_native_without_perfusion_evidence(rows: pd.DataFrame):
+    """Default remaining diagnostic T1 acquisitions to native after context inference."""
     assignments = []
-    resolved = set()
-    for (_, column, name), indices in protocols.items():
-        indices = list(dict.fromkeys(indices))
-        if len(indices) < 2:
+    for idx, row in rows.iterrows():
+        if row.mri_perfusion_source != "none" or not is_native_fallback_candidate(row):
             continue
-        for idx in indices:
-            row = rows.loc[idx]
-            if (
-                idx in resolved
-                or not is_native_fallback_candidate(row)
-                or row.mri_perfusion_source != "none"
-                or _phase_matches_pattern(row, rules.RX_PHASE_GENERIC_DYNAMIC)
-            ):
-                continue
-            if bool(
-                _first_phase_text_value(
-                    row,
-                    lambda text: shared_rules.has_pre_post_contrast_text(
-                        text,
-                        native=rules.RX_PHASE_NATIVE,
-                        post=rules.RX_PHASE_POST_CONTRAST,
-                    ),
-                )
-            ):
-                continue
-            assignments.append(
-                (
-                    idx,
-                    "inferred NATIVE from repeated matching protocol: "
-                    f"{column}={name!r}; {len(indices)} matching rows with the "
-                    "same exam, sequence family, plane, MIP/MPR and subtraction flags; "
-                    "eligible unresolved T1 candidate "
-                    "without explicit precontrast evidence; acquisition order "
-                    "not used",
-                )
+        if any(
+            common.stable_text(value)
+            for value in scalar_values(row.get("ContrastBolusAgentPhase"))
+        ):
+            continue
+        evidence = common.first_phase_text_column(
+            row,
+            _resolve_text_cols(),
+            phase_rules=rules.PHASE_RULES,
+            # A bare contrast-agent name alone does not establish postcontrast status.
+            post=shared_rules.RX_PHASE_POST_CONTRAST,
+            extra_patterns=(rules.RX_PHASE_GENERIC_DYNAMIC,),
+        )
+        if evidence is not None:
+            continue
+        assignments.append(
+            (
+                idx,
+                "fallback NATIVE for diagnostic T1 without acquisition perfusion "
+                "or postcontrast evidence; repeated protocols and chronology "
+                "not required",
             )
-            resolved.add(idx)
+        )
     return assignments
 
 
@@ -1855,7 +1834,6 @@ def _infer_missing_native_fallbacks(
                 assignments.append((idx, reason))
                 eligible.loc[idx, "mri_perfusion_label"] = "NATIVE"
                 eligible.loc[idx, "mri_perfusion_source"] = "exam_context"
-    assignments.extend(_infer_same_protocol_natives(eligible))
     return assignments
 
 
@@ -2115,6 +2093,13 @@ def add_mri_perfusion_columns(
             "mri_perfusion_reason",
         ):
             out.loc[conflicts, column] = exam_rows.loc[conflicts, column]
+
+        # This final assumption must not become an anchor for dynamic inference.
+        for row_idx, reason in _infer_native_without_perfusion_evidence(exam_rows):
+            out.loc[row_idx, "mri_perfusion_label"] = "NATIVE"
+            out.loc[row_idx, "mri_perfusion_reason"] = reason
+            out.loc[row_idx, "mri_perfusion_confidence"] = "fallback"
+            out.loc[row_idx, "mri_perfusion_source"] = "native_no_perfusion_evidence"
 
     for row_idx, row in out.iterrows():
         if row.phase_text_column and row.phase_text_value:

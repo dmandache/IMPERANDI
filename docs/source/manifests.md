@@ -631,14 +631,19 @@ ties. Supplied acquisition identities are counted once. For sequence families
 without a recognized vendor name, matching protocol text after removing phase
 terms keeps unrelated T1 protocols separate.
 
-A further generic native fallback checks repeated acquisition protocols in the
-same configured text field, normalizing case and separators. With at least two
-matching rows, every eligible unlabelled diagnostic T1 match becomes native,
-even without perfusion-phase wording or chronology. Phase labelling retains all
-eligible matches; best-candidate selection happens later. This route retains
-study, family, plane, MIP/MPR, and subtraction boundaries and preserves resolved
-phases. Postcontrast candidates and excluded derived products remain ineligible.
-Dynamic and mixed pre/post descriptions retain their dedicated inference routes.
+After all contextual phase inference, every remaining eligible diagnostic T1
+acquisition without acquisition-level perfusion or postcontrast evidence falls
+back to native. A single acquisition is sufficient: repeated protocols, matching
+descriptions, and chronology are not required. The fallback records
+`mri_perfusion_source=native_no_perfusion_evidence` and confidence `fallback`.
+It does not supply anchors or change the progression of dynamic acquisitions.
+Phase labelling retains all eligible matches; best-candidate selection happens
+later, with this fallback ranked below context-supported native evidence.
+Bare contrast-agent names alone do not establish an acquisition's postcontrast
+phase. Configured study-level phase context is preserved. Explicit or conflicting
+phase metadata, unresolved dynamics, numbered phases, mixed pre/post descriptions,
+and unsupported or conflicting text durations retain their dedicated inference
+routes. Postcontrast candidates and excluded image products remain ineligible.
 
 ART-PORT profiles use arterial at the first volume and portal at the last.
 ART/PORT/LATE profiles use arterial first and delayed last; the middle of a

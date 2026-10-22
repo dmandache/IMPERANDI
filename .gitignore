@@ -5,6 +5,7 @@
 .temp/
 tmp/
 temp/
+.pytest_tmp/
 
 # Generic temp files
 *.tmp

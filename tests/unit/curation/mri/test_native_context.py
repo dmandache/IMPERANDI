@@ -89,10 +89,11 @@ def test_exam_level_injection_description_does_not_exclude_a_separate_native_can
 
 
 @pytest.mark.parametrize(
-    "other_native,expected", [("AX VIBE pre", "NATIVE"), ("AX VIBE", "OTHER")]
+    "other_native,source",
+    [("AX VIBE pre", "explicit_text"), ("AX VIBE", "native_no_perfusion_evidence")],
 )
 def test_unrelated_native_does_not_suppress_protocol_native_fallback(
-    other_native, expected
+    other_native, source
 ):
     rows = frame(
         [
@@ -103,7 +104,8 @@ def test_unrelated_native_does_not_suppress_protocol_native_fallback(
         ]
     )
     out = annotate(rows)
-    assert out.loc["v0", "phase"] == expected
+    assert out.loc["v0", "phase"] == "NATIVE"
+    assert out.loc["v0", "mri_perfusion_source"] == source
     assert out.loc[["v1", "v2", "v3"], "phase"].tolist() == [
         "NATIVE",
         "ARTERIAL",
@@ -217,7 +219,7 @@ def test_secondary_image_type_allows_repeated_protocol_natives(image_type):
     assert out.mri_sequence.eq("T1").all()
     assert not out.is_derived_low_value.any()
     assert out.phase.eq("NATIVE").all()
-    assert out.mri_perfusion_source.eq("exam_context").all()
+    assert out.mri_perfusion_source.eq("native_no_perfusion_evidence").all()
     assert out.mri_perfusion_confidence.eq("fallback").all()
 
 
@@ -289,8 +291,8 @@ def test_lava_flex_water_native_matches_perfusion_across_image_types():
         "PORTAL_VENOUS",
         "DELAYED",
         "OTHER",
-        "OTHER",
-        "OTHER",
+        "NATIVE",
+        "NATIVE",
         "ARTERIAL",
         "ARTERIAL",
         "ARTERIAL",
@@ -340,9 +342,6 @@ def test_phase_resolved_from_elapsed_time_supports_native_fallback(description):
 @pytest.mark.parametrize(
     "descriptions",
     [
-        ["AX LAVA", "AX LAVA post"],
-        ["AX LAVA", "AX LAVA dynamic"],
-        ["AX LAVA", "AX VIBE portal"],
         ["AX LAVA post", "AX LAVA portal"],
         ["AX LAVA MPR", "AX LAVA portal"],
         ["AX LAVA Ph1", "AX LAVA portal"],
@@ -362,17 +361,21 @@ def test_named_phase_establishes_separate_native_without_order(order, protocol):
     assert out.loc["v0", "mri_perfusion_source"] == "exam_context"
 
 
-def test_separate_native_with_unresolved_dynamics_uses_count_without_order():
+def test_context_minimum_does_not_block_final_native_fallback():
     rows = frame(["AX T1 SE", "AX T1 SE dynamic", "AX T1 SE dynamic"])
     rows = rows.drop(columns="acquisition_order")
     assert annotate(rows).phase.tolist() == ["NATIVE", "OTHER", "OTHER"]
-    assert annotate(rows.iloc[:2]).phase.tolist() == ["OTHER", "OTHER"]
+    out = annotate(rows.iloc[:2])
+    assert out.phase.tolist() == ["NATIVE", "OTHER"]
+    assert out.loc["v0", "mri_perfusion_source"] == "native_no_perfusion_evidence"
 
 
 def test_separate_native_counts_shared_acquisition_identity_once_without_order():
     rows = frame(["AX T1 SE", "AX T1 SE dynamic", "AX T1 SE dynamic"])
     rows["acquisition_id"] = ["native", "same-dynamic", "same-dynamic"]
-    assert not annotate(rows).phase.eq("NATIVE").any()
+    out = annotate(rows)
+    assert out.phase.tolist() == ["NATIVE", "OTHER", "OTHER"]
+    assert out.loc["v0", "mri_perfusion_source"] == "native_no_perfusion_evidence"
 
 
 def test_metadata_classified_t1_supports_separate_native_without_gre_evidence():
@@ -384,9 +387,11 @@ def test_metadata_classified_t1_supports_separate_native_without_gre_evidence():
     assert out.loc["v0", "mri_perfusion_source"] == "exam_context"
 
 
-def test_unknown_t1_families_require_matching_protocol_for_separate_native():
+def test_unmatched_t1_protocol_uses_final_native_fallback():
     rows = frame(["AX T1 SE", "AX T1 MPRAGE portal"])
-    assert annotate(rows).phase.tolist() == ["OTHER", "PORTAL_VENOUS"]
+    out = annotate(rows)
+    assert out.phase.tolist() == ["NATIVE", "PORTAL_VENOUS"]
+    assert out.loc["v0", "mri_perfusion_source"] == "native_no_perfusion_evidence"
 
 
 def test_separate_native_fallback_resolves_other_t1_protocols_independently():
@@ -397,13 +402,175 @@ def test_separate_native_fallback_resolves_other_t1_protocols_independently():
 
 
 @pytest.mark.parametrize("protocol", ["AX LAVA", "AX T1", "AX T1 SE", "AX T1 MPRAGE"])
-@pytest.mark.parametrize("count", [2, 4])
-def test_matching_protocol_repeats_label_all_eligible_natives(protocol, count):
+@pytest.mark.parametrize("count", [1, 2, 4])
+def test_native_fallback_does_not_require_repeated_protocols(protocol, count):
     rows = frame([protocol] * count)
     out = annotate(rows.sample(frac=1, random_state=6)).loc[rows.volume_id]
     assert out.phase.eq("NATIVE").all()
-    assert out.mri_perfusion_reason.str.contains("repeated matching protocol").all()
+    assert out.mri_perfusion_source.eq("native_no_perfusion_evidence").all()
+    assert out.mri_perfusion_reason.str.contains("without acquisition perfusion").all()
     assert out.mri_perfusion_confidence.eq("fallback").all()
+
+
+@pytest.mark.parametrize(
+    "column,value",
+    [("ProtocolName", "Liver"), ("ScanningSequence", "GR"), ("ScanOptions", "FS")],
+)
+def test_final_native_fallback_does_not_depend_on_shared_generic_metadata(
+    column, value
+):
+    rows = frame(["AX T1 SE", "AX T1 MPRAGE"])
+    rows[column] = value
+    out = annotate(
+        rows,
+        {
+            "strategies": [{"type": "rules"}],
+            "text_columns": {"MR": ["SeriesDescription", column]},
+        },
+    )
+    assert out.phase.tolist() == ["NATIVE", "NATIVE"]
+    assert out.phase.tolist() == annotate(rows.drop(columns=column)).phase.tolist()
+    assert out.mri_perfusion_source.eq("native_no_perfusion_evidence").all()
+    assert not out.mri_perfusion_reason.str.contains(f"{column}=").any()
+
+
+def test_contextual_protocol_matching_uses_one_priority_acquisition_field():
+    rows = frame(["AX T1 SE", "AX T1 MPRAGE"])
+    rows["ProtocolName"] = ["Liver", "Liver portal"]
+    out = annotate(
+        rows,
+        {
+            "strategies": [{"type": "rules"}],
+            "text_columns": {"MR": ["SeriesDescription", "ProtocolName"]},
+        },
+    )
+    assert out.phase.tolist() == ["NATIVE", "PORTAL_VENOUS"]
+    assert out.loc["v0", "mri_perfusion_source"] == "native_no_perfusion_evidence"
+    assert out.loc["v1", "mri_perfusion_source"] == "explicit_text"
+
+
+def test_single_metadata_classified_t1_falls_back_to_native():
+    rows = frame(["AX custom sequence"]).drop(columns="acquisition_order")
+    rows["RepetitionTime"] = 400
+    rows["EchoTime"] = 10
+    out = annotate(rows)
+    assert out.mri_sequence.tolist() == ["T1"]
+    assert out.phase.tolist() == ["NATIVE"]
+    assert out.loc["v0", "mri_perfusion_source"] == "native_no_perfusion_evidence"
+
+
+@pytest.mark.parametrize(
+    "description",
+    [
+        "AX T1 post",
+        "AX T1 C+",
+        "AX T1 dynamic",
+        "AX T1 Ph2",
+        "AX T1 ART-PORT",
+        "AX T1 ART/PORT/LATE",
+        "AX T1 Mask Multiart",
+        "AX T1 pre/post",
+        "AX T1 2s",
+        "AX T1 5min 15min",
+        "AX T1 MPR",
+        "AX T1 sub",
+        "AX T1 fat",
+        "AX T1 PDFF",
+        "AX T1 R2star",
+        "AX T2",
+        "AX DWI",
+        "localizer",
+        "key images",
+    ],
+)
+def test_final_native_fallback_preserves_perfusion_evidence_and_exclusions(description):
+    out = annotate(frame([description]))
+    assert out.loc["v0", "mri_perfusion_source"] != "native_no_perfusion_evidence"
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("PRE_CONTRAST", "NATIVE"),
+        ("ARTERIAL", "ARTERIAL"),
+        ("POST_CONTRAST", "OTHER"),
+        (["ARTERIAL", "DELAYED"], "OTHER"),
+    ],
+)
+def test_final_native_fallback_preserves_structured_phase_evidence(raw, expected):
+    rows = frame(["AX T1 SE"])
+    rows["ContrastBolusAgentPhase"] = pd.Series([raw])
+    out = annotate(rows)
+    assert out.phase.tolist() == [expected]
+    assert out.loc["v0", "mri_perfusion_source"] != "native_no_perfusion_evidence"
+
+
+@pytest.mark.parametrize("description", ["AX T1 SE", "AX T1 SE gado"])
+def test_bare_agent_context_allows_final_native_fallback(description):
+    rows = frame([description])
+    out = annotate(rows)
+    assert out.phase.tolist() == ["NATIVE"]
+    assert out.loc["v0", "mri_perfusion_source"] == "native_no_perfusion_evidence"
+
+
+@pytest.mark.parametrize(
+    "context", ["with injection", "with and without contrast", "2s"]
+)
+def test_final_native_fallback_preserves_configured_study_phase_context(context):
+    rows = frame(["AX T1 SE"]).drop(columns="acquisition_order")
+    rows["StudyDescription"] = context
+    out = annotate(
+        rows,
+        {
+            "strategies": [{"type": "rules"}],
+            "text_columns": {"MR": ["SeriesDescription", "StudyDescription"]},
+        },
+    )
+    assert out.phase.tolist() == ["OTHER"]
+    assert out.loc["v0", "mri_perfusion_source"] != "native_no_perfusion_evidence"
+
+
+def test_final_native_fallback_respects_configured_postcontrast_field():
+    rows = frame(["AX T1 SE"])
+    rows["ProtocolName"] = "AX T1 SE post"
+    out = annotate(
+        rows,
+        {
+            "strategies": [{"type": "rules"}],
+            "text_columns": {"MR": ["SeriesDescription", "ProtocolName"]},
+        },
+    )
+    assert out.phase.tolist() == ["OTHER"]
+    assert out.loc["v0", "mri_perfusion_source"] != "native_no_perfusion_evidence"
+
+
+def test_final_native_fallback_preserves_earlier_ontology_phase():
+    rows = frame(["AX T1 SE"])
+    rows["site_phase"] = "portal"
+    out = annotate(
+        rows,
+        {
+            "strategies": [
+                {
+                    "type": "ontology",
+                    "columns": ["site_phase"],
+                    "mapping": {"portal": "PORTAL_VENOUS"},
+                },
+                {"type": "rules"},
+            ],
+        },
+    )
+    assert out.phase.tolist() == ["PORTAL_VENOUS"]
+    assert out.loc["v0", "mri_perfusion_source"] != "native_no_perfusion_evidence"
+
+
+def test_explicit_native_is_selected_before_native_without_perfusion_evidence():
+    result = mc.curate_mri(frame(["AX T1 SE", "AX T1 SE pre"]))
+    out = result["curated"].set_index("volume_id")
+    assert out.phase.eq("NATIVE").all()
+    assert out.loc["v0", "mri_perfusion_source"] == "native_no_perfusion_evidence"
+    assert out.loc["v1", "mri_perfusion_source"] == "explicit_text"
+    assert result["selected_long"].volume_id.tolist() == ["v1"]
 
 
 def test_repeated_protocol_labels_all_candidates_before_best_selection():
@@ -485,10 +652,12 @@ def test_repeated_protocol_does_not_use_canonical_time_to_select_one_native():
         ("SeriesDescription", "AX T1 MPRAGE"),
     ],
 )
-def test_repeated_protocol_keeps_acquisition_and_protocol_boundaries(column, value):
+def test_final_native_fallback_is_independent_of_protocol_groups(column, value):
     rows = frame(["AX T1 SE"] * 2)
     rows.loc[1, column] = value
-    assert annotate(rows).phase.tolist() == ["OTHER", "OTHER"]
+    out = annotate(rows)
+    assert out.phase.tolist() == ["NATIVE", "NATIVE"]
+    assert out.mri_perfusion_source.eq("native_no_perfusion_evidence").all()
 
 
 @pytest.mark.parametrize("image_type", ["DERIVED PRIMARY", None])
@@ -561,11 +730,12 @@ def test_repeated_protocol_prefers_sequence_description_over_generic_protocol(re
             "text_columns": {"MR": ["SeriesDescription", "ProtocolName"]},
         },
     )
-    expected = ["NATIVE", "NATIVE"] if repeated else ["OTHER", "OTHER"]
-    assert out.phase.tolist() == expected
-    if repeated:
-        assert out.mri_perfusion_reason.str.contains("SeriesDescription=").all()
-        assert not out.mri_perfusion_reason.str.contains("ProtocolName=").any()
+    assert out.phase.tolist() == ["NATIVE", "NATIVE"]
+    assert (
+        out.phase.tolist() == annotate(rows.drop(columns="ProtocolName")).phase.tolist()
+    )
+    assert out.mri_perfusion_source.eq("native_no_perfusion_evidence").all()
+    assert not out.mri_perfusion_reason.str.contains("ProtocolName=").any()
 
 
 def test_repeated_protocol_uses_configured_protocol_name_field():
@@ -576,7 +746,7 @@ def test_repeated_protocol_uses_configured_protocol_name_field():
         "text_columns": {"MR": ["ProtocolName"]},
     })
     assert out.phase.tolist() == ["NATIVE", "NATIVE"]
-    assert "ProtocolName=" in out.loc["v0", "mri_perfusion_reason"]
+    assert out.mri_perfusion_source.eq("native_no_perfusion_evidence").all()
     assert annotate(rows).phase.tolist() == ["OTHER", "OTHER"]
 
 
@@ -643,9 +813,10 @@ def test_matching_numbered_protocol_matches_across_image_types(image_type):
     assert annotate(rows).phase.tolist() == ["NATIVE", "OTHER"]
 
 
-def test_numbered_protocol_match_requires_same_description_not_just_sequence_family():
+def test_final_native_fallback_does_not_supply_numbered_protocol_context():
     out = annotate(frame(["AX LAVA breath hold", "Ph2/AX LAVA dynamic"]))
-    assert out.phase.tolist() == ["OTHER", "OTHER"]
+    assert out.phase.tolist() == ["NATIVE", "OTHER"]
+    assert out.loc["v0", "mri_perfusion_source"] == "native_no_perfusion_evidence"
 
 
 @pytest.mark.parametrize("evidence", ["text", "dicom", "profile"])
@@ -671,11 +842,14 @@ def test_protocol_match_precedes_weaker_fallback_and_repeated_natives_count_once
     rows = frame([native, "AX LAVA dynamic", "Ph1/AX LAVA dynamic", "Ph2/AX LAVA dynamic"])
     out = annotate(rows)
     assert out.phase.tolist() == [
-        "NATIVE" if native.endswith("pre") else "OTHER",
+        "NATIVE",
         "NATIVE",
         "ARTERIAL",
         "PORTAL_VENOUS",
     ]
+    assert out.loc["v0", "mri_perfusion_source"] == (
+        "explicit_text" if native.endswith("pre") else "native_no_perfusion_evidence"
+    )
 
 
 @pytest.mark.parametrize("series", ["AX LAVA", "AX LAVA post"])

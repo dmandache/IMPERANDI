@@ -82,5 +82,6 @@ def test_mpr_phase_does_not_supply_native_context_to_source_protocol():
         ]
     )
     out = mc.annotate_mri(rows).set_index("volume_id")
-    assert out.loc["source", "phase"] == "OTHER"
+    assert out.loc["source", "phase"] == "NATIVE"
+    assert out.loc["source", "mri_perfusion_source"] == "native_no_perfusion_evidence"
     assert out.loc["mpr", "phase"] == "PORTAL_VENOUS"

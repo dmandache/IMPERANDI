@@ -118,6 +118,10 @@ and its canonical `time`, `acquisition_order`, or series-local volume rank.
 Raw DICOM clocks and bolus metadata do not calibrate phase delays. Wide QC cells
 include volume identifiers and phase provenance.
 Selection scores rank candidates; they are not calibrated phase confidence.
+After contextual MRI phase inference, eligible diagnostic T1 acquisitions without
+acquisition-level perfusion or postcontrast evidence default to NATIVE, including
+single acquisitions. These assumptions record confidence `fallback` and source
+`native_no_perfusion_evidence`; they do not establish dynamic phase context.
 Within the MRI delayed slot, candidates timed at 5-10 minutes (inclusive) are
 preferred before the usual score and coverage ranking. Timing comes from an
 unambiguous duration in the phase-evidence text, otherwise from `time_delta`.
