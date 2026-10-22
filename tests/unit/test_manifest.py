@@ -2,6 +2,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 # Ensure src/ is on sys.path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
@@ -70,6 +71,39 @@ def test_load_manifest_accepts_only_yaml(tmp_path):
     json_path.write_text('{"dataset_name": "site"}', encoding="utf-8")
     with pytest.raises(ValueError, match="must use YAML"):
         load_manifest(str(json_path), base_path=base_path)
+
+
+@pytest.mark.parametrize(
+    "content,line,column,problem",
+    [
+        ("cleaning:\n\tsteps: []\n", 2, 1, "cannot start any token"),
+        ("cleaning: [\n", 2, 1, "expected the node content"),
+    ],
+)
+def test_manifest_syntax_error_reports_path_location_and_problem(
+    tmp_path, content, line, column, problem
+):
+    manifest_path = tmp_path / "invalid.yaml"
+    manifest_path.write_text(content, encoding="utf-8")
+
+    with pytest.raises(ValueError) as error:
+        load_manifest(str(manifest_path), base_path=tmp_path)
+
+    message = str(error.value)
+    assert "Invalid YAML in manifest" in message
+    assert str(manifest_path) in message
+    assert f"line {line}, column {column}" in message
+    assert problem in message
+    assert isinstance(error.value.__cause__, yaml.YAMLError)
+
+
+@pytest.mark.parametrize("content", ["", "- item\n", "true\n"])
+def test_manifest_requires_a_mapping_even_when_yaml_syntax_is_valid(tmp_path, content):
+    manifest_path = tmp_path / "invalid.yaml"
+    manifest_path.write_text(content, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Manifest must contain a YAML mapping"):
+        load_manifest(str(manifest_path), base_path=tmp_path)
 
 
 def test_external_manifest_requires_an_explicit_path(tmp_path, monkeypatch):

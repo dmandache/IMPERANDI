@@ -234,6 +234,11 @@ def test_phase_sharing_requires_compatible_supplied_acquisition_identity(bad_evi
     )
     if bad_evidence is None:
         assert out.loc["v1", "mri_perfusion_source"] == "acquisition_phase"
+    else:
+        assert out.loc["v1", "mri_perfusion_source"] != "acquisition_phase"
+    if bad_evidence == "clock":
+        # The fat component measures time from its own first acquisition.
+        assert out.loc["v1", "time_delta"] == 0
 
 
 def test_equal_time_alone_does_not_share_phase_between_components():
@@ -260,10 +265,19 @@ def test_grasp_and_conventional_vibe_do_not_form_one_dynamic_run():
         ("AX T1 5min tardif", "DELAYED"),
         ("AX T1 tardif 2h", "HEPATOBILIARY"),
         ("AX T1 2h tardif", "HEPATOBILIARY"),
-        ("AX T1 3h tardif", "OTHER"),
+        ("AX T1 delayed 120min", "HEPATOBILIARY"),
+        ("AX T1 late 20min", "HEPATOBILIARY"),
+        ("AX T1 tardif 15min", "DELAYED"),
+        ("AX T1 tardif 19min59s", "DELAYED"),
+        ("AX T1 tardif 2h59min59s", "HEPATOBILIARY"),
+        ("AX T1 3h tardif", "DELAYED"),
+        ("AX T1 2h", "HEPATOBILIARY"),
+        ("AX T1 3h", "OTHER"),
     ],
 )
-def test_duration_over_generic_late_keeps_existing_hepatobiliary_window(text, expected):
+def test_hepatobiliary_timing_overrides_generic_late_within_configured_windows(
+    text, expected
+):
     assert annotate(volumes(1, text)).loc["v0", "phase"] == expected
 
 

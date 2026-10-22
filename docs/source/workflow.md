@@ -118,6 +118,15 @@ and its canonical `time`, `acquisition_order`, or series-local volume rank.
 Raw DICOM clocks and bolus metadata do not calibrate phase delays. Wide QC cells
 include volume identifiers and phase provenance.
 Selection scores rank candidates; they are not calibrated phase confidence.
+After contextual MRI phase inference, eligible diagnostic T1 acquisitions without
+acquisition-level perfusion or postcontrast evidence default to NATIVE, including
+single acquisitions. These assumptions record confidence `fallback` and source
+`native_no_perfusion_evidence`; they do not establish dynamic phase context.
+Within the MRI delayed slot, candidates timed at 5-10 minutes (inclusive) are
+preferred before the usual score and coverage ranking. Timing comes from an
+unambiguous duration in the phase-evidence text, otherwise from `time_delta`.
+If no candidate is in that interval, the usual ranking applies. This preference
+does not change phase classification or its duration windows.
 
 ## Example Slurm batch script
 
@@ -191,16 +200,18 @@ starting from scratch unless you pass `--no_resume`.
 
 ### MRI combined dynamic labels
 
-Explicit duration metadata or acquisition time relative to `ContrastBolusStartTime`
-is checked before order-based assignment. Timing outside supported windows or
-conflicting delays remains `OTHER`; endpoint fallback cannot override it. A shared
-multivolume container clock is not treated as a per-frame injection delay.
+MRI resolves named phases and combined dynamic profiles before numeric durations.
+For example, `axial t1 caipi fs art port 90s` uses the ART-PORT profile rather than
+assigning every volume portal from `90s`. Durations supply phase evidence only
+when no phase/profile text matches, except that an unambiguous hepatobiliary
+duration overrides generic delayed wording: `tardif 2h` is HEPATOBILIARY,
+while `tardif 5min` remains DELAYED.
 
-Without exact timing, ART-PORT uses ARTERIAL for the first acquisition and
+ART-PORT uses ARTERIAL for the first acquisition and
 PORTAL_VENOUS for the last. ART/PORT/LATE uses ARTERIAL for the first and DELAYED
 for the last; its middle acquisition is PORTAL_VENOUS only for a three-acquisition
-profile. Other intermediate acquisitions require timing evidence. An isolated
-combined label remains unresolved.
+profile. Other intermediate acquisitions remain unresolved from profile order.
+An isolated combined label remains unresolved.
 
 Across series, endpoint assignment requires a complete, distinct acquisition-order
 or clock field. Studies, sequence families, planes and Dixon components remain

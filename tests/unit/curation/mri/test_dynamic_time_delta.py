@@ -55,8 +55,6 @@ def test_time_delta_uses_seconds_from_first_volume_independent_of_input_order(
         ("study_id", "exam2"),
         ("date", "2020-01-02"),
         ("StudyInstanceUID", "study2"),
-        ("ImageType", "DERIVED PRIMARY"),
-        ("ImageType", None),
         ("SeriesDescription", "AX T1 VIBE dynamic"),
         ("SeriesDescription", "COR T1 LAVA dynamic"),
         ("SeriesDescription", "AX T1 mDIXON fat dynamic"),
@@ -85,9 +83,13 @@ def test_distinct_dynamic_groups_have_independent_reference_times(field, value):
         ["original", "primary"],
         ("ORIGINAL", "PRIMARY"),
         "['ORIGINAL', 'PRIMARY']",
+        "DERIVED PRIMARY",
+        ["DERIVED", "PRIMARY", "OTHER"],
+        "ORIGINAL PRIMARY OTHER",
+        None,
     ],
 )
-def test_equivalent_image_type_encodings_share_the_time_reference(image_type):
+def test_image_types_share_the_time_reference(image_type):
     rows = dynamic_rows().astype({"ImageType": object})
     rows.at[1, "ImageType"] = image_type
 

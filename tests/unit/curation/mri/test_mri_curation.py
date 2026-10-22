@@ -167,6 +167,47 @@ def test_sequence_detection_falls_back_to_next_text_column_when_first_has_no_mat
 
 
 @pytest.mark.parametrize(
+    "description,expected",
+    [
+        ("T1 VIBE native 90s", "NATIVE"),
+        ("T1 VIBE arterial 90s", "ARTERIAL"),
+        ("T1 VIBE portal 25s", "PORTAL_VENOUS"),
+        ("T1 VIBE tardif 90s", "DELAYED"),
+        ("T1 VIBE 25s late", "DELAYED"),
+        ("T1 VIBE tardif 45s", "DELAYED"),
+        ("T1 VIBE HBP 25s", "HEPATOBILIARY"),
+        ("T1 VIBE 90s", "PORTAL_VENOUS"),
+        ("T1 VIBE 2h", "HEPATOBILIARY"),
+    ],
+)
+def test_phase_text_precedes_duration_fallback(description, expected):
+    out = mc.annotate_mri(pd.DataFrame([row(description)]))
+    assert out.loc[0, "mri_perfusion_label"] == expected
+
+
+@pytest.mark.parametrize("same_series", [False, True])
+def test_art_port_text_precedes_90s_duration(same_series):
+    out = mc.annotate_mri(
+        pd.DataFrame(
+            [
+                row(
+                    "axial t1 caipi fs art port 90s",
+                    series_id="S" if same_series else f"S{i}",
+                    volume_id=f"V{i}",
+                    time=f"120{i}00",
+                    acquisition_order=i,
+                )
+                for i in range(2)
+            ]
+        )
+    )
+    assert out.mri_perfusion_label.tolist() == ["ARTERIAL", "PORTAL_VENOUS"]
+    assert out.mri_perfusion_source.eq(
+        "volume_order_art_port" if same_series else "acquisition_order_art_port"
+    ).all()
+
+
+@pytest.mark.parametrize(
     "desc,expected_phase",
     [
         ("T1 VIBE DIXON SANS IV CAIPI_W", "NATIVE"),
@@ -212,8 +253,15 @@ def test_low_level_phase_regexes_do_not_classify_ordinal_phases():
         ),
         (
             "DELAYED",
-            ["3 min", "5 min", "10 min", "15 mn", "tardif"],
-            ["2 min", "16 min", "tardif 2 min", "tardif 20 min"],
+            [
+                "3 min",
+                "5 min",
+                "10 min",
+                "15 mn",
+                "tardif",
+                "tardif 2 min",
+            ],
+            ["2 min", "16 min"],
         ),
     ],
 )
@@ -228,12 +276,13 @@ def test_phase_time_windows_follow_curation_policy(phase, accepted, rejected):
         ), text
 
 
-def test_water_lava_alone_is_not_native():
+def test_water_lava_alone_falls_back_to_native():
     out = mc.annotate_mri(pd.DataFrame([row("WATER: Ax LAVA-Flex APNEE")]))
 
     assert out.loc[0, "mri_sequence"] == "T1"
-    assert out.loc[0, "mri_perfusion_label"] == "OTHER"
-    assert out.loc[0, "mri_perfusion_confidence"] == "unknown"
+    assert out.loc[0, "mri_perfusion_label"] == "NATIVE"
+    assert out.loc[0, "mri_perfusion_confidence"] == "fallback"
+    assert out.loc[0, "mri_perfusion_source"] == "native_no_perfusion_evidence"
 
 
 def test_post_gado_ordinal_phases_with_explicit_native_are_context_inferred():
@@ -291,7 +340,7 @@ def test_post_gado_ordinal_phases_with_explicit_native_are_context_inferred():
     ) == {"dynamic_explicit_anchor"}
 
 
-def test_missing_native_fallback_uses_water_lava_only_with_dynamic_context():
+def test_water_lava_native_context_preserves_dynamic_phase_progression():
     results = curate(
         [
             row(
@@ -364,10 +413,11 @@ def test_single_numbered_dynamic_requires_phase_context(number):
     assert out.loc[0, "mri_perfusion_source"] == mc.GENERIC_DYNAMIC_CONTEXT_PENDING
 
 
-def test_hepatobiliary_2h_takes_priority_over_delayed_tardif():
+def test_hepatobiliary_duration_takes_priority_over_generic_tardif_text():
     out = mc.annotate_mri(pd.DataFrame([row("mDIXON tardif 2h")]))
     assert out.loc[0, "mri_perfusion_label"] == "HEPATOBILIARY"
     assert "hepatobiliary" in out.loc[0, "mri_perfusion_reason"].lower()
+    assert "7200.0" in out.loc[0, "mri_perfusion_reason"]
 
 
 def test_explicit_phase_matching_uses_first_matching_text_column(monkeypatch):
@@ -529,10 +579,14 @@ def test_art_port_mixed_multivolume_and_single_volume_uses_acquisition_order():
     ]
 
 
-def test_single_volume_art_port_row_defers_to_exam_context():
+@pytest.mark.parametrize(
+    "description",
+    ["T1 VIBE DIXON ART-PORT CAIPI_W", "axial t1 caipi fs art port 90s"],
+)
+def test_single_volume_art_port_row_defers_to_exam_context(description):
     candidate = pd.Series(
         {
-            **row("T1 VIBE DIXON ART-PORT CAIPI_W"),
+            **row(description),
             "mri_sequence": "T1",
             "volume_order_in_series": 1,
             "n_volumes_in_series": 1,
@@ -652,14 +706,14 @@ def test_art_port_late_multivolume_resolves_arterial_portal_delayed():
 
 
 @pytest.mark.parametrize(
-    "native_description,expected",
+    "native_description,source",
     [
-        ("WATER: Ax LAVA-Flex APNEE", "OTHER"),
-        ("T1 VIBE DIXON WATER", "NATIVE"),
+        ("WATER: Ax LAVA-Flex APNEE", "native_no_perfusion_evidence"),
+        ("T1 VIBE DIXON WATER", "exam_context"),
     ],
 )
 def test_art_port_late_native_fallback_requires_compatible_protocol(
-    native_description, expected
+    native_description, source
 ):
     results = curate(
         [
@@ -691,10 +745,8 @@ def test_art_port_late_native_fallback_requires_compatible_protocol(
     )
     cur = results["curated"].set_index("volume_id")
 
-    assert cur.loc["VPRE", "mri_perfusion_label"] == expected
-    assert cur.loc["VPRE", "mri_perfusion_source"] == (
-        "exam_context" if expected == "NATIVE" else "none"
-    )
+    assert cur.loc["VPRE", "mri_perfusion_label"] == "NATIVE"
+    assert cur.loc["VPRE", "mri_perfusion_source"] == source
 
 
 def test_art_port_late_mixed_multivolume_and_single_volume_uses_acquisition_order():
@@ -1182,10 +1234,12 @@ def test_derived_mri_description_selection_depends_on_product(
 
     assert result["curated"].iloc[0]["phase_status"] == "RESOLVED"
     assert result["curated"].iloc[0]["phase"] == phase
-    assert len(selected_for_slot(result, f"T1_{phase}")) == (1 if marker == "MIP" else 0)
+    assert len(selected_for_slot(result, f"T1_{phase}")) == (
+        1 if marker in {"MIP", "SECONDARY"} else 0
+    )
 
 
-def test_explicit_mpr_phases_fill_slots_when_originals_are_unresolved():
+def test_explicit_mpr_phases_fill_slots_when_dynamic_order_is_missing():
     phases = [
         ("sans iv", "NATIVE"),
         ("arteriel", "ARTERIAL"),
@@ -1194,32 +1248,39 @@ def test_explicit_mpr_phases_fill_slots_when_originals_are_unresolved():
     ]
     rows = []
     for acquisition, (description, phase) in enumerate(phases, start=1):
-        rows.extend([
-            row(
-                "t1 vibe fs multi gado",
-                series_id=f"original_{acquisition}",
-                volume_id=f"original_{acquisition}",
-                protocol="T1 Vibe FS Multi Gado",
-                time=None,
-                AcquisitionNumber=acquisition,
-            ),
-            row(
-                description,
-                series_id=f"mpr_{acquisition}",
-                volume_id=f"mpr_{acquisition}",
-                protocol="T1 Vibe FS Multi Gado",
-                image_type=["DERIVED", "SECONDARY", "MPR", "CSA MPR THICK", "M"],
-                time=None,
-                RepetitionTime=4.65,
-                EchoTime=2.15,
-                AcquisitionNumber=acquisition,
-            ),
-        ])
+        rows.extend(
+            [
+                row(
+                    "t1 vibe fs multi gado",
+                    series_id=f"original_{acquisition}",
+                    volume_id=f"original_{acquisition}",
+                    protocol="T1 Vibe FS Multi Gado",
+                    time=None,
+                    AcquisitionNumber=acquisition,
+                ),
+                row(
+                    description,
+                    series_id=f"mpr_{acquisition}",
+                    volume_id=f"mpr_{acquisition}",
+                    protocol="T1 Vibe FS Multi Gado",
+                    image_type=["DERIVED", "SECONDARY", "MPR", "CSA MPR THICK", "M"],
+                    time=None,
+                    RepetitionTime=4.65,
+                    EchoTime=2.15,
+                    AcquisitionNumber=acquisition,
+                ),
+            ]
+        )
     result = curate(rows)
 
-    assert set(result["selected_long"]["volume_id"]) == {
-        f"mpr_{acquisition}" for acquisition in range(1, 5)
-    }
+    selected = result["selected_long"].set_index("selection_slot")
+    for acquisition, (_, phase) in enumerate(phases, start=1):
+        assert selected.loc[f"T1_{phase}", "volume_id"] == f"mpr_{acquisition}"
+    originals = result["curated"].loc[
+        result["curated"].volume_id.str.startswith("original_")
+    ]
+    assert originals.phase.eq("OTHER").all()
+    assert originals.mri_perfusion_source.eq(mc.GENERIC_DYNAMIC_CONTEXT_PENDING).all()
     assert set(result["selected_long"]["phase"]) == {phase for _, phase in phases}
 
 
@@ -1235,11 +1296,17 @@ def test_source_image_is_preferred_to_mpr_for_same_phase():
 @pytest.mark.parametrize(
     "marker", ["SUBTRACTION", "MIP", "PDFF", "SECONDARY", "KEY IMAGES"]
 )
-def test_derived_mri_product_without_phase_is_unresolved_and_not_selected(marker):
+def test_derived_mri_product_without_phase_selection_depends_on_product(marker):
     result = curate([row(f"AX T1 DIXON {marker}")])
 
-    assert result["curated"].iloc[0]["phase_status"] == "UNRESOLVED"
-    assert result["selected_long"].empty
+    annotated = result["curated"].iloc[0]
+    if marker == "SECONDARY":
+        assert annotated["phase"] == "NATIVE"
+        assert annotated["mri_perfusion_source"] == "native_no_perfusion_evidence"
+        assert result["selected_long"].selection_slot.tolist() == ["T1_NATIVE"]
+    else:
+        assert annotated["phase_status"] == "UNRESOLVED"
+        assert result["selected_long"].empty
 
 
 def test_derived_dynamic_product_does_not_shift_source_acquisition_phases():
@@ -1276,13 +1343,14 @@ def test_derived_dynamic_product_does_not_shift_source_acquisition_phases():
     assert set(result["selected_long"]["volume_id"]) == {"V1", "V2"}
 
 
-def test_derived_dixon_without_phase_evidence_remains_unresolved():
+def test_diagnostic_derived_dixon_without_phase_evidence_falls_back_to_native():
     result = curate([row("AX T1 DIXON", image_type=["DERIVED", "PRIMARY", "W"])])
     annotated = result["curated"].iloc[0]
 
-    assert annotated["phase"] == "OTHER"
-    assert annotated["phase_status"] == "UNRESOLVED"
-    assert result["selected_long"].empty
+    assert annotated["phase"] == "NATIVE"
+    assert annotated["phase_status"] == "RESOLVED"
+    assert annotated["mri_perfusion_source"] == "native_no_perfusion_evidence"
+    assert result["selected_long"].selection_slot.tolist() == ["T1_NATIVE"]
 
 
 # -----------------------------------------------------------------------------
@@ -1590,9 +1658,22 @@ def test_explicit_delayed_evidence_survives_ambiguous_art_port_group():
     assert out.iloc[3].mri_perfusion_confidence == "explicit"
 
 
-@pytest.mark.parametrize("profile", ["ART-PORT", "ART/PORT/LATE"])
+@pytest.mark.parametrize(
+    "profile,source_suffix,expected",
+    [
+        ("ART-PORT", "art_port", ["ARTERIAL", "OTHER", "OTHER", "PORTAL_VENOUS"]),
+        ("ART/PORT/LATE", "art_port_late", ["ARTERIAL", "OTHER", "OTHER", "DELAYED"]),
+        (
+            "Mask Multiart",
+            "mask_multiart",
+            ["NATIVE", "ARTERIAL", "ARTERIAL", "ARTERIAL"],
+        ),
+    ],
+)
 @pytest.mark.parametrize("same_series", [False, True])
-def test_dynamic_profile_exact_text_timing_precedes_endpoints(profile, same_series):
+def test_dynamic_profile_text_precedes_durations(
+    profile, source_suffix, expected, same_series
+):
     out = mc.annotate_mri(
         pd.DataFrame(
             [
@@ -1607,13 +1688,9 @@ def test_dynamic_profile_exact_text_timing_precedes_endpoints(profile, same_seri
             ]
         )
     )
-    assert out.mri_perfusion_label.tolist() == [
-        "ARTERIAL",
-        "ARTERIAL",
-        "PORTAL_VENOUS",
-        "DELAYED",
-    ]
-    assert out.mri_perfusion_source.eq("explicit_duration").all()
+    assert out.mri_perfusion_label.tolist() == expected
+    prefix = "volume_order" if same_series else "acquisition_order"
+    assert out.mri_perfusion_source.eq(f"{prefix}_{source_suffix}").all()
 
 
 @pytest.mark.parametrize("same_series", [False, True])
@@ -1641,7 +1718,7 @@ def test_dynamic_profile_uses_order_instead_of_raw_injection_clocks(same_series)
     ]
 
 
-def test_profile_unsupported_exact_delay_blocks_endpoint_fallback():
+def test_profile_text_precedes_unsupported_duration():
     out = mc.annotate_mri(
         pd.DataFrame(
             [
@@ -1655,11 +1732,11 @@ def test_profile_unsupported_exact_delay_blocks_endpoint_fallback():
             ]
         )
     )
-    assert out.mri_perfusion_label.tolist() == ["OTHER", "PORTAL_VENOUS"]
-    assert "fallback blocked" in out.loc[0, "mri_perfusion_reason"]
+    assert out.mri_perfusion_label.tolist() == ["ARTERIAL", "PORTAL_VENOUS"]
+    assert out.mri_perfusion_source.eq("acquisition_order_art_port").all()
 
 
-def test_profile_timed_middle_retains_untimed_endpoint_positions():
+def test_profile_duration_does_not_resolve_middle_acquisition():
     out = mc.annotate_mri(
         pd.DataFrame(
             [
@@ -1674,7 +1751,7 @@ def test_profile_timed_middle_retains_untimed_endpoint_positions():
             ]
         )
     )
-    assert out.mri_perfusion_label.tolist() == ["ARTERIAL", "ARTERIAL", "PORTAL_VENOUS"]
+    assert out.mri_perfusion_label.tolist() == ["ARTERIAL", "OTHER", "PORTAL_VENOUS"]
 
 
 def test_profile_shared_multivolume_clock_is_not_per_frame_delay():
@@ -1698,12 +1775,12 @@ def test_profile_shared_multivolume_clock_is_not_per_frame_delay():
     assert not out.mri_perfusion_source.eq("explicit_duration").any()
 
 
-def test_profile_text_duration_is_not_overridden_by_raw_bolus_clocks():
+def test_duration_without_phase_text_is_not_overridden_by_raw_bolus_clocks():
     out = mc.annotate_mri(
         pd.DataFrame(
             [
                 row(
-                    "T1 VIBE ART-PORT 25s",
+                    "T1 VIBE 25s",
                     AcquisitionTime="120115",
                     ContrastBolusStartTime="120000",
                 )

@@ -627,15 +627,32 @@ def detect_ordinal_phase_index(row: pd.Series) -> int | None:
 
 
 def detect_explicit_phase_from_text(row: pd.Series) -> tuple[str | None, str, str, str]:
-    match = _first_phase_text_value(
-        row,
-        lambda text: match_phase(
+    """Prefer named phases, except hepatobiliary timing overrides generic delayed text."""
+
+    def match_text_then_duration(text):
+        for rule in rules.PHASE_RULES:
+            if rule.label == "NATIVE" and shared_rules.has_pre_post_contrast_text(
+                text, rule.pattern, rules.RX_PHASE_POST_CONTRAST
+            ):
+                continue
+            if re.search(rule.pattern, text):
+                if rule.label == "DELAYED":
+                    timed_match = match_phase(
+                        text,
+                        rules.PHASE_RULES,
+                        post=rules.RX_PHASE_POST_CONTRAST,
+                        prefer_delayed_time=True,
+                    )
+                    if timed_match is not None and timed_match[0] == "HEPATOBILIARY":
+                        return timed_match
+                return rule.label, rule.description
+        return match_phase(
             text,
             rules.PHASE_RULES,
             post=rules.RX_PHASE_POST_CONTRAST,
-            prefer_delayed_time=True,
-        ),
-    )
+        )
+
+    match = _first_phase_text_value(row, match_text_then_duration)
     if match is not None:
         label, description = match
         return (
@@ -735,10 +752,11 @@ def detect_t1_perfusion_phase(row: pd.Series) -> tuple[str, str, str, str]:
     Volume-aware T1 phase classifier.
 
     Priority:
-      1. Direct DICOM phase labels and pure named phase evidence.
-      2. Established ART/PORT/LATE, ART-PORT, and Mask+Multiart inference.
-      3. Defer generic dynamics and PhN prefixes to compatible chronology.
-      4. OTHER.
+      1. Direct DICOM phase labels.
+      2. Named dynamic profiles and pure named phase evidence.
+      3. Explicit duration when no phase/profile text matches.
+      4. Defer generic dynamics and PhN prefixes to compatible chronology.
+      5. OTHER.
     """
     seq = norm_label(row.get("mri_sequence"))
 
@@ -777,39 +795,6 @@ def detect_t1_perfusion_phase(row: pd.Series) -> tuple[str, str, str, str]:
     if len(supported) == 1:
         label = next(iter(supported))
         return label, "explicit ContrastBolusAgentPhase", "explicit", "dicom_phase"
-    special_profile = (
-        text_matches_art_port(row)
-        or text_matches_art_port_late(row)
-        or text_matches_mask_multiart(row)
-    )
-    if not special_profile:
-        explicit = detect_explicit_phase_from_text(row)
-        if explicit[0] is not None:
-            return explicit
-    if special_profile:
-        text_column, text = _phase_text_column(row) or ("", "")
-        durations = shared_rules._durations(text)
-        if durations:
-            labels = []
-            for _, seconds in durations:
-                matches = {
-                    rule.label
-                    for rule in rules.PHASE_RULES
-                    if rule.accepts_time(seconds)
-                }
-                labels.append(next(iter(matches)) if len(matches) == 1 else "OTHER")
-            label = labels[0] if len(set(labels)) == 1 else "OTHER"
-            return (
-                label,
-                f"explicit duration in {text_column}={text!r}"
-                + (
-                    "; unsupported duration; order fallback blocked"
-                    if label == "OTHER"
-                    else ""
-                ),
-                "explicit" if label != "OTHER" else "unknown",
-                "explicit_duration",
-            )
 
     # A single derived product is not another acquisition in an ART/PORT
     # container. Only a real multivolume order can disambiguate its phase here;
@@ -881,6 +866,10 @@ def detect_t1_perfusion_phase(row: pd.Series) -> tuple[str, str, str, str]:
             MASK_MULTIART_CONTEXT_PENDING,
         )
 
+    explicit = detect_explicit_phase_from_text(row)
+    if explicit[0] is not None:
+        return explicit
+
     ordinal_index = detect_ordinal_phase_index(row)
     if ordinal_index is not None:
         return (
@@ -927,16 +916,10 @@ def _infer_special_profile_phases_by_acquisition_order(
     candidates["_is_single_volume"] = n_volumes.eq(1)
     candidates["_is_multivolume"] = n_volumes.gt(1)
 
-    component = (
-        candidates["dixon_component"].fillna("UNKNOWN")
-        if "dixon_component" in candidates.columns
-        else pd.Series("UNKNOWN", index=candidates.index)
-    )
     assignments = []
     # Keep studies, sequence families, planes and reconstruction components apart.
-    grouping = candidates.apply(_generic_dynamic_key, axis=1)
-    for _, component_rows in candidates.groupby(grouping, sort=False):
-        component_name = component.loc[component_rows.index[0]]
+    grouping = candidates.apply(_dynamic_chronology_key, axis=1)
+    for (_, component_name), component_rows in candidates.groupby(grouping, sort=False):
         has_single_volume = bool(component_rows["_is_single_volume"].any())
         has_multivolume = bool(component_rows["_is_multivolume"].any())
         if not has_single_volume:
@@ -1074,6 +1057,8 @@ def _dynamic_series_id(row: pd.Series) -> str:
 
 
 def _generic_dynamic_key(row: pd.Series) -> tuple:
+    """Group compatible protocols separately by MIP/MPR and subtraction flags."""
+
     sequence_patterns = (
         rules.RX_LOCALIZER,
         rules.RX_KEY_IMAGES,
@@ -1104,27 +1089,30 @@ def _generic_dynamic_key(row: pd.Series) -> tuple:
             common.stable_text(row.get(col))
             for col in ("patient_key", "date", "study_id", "StudyInstanceUID")
         ),
-        tuple(parse_image_type_tokens(row.get("ImageType"))),
         family,
         plane,
-        norm_label(row.get("dixon_component"), "NOT_DIXON"),
+        (
+            bool(row.get("is_mip_mpr", False))
+            if not common.is_missing(row.get("is_mip_mpr"))
+            else False
+        ),
+        (
+            bool(row.get("is_subtraction", False))
+            if not common.is_missing(row.get("is_subtraction"))
+            else False
+        ),
     )
 
 
-def _matches_dynamic_group(row: pd.Series, key: tuple, series_ids: set[str]) -> bool:
+def _matches_dynamic_group(row: pd.Series, key: tuple) -> bool:
     """Keep native/context matching consistent with the target dynamic protocol."""
-    row_key = _generic_dynamic_key(row)
-    if row_key == key:
-        return True
-    if row_key[:-1] != key[:-1]:
-        return False
-    # An explicitly identified water reconstruction can support an unidentified
-    # Dixon reconstruction of the same protocol, never a known fat component.
-    if row_key[-1] == "WATER" and key[-1] in {"DIXON_UNKNOWN", "NOT_DIXON"}:
-        return True
-    return (
-        row_key[-1] in {"NOT_DIXON", "DIXON_UNKNOWN"}
-        and _dynamic_series_id(row) in series_ids
+    return _generic_dynamic_key(row) == key
+
+
+def _dynamic_chronology_key(row: pd.Series) -> tuple:
+    """Rank Dixon reconstruction runs separately within their shared protocol."""
+    return _generic_dynamic_key(row), norm_label(
+        row.get("dixon_component"), "NOT_DIXON"
     )
 
 
@@ -1228,7 +1216,7 @@ def _generic_dynamic_chronology(rows: pd.DataFrame):
 
 
 def _dynamic_time_deltas(rows: pd.DataFrame) -> pd.Series:
-    """Measure seconds from the first volume in each compatible dynamic group."""
+    """Measure seconds from the first volume in each protocol and Dixon component."""
     delta = pd.Series(np.nan, index=rows.index, dtype=float)
     if "time" not in rows:
         return delta
@@ -1240,7 +1228,7 @@ def _dynamic_time_deltas(rows: pd.DataFrame) -> pd.Series:
         return delta
     seconds = eligible.time.map(parse_time_to_seconds)
     for _, group in eligible.groupby(
-        eligible.apply(_generic_dynamic_key, axis=1), sort=False
+        eligible.apply(_dynamic_chronology_key, axis=1), sort=False
     ):
         if not group.apply(
             lambda row: _phase_matches_pattern(row, rules.RX_PHASE_GENERIC_DYNAMIC)
@@ -1321,20 +1309,36 @@ def infer_generic_dynamic_phases_from_exam_context(
             )
         )
     ]
-    keys = eligible.apply(_generic_dynamic_key, axis=1)
+    keys = eligible.apply(_dynamic_chronology_key, axis=1)
     groups = {}
     for idx in generic.index:
         groups.setdefault(keys.loc[idx], []).append(idx)
     assignments = []
     phases = ["NATIVE", "ARTERIAL", "PORTAL_VENOUS", "DELAYED"]
     phase_ranks = {phase: rank for rank, phase in enumerate(phases)}
-    for key, indices in groups.items():
+    for (key, component), indices in groups.items():
         candidates = generic.loc[indices]
         series_ids = set(candidates.apply(_dynamic_series_id, axis=1)) - {""}
         matched_anchors = anchors.loc[
             anchors.apply(
-                lambda row: _matches_dynamic_group(row, key, series_ids), axis=1
+                lambda row: _matches_dynamic_group(row, key),
+                axis=1,
             )
+        ]
+        same_component = matched_anchors.apply(
+            lambda row: norm_label(row.get("dixon_component"), "NOT_DIXON")
+            == component,
+            axis=1,
+        )
+        # Prefer this run's native over other components' reconstruction ranks.
+        share_native = (
+            not matched_anchors.loc[same_component]
+            .mri_perfusion_label.eq("NATIVE")
+            .any()
+        )
+        matched_anchors = matched_anchors.loc[
+            same_component
+            | (share_native & matched_anchors.mri_perfusion_label.eq("NATIVE"))
         ]
         context = pd.concat([candidates, matched_anchors])
         evidence, failure = _generic_dynamic_chronology(context)
@@ -1419,7 +1423,8 @@ def infer_generic_dynamic_phases_from_exam_context(
                         else f"inferred {label}; "
                     )
                     + reason
-                    + f"; ordered by {order_source}, family={key[-3]}, plane={key[-2]}, component={key[-1]}"
+                    + f"; ordered by {order_source}, family={key[-4]}, plane={key[-3]}, "
+                    f"is_mip_mpr={key[-2]}, is_subtraction={key[-1]}"
                     + (f"; explicit anchors={anchor_ids}" if anchor_ids else "")
                     + (
                         f"; native context={native_context_ids}"
@@ -1551,11 +1556,7 @@ def is_native_fallback_candidate(row: pd.Series) -> bool:
     if dixon_component in {"FAT", "FAT_FRACTION", "R2STAR", "DIXON_ALL"}:
         return False
 
-    return bool(
-        row.get("is_3d_gre")
-        or _sequence_matches_pattern(row, rules.RX_T1_3D_GRE)
-        or dixon_component in {"WATER", "IN_PHASE", "DIXON_UNKNOWN"}
-    )
+    return True
 
 
 def _sort_key_for_native_fallback(row: pd.Series) -> tuple:
@@ -1576,18 +1577,39 @@ def _sort_key_for_native_fallback(row: pd.Series) -> tuple:
     )
     quality_score += 1 if bool(row.get("is_breath_hold")) else 0
 
-    time_seconds = parse_time_to_seconds(row.get("time"))
-    acquisition_order = safe_float(row.get("acquisition_order"))
     return (
         -quality_score,
         -component_score,
-        time_seconds if pd.notna(time_seconds) else np.inf,
-        acquisition_order if pd.notna(acquisition_order) else np.inf,
+        common.stable_text(row.get("volume_id")) or _dynamic_series_id(row),
     )
 
 
+def _native_protocol_texts(row: pd.Series, *, strip_phase: bool = False):
+    """Use one acquisition field, preferring its configured phase evidence."""
+
+    evidence = _phase_text_column(row)
+    for column, text in iter_series_text_columns(row):
+        if column in {"StudyDescription", "ImageType"}:
+            continue
+        if evidence is not None and evidence[0] != column:
+            continue
+        if strip_phase:
+            for pattern in (
+                rules.RX_PHASE_ORDINAL,
+                shared_rules.RX_DURATION,
+                *(rule.pattern for rule in rules.PHASE_RULES),
+                rules.RX_PHASE_POST_CONTRAST,
+                rules.RX_PHASE_GENERIC_DYNAMIC,
+            ):
+                text = re.sub(pattern, " ", text)
+        name = re.sub(rf"{SEP_CHARS}+", " ", text).strip()
+        if name:
+            yield column, name
+            return
+
+
 def infer_missing_native_fallback(exam_rows: pd.DataFrame) -> tuple[int | None, str]:
-    """Find a separate native before compatible dynamics or resolved perfusion phases."""
+    """Find a separate native using compatible perfusion context, without chronology."""
     if exam_rows.mri_perfusion_label.eq("NATIVE").any():
         return None, "native/precontrast already resolved in compatible protocol"
     candidates = exam_rows.loc[
@@ -1620,23 +1642,59 @@ def infer_missing_native_fallback(exam_rows: pd.DataFrame) -> tuple[int | None, 
         key=lambda idx: _sort_key_for_native_fallback(candidates.loc[idx]),
     )
     for idx in ranked:
-        chronology, _ = _generic_dynamic_chronology(
-            pd.concat([candidates.loc[[idx]], context])
-        )
-        if (
-            chronology is None
-            or chronology.order.isna().any()
-            or chronology.order.nunique() < minimum_acquisitions
-        ):
-            continue
-        if chronology.loc[idx, "order"] >= chronology.loc[context.index, "order"].min():
+        evidence = pd.concat([candidates.loc[[idx]], context])
+        acquisitions = set()
+        for evidence_idx, row in evidence.iterrows():
+            identity = next(
+                (
+                    (column, common.stable_text(row.get(column)))
+                    for column in ("acquisition_id", "volume_id")
+                    if not common.is_missing(row.get(column))
+                    and common.stable_text(row.get(column))
+                ),
+                ("row", evidence_idx),
+            )
+            acquisitions.add(identity)
+        if len(acquisitions) < minimum_acquisitions:
             continue
         desc = candidates.loc[idx].get("SeriesDescription")
         return idx, (
             "selected fallback native/precontrast from compatible protocol context: "
-            f"a separate candidate precedes compatible perfusion acquisitions: {desc}"
+            f"a separate candidate matches compatible perfusion acquisitions: {desc}"
         )
-    return None, "no supported native candidate before compatible dynamics"
+    return None, "no supported native candidate with sufficient compatible context"
+
+
+def _infer_native_without_perfusion_evidence(rows: pd.DataFrame):
+    """Default remaining diagnostic T1 acquisitions to native after context inference."""
+    assignments = []
+    for idx, row in rows.iterrows():
+        if row.mri_perfusion_source != "none" or not is_native_fallback_candidate(row):
+            continue
+        if any(
+            common.stable_text(value)
+            for value in scalar_values(row.get("ContrastBolusAgentPhase"))
+        ):
+            continue
+        evidence = common.first_phase_text_column(
+            row,
+            _resolve_text_cols(),
+            phase_rules=rules.PHASE_RULES,
+            # A bare contrast-agent name alone does not establish postcontrast status.
+            post=shared_rules.RX_PHASE_POST_CONTRAST,
+            extra_patterns=(rules.RX_PHASE_GENERIC_DYNAMIC,),
+        )
+        if evidence is not None:
+            continue
+        assignments.append(
+            (
+                idx,
+                "fallback NATIVE for diagnostic T1 without acquisition perfusion "
+                "or postcontrast evidence; repeated protocols and chronology "
+                "not required",
+            )
+        )
+    return assignments
 
 
 def _infer_unnumbered_protocol_natives(rows: pd.DataFrame):
@@ -1721,9 +1779,8 @@ def _apply_numbered_postcontrast_context(rows: pd.DataFrame) -> pd.DataFrame:
         if ordinal is None or row.mri_sequence != "T1":
             continue
         key = _generic_dynamic_key(row)
-        series_ids = {_dynamic_series_id(row)} - {""}
         if not natives.apply(
-            lambda native: _matches_dynamic_group(native, key, series_ids), axis=1
+            lambda native: _matches_dynamic_group(native, key), axis=1
         ).any():
             continue
         rows.loc[idx, "_numbered_postcontrast"] = True
@@ -1763,22 +1820,37 @@ def _infer_missing_native_fallbacks(
             axis=1,
         )
     ]
-    if phase_context.empty:
-        return assignments
     for key, rows in phase_context.groupby(
         phase_context.apply(_generic_dynamic_key, axis=1), sort=False
     ):
-        series_ids = set(rows.apply(_dynamic_series_id, axis=1)) - {""}
         context = eligible.loc[
             eligible.apply(
-                lambda row: _matches_dynamic_group(row, key, series_ids), axis=1
+                lambda row: _matches_dynamic_group(row, key), axis=1
             )
         ]
-        idx, reason = infer_missing_native_fallback(context)
-        if idx is not None:
-            assignments.append((idx, reason))
-            eligible.loc[idx, "mri_perfusion_label"] = "NATIVE"
-            eligible.loc[idx, "mri_perfusion_source"] = "exam_context"
+        contexts = [context]
+        if key[-4] == "UNSPECIFIED_T1":
+            # An unrecognized T1 family alone does not identify a common protocol.
+            names = dict.fromkeys(
+                name
+                for _, row in rows.iterrows()
+                for name in _native_protocol_texts(row, strip_phase=True)
+            )
+            contexts = [
+                context.loc[
+                    context.apply(
+                        lambda row: name in set(_native_protocol_texts(row, strip_phase=True)),
+                        axis=1,
+                    )
+                ]
+                for name in names
+            ]
+        for compatible in contexts:
+            idx, reason = infer_missing_native_fallback(compatible)
+            if idx is not None and idx not in {assigned for assigned, _ in assignments}:
+                assignments.append((idx, reason))
+                eligible.loc[idx, "mri_perfusion_label"] = "NATIVE"
+                eligible.loc[idx, "mri_perfusion_source"] = "exam_context"
     return assignments
 
 
@@ -2038,6 +2110,13 @@ def add_mri_perfusion_columns(
             "mri_perfusion_reason",
         ):
             out.loc[conflicts, column] = exam_rows.loc[conflicts, column]
+
+        # This final assumption must not become an anchor for dynamic inference.
+        for row_idx, reason in _infer_native_without_perfusion_evidence(exam_rows):
+            out.loc[row_idx, "mri_perfusion_label"] = "NATIVE"
+            out.loc[row_idx, "mri_perfusion_reason"] = reason
+            out.loc[row_idx, "mri_perfusion_confidence"] = "fallback"
+            out.loc[row_idx, "mri_perfusion_source"] = "native_no_perfusion_evidence"
 
     for row_idx, row in out.iterrows():
         if row.phase_text_column and row.phase_text_value:
@@ -2439,9 +2518,21 @@ def add_scores(df: pd.DataFrame) -> pd.DataFrame:
 # -----------------------------------------------------------------------------
 
 
+def _delayed_in_preferred_window(row: pd.Series) -> bool:
+    """Prefer 5-10 minute delayed acquisitions, using text timing before elapsed time."""
+    if norm_label(row.get("phase", row.get("mri_perfusion_label"))) != "DELAYED":
+        return False
+    durations = _first_phase_text_value(row, shared_rules.duration_seconds)
+    if durations:
+        return len(set(durations)) == 1 and 300 <= durations[0] <= 600
+    seconds = safe_float(row.get("time_delta"))
+    return bool(pd.notna(seconds) and 300 <= seconds <= 600)
+
+
 def add_tiebreaker_columns(df: pd.DataFrame, time_col: str = "time") -> pd.DataFrame:
     out = df.copy()
     out["_row_order"] = np.arange(len(out))
+    out["_delayed_in_preferred_window"] = out.apply(_delayed_in_preferred_window, axis=1)
 
     if time_col in out.columns:
         out["_time_seconds"] = out[time_col].apply(parse_time_to_seconds)
@@ -2551,14 +2642,26 @@ def select_best_candidates(
     sort_cols = [
         *exam_cols,
         "selection_slot",
+        "_delayed_in_preferred_window",
         "selection_score",
         "_volume_proxy",
+        "_slice_thickness",
         "_z_coverage_proxy",
         "_n_rows_proxy",
         "_time_seconds",
         "_row_order",
     ]
-    ascending = [True] * len(exam_cols) + [True, False, False, False, False, True, True]
+    ascending = [True] * len(exam_cols) + [
+        True,
+        False,
+        False,
+        False,
+        True,
+        False,
+        False,
+        True,
+        True,
+    ]
 
     ranked = selectable.sort_values(sort_cols, ascending=ascending, na_position="last")
 
@@ -2578,6 +2681,8 @@ def select_best_candidates(
         if pd.notna(volume_order) and pd.notna(n_volumes):
             details.append(f"vol={volume_order:g}/{n_volumes:g}")
         details.append(f"score={row.get('selection_score'):.1f}")
+        if row.get("_delayed_in_preferred_window"):
+            details.append("preferred delayed interval=5-10min")
         return f"{desc} [{', '.join(details)}] {common.phase_evidence_summary(row)}"
 
     ranked["selected_candidate"] = ranked.apply(_display, axis=1)

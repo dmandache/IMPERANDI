@@ -44,6 +44,8 @@ def annotate(df):
         "AX T1 VIBE GRASP",
         "AX T1 TWIST",
         "AX T1 DISCO dynamic",
+        "t1 vibe fs multi gado",
+        "AX T1 VIBE MULTI_GADOLINIUM",
     ],
 )
 @pytest.mark.parametrize("same_series", [False, True])
@@ -65,6 +67,118 @@ def test_four_dynamic_acquisitions_restore_full_phase_sequence(
     assert out.mri_perfusion_confidence.eq("inferred").all()
 
 
+@pytest.mark.parametrize("clocks", [False, True])
+@pytest.mark.parametrize("shared_order", [False, True])
+@pytest.mark.parametrize(
+    "description,expected",
+    [
+        ("AX T1 mDIXON dynamic", ["NATIVE", "ARTERIAL", "PORTAL_VENOUS", "DELAYED"]),
+        ("AX T1 mDIXON ART-PORT", ["ARTERIAL", "PORTAL_VENOUS"]),
+        ("AX T1 mDIXON ART/PORT/LATE", ["ARTERIAL", "PORTAL_VENOUS", "DELAYED"]),
+        ("AX T1 mDIXON Mask+Multiart", ["NATIVE", "ARTERIAL", "ARTERIAL"]),
+    ],
+)
+def test_dixon_reconstructions_keep_acquisition_positions(
+    description, expected, shared_order, clocks
+):
+    reconstructions = []
+    for component_index, component in enumerate(["W", "F", "in", "opp"]):
+        rows = (
+            acquisitions(f"{description}_{component}", same_series=False, clocks=clocks)
+            .iloc[: len(expected)]
+            .copy()
+        )
+        rows["volume_id"] = component + "_" + rows.volume_id
+        rows["series_id"] = component + "_" + rows.series_id
+        rows["acquisition_id"] = [f"acquisition_{i}" for i in range(len(expected))]
+        if not shared_order:
+            rows["acquisition_order"] += component_index * len(expected)
+        reconstructions.append(rows)
+
+    frame = pd.concat(reconstructions, ignore_index=True).sample(
+        frac=1, random_state=23
+    )
+    out = mc.annotate_mri(frame).set_index("volume_id")
+
+    for rows in reconstructions:
+        assert out.loc[rows.volume_id, "phase"].tolist() == expected
+
+
+@pytest.mark.parametrize("count", [1, 2])
+def test_dixon_reconstructions_do_not_supply_missing_dynamic_acquisitions(count):
+    water = acquisitions("AX T1 mDIXON dynamic_W", clocks=False).iloc[:count].copy()
+    fat = water.copy()
+    fat["volume_id"] = "fat_" + fat.volume_id
+    fat["series_id"] = "FAT"
+    fat["SeriesDescription"] = "AX T1 mDIXON dynamic_F"
+    fat["acquisition_order"] += count
+
+    out = mc.annotate_mri(pd.concat([water, fat], ignore_index=True))
+
+    assert out.phase.eq("OTHER").all()
+    assert out.mri_perfusion_source.eq(mc.GENERIC_DYNAMIC_CONTEXT_PENDING).all()
+
+
+@pytest.mark.parametrize("clocks", [False, True])
+@pytest.mark.parametrize("shared_order", [False, True])
+def test_each_dixon_component_uses_its_own_explicit_phase_anchors(clocks, shared_order):
+    reconstructions = []
+    for component_index, component in enumerate(["W", "F", "in", "opp"]):
+        rows = acquisitions(
+            f"AX T1 mDIXON dynamic_{component}", same_series=False, clocks=clocks
+        )
+        rows.loc[0, "SeriesDescription"] = f"AX T1 mDIXON pre_{component}"
+        rows.loc[2, "SeriesDescription"] = f"AX T1 mDIXON portal_{component}"
+        rows["volume_id"] = component + "_" + rows.volume_id
+        rows["series_id"] = component + "_" + rows.series_id
+        if not shared_order:
+            rows["acquisition_order"] += component_index * len(rows)
+        reconstructions.append(rows)
+
+    frame = pd.concat(reconstructions, ignore_index=True).sample(
+        frac=1, random_state=31
+    )
+    out = mc.annotate_mri(frame).set_index("volume_id")
+
+    for rows in reconstructions:
+        assert out.loc[rows.volume_id, "phase"].tolist() == [
+            "NATIVE",
+            "ARTERIAL",
+            "PORTAL_VENOUS",
+            "DELAYED",
+        ]
+        assert (
+            out.loc[rows.loc[[0, 2], "volume_id"], "mri_perfusion_source"]
+            .eq("explicit_text")
+            .all()
+        )
+
+
+def test_explicit_phase_on_other_dixon_component_does_not_consume_a_position():
+    rows = acquisitions("AX T1 mDIXON dynamic_W", clocks=False)
+    portal = rows.iloc[0].copy()
+    portal.update(
+        {
+            "volume_id": "portal_fat",
+            "series_id": "FAT",
+            "SeriesDescription": "AX T1 mDIXON portal_F",
+            "acquisition_order": 4,
+        }
+    )
+    out = mc.annotate_mri(
+        pd.concat([rows, pd.DataFrame([portal])], ignore_index=True)
+    ).set_index("volume_id")
+
+    assert out.loc[rows.volume_id, "phase"].tolist() == [
+        "NATIVE",
+        "ARTERIAL",
+        "PORTAL_VENOUS",
+        "DELAYED",
+    ]
+    assert out.loc["portal_fat", "phase"] == "PORTAL_VENOUS"
+    assert out.loc["portal_fat", "mri_perfusion_source"] == "explicit_text"
+
+
 @pytest.mark.parametrize(
     "description,expected",
     [
@@ -74,23 +188,18 @@ def test_four_dynamic_acquisitions_restore_full_phase_sequence(
         ("AX T1 LAVA Mask+Multiart", ["NATIVE", "ARTERIAL", "ARTERIAL", "ARTERIAL"]),
     ],
 )
-def test_different_image_types_have_independent_dynamic_progressions(
-    description, expected
-):
-    first = acquisitions(description, same_series=False, clocks=False)
-    first["ImageType"] = "ORIGINAL PRIMARY M"
-    first["acquisition_order"] *= 2
-    second = first.copy()
-    second["ImageType"] = "ORIGINAL PRIMARY P"
-    second["volume_id"] = "second_" + second.volume_id
-    second["series_id"] = "second_" + second.series_id
-    second["acquisition_order"] += 1
-    rows = pd.concat([first, second], ignore_index=True)
+def test_different_image_types_share_dynamic_progression(description, expected):
+    rows = acquisitions(description, same_series=False, clocks=False)
+    rows["ImageType"] = [
+        "ORIGINAL PRIMARY M",
+        "DERIVED PRIMARY M",
+        None,
+        "ORIGINAL PRIMARY P",
+    ]
 
     out = mc.annotate_mri(rows.sample(frac=1, random_state=11)).set_index("volume_id")
 
-    assert out.loc[first.volume_id, "phase"].tolist() == expected
-    assert out.loc[second.volume_id, "phase"].tolist() == expected
+    assert out.loc[rows.volume_id, "phase"].tolist() == expected
 
 
 @pytest.mark.parametrize(
@@ -154,8 +263,9 @@ def test_long_gaps_do_not_delete_an_ordered_four_acquisition_template():
     ]
 
 
-def test_no_permanent_blocked_state_survives_in_missing_order_case():
-    rows = acquisitions("AX T1 LAVA dynamic", same_series=False, clocks=False)
+@pytest.mark.parametrize("description", ["AX T1 LAVA dynamic", "t1 vibe fs multi gado"])
+def test_no_permanent_blocked_state_survives_in_missing_order_case(description):
+    rows = acquisitions(description, same_series=False, clocks=False)
     rows = rows.drop(columns=["acquisition_order", "TemporalPositionIdentifier"])
     out = annotate(rows)
     assert out.mri_perfusion_label.eq("OTHER").all()
@@ -248,11 +358,17 @@ def test_separate_native_counts_before_unlabelled_dynamic_progression(
         )
 
 
-def test_native_alone_does_not_supply_dynamic_evidence_to_other_t1_volumes():
+def test_repeated_protocols_can_be_native_alongside_explicit_native():
     rows = acquisitions("AX T1 LAVA", same_series=False).iloc[:3].copy()
     rows.loc[0, "SeriesDescription"] = "AX T1 LAVA pre"
     out = mc.annotate_mri(rows)
-    assert out.mri_perfusion_label.tolist() == ["NATIVE", "OTHER", "OTHER"]
+    assert out.mri_perfusion_label.tolist() == ["NATIVE", "NATIVE", "NATIVE"]
+    assert out.loc[0, "mri_perfusion_source"] == "explicit_text"
+    assert (
+        out.loc[[1, 2], "mri_perfusion_reason"]
+        .str.contains("without acquisition perfusion")
+        .all()
+    )
 
 
 @pytest.mark.parametrize("same_series", [False, True])
@@ -283,7 +399,7 @@ def test_extra_dynamic_acquisitions_remain_delayed_after_standard_progression(
     ]
 
 
-def test_late_unlabelled_candidate_does_not_steal_native_from_dynamic_start():
+def test_separate_native_candidate_is_resolved_independently_of_acquisition_order():
     rows = acquisitions("AX T1 LAVA dynamic", same_series=False).iloc[:3].copy()
     late = rows.iloc[-1].copy()
     late.update(
@@ -299,11 +415,12 @@ def test_late_unlabelled_candidate_does_not_steal_native_from_dynamic_start():
         pd.concat([rows, pd.DataFrame([late])], ignore_index=True)
     ).set_index("volume_id")
     assert out.loc[["v0", "v1", "v2"], "mri_perfusion_label"].tolist() == [
-        "NATIVE",
-        "ARTERIAL",
-        "PORTAL_VENOUS",
+        "OTHER",
+        "OTHER",
+        "OTHER",
     ]
-    assert out.loc["late", "mri_perfusion_label"] == "OTHER"
+    assert out.loc["late", "mri_perfusion_label"] == "NATIVE"
+    assert out.loc["late", "mri_perfusion_source"] == "exam_context"
 
 
 def test_unlabelled_candidate_cannot_anchor_a_different_study():
@@ -322,7 +439,8 @@ def test_unlabelled_candidate_cannot_anchor_a_different_study():
     out = mc.annotate_mri(
         pd.concat([pd.DataFrame([native]), rows], ignore_index=True)
     ).set_index("volume_id")
-    assert out.loc["native", "mri_perfusion_label"] == "OTHER"
+    assert out.loc["native", "mri_perfusion_label"] == "NATIVE"
+    assert out.loc["native", "mri_perfusion_source"] == "native_no_perfusion_evidence"
     assert out.loc[["v0", "v1", "v2"], "mri_perfusion_label"].tolist() == [
         "NATIVE",
         "ARTERIAL",

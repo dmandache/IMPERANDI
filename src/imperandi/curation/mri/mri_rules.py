@@ -64,6 +64,7 @@ RX_SEQUENCE_T1_CONTRAST = token(
     GADOLINIUM,
     rf"t1{SEP}(?:{GADOLINIUM}|{shared.CONTRAST}|post|c\+|fs{SEP}post)",
     rf"post{SEP}(?:iv|{GADOLINIUM}|{shared.CONTRAST})",
+    rf"multi{SEP}(?:iv|{GADOLINIUM}|{shared.CONTRAST})",
     rf"(?:post|ce){SEP}t1",
 )
 RX_SEQUENCE_T2 = token(
@@ -106,6 +107,7 @@ RX_PHASE_GENERIC_DYNAMIC = token(
     shared.RX_PHASE_GENERIC_DYNAMIC,
     RX_PHASE_ART_PORT_DYNAMIC,
     RX_PHASE_MASK_MULTIART_DYNAMIC,
+    rf"multi{SEP}(?:{GADOLINIUM})",
     rf"twist|twist{SEP}vibe|grasp",
 )
 RX_T1_DYNAMIC = token(
@@ -195,6 +197,7 @@ T1_PHASE_SOURCE_PRIORITY = {
     "volume_order_mask_multiart": 10,
     "volume_order": 0,
     "exam_context": -5,
+    "native_no_perfusion_evidence": -10,
     "none": -20,
 }
 
