@@ -51,8 +51,13 @@ def anchored_rows(description="dynamic", same_series=False):
 
 @pytest.mark.parametrize("same_series", [False, True])
 @pytest.mark.parametrize("description", ["dynamic", "dynamic post"])
-def test_explicit_native_anchors_same_or_separate_series(same_series, description):
-    out = curate(anchored_rows(description, same_series))
+@pytest.mark.parametrize("native_image_type", ["ORIGINAL PRIMARY", "ORIGINAL PRIMARY F"])
+def test_explicit_native_anchors_same_or_separate_series(
+    same_series, description, native_image_type
+):
+    rows = anchored_rows(description, same_series)
+    rows[0]["ImageType"] = native_image_type
+    out = curate(rows)
     assert out.loc[["pre", "d1", "d2", "d3"], "phase"].tolist() == [
         "NATIVE",
         "ARTERIAL",
@@ -288,7 +293,6 @@ def test_full_and_post_only_dynamic_templates_without_native_anchor(
         {"patient_key": "OTHER"},
         {"SeriesDescription": "AX T1 VIBE pre"},
         {"acquisition_plane": "CORONAL"},
-        {"ImageType": "ORIGINAL PRIMARY F"},
     ],
 )
 def test_unrelated_native_cannot_anchor_post_only_group(anchor_change):
@@ -309,7 +313,7 @@ def test_unrelated_native_cannot_anchor_post_only_group(anchor_change):
     )
 
 
-def test_unknown_native_component_can_anchor_only_its_own_dixon_series():
+def test_unknown_native_component_anchors_compatible_dixon_across_series():
     rows = anchored_rows("dynamic post", same_series=True)
     rows[0]["SeriesDescription"] = "AX T1 mDIXON pre"
     for row in rows[1:]:
@@ -328,9 +332,9 @@ def test_unknown_native_component_can_anchor_only_its_own_dixon_series():
         "DELAYED",
     ]
     assert (
-        not out.loc[["d1", "d2", "d3"], "mri_perfusion_reason"]
+        out.loc[["d1", "d2", "d3"], "mri_perfusion_reason"]
         .str.contains("explicit anchors=pre")
-        .any()
+        .all()
     )
 
 

@@ -67,6 +67,118 @@ def test_four_dynamic_acquisitions_restore_full_phase_sequence(
     assert out.mri_perfusion_confidence.eq("inferred").all()
 
 
+@pytest.mark.parametrize("clocks", [False, True])
+@pytest.mark.parametrize("shared_order", [False, True])
+@pytest.mark.parametrize(
+    "description,expected",
+    [
+        ("AX T1 mDIXON dynamic", ["NATIVE", "ARTERIAL", "PORTAL_VENOUS", "DELAYED"]),
+        ("AX T1 mDIXON ART-PORT", ["ARTERIAL", "PORTAL_VENOUS"]),
+        ("AX T1 mDIXON ART/PORT/LATE", ["ARTERIAL", "PORTAL_VENOUS", "DELAYED"]),
+        ("AX T1 mDIXON Mask+Multiart", ["NATIVE", "ARTERIAL", "ARTERIAL"]),
+    ],
+)
+def test_dixon_reconstructions_keep_acquisition_positions(
+    description, expected, shared_order, clocks
+):
+    reconstructions = []
+    for component_index, component in enumerate(["W", "F", "in", "opp"]):
+        rows = (
+            acquisitions(f"{description}_{component}", same_series=False, clocks=clocks)
+            .iloc[: len(expected)]
+            .copy()
+        )
+        rows["volume_id"] = component + "_" + rows.volume_id
+        rows["series_id"] = component + "_" + rows.series_id
+        rows["acquisition_id"] = [f"acquisition_{i}" for i in range(len(expected))]
+        if not shared_order:
+            rows["acquisition_order"] += component_index * len(expected)
+        reconstructions.append(rows)
+
+    frame = pd.concat(reconstructions, ignore_index=True).sample(
+        frac=1, random_state=23
+    )
+    out = mc.annotate_mri(frame).set_index("volume_id")
+
+    for rows in reconstructions:
+        assert out.loc[rows.volume_id, "phase"].tolist() == expected
+
+
+@pytest.mark.parametrize("count", [1, 2])
+def test_dixon_reconstructions_do_not_supply_missing_dynamic_acquisitions(count):
+    water = acquisitions("AX T1 mDIXON dynamic_W", clocks=False).iloc[:count].copy()
+    fat = water.copy()
+    fat["volume_id"] = "fat_" + fat.volume_id
+    fat["series_id"] = "FAT"
+    fat["SeriesDescription"] = "AX T1 mDIXON dynamic_F"
+    fat["acquisition_order"] += count
+
+    out = mc.annotate_mri(pd.concat([water, fat], ignore_index=True))
+
+    assert out.phase.eq("OTHER").all()
+    assert out.mri_perfusion_source.eq(mc.GENERIC_DYNAMIC_CONTEXT_PENDING).all()
+
+
+@pytest.mark.parametrize("clocks", [False, True])
+@pytest.mark.parametrize("shared_order", [False, True])
+def test_each_dixon_component_uses_its_own_explicit_phase_anchors(clocks, shared_order):
+    reconstructions = []
+    for component_index, component in enumerate(["W", "F", "in", "opp"]):
+        rows = acquisitions(
+            f"AX T1 mDIXON dynamic_{component}", same_series=False, clocks=clocks
+        )
+        rows.loc[0, "SeriesDescription"] = f"AX T1 mDIXON pre_{component}"
+        rows.loc[2, "SeriesDescription"] = f"AX T1 mDIXON portal_{component}"
+        rows["volume_id"] = component + "_" + rows.volume_id
+        rows["series_id"] = component + "_" + rows.series_id
+        if not shared_order:
+            rows["acquisition_order"] += component_index * len(rows)
+        reconstructions.append(rows)
+
+    frame = pd.concat(reconstructions, ignore_index=True).sample(
+        frac=1, random_state=31
+    )
+    out = mc.annotate_mri(frame).set_index("volume_id")
+
+    for rows in reconstructions:
+        assert out.loc[rows.volume_id, "phase"].tolist() == [
+            "NATIVE",
+            "ARTERIAL",
+            "PORTAL_VENOUS",
+            "DELAYED",
+        ]
+        assert (
+            out.loc[rows.loc[[0, 2], "volume_id"], "mri_perfusion_source"]
+            .eq("explicit_text")
+            .all()
+        )
+
+
+def test_explicit_phase_on_other_dixon_component_does_not_consume_a_position():
+    rows = acquisitions("AX T1 mDIXON dynamic_W", clocks=False)
+    portal = rows.iloc[0].copy()
+    portal.update(
+        {
+            "volume_id": "portal_fat",
+            "series_id": "FAT",
+            "SeriesDescription": "AX T1 mDIXON portal_F",
+            "acquisition_order": 4,
+        }
+    )
+    out = mc.annotate_mri(
+        pd.concat([rows, pd.DataFrame([portal])], ignore_index=True)
+    ).set_index("volume_id")
+
+    assert out.loc[rows.volume_id, "phase"].tolist() == [
+        "NATIVE",
+        "ARTERIAL",
+        "PORTAL_VENOUS",
+        "DELAYED",
+    ]
+    assert out.loc["portal_fat", "phase"] == "PORTAL_VENOUS"
+    assert out.loc["portal_fat", "mri_perfusion_source"] == "explicit_text"
+
+
 @pytest.mark.parametrize(
     "description,expected",
     [

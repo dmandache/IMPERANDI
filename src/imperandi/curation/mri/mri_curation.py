@@ -916,16 +916,10 @@ def _infer_special_profile_phases_by_acquisition_order(
     candidates["_is_single_volume"] = n_volumes.eq(1)
     candidates["_is_multivolume"] = n_volumes.gt(1)
 
-    component = (
-        candidates["dixon_component"].fillna("UNKNOWN")
-        if "dixon_component" in candidates.columns
-        else pd.Series("UNKNOWN", index=candidates.index)
-    )
     assignments = []
     # Keep studies, sequence families, planes and reconstruction components apart.
-    grouping = candidates.apply(_generic_dynamic_key, axis=1)
-    for _, component_rows in candidates.groupby(grouping, sort=False):
-        component_name = component.loc[component_rows.index[0]]
+    grouping = candidates.apply(_dynamic_chronology_key, axis=1)
+    for (_, component_name), component_rows in candidates.groupby(grouping, sort=False):
         has_single_volume = bool(component_rows["_is_single_volume"].any())
         has_multivolume = bool(component_rows["_is_multivolume"].any())
         if not has_single_volume:
@@ -1115,6 +1109,13 @@ def _matches_dynamic_group(row: pd.Series, key: tuple) -> bool:
     return _generic_dynamic_key(row) == key
 
 
+def _dynamic_chronology_key(row: pd.Series) -> tuple:
+    """Rank Dixon reconstruction runs separately within their shared protocol."""
+    return _generic_dynamic_key(row), norm_label(
+        row.get("dixon_component"), "NOT_DIXON"
+    )
+
+
 def _series_temporal_order(rows: pd.DataFrame):
     """Use volume ranks only within a known series."""
     if "volume_order_in_series" not in rows:
@@ -1215,7 +1216,7 @@ def _generic_dynamic_chronology(rows: pd.DataFrame):
 
 
 def _dynamic_time_deltas(rows: pd.DataFrame) -> pd.Series:
-    """Measure seconds from the first volume in each compatible dynamic group."""
+    """Measure seconds from the first volume in each protocol and Dixon component."""
     delta = pd.Series(np.nan, index=rows.index, dtype=float)
     if "time" not in rows:
         return delta
@@ -1227,7 +1228,7 @@ def _dynamic_time_deltas(rows: pd.DataFrame) -> pd.Series:
         return delta
     seconds = eligible.time.map(parse_time_to_seconds)
     for _, group in eligible.groupby(
-        eligible.apply(_generic_dynamic_key, axis=1), sort=False
+        eligible.apply(_dynamic_chronology_key, axis=1), sort=False
     ):
         if not group.apply(
             lambda row: _phase_matches_pattern(row, rules.RX_PHASE_GENERIC_DYNAMIC)
@@ -1308,20 +1309,36 @@ def infer_generic_dynamic_phases_from_exam_context(
             )
         )
     ]
-    keys = eligible.apply(_generic_dynamic_key, axis=1)
+    keys = eligible.apply(_dynamic_chronology_key, axis=1)
     groups = {}
     for idx in generic.index:
         groups.setdefault(keys.loc[idx], []).append(idx)
     assignments = []
     phases = ["NATIVE", "ARTERIAL", "PORTAL_VENOUS", "DELAYED"]
     phase_ranks = {phase: rank for rank, phase in enumerate(phases)}
-    for key, indices in groups.items():
+    for (key, component), indices in groups.items():
         candidates = generic.loc[indices]
         series_ids = set(candidates.apply(_dynamic_series_id, axis=1)) - {""}
         matched_anchors = anchors.loc[
             anchors.apply(
-                lambda row: _matches_dynamic_group(row, key), axis=1
+                lambda row: _matches_dynamic_group(row, key),
+                axis=1,
             )
+        ]
+        same_component = matched_anchors.apply(
+            lambda row: norm_label(row.get("dixon_component"), "NOT_DIXON")
+            == component,
+            axis=1,
+        )
+        # Prefer this run's native over other components' reconstruction ranks.
+        share_native = (
+            not matched_anchors.loc[same_component]
+            .mri_perfusion_label.eq("NATIVE")
+            .any()
+        )
+        matched_anchors = matched_anchors.loc[
+            same_component
+            | (share_native & matched_anchors.mri_perfusion_label.eq("NATIVE"))
         ]
         context = pd.concat([candidates, matched_anchors])
         evidence, failure = _generic_dynamic_chronology(context)

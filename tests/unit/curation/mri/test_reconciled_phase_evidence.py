@@ -234,6 +234,11 @@ def test_phase_sharing_requires_compatible_supplied_acquisition_identity(bad_evi
     )
     if bad_evidence is None:
         assert out.loc["v1", "mri_perfusion_source"] == "acquisition_phase"
+    else:
+        assert out.loc["v1", "mri_perfusion_source"] != "acquisition_phase"
+    if bad_evidence == "clock":
+        # The fat component measures time from its own first acquisition.
+        assert out.loc["v1", "time_delta"] == 0
 
 
 def test_equal_time_alone_does_not_share_phase_between_components():
