@@ -11,6 +11,7 @@ import dicom2nifti
 from tqdm import tqdm
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import tempfile
+from contextlib import contextmanager
 
 from imperandi.utils.archive_io import (
     ArchiveSession,
@@ -348,6 +349,56 @@ def materialize_archive_dicom_paths(
     return out, df_err
 
 
+def _dicom_series_dir(row) -> Path:
+    directory = row.get("series_dir")
+    if directory is not None and not pd.isna(directory) and str(directory).strip():
+        return Path(directory)
+    paths = _flatten_dicom_paths(row.get("dicom_path"))
+    if not paths:
+        raise ValueError("DICOM volume contains no readable slice paths")
+    return Path(paths[0]).parent
+
+
+@contextmanager
+def temporary_nifti_from_dicom(row, *, verbose=False):
+    """Reuse volume conversion in a temporary directory, including archive inputs."""
+    metadata = pd.Series(
+        {
+            **dict(row),
+            # Output names are private to this temporary conversion.
+            "patient_key": "temporary",
+            "study_id": "temporary",
+            "series_id": "volume",
+            "volume_ordinal_in_series": 1,
+        }
+    )
+    paths = metadata.get("dicom_path")
+    metadata["dicom_path"] = (
+        convert_list_str_to_list(paths) if isinstance(paths, str) else paths
+    )
+    if not _flatten_dicom_paths(metadata["dicom_path"]):
+        raise ValueError("DICOM volume contains no readable slice paths")
+    with tempfile.TemporaryDirectory(prefix="imperandi_phase_") as temp_dir:
+        with ArchiveSession(cache_dir=Path(temp_dir) / "dicom") as archive_session:
+            work, errors = materialize_archive_dicom_paths(
+                pd.DataFrame([metadata]), archive_session
+            )
+            if not errors.empty:
+                raise ValueError(errors.iloc[0]["error"])
+            # Materialized members may no longer belong to the original directory.
+            metadata = work.iloc[0].drop(labels="series_dir", errors="ignore")
+            _, path, error = process_single_volume(
+                0, metadata, Path(temp_dir) / "nifti", verbose
+            )
+            if error is not None or path is None:
+                raise ValueError(
+                    error.get("error", "DICOM conversion failed")
+                    if error is not None
+                    else "DICOM conversion produced no NIfTI file"
+                )
+            yield Path(path)
+
+
 # Function to convert a single DICOM volume to NIfTI (parallel task)
 def process_single_volume(
     k, row, output_dir, verbose, return_status=False, force=False
@@ -378,7 +429,7 @@ def process_single_volume(
         return k, export_path, error_row
 
     try:
-        dicom_dir_path = row["series_dir"]
+        dicom_dir_path = _dicom_series_dir(row)
         files_in_vol = _flatten_dicom_paths(row["dicom_path"])
         files_in_dir = list(Path(dicom_dir_path).iterdir())
 
@@ -484,9 +535,7 @@ def convert_dicom_to_nifti_parallel(
     df["volume_ordinal_in_series"] = df.groupby("series_id").cumcount() + 1
 
     if "series_dir" not in df.columns:
-        df["series_dir"] = df["dicom_path"].apply(
-            lambda x: Path(x[0]).parent if isinstance(x, list) else Path(x).parent
-        )
+        df["series_dir"] = df.apply(_dicom_series_dir, axis=1)
 
     # Use ProcessPoolExecutor to parallelize the task.
     with ProcessPoolExecutor(max_workers=num_workers) as executor:
@@ -601,7 +650,7 @@ def main(args):
             "dicom_path",
             "series_dir",
         ],
-        artifact_columns=["dicom_path"],
+        artifact_columns=[], #["dicom_path"],
         strict=bool(getattr(args, "strict_resume", False)),
     )
     resume_ctx = prepare_resume_context(

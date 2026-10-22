@@ -162,6 +162,10 @@ def validate_phase_curation(config: Mapping[str, Any] | None) -> dict[str, Any]:
             )
 
         else:
+            force_conversion = strategy.get("force_nifti_conversion", False)
+            if not isinstance(force_conversion, bool):
+                raise ValueError(f"{field}.force_nifti_conversion must be a boolean.")
+            strategy["force_nifti_conversion"] = force_conversion
             column = strategy.get("column", "totalseg_phase")
             if not isinstance(column, str) or not column.strip():
                 raise ValueError(f"{field}.column must be a non-empty string.")

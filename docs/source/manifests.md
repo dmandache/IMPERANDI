@@ -625,12 +625,21 @@ command invokes TotalSegmentator only for rows that reach this strategy. If it
 appears after ontology and rules, rows already resolved by either earlier
 strategy skip model inference.
 
+Prediction uses an existing `nifti_path` when available. Otherwise, the `phase`
+command can convert the row's `dicom_path` into a temporary NIfTI using the same
+conversion code as `convert`, including archive inputs. Enable
+`force_nifti_conversion: true` in this strategy or pass `--force-nifti-conversion`
+to `phase`; conversion is disabled by default. Temporary files are
+removed after prediction; their paths are not saved to the output CSV.
+Conversion failures are recorded in the phase error CSV.
+
 ```yaml
 phase_curation:
   strategies:
     - type: rules
     - type: totalsegmentator
       column: totalseg_phase
+      force_nifti_conversion: false
       modalities: [CT]
       confidence_columns: [totalseg_probability, totalseg_confidence]
       mapping:
