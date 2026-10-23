@@ -71,6 +71,45 @@ def _finite_number(value):
     )
 
 
+def _validate_pyramid(shrink_factors, smoothing_sigmas_mm, prefix):
+    """Validate paired coarse-to-fine schedules before calling SimpleITK."""
+    shrink_name = f"{prefix}_shrink_factors"
+    sigma_name = f"{prefix}_smoothing_sigmas_mm"
+    if (
+        not isinstance(shrink_factors, list)
+        or not shrink_factors
+        or any(
+            type(value) is not int or not 1 <= value <= 2**32 - 1
+            for value in shrink_factors
+        )
+    ):
+        raise ValueError(
+            f"{shrink_name} must be a nonempty list of integers in [1, {2**32 - 1}]"
+        )
+    if any(a <= b for a, b in zip(shrink_factors, shrink_factors[1:])):
+        raise ValueError(f"{shrink_name} must be strictly decreasing (coarse to fine)")
+    try:
+        valid_sigmas = (
+            isinstance(smoothing_sigmas_mm, list)
+            and bool(smoothing_sigmas_mm)
+            and all(
+                _finite_number(value) and value >= 0 for value in smoothing_sigmas_mm
+            )
+        )
+    except OverflowError:
+        valid_sigmas = False
+    if not valid_sigmas:
+        raise ValueError(
+            f"{sigma_name} must be a nonempty list of finite nonnegative numbers"
+        )
+    if len(shrink_factors) != len(smoothing_sigmas_mm):
+        raise ValueError(
+            f"{shrink_name} and {sigma_name} must have the same number of levels"
+        )
+    if any(a < b for a, b in zip(smoothing_sigmas_mm, smoothing_sigmas_mm[1:])):
+        raise ValueError(f"{sigma_name} must be nonincreasing (coarse to fine)")
+
+
 @dataclass(frozen=True)
 class RegistrationConfig:
     grouping_columns: list[str] = field(
@@ -105,6 +144,14 @@ class RegistrationConfig:
     )
     maximum_mi_stage_dice_decrease: float = 0.002
     maximum_optimizer_iterations: int = 100
+    linear_shrink_factors: list[int] = field(default_factory=lambda: [4, 2, 1])
+    linear_smoothing_sigmas_mm: list[float] = field(
+        default_factory=lambda: [2.0, 1.0, 0.0]
+    )
+    elastic_shrink_factors: list[int] = field(default_factory=lambda: [4, 2, 1])
+    elastic_smoothing_sigmas_mm: list[float] = field(
+        default_factory=lambda: [2.0, 1.0, 0.0]
+    )
     distance_map_crop_padding_mm: float = 25.0
     organ_boundary_band_half_width_mm: float = 15.0
     organ_distance_field_padding_mm: float = 10.0
@@ -124,6 +171,14 @@ class RegistrationConfig:
     )
 
     def __post_init__(self):
+        for prefix in ("linear", "elastic"):
+            shrink_name = f"{prefix}_shrink_factors"
+            sigma_name = f"{prefix}_smoothing_sigmas_mm"
+            factors, sigmas = getattr(self, shrink_name), getattr(self, sigma_name)
+            _validate_pyramid(factors, sigmas, prefix)
+            # Do not retain mutable lists owned by a caller's manifest.
+            object.__setattr__(self, shrink_name, list(factors))
+            object.__setattr__(self, sigma_name, list(sigmas))
         for name in (
             "preserve_source_organ_mask",
             "accept_partial_organ_masks",

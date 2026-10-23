@@ -665,6 +665,56 @@ def test_invalid_manifest_dry_run_does_not_create_outputs(cohort, tmp_path):
     assert not (tmp_path / "registration").exists()
 
 
+def test_pyramid_manifest_resolves_and_validates_during_dry_run(cohort, tmp_path):
+    manifest = tmp_path / "pyramid.yaml"
+    settings = {
+        "linear_shrink_factors": [8, 4, 2],
+        "linear_smoothing_sigmas_mm": [4, 2, 1],
+        "elastic_shrink_factors": [4, 2],
+        "elastic_smoothing_sigmas_mm": [2, 1],
+    }
+    manifest.write_text(yaml.safe_dump({"registration": settings}))
+    args = args_for(cohort, "--manifest", str(manifest), "--dry-run")
+    config, _ = register.resolve_config(register.normalize_registration_args(args))
+    for name, value in settings.items():
+        assert getattr(config, name) == value
+    register.main(args)
+    settings["elastic_smoothing_sigmas_mm"] = [2, 1, 0]
+    manifest.write_text(yaml.safe_dump({"registration": settings}))
+    with pytest.raises(ValueError, match="same number of levels"):
+        register.main(args)
+    assert not paths_for(cohort)[0].exists()
+    assert not (tmp_path / "registration").exists()
+
+
+@pytest.mark.parametrize(
+    "name,value",
+    [
+        ("linear_shrink_factors", [8, 4, 2]),
+        ("linear_smoothing_sigmas_mm", [4, 2, 1]),
+        ("elastic_shrink_factors", [8, 4, 2]),
+        ("elastic_smoothing_sigmas_mm", [4, 2, 1]),
+    ],
+)
+def test_changed_pyramid_settings_invalidate_resume(monkeypatch, cohort, name, value):
+    args = register.normalize_registration_args(args_for(cohort))
+    table = pd.read_csv(cohort)
+    config = RegistrationConfig()
+    runtime.run_registration(args, table, config, {})
+    actual = runtime.iter_group_results
+    observed = []
+
+    def tracking(groups, *args, **kwargs):
+        observed.extend(key for key, _ in groups)
+        yield from actual(groups, *args, **kwargs)
+
+    monkeypatch.setattr(runtime, "iter_group_results", tracking)
+    runtime.run_registration(args, table, config, {})
+    assert observed == []
+    runtime.run_registration(args, table, RegistrationConfig(**{name: value}), {})
+    assert len(observed) == 2
+
+
 def test_missing_error_checkpoint_reprocesses_instead_of_losing_errors(
     monkeypatch, cohort
 ):

@@ -408,8 +408,17 @@ registration:
   minimum_stage_mi_improvement:
     mi_affine: 0.0
   maximum_mi_stage_dice_decrease: 0.002
-  # Maximum iterations per optimization stage.
+  # Maximum iterations per level of linear refinement.
   maximum_optimizer_iterations: 100
+  # Paired schedules, coarse to fine. Shrink factors are positive integers in
+  # strictly decreasing order; sigmas are nonincreasing, nonnegative mm widths.
+  # Supply both lists when changing their length. A final factor 1 uses the
+  # original optimization grid; omitting it can trade accuracy for speed.
+  linear_shrink_factors: [4, 2, 1]
+  linear_smoothing_sigmas_mm: [2.0, 1.0, 0.0]
+  # Independent B-spline schedule; does not enable the optional elastic stage.
+  elastic_shrink_factors: [4, 2, 1]
+  elastic_smoothing_sigmas_mm: [2.0, 1.0, 0.0]
   # Distance-map crop margin in mm.
   distance_map_crop_padding_mm: 25.0
   # Signed-distance clamp and MI boundary-band half-width in mm.

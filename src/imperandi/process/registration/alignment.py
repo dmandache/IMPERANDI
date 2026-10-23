@@ -831,6 +831,13 @@ def _validate_linear_transform(transform):
     transform.GetInverse()
 
 
+def _configure_pyramid(registration, shrink_factors, smoothing_sigmas_mm):
+    """Apply a validated schedule with smoothing measured in physical units."""
+    registration.SetShrinkFactorsPerLevel(shrink_factors)
+    registration.SetSmoothingSigmasPerLevel(smoothing_sigmas_mm)
+    registration.SmoothingSigmasAreSpecifiedInPhysicalUnitsOn()
+
+
 def _mask_linear_refine(fixed_dm, moving_dm, initial, config, *, affine):
     """Align liver signed-distance maps with a rigid or affine transform."""
     sitk = backend()
@@ -842,9 +849,9 @@ def _mask_linear_refine(fixed_dm, moving_dm, initial, config, *, affine):
         1.0, 0.001, config.maximum_optimizer_iterations
     )
     registration.SetOptimizerScalesFromPhysicalShift()
-    registration.SetShrinkFactorsPerLevel([4, 2, 1])
-    registration.SetSmoothingSigmasPerLevel([2, 1, 0])
-    registration.SmoothingSigmasAreSpecifiedInPhysicalUnitsOn()
+    _configure_pyramid(
+        registration, config.linear_shrink_factors, config.linear_smoothing_sigmas_mm
+    )
     registration.SetInitialTransform(transform, inPlace=True)
     registration.Execute(fixed_dm, moving_dm)
     _validate_linear_transform(transform)
@@ -901,9 +908,9 @@ def mi_refine(
         1.0, 0.001, config.maximum_optimizer_iterations
     )
     registration.SetOptimizerScalesFromPhysicalShift()
-    registration.SetShrinkFactorsPerLevel([4, 2, 1])
-    registration.SetSmoothingSigmasPerLevel([2, 1, 0])
-    registration.SmoothingSigmasAreSpecifiedInPhysicalUnitsOn()
+    _configure_pyramid(
+        registration, config.linear_shrink_factors, config.linear_smoothing_sigmas_mm
+    )
     registration.SetInitialTransform(transform, inPlace=True)
     registration.Execute(
         sitk.Cast(fixed_image, sitk.sitkFloat32),
@@ -985,9 +992,9 @@ def mask_elastic_refine(
         convergenceWindowSize=5,
     )
     registration.SetOptimizerScalesFromPhysicalShift()
-    registration.SetShrinkFactorsPerLevel([4, 2, 1])
-    registration.SetSmoothingSigmasPerLevel([2, 1, 0])
-    registration.SmoothingSigmasAreSpecifiedInPhysicalUnitsOn()
+    _configure_pyramid(
+        registration, config.elastic_shrink_factors, config.elastic_smoothing_sigmas_mm
+    )
     registration.SetInitialTransform(bspline, inPlace=True)
     qc_domain = _physical_qc_grid(fixed_dm, control_spacing)
     initial_parameters = tuple(bspline.GetParameters())

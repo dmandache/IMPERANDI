@@ -259,3 +259,92 @@ def test_old_setting_names_report_replacements():
 def test_old_elastic_setting_names_report_replacements(old, new):
     with pytest.raises(ValueError, match=rf"{old} -> {new}"):
         RegistrationConfig.from_mapping({old: True})
+
+
+@pytest.mark.parametrize("prefix", ["linear", "elastic"])
+def test_pyramid_defaults_preserve_existing_schedule(prefix):
+    config = RegistrationConfig()
+    assert getattr(config, f"{prefix}_shrink_factors") == [4, 2, 1]
+    assert getattr(config, f"{prefix}_smoothing_sigmas_mm") == [2.0, 1.0, 0.0]
+
+
+@pytest.mark.parametrize("prefix", ["linear", "elastic"])
+@pytest.mark.parametrize(
+    "factors,sigmas", [([8, 4, 2], [4, 2, 1]), ([1], [0]), ([4, 2], [0, 0])]
+)
+def test_pyramid_schedules_support_coarse_and_single_level_runs(
+    prefix, factors, sigmas
+):
+    from dataclasses import asdict
+    import yaml
+
+    factors, sigmas = list(factors), list(sigmas)
+    settings = {
+        f"{prefix}_shrink_factors": factors,
+        f"{prefix}_smoothing_sigmas_mm": sigmas,
+    }
+    config = RegistrationConfig.from_mapping(settings)
+    assert getattr(config, f"{prefix}_shrink_factors") == factors
+    assert getattr(config, f"{prefix}_smoothing_sigmas_mm") == sigmas
+    assert (
+        RegistrationConfig.from_mapping(yaml.safe_load(yaml.safe_dump(asdict(config))))
+        == config
+    )
+    factors.clear()
+    sigmas.clear()
+    assert getattr(config, f"{prefix}_shrink_factors")
+    assert getattr(config, f"{prefix}_smoothing_sigmas_mm")
+
+
+@pytest.mark.parametrize("prefix", ["linear", "elastic"])
+@pytest.mark.parametrize(
+    "value",
+    [
+        None,
+        [],
+        {},
+        "4,2,1",
+        [True, 2, 1],
+        [4.0, 2, 1],
+        [4, 2, 0],
+        [4, 2, -1],
+        [4, 4, 1],
+        [1, 2, 4],
+        [float("inf"), 2, 1],
+        [2**32, 2, 1],
+    ],
+)
+def test_invalid_pyramid_shrink_factors_are_rejected(prefix, value):
+    name = f"{prefix}_shrink_factors"
+    with pytest.raises(ValueError, match=name):
+        RegistrationConfig.from_mapping({name: value})
+
+
+@pytest.mark.parametrize("prefix", ["linear", "elastic"])
+@pytest.mark.parametrize(
+    "value",
+    [
+        None,
+        [],
+        {},
+        "2,1,0",
+        [True, 1, 0],
+        ["2", 1, 0],
+        [2, 1, -1],
+        [0, 1, 2],
+        [float("inf"), 1, 0],
+        [float("nan"), 1, 0],
+    ],
+)
+def test_invalid_pyramid_smoothing_sigmas_are_rejected(prefix, value):
+    name = f"{prefix}_smoothing_sigmas_mm"
+    with pytest.raises(ValueError, match=name):
+        RegistrationConfig.from_mapping({name: value})
+
+
+@pytest.mark.parametrize("prefix", ["linear", "elastic"])
+def test_pyramid_pairs_must_have_the_same_length(prefix):
+    with pytest.raises(
+        ValueError, match=f"{prefix}_shrink_factors.*same number of levels"
+    ):
+        RegistrationConfig.from_mapping({f"{prefix}_shrink_factors": [2, 1]})

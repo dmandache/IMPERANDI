@@ -192,6 +192,15 @@ guards, and explicit rejection reasons. Linear stages default to at most 100
 optimizer iterations; mask-elastic defaults to 25. These initial QC settings
 require dataset validation.
 
+Optimizer resolution is configured independently with
+`linear_shrink_factors` / `linear_smoothing_sigmas_mm` and
+`elastic_shrink_factors` / `elastic_smoothing_sigmas_mm`. Both default to shrink
+factors `[4, 2, 1]` and smoothing sigmas `[2.0, 1.0, 0.0]` mm. Linear settings
+apply to mask-rigid, mask-affine, and MI linear refinement; elastic settings
+apply to mask B-spline refinement. The iteration limits above apply per level.
+See [Registration pyramid levels](manifests.md#registration-pyramid-levels) for
+validation rules, single-level runs, and a coarser schedule to benchmark.
+
 `reference_selection_priority` is one ordered criterion list applied within
 every group, with exactly one column per item. Include `Modality` as an ordinary criterion
 when cross-modality groups need a preferred reference. For example:

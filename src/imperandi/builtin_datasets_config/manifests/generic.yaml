@@ -289,6 +289,13 @@ registration:
     mi_affine: 0.0
   maximum_mi_stage_dice_decrease: 0.002
   maximum_optimizer_iterations: 100
+  # Coarse-to-fine optimizer levels; each factor pairs with a sigma in mm.
+  # Linear schedules cover mask-rigid, mask-affine, and MI linear refinement.
+  linear_shrink_factors: [4, 2, 1]
+  linear_smoothing_sigmas_mm: [2.0, 1.0, 0.0]
+  # Used only when elastic refinement is enabled.
+  elastic_shrink_factors: [4, 2, 1]
+  elastic_smoothing_sigmas_mm: [2.0, 1.0, 0.0]
   distance_map_crop_padding_mm: 25.0
   # Signed-distance clamp and MI boundary-band half-width in mm.
   organ_boundary_band_half_width_mm: 15.0
