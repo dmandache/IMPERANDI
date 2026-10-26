@@ -9,6 +9,7 @@ def test_registration_and_consensus_dice_defaults_are_distinct():
     config = RegistrationConfig()
     assert config.minimum_accepted_organ_dice == 0.5
     assert config.minimum_consensus_dice == 0.8
+    assert config.elastic_trigger_organ_dice == 0.9
 
 
 def test_output_space_defaults_to_moving_and_rejects_unknown_values():
@@ -19,7 +20,12 @@ def test_output_space_defaults_to_moving_and_rejects_unknown_values():
 
 
 @pytest.mark.parametrize(
-    "name", ["early_stop_organ_dice", "consensus_probability_threshold"]
+    "name",
+    [
+        "early_stop_organ_dice",
+        "elastic_trigger_organ_dice",
+        "consensus_probability_threshold",
+    ],
 )
 @pytest.mark.parametrize(
     "value", [True, False, None, "0.5", float("nan"), float("inf")]
@@ -30,9 +36,18 @@ def test_thresholds_require_finite_numbers(name, value):
 
 
 @pytest.mark.parametrize("value", [0, -0.01, 1.01])
-def test_early_stop_dice_requires_positive_probability(value):
-    with pytest.raises(ValueError, match="early_stop_organ_dice"):
-        RegistrationConfig(early_stop_organ_dice=value)
+@pytest.mark.parametrize(
+    "name", ["early_stop_organ_dice", "elastic_trigger_organ_dice"]
+)
+def test_dice_threshold_requires_positive_probability(name, value):
+    with pytest.raises(ValueError, match=name):
+        RegistrationConfig(**{name: value})
+
+
+@pytest.mark.parametrize("value", [0.01, 0.85, 1])
+def test_elastic_trigger_accepts_manifest_probability(value):
+    config = RegistrationConfig.from_mapping({"elastic_trigger_organ_dice": value})
+    assert config.elastic_trigger_organ_dice == value
 
 
 def test_consensus_dice_cannot_be_below_registration_acceptance():

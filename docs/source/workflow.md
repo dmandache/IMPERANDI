@@ -171,7 +171,8 @@ override manifest values. An optional
 manifest `registration` mapping accepts explicit names including
 `grouping_columns`, `organ_mask_column`, `tumor_mask_column`,
 `organ_consensus_method`, `tumor_consensus_method`, `enable_affine_stage`,
-`enable_elastic_stage`, `elastic_control_point_spacing_mm`,
+`enable_elastic_stage`, `elastic_trigger_organ_dice`,
+`elastic_control_point_spacing_mm`,
 `elastic_optimizer_iterations`, `maximum_elastic_displacement_p95_mm`,
 `maximum_elastic_displacement_mm`,
 `minimum_elastic_jacobian_determinant`,
@@ -265,8 +266,27 @@ translation remains available as a safe fallback. Mask-rigid and mask-affine
 refinements follow only as needed. MI affine and a fold-checked mask B-spline are
 the final optional stages, and both are disabled by default.
 
-The elastic stage optimizes liver signed-distance maps only inside a shell
-extending `organ_boundary_band_half_width_mm` (default 15 mm) on both sides of
+To avoid an expensive processing stage when registration is already acceptable,
+elastic refinement runs only when the selected alignment's Dice is **below**
+`elastic_trigger_organ_dice` (default **0.90**, finite numeric range `(0, 1]`).
+At or above the threshold, it retains the selected transform and records
+`skipped_acceptable_dice`, including the input Dice, threshold, and metric in
+stage diagnostics. Complete masks use full-organ Dice; partial masks use
+common-FOV Dice. This setting controls only elastic refinement: earlier linear
+stages still run as needed, and `early_stop_organ_dice` (default 0.95) continues
+to stop the entire cascade. Elastic refinement must also be enabled:
+
+```yaml
+registration:
+  enable_elastic_stage: true
+  elastic_trigger_organ_dice: 0.90
+```
+
+The threshold is a configurable processing policy and requires dataset validation;
+it does not change the minimum Dice required to accept a registration or include
+it in consensus. When triggered, the elastic stage optimizes liver signed-distance
+maps only inside a shell extending `organ_boundary_band_half_width_mm`
+(default 15 mm) on both sides of
 the boundary. Its B-spline control-point spacing defaults to 90 mm and its
 optimizer limit to 25 iterations, deliberately restricting the refinement to a
 small, smooth deformation. Smaller spacing permits more local deformation and

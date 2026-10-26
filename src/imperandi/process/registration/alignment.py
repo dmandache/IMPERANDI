@@ -1081,8 +1081,11 @@ def register_pair(
 
     Every candidate is accepted only when liver Dice improves. Once the selected
     Dice reaches ``early_stop_organ_dice``, later stages are explicitly skipped.
+    Elastic refinement runs only below ``elastic_trigger_organ_dice`` to avoid
+    expensive processing when the selected registration is already acceptable.
     Images default to the masks for callers using the low-level mask-only API.
     """
+
     sitk = backend()
     fixed_image = fixed_organ if fixed_image is None else fixed_image
     moving_image = moving_organ if moving_image is None else moving_image
@@ -1362,6 +1365,18 @@ def register_pair(
         stages["mask_elastic"].update(
             status="skipped_disabled",
             input_dice=score,
+            selected=False,
+            fallback_stage=stage,
+        )
+    elif (
+        stages["mask_elastic"]["status"] == "not_run"
+        and score >= config.elastic_trigger_organ_dice
+    ):
+        stages["mask_elastic"].update(
+            status="skipped_acceptable_dice",
+            input_dice=score,
+            required_dice=config.elastic_trigger_organ_dice,
+            selection_metric=dice_metric,
             selected=False,
             fallback_stage=stage,
         )

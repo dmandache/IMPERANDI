@@ -264,6 +264,8 @@ registration:
   output_space: moving
   enable_affine_stage: false
   enable_elastic_stage: false
+  # Avoid expensive elastic processing when registration already meets this Dice.
+  elastic_trigger_organ_dice: 0.90
   elastic_control_point_spacing_mm: 90.0
   elastic_optimizer_iterations: 25
   maximum_elastic_displacement_p95_mm: 8.0

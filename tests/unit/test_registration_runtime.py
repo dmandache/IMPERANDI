@@ -198,7 +198,14 @@ def test_cli_overrides_manifest_affine_setting(tmp_path, cohort):
 def test_cli_overrides_manifest_elastic_stage_setting(tmp_path, cohort):
     manifest = tmp_path / "elastic.yaml"
     manifest.write_text(
-        yaml.safe_dump({"registration": {"enable_elastic_stage": True}})
+        yaml.safe_dump(
+            {
+                "registration": {
+                    "enable_elastic_stage": True,
+                    "elastic_trigger_organ_dice": 0.85,
+                }
+            }
+        )
     )
     enabled, _ = register.resolve_config(
         register.normalize_registration_args(
@@ -217,6 +224,8 @@ def test_cli_overrides_manifest_elastic_stage_setting(tmp_path, cohort):
     )
     assert enabled.enable_elastic_stage is True
     assert disabled.enable_elastic_stage is False
+    assert enabled.elastic_trigger_organ_dice == 0.85
+    assert disabled.elastic_trigger_organ_dice == 0.85
 
 
 @pytest.mark.parametrize("entry_point", ["cli", "module"])

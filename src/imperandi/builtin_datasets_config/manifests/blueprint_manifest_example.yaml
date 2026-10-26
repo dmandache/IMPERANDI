@@ -377,6 +377,9 @@ registration:
   enable_affine_stage: false
   # Run mask-driven B-spline refinement as the optional final stage.
   enable_elastic_stage: false
+  # Avoid the expensive elastic stage when registration is already acceptable.
+  # Run only below this Dice; use common-FOV Dice for partial masks. Range: (0, 1].
+  elastic_trigger_organ_dice: 0.90
   # Approximate B-spline control-point spacing; smaller values deform more locally.
   elastic_control_point_spacing_mm: 90.0
   # Keep the elastic optimization deliberately short and deformation conservative.

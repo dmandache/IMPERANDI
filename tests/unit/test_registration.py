@@ -1,5 +1,6 @@
 """Synthetic geometry and cohort contracts for registration."""
 
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -1161,6 +1162,99 @@ def test_mask_elastic_optimizer_stops_and_restores_valid_checkpoint(monkeypatch)
     ]
     assert diagnostics["optimizer_valid_checkpoints"] == 1
     assert residual.GetParameters() == pytest.approx(observed_parameters[0])
+
+
+@pytest.mark.parametrize("partial", [False, True])
+@pytest.mark.parametrize(
+    "selected_dice,threshold,enabled,early_stop,expected_status",
+    [
+        (0.899999, 0.9, True, 1, "failed"),
+        (0.9, 0.9, True, 1, "skipped_acceptable_dice"),
+        (0.900001, 0.9, True, 1, "skipped_acceptable_dice"),
+        (0.85, 0.85, True, 1, "skipped_acceptable_dice"),
+        (0.899999, 0.9, False, 1, "skipped_disabled"),
+        (0.9, 0.9, False, 1, "skipped_disabled"),
+        (0.95, 0.9, True, 0.95, "skipped_early_stop"),
+    ],
+)
+def test_elastic_trigger_uses_selected_dice_before_expensive_work(
+    monkeypatch, partial, selected_dice, threshold, enabled, early_stop, expected_status
+):
+    config = RegistrationConfig(
+        enable_elastic_stage=enabled,
+        elastic_trigger_organ_dice=threshold,
+        early_stop_organ_dice=early_stop,
+    )
+    mask = organ()
+    quality = alignment.assess_organ_mask(mask, config)
+    monkeypatch.setattr(
+        alignment,
+        "assess_organ_mask",
+        lambda *args: replace(quality, status="partial") if partial else quality,
+    )
+    scores = iter([0.5, 0.6, 0.7, selected_dice])
+    monkeypatch.setattr(alignment, "dice", lambda *args: next(scores))
+
+    def overlap(*args):
+        return dict(
+            dice_full=0.99 if partial else selected_dice,
+            dice_common_fov=next(scores) if partial else 0.99,
+            common_fov_fraction=1.0,
+            common_foreground_voxels=100,
+        )
+
+    monkeypatch.setattr(alignment, "overlap_qc", overlap)
+
+    class Optimizer:
+        def GetOptimizerStopConditionDescription(self):
+            return "test"
+
+        def GetOptimizerIteration(self):
+            return 1
+
+    monkeypatch.setattr(
+        alignment, "initialize_pca", lambda *args: sitk.Euler3DTransform()
+    )
+    monkeypatch.setattr(
+        alignment,
+        "mask_rigid_refine",
+        lambda *args: (sitk.Euler3DTransform(), Optimizer()),
+    )
+    affine = sitk.AffineTransform(3)
+    monkeypatch.setattr(
+        alignment, "mask_affine_refine", lambda *args: (affine, Optimizer())
+    )
+    calls = []
+
+    def mutual_information(*args):
+        calls.append("mi")
+        return 0.2
+
+    def elastic(*args):
+        calls.append("elastic")
+        raise ValueError("Stop at elastic entry for this gate test")
+
+    monkeypatch.setattr(alignment, "mutual_information_score", mutual_information)
+    monkeypatch.setattr(alignment, "mask_elastic_refine", elastic)
+
+    result = register_pair(mask, mask, config)
+
+    assert list(scores) == []
+    assert result.stage == "mask_affine"
+    assert result.reference_to_scan is affine
+    assert result.dice_after == selected_dice
+    assert result.stages["mask_affine"]["status"] == "evaluated"
+    detail = result.stages["mask_elastic"]
+    assert detail["status"] == expected_status
+    assert calls == (["mi", "elastic"] if expected_status == "failed" else [])
+    if expected_status == "skipped_acceptable_dice":
+        assert detail["input_dice"] == selected_dice
+        assert detail["required_dice"] == threshold
+        assert detail["selection_metric"] == (
+            "dice_common_fov" if partial else "dice_full"
+        )
+        assert detail["fallback_stage"] == "mask_affine"
+        assert detail["selected"] is False
 
 
 def test_mask_elastic_is_the_optional_final_stage_and_retains_inverse(monkeypatch):

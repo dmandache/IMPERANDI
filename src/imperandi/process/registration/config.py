@@ -89,6 +89,7 @@ class RegistrationConfig:
     output_space: str = "moving"
     enable_affine_stage: bool = False
     enable_elastic_stage: bool = False
+    elastic_trigger_organ_dice: float = 0.90
     elastic_control_point_spacing_mm: float = 90.0
     elastic_optimizer_iterations: int = 25
     maximum_elastic_displacement_p95_mm: float = 8.0
@@ -160,6 +161,7 @@ class RegistrationConfig:
             "minimum_accepted_organ_dice",
             "minimum_consensus_dice",
             "minimum_common_field_of_view_fraction",
+            "elastic_trigger_organ_dice",
         ):
             value = getattr(self, name)
             if not _finite_number(value) or not 0 < value <= 1:
