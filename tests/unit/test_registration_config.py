@@ -168,7 +168,7 @@ def test_mi_stage_dice_decrease_is_a_probability(value):
     ],
 )
 def test_redundant_settings_are_removed(name):
-    with pytest.raises(ValueError, match="Removed registration settings"):
+    with pytest.raises(ValueError, match=f"Unknown registration settings.*{name}"):
         RegistrationConfig.from_mapping({name: 0.1})
 
 
@@ -244,21 +244,37 @@ def test_invalid_organ_consensus_is_rejected(method):
         RegistrationConfig(organ_consensus_method=method)
 
 
-def test_old_setting_names_report_replacements():
-    with pytest.raises(ValueError, match="group_columns -> grouping_columns"):
-        RegistrationConfig.from_mapping({"group_columns": ["patient_key"]})
-
-
 @pytest.mark.parametrize(
-    "old,new",
+    "name",
     [
-        ("elastic", "enable_elastic_stage"),
-        ("bspline_ctrl_spacing_mm", "elastic_control_point_spacing_mm"),
+        "group_columns",
+        "organ_column",
+        "tumor_column",
+        "organ_consensus",
+        "tumor_consensus",
+        "affine",
+        "elastic",
+        "bspline_ctrl_spacing_mm",
+        "early_stop_dice",
+        "boundary_margin_mm",
+        "allow_partial_organs",
+        "min_largest_component_fraction",
+        "min_confidence_dice",
+        "min_common_fov_fraction",
+        "pca_max_rotation_degrees",
+        "min_delta",
+        "iterations",
+        "crop_padding_mm",
+        "distance_band_mm",
+        "keep_source_segmentation",
+        "constrain_tumor_to_organ",
+        "threshold",
+        "reference_priority",
     ],
 )
-def test_old_elastic_setting_names_report_replacements(old, new):
-    with pytest.raises(ValueError, match=rf"{old} -> {new}"):
-        RegistrationConfig.from_mapping({old: True})
+def test_old_setting_names_are_unknown(name):
+    with pytest.raises(ValueError, match=f"Unknown registration settings.*{name}"):
+        RegistrationConfig.from_mapping({name: True})
 
 
 @pytest.mark.parametrize("prefix", ["linear", "elastic"])

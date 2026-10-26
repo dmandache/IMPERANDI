@@ -29,39 +29,6 @@ DEFAULT_MINIMUM_STAGE_MI_IMPROVEMENT = {
     "mi_affine": 0.0,
 }
 
-RENAMED_SETTINGS = {
-    "group_columns": "grouping_columns",
-    "organ_column": "organ_mask_column",
-    "tumor_column": "tumor_mask_column",
-    "organ_consensus": "organ_consensus_method",
-    "tumor_consensus": "tumor_consensus_method",
-    "affine": "enable_affine_stage",
-    "elastic": "enable_elastic_stage",
-    "bspline_ctrl_spacing_mm": "elastic_control_point_spacing_mm",
-    "early_stop_dice": "early_stop_organ_dice",
-    "boundary_margin_mm": "partial_mask_boundary_margin_mm",
-    "allow_partial_organs": "accept_partial_organ_masks",
-    "min_largest_component_fraction": "minimum_largest_component_fraction",
-    "min_confidence_dice": "minimum_accepted_organ_dice",
-    "min_common_fov_fraction": "minimum_common_field_of_view_fraction",
-    "pca_max_rotation_degrees": "maximum_pca_rotation_degrees",
-    "min_delta": "minimum_stage_dice_improvement",
-    "iterations": "maximum_optimizer_iterations",
-    "crop_padding_mm": "distance_map_crop_padding_mm",
-    "distance_band_mm": "organ_boundary_band_half_width_mm",
-    "keep_source_segmentation": "preserve_source_organ_mask",
-    "constrain_tumor_to_organ": "clip_tumor_consensus_to_organ",
-    "threshold": "consensus_probability_threshold",
-    "reference_priority": "reference_selection_priority",
-}
-
-REMOVED_SETTINGS = {
-    "affine_min_dice": "affine execution is controlled by enable_affine_stage",
-    "elastic_min_dice": "use minimum_stage_dice_improvement.mask_elastic",
-    "min_dice": "use minimum_accepted_organ_dice",
-    "demons_smoothing_sigma_mm": "mask_elastic uses B-spline refinement, not Demons",
-}
-
 
 def _finite_number(value):
     return (
@@ -392,18 +359,6 @@ class RegistrationConfig:
     def from_mapping(cls, value):
         if not isinstance(value, Mapping):
             raise ValueError("registration must be a mapping")
-        removed = set(value) & set(REMOVED_SETTINGS)
-        if removed:
-            explanations = ", ".join(
-                f"{name} ({REMOVED_SETTINGS[name]})" for name in sorted(removed)
-            )
-            raise ValueError(f"Removed registration settings: {explanations}")
-        renamed = set(value) & set(RENAMED_SETTINGS)
-        if renamed:
-            replacements = ", ".join(
-                f"{name} -> {RENAMED_SETTINGS[name]}" for name in sorted(renamed)
-            )
-            raise ValueError(f"Renamed registration settings: {replacements}")
         unknown = set(value) - set(cls.__dataclass_fields__)
         if unknown:
             raise ValueError(f"Unknown registration settings: {sorted(unknown)}")

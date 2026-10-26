@@ -432,6 +432,34 @@ def test_failure_is_not_identity_success(tmp_path):
     assert errors.stage.tolist() == ["organ"]
 
 
+def test_pair_registration_callback_receives_source_images(tmp_path):
+    rows = [save_scan(tmp_path, "a", phase="PORTAL_VENOUS"), save_scan(tmp_path, "b")]
+    for row in rows:
+        source = sitk.Cast(sitk.ReadImage(row["nifti_path"]), sitk.sitkFloat32) * 100
+        sitk.WriteImage(source, row["nifti_path"])
+    calls = []
+
+    def custom_registration(
+        fixed_organ, moving_organ, config, fixed_image, moving_image
+    ):
+        calls.append((fixed_image, moving_image))
+        assert fixed_image.GetPixelID() == sitk.sitkFloat32
+        assert moving_image.GetPixelID() == sitk.sitkFloat32
+        assert sitk.GetArrayViewFromImage(fixed_image).max() == 100
+        assert sitk.GetArrayViewFromImage(moving_image).max() == 100
+        return register_pair(
+            fixed_organ, moving_organ, config, fixed_image, moving_image
+        )
+
+    out, errors = register_cohort(
+        pd.DataFrame(rows), tmp_path / "out", pair_registration=custom_registration
+    )
+
+    assert errors.empty
+    assert len(calls) == 1
+    assert out.registration_status.tolist() == ["reference", "ok"]
+
+
 def test_tumor_resampling_failure_preserves_organ_registration(monkeypatch, tmp_path):
     from imperandi.process.registration import cohort
 

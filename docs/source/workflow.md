@@ -88,6 +88,12 @@ imperandi register --csv_path nifti_index_phased.csv \
   --num_workers 4
 ```
 
+Registration accepts only the current configuration names; unknown settings are
+rejected. Python callers use `RegistrationConfig` and `register_cohort` from
+`imperandi.process.registration`. Custom `pair_registration` callbacks receive
+`(fixed_organ, moving_organ, config, fixed_image, moving_image)` and return
+`alignment.TransformResult`.
+
 The manifest's ordered `registration.grouping_columns` list defines group identity.
 The default is `[patient_key, study_id, Modality]`; a dataset can instead use,
 for example, `[patient_key, exam_stage]`. Saved artifacts use these grouping

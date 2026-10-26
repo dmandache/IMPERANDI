@@ -21,6 +21,7 @@ from .config import (
     RegistrationConfig,
 )
 from .alignment import (
+    RegistrationRejected,
     assess_organ_mask,
     backend,
     coverage_image,
@@ -51,15 +52,8 @@ from .reporting import (
 logger = logging.getLogger(__name__)
 
 
-OBSOLETE_ARTIFACT_COLUMNS = (
-    "registration_report_path",
-    "reg_reference_to_scan_path",
-    "reg_scan_to_reference_path",
+REFERENCE_ARTIFACT_COLUMNS = (
     "reg_tumor_common_path",
-    "reg_tumor_coverage_common_path",
-    "reg_tumor_coverage_native_path",
-    "reg_tumor_probability_common_path",
-    "reg_tumor_probability_native_path",
     "reg_nifti_path",
     "reg_organ_path",
 )
@@ -152,7 +146,7 @@ def reference_rank(row, priorities) -> tuple[tuple, str]:
 
 def prepare_cohort(table: pd.DataFrame, config) -> pd.DataFrame:
     """Validate identities and initialize registration output columns."""
-    df = table.drop(columns=OBSOLETE_ARTIFACT_COLUMNS, errors="ignore").reset_index(
+    df = table.drop(columns=REFERENCE_ARTIFACT_COLUMNS, errors="ignore").reset_index(
         drop=True
     )
 
@@ -221,9 +215,7 @@ def prepare_cohort(table: pd.DataFrame, config) -> pd.DataFrame:
         "reg_organ_native_path",
     ]
     if config.output_space == "reference":
-        derived_columns.extend(
-            ["reg_nifti_path", "reg_organ_path", "reg_tumor_common_path"]
-        )
+        derived_columns.extend(REFERENCE_ARTIFACT_COLUMNS)
     for column in derived_columns:
         df[column] = pd.Series([None] * len(df), dtype=object)
 
@@ -649,6 +641,8 @@ def register_cohort(
     This image-processing API performs fresh work. The CLI runner adds group
     scheduling, checkpointing, and resume around this function.
     pair_registration and fusion may be injected by alternative implementations.
+    pair_registration receives (fixed_organ, moving_organ, config, fixed_image,
+    moving_image) and returns an alignment.TransformResult.
     """
     config = config or RegistrationConfig()
     sitk = backend()
@@ -815,24 +809,20 @@ def register_cohort(
                         },
                     }
                 else:
-                    if pair_registration is register_pair:
-                        result = pair_registration(
-                            reference_organ, organ, config, reference, image
-                        )
-                    else:
-                        # Preserve the established three-argument injection API.
-                        result = pair_registration(reference_organ, organ, config)
+                    result = pair_registration(
+                        reference_organ, organ, config, reference, image
+                    )
                     tx = result.reference_to_scan
                     pair_results[i] = result
                     report = _registration_report(result)
                 record_stages(df, i, report)
-                metrics = getattr(result, "overlap", None) or overlap_qc(
-                    reference_organ, organ, tx
-                )
+                metrics = (
+                    result.overlap if result is not None else None
+                ) or overlap_qc(reference_organ, organ, tx)
                 confidence = registration_confidence(
                     metrics, mask_qc[ref].partial or mask_qc[i].partial, config
                 )
-                if i != ref and getattr(result, "confidence", "ok") in {
+                if result is not None and result.confidence in {
                     "failed",
                     "low_confidence",
                 }:
@@ -846,7 +836,7 @@ def register_cohort(
                 if confidence in {"failed", "low_confidence"}:
                     df.at[i, "registration_status"] = confidence
                     continue
-                inverse = getattr(result, "scan_to_reference", None)
+                inverse = result.scan_to_reference if result is not None else None
                 if inverse is None:
                     inverse = tx.GetInverse()
                 pair_dir = directory / ids[i]
@@ -910,7 +900,7 @@ def register_cohort(
                     "reference" if i == ref else confidence
                 )
             except (RuntimeError, ValueError) as exc:
-                if hasattr(exc, "result"):
+                if isinstance(exc, RegistrationRejected):
                     pair_results[i] = exc.result
                     report = _registration_report(exc.result)
                     record_stages(df, i, report)
@@ -1092,11 +1082,9 @@ def register_cohort(
         if ref in tumors:
             df.at[ref, "registration_tumor_dice_baseline"] = 1.0
             for i, tumor in tumors.items():
-                if i == ref:
+                if i == ref or i not in pair_results:
                     continue
-                for stage, tx in getattr(
-                    pair_results.get(i), "stage_transforms", {}
-                ).items():
+                for stage, tx in pair_results[i].stage_transforms.items():
                     try:
                         df.at[i, f"registration_tumor_dice_{stage}"] = dice(
                             tumors[ref], tumor, tx
