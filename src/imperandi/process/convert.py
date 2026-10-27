@@ -540,7 +540,10 @@ def convert_dicom_to_nifti_parallel(
     df["volume_ordinal_in_series"] = df.groupby("series_id").cumcount() + 1
 
     if "series_dir" not in df.columns:
-        df["series_dir"] = df.apply(_dicom_series_dir, axis=1)
+        if df.empty:
+            df["series_dir"] = pd.Series(index=df.index, dtype="object")
+        else:
+            df["series_dir"] = df.apply(_dicom_series_dir, axis=1)
 
     # Use ProcessPoolExecutor to parallelize the task.
     with ProcessPoolExecutor(max_workers=num_workers) as executor:
@@ -835,13 +838,18 @@ def main(args):
         convert_kwargs = {"on_result": _on_result}
         if semantic_reprocess_ids:
             convert_kwargs["force_source_ids"] = semantic_reprocess_ids
-        _, _ = convert_dicom_to_nifti_parallel(
-            work_df,
-            args.output_dir,
-            True,
-            args.num_workers,
-            **convert_kwargs,
-        )
+        if not work_df.empty:
+            _, _ = convert_dicom_to_nifti_parallel(
+                work_df,
+                args.output_dir,
+                True,
+                args.num_workers,
+                **convert_kwargs,
+            )
+        else:
+            logger.info("No volumes require conversion; skipping conversion workers.")
+
+        _checkpoint_write(force=True)
         _checkpoint_write(force=True)
 
     if args.verbose:
