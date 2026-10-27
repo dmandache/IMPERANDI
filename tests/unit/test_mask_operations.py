@@ -545,21 +545,77 @@ def test_direct_worker_normalizes_output_names_and_infers_backend_masks(tmp_path
     assert read_mask(tmp_path, "result").all()
 
 
-def test_missing_input_always_fails_even_with_geometry_warn_only(tmp_path):
-    save_mask(tmp_path, "a", np.ones((3, 3, 3, 2)))
+@pytest.mark.parametrize("policy", ["fail", "warn_only"])
+@pytest.mark.parametrize("unreadable", [False, True])
+def test_postprocess_input_failure_policy(tmp_path, policy, unreadable):
+    save_mask(tmp_path, "a", np.ones((3, 3, 3)))
+    if unreadable:
+        (tmp_path / "missing.nii.gz").write_text("invalid NIfTI")
     config = {
         "tasks": [{"task": "total", "output": "a"}],
         "postprocess": {
-            "on_failure": "warn_only",
+            "on_failure": policy,
             "operations": [
                 {"op": "union", "inputs": ["a", "missing"], "output": "result"}
             ],
         },
     }
-    with pytest.raises(FileNotFoundError, match="missing.nii.gz"):
-        segment.segment_volume(
-            tmp_path / "vol.nii.gz", tmp_path, config, backend=UnexpectedBackend()
+    resolved = {}
+
+    def run():
+        return segment.segment_volume(
+            tmp_path / "vol.nii.gz",
+            tmp_path,
+            config,
+            backend=UnexpectedBackend(),
+            resolved_output_to_fetch=resolved,
         )
+
+    if policy == "fail":
+        error = nib.filebasedimages.ImageFileError if unreadable else FileNotFoundError
+        with pytest.raises(error, match="missing.nii.gz"):
+            run()
+    else:
+        warnings = run()
+        assert len(warnings) == 1
+        assert "missing.nii.gz" in warnings[0]
+        assert resolved == {"a": "a"}
+
+
+@pytest.mark.parametrize("policy", ["fail", "warn_only"])
+@pytest.mark.parametrize("error_type", [RuntimeError, OSError, KeyboardInterrupt])
+def test_postprocess_runtime_failure_policy(tmp_path, monkeypatch, policy, error_type):
+    save_mask(tmp_path, "a", np.ones((3, 3, 3)))
+    save_mask(tmp_path, "result", np.zeros((3, 3, 3)))
+    config = {
+        "tasks": [{"task": "total", "output": "a"}],
+        "postprocess": {
+            "on_failure": policy,
+            "operations": [{"op": "not", "input": "a", "output": "result"}],
+        },
+    }
+
+    def fail(*args):
+        raise error_type("postprocess error")
+
+    monkeypatch.setattr(segment, "apply_operations", fail)
+    resolved = {}
+
+    def run():
+        return segment.segment_volume(
+            tmp_path / "vol.nii.gz",
+            tmp_path,
+            config,
+            backend=UnexpectedBackend(),
+            resolved_output_to_fetch=resolved,
+        )
+
+    if policy == "fail" or error_type is KeyboardInterrupt:
+        with pytest.raises(error_type, match="postprocess error"):
+            run()
+    else:
+        assert run() == ["Postprocess operations failed: postprocess error"]
+        assert resolved == {"a": "a"}
 
 
 @pytest.mark.parametrize("manifest", ["generic", "blueprint_manifest_example"])

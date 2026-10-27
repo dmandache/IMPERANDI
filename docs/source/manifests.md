@@ -807,10 +807,13 @@ result, add an `intersection` step with that original mask as the output.
 For example, an output named `liver_tumor` mapped to `fetch_output: liver_lesions`
 updates `liver_lesions.nii.gz`, and `mask_liver_tumor` still points to that file.
 
-The full sequence is computed before any output is written. Missing or
-unreadable input files always fail the row. Geometry errors also fail by default;
-`postprocess.on_failure: warn_only` records a warning and returns the input masks
-without reporting derived outputs when geometry prevents the sequence completing.
+The full sequence is computed before any output is written. Postprocessing errors
+fail the row by default (`postprocess.on_failure: fail`). Setting
+`postprocess.on_failure: warn_only` records a warning and retains successfully
+segmented mask paths in the CSV without reporting derived outputs from the failed
+sequence. This includes missing or unreadable inputs, geometry errors, and
+operation or output-writing errors. It does not roll back files already written
+before an output-writing error. Segmentation and cropping errors still fail the row.
 Unknown operations, inappropriate parameters, and references to later results
 are rejected during manifest validation. If an initial backend mask is also the
 output of a later step, declare it in the task's `output`/`outputs` or ROI subset

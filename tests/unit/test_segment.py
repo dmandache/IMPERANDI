@@ -699,7 +699,7 @@ def test_operations_fail_at_fetch_without_writing_partial_merge(
     assert present.read_bytes() == original
 
 
-def test_undeclared_missing_mask_fails_after_all_tasks_run(tmp_path):
+def test_undeclared_missing_mask_warns_after_all_tasks_run(tmp_path):
     nifti = tmp_path / "vol.nii.gz"
     save_nifti(np.zeros((4, 4, 4)), np.eye(4), nifti)
     config = segment_module.validate_segmentation_config(
@@ -736,7 +736,7 @@ def test_undeclared_missing_mask_fails_after_all_tasks_run(tmp_path):
             name = "spleen" if task == "total" else "liver_lesions"
             save_nifti(np.ones((4, 4, 4)), np.eye(4), output_dir / f"{name}.nii.gz")
 
-    _, out_dir, error, _, _ = segment_module.process_single_volume(
+    _, out_dir, error, warning, outputs = segment_module.process_single_volume(
         0,
         {"nifti_path": str(nifti), "Modality": "CT"},
         config,
@@ -745,9 +745,11 @@ def test_undeclared_missing_mask_fails_after_all_tasks_run(tmp_path):
         backend=MissingLiverBackend(),
     )
     assert calls == ["total", "liver_lesions"]
-    assert out_dir is None
-    assert "liver.nii.gz" in error
-    assert "No such file" in error
+    assert out_dir == str(tmp_path)
+    assert error is None
+    assert "liver.nii.gz" in warning
+    assert "No such file" in warning
+    assert outputs == {"liver_tumor": "liver_lesions", "spleen": "spleen"}
     assert not (tmp_path / "merged.nii.gz").exists()
 
 
@@ -1214,6 +1216,70 @@ def test_main_adds_mask_columns_for_runtime_inferred_outputs(tmp_path, monkeypat
     out_df = pd.read_csv(args.csv_path_out)
     assert "mask_runtime_inferred" in out_df.columns
     assert out_df.loc[0, "mask_runtime_inferred"].endswith("runtime_inferred.nii.gz")
+
+
+@pytest.mark.parametrize("policy", ["fail", "warn_only"])
+def test_main_preserves_segmented_paths_after_postprocess_warning(
+    tmp_path, monkeypatch, policy
+):
+    nifti = tmp_path / "vol.nii.gz"
+    save_nifti(np.ones((3, 3, 3)), np.eye(4), nifti)
+    # A stale derived file must not be published after the operation fails.
+    save_nifti(np.ones((3, 3, 3)), np.eye(4), tmp_path / "merged.nii.gz")
+    csv_path = tmp_path / "input.csv"
+    pd.DataFrame([{"nifti_path": str(nifti), "Modality": "CT"}]).to_csv(
+        csv_path, index=False
+    )
+    manifest = tmp_path / "manifest.yaml"
+    write_segmentation_manifest(
+        manifest,
+        {
+            "tasks": [
+                {"task": "total", "output": "liver", "fetch_output": "backend_liver"}
+            ],
+            "postprocess": {
+                "on_failure": policy,
+                "operations": [
+                    {"op": "union", "inputs": ["liver", "missing"], "output": "merged"}
+                ],
+            },
+        },
+    )
+
+    class Backend:
+        def run(self, *, output_dir, **kwargs):
+            save_nifti(
+                np.ones((3, 3, 3)), np.eye(4), output_dir / "backend_liver.nii.gz"
+            )
+
+    monkeypatch.setattr(segment_module, "TotalSegmentatorBackend", Backend)
+    monkeypatch.setattr(
+        segment_module, "prefetch_totalsegmentator_models", lambda *a, **k: None
+    )
+    patch_strategy(monkeypatch, mode="serial", max_workers=1, max_in_flight=1)
+    args = argparse.Namespace(
+        csv_path=str(csv_path),
+        csv_path_out=str(tmp_path / "out.csv"),
+        error_csv_path=str(tmp_path / "errors.csv"),
+        manifest=str(manifest),
+        num_workers=1,
+        verbose=False,
+        force=False,
+        start_method="spawn",
+        timeout_sec=10,
+    )
+    segment_module.main(args)
+    row = pd.read_csv(args.csv_path_out).iloc[0]
+    assert (tmp_path / "backend_liver.nii.gz").is_file()
+    assert pd.isna(row.mask_merged)
+    if policy == "warn_only":
+        assert row.mask_liver == str(tmp_path / "backend_liver.nii.gz")
+        assert "missing.nii.gz" in row.warning_message
+        assert "Postprocess operations failed" in row.warning_message
+        assert not Path(args.error_csv_path).exists()
+    else:
+        assert pd.isna(row.mask_liver)
+        assert "missing.nii.gz" in Path(args.error_csv_path).read_text()
 
 
 def test_main_records_warning_when_merged_mask_missing(tmp_path, monkeypatch):

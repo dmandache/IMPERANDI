@@ -922,6 +922,7 @@ def segment_volume(
         if verbose:
             logger.info("Masks saved for %s", task_name)
 
+    backend_outputs = dict(output_to_fetch)
     if postprocess:
         for name in operation_sources(operations):
             output_to_fetch.setdefault(name, name)
@@ -954,16 +955,17 @@ def segment_volume(
     ):
         try:
             apply_operations(output_dir, operations, output_to_fetch)
-        except MaskGeometryError as exc:
+        except Exception as exc:
             if postprocess.get("on_failure", "fail") == "fail":
                 raise
             message = f"Postprocess operations failed: {exc}"
             logger.warning(message)
             warnings.append(message)
-            # A failed sequence must not advertise stale derived masks.
+            # Retain completed segmentation outputs, not missing operation
+            # inputs or stale derived masks from an unsuccessful sequence.
             if resolved_output_to_fetch is not None:
                 resolved_output_to_fetch.clear()
-                resolved_output_to_fetch.update(output_to_fetch)
+                resolved_output_to_fetch.update(backend_outputs)
             return warnings
     elif verbose:
         logger.info("Skip postprocess – completed operations and masks are unchanged")
