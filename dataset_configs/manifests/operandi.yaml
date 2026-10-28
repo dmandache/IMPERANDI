@@ -678,11 +678,16 @@ registration:
   organ_consensus_method: majority
   # Tumor fusion: anchor, majority, intersection, union, or staple.
   tumor_consensus_method: union
-  # Run masked MI affine only when earlier stages do not meet the Dice target.
-  enable_affine_stage: true
-  enable_elastic_stage: false
-  # Stop the cascade as soon as a selected transform reaches this liver Dice.
-  early_stop_organ_dice: 0.98
+  # Ordered refinement steps; omit a stage to disable it.
+  stages:
+    - type: mask_rigid
+      run_if: {dice_below: 0.98}
+      acceptance: {minimum_dice_improvement: 0.001}
+    - type: mask_affine
+      run_if: {dice_below: 0.98}
+    - type: mi_affine
+      run_if: always
+      acceptance: {minimum_mi_improvement: 0.0, maximum_dice_decrease: 0.05}
   minimum_consensus_dice: 0.92
   # Completeness heuristics; tune for the dataset and organ, not clinical cutoffs.
   partial_mask_boundary_margin_mm: 1.0
@@ -692,15 +697,6 @@ registration:
   minimum_common_field_of_view_fraction: 0.05
   # Reject PCA orientation candidates requiring a larger rigid rotation.
   maximum_pca_rotation_degrees: 45.0
-  # Minimum Dice improvement required to select each registration stage.
-  minimum_stage_dice_improvement:
-    geometry: 0.001
-    pca: 0.001
-    mask_rigid: 0.001
-    mask_elastic: 0.001
-  minimum_stage_mi_improvement:
-    mi_affine: 0.0
-  maximum_mi_stage_dice_decrease: 0.05
   # Maximum iterations per optimization stage.
   maximum_optimizer_iterations: 100
   # Elastic transform acceptability criteria  

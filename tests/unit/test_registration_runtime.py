@@ -61,7 +61,7 @@ def test_manifest_overrides_defaults_and_cli(tmp_path, cohort):
                     "organ_consensus_method": "anchor",
                     "tumor_consensus_method": "majority",
                     "output_space": "moving",
-                    "enable_affine_stage": True,
+                    "stages": [{"type": "mi_affine"}],
                 }
             }
         )
@@ -73,7 +73,7 @@ def test_manifest_overrides_defaults_and_cli(tmp_path, cohort):
     assert config.organ_consensus_method == "anchor"
     assert config.tumor_consensus_method == "majority"
     assert config.output_space == "moving"
-    assert config.enable_affine_stage
+    assert config.stages[0].type == "mi_affine"
     override = register.normalize_registration_args(
         args_for(
             cohort,
@@ -85,14 +85,13 @@ def test_manifest_overrides_defaults_and_cli(tmp_path, cohort):
             "union",
             "--output_space",
             "reference",
-            "--disable_affine_stage",
         )
     )
     config, _ = register.resolve_config(override)
     assert config.organ_consensus_method == "majority"
     assert config.tumor_consensus_method == "union"
     assert config.output_space == "reference"
-    assert not config.enable_affine_stage
+    assert config.stages[0].type == "mi_affine"
     built_in = register.normalize_registration_args(
         args_for(cohort, "--manifest", "generic")
     )
@@ -162,72 +161,6 @@ def test_reference_criterion_order_changes_selection_and_invalidates_resume(
         ).all()
 
 
-def test_cli_overrides_manifest_affine_setting(tmp_path, cohort):
-    manifest = tmp_path / "affine.yaml"
-    manifest.write_text(
-        yaml.safe_dump(
-            {
-                "registration": {
-                    "enable_affine_stage": True,
-                    "early_stop_organ_dice": 0.9,
-                }
-            }
-        )
-    )
-    enabled, _ = register.resolve_config(
-        register.normalize_registration_args(
-            args_for(cohort, "--manifest", str(manifest))
-        )
-    )
-    disabled, _ = register.resolve_config(
-        register.normalize_registration_args(
-            args_for(
-                cohort,
-                "--manifest",
-                str(manifest),
-                "--disable_affine_stage",
-            )
-        )
-    )
-    assert enabled.enable_affine_stage is True
-    assert enabled.early_stop_organ_dice == 0.9
-    assert disabled.enable_affine_stage is False
-    assert disabled.early_stop_organ_dice == 0.9
-
-
-def test_cli_overrides_manifest_elastic_stage_setting(tmp_path, cohort):
-    manifest = tmp_path / "elastic.yaml"
-    manifest.write_text(
-        yaml.safe_dump(
-            {
-                "registration": {
-                    "enable_elastic_stage": True,
-                    "elastic_trigger_organ_dice": 0.85,
-                }
-            }
-        )
-    )
-    enabled, _ = register.resolve_config(
-        register.normalize_registration_args(
-            args_for(cohort, "--manifest", str(manifest))
-        )
-    )
-    disabled, _ = register.resolve_config(
-        register.normalize_registration_args(
-            args_for(
-                cohort,
-                "--manifest",
-                str(manifest),
-                "--disable_elastic_stage",
-            )
-        )
-    )
-    assert enabled.enable_elastic_stage is True
-    assert disabled.enable_elastic_stage is False
-    assert enabled.elastic_trigger_organ_dice == 0.85
-    assert disabled.elastic_trigger_organ_dice == 0.85
-
-
 @pytest.mark.parametrize("entry_point", ["cli", "module"])
 @pytest.mark.parametrize("override", [False, True])
 def test_startup_log_contains_effective_manifest_settings(
@@ -242,7 +175,7 @@ def test_startup_log_contains_effective_manifest_settings(
                 "registration": {
                     "organ_consensus_method": "anchor",
                     "tumor_consensus_method": "majority",
-                    "enable_affine_stage": True,
+                    "stages": [{"type": "mi_affine"}],
                     "maximum_optimizer_iterations": 17,
                 }
             }
@@ -255,7 +188,6 @@ def test_startup_log_contains_effective_manifest_settings(
             "majority",
             "--tumor_consensus_method",
             "union",
-            "--disable_affine_stage",
         ]
     args = args_for(cohort, *flags)
     with caplog.at_level(logging.INFO):
@@ -272,7 +204,7 @@ def test_startup_log_contains_effective_manifest_settings(
     logged = records[0].args[1]
     assert logged.organ_consensus_method == ("majority" if override else "anchor")
     assert logged.tumor_consensus_method == ("union" if override else "majority")
-    assert logged.enable_affine_stage is not override
+    assert logged.stages[0]["type"] == "mi_affine"
     assert logged.maximum_optimizer_iterations == 17
     assert logged.manifest == str(manifest)
     assert logged.csv_path == str(cohort)
@@ -337,10 +269,50 @@ def test_registration_behavior_change_invalidates_resume(monkeypatch, cohort):
     assert len(observed) == 2
 
 
-def test_retry_failed_recomputes_recovered_mi_failure(monkeypatch, cohort):
+def test_stage_order_and_parameters_invalidate_resume(monkeypatch, cohort, tmp_path):
+    manifest = tmp_path / "stages.yaml"
+    plans = [
+        [{"type": "mask_affine"}, {"type": "mi_affine"}],
+        [{"type": "mi_affine"}, {"type": "mask_affine"}],
+        [
+            {"type": "mi_affine", "metric": {"sampling_seed": 43}},
+            {"type": "mask_affine"},
+        ],
+    ]
+    actual = runtime.iter_group_results
+    observed = []
+
+    def tracking(groups, *args, **kwargs):
+        observed.extend(key for key, _ in groups)
+        yield from actual(groups, *args, **kwargs)
+
+    monkeypatch.setattr(runtime, "iter_group_results", tracking)
+    for plan in plans:
+        manifest.write_text(yaml.safe_dump({"registration": {"stages": plan}}))
+        register.main(args_for(cohort, "--manifest", str(manifest)))
+        assert len(observed) == 2
+        observed.clear()
+        register.main(args_for(cohort, "--manifest", str(manifest)))
+        assert observed == []
+
+
+@pytest.mark.parametrize(
+    "flag",
+    [
+        "--enable_affine_stage",
+        "--disable_affine_stage",
+        "--enable_elastic_stage",
+        "--disable_elastic_stage",
+    ],
+)
+def test_removed_stage_flags_are_rejected(cohort, flag):
+    with pytest.raises(SystemExit):
+        args_for(cohort, flag)
+
+
+def test_retry_failed_recomputes_recovered_mi_failure(monkeypatch, cohort, tmp_path):
     from imperandi.process.registration import alignment
 
-    monkeypatch.setattr(alignment, "MI_AFFINE_STAGE_ENABLED", True)
     table = pd.read_csv(cohort, dtype=str)
     table["study_id"] = "same-visit"
     table.to_csv(cohort, index=False)
@@ -366,19 +338,24 @@ def test_retry_failed_recomputes_recovered_mi_failure(monkeypatch, cohort):
     monkeypatch.setattr(
         alignment,
         "mask_rigid_refine",
-        lambda *args: (sitk.Euler3DTransform(), Optimizer()),
+        lambda *args, **kwargs: (sitk.Euler3DTransform(), Optimizer()),
     )
     monkeypatch.setattr(
         alignment,
         "mask_affine_refine",
-        lambda *args: (sitk.AffineTransform(3), Optimizer()),
+        lambda *args, **kwargs: (sitk.AffineTransform(3), Optimizer()),
+    )
+
+    manifest = tmp_path / "mi.yaml"
+    manifest.write_text(
+        yaml.safe_dump({"registration": {"stages": [{"type": "mi_affine"}]}})
     )
 
     def fail_mi(*args, **kwargs):
         raise ValueError("deliberate MI failure")
 
     monkeypatch.setattr(alignment, "mi_refine", fail_mi)
-    register.main(args_for(cohort, "--enable_affine_stage"))
+    register.main(args_for(cohort, "--manifest", str(manifest)))
     output, errors, _ = paths_for(cohort)
     saved = pd.read_csv(output)
     assert not saved.registration_status.eq("failed").any()
@@ -402,14 +379,14 @@ def test_retry_failed_recomputes_recovered_mi_failure(monkeypatch, cohort):
         yield from actual_groups(groups, *args, **kwargs)
 
     monkeypatch.setattr(runtime, "iter_group_results", tracking)
-    register.main(args_for(cohort, "--enable_affine_stage"))
+    register.main(args_for(cohort, "--manifest", str(manifest)))
     assert observed == []
-    register.main(args_for(cohort, "--enable_affine_stage", "--retry_failed"))
+    register.main(args_for(cohort, "--manifest", str(manifest), "--retry_failed"))
     assert len(observed) == 1
     observed.clear()
     # Identical masks now produce an expected no-improvement rejection, which
     # must not be confused with an optimizer or validation failure on retry.
-    register.main(args_for(cohort, "--enable_affine_stage", "--retry_failed"))
+    register.main(args_for(cohort, "--manifest", str(manifest), "--retry_failed"))
     assert observed == []
 
 

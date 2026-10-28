@@ -18,7 +18,15 @@ def single_thread():
 
 
 @pytest.mark.parametrize(
-    "stage", ["mask_rigid", "mask_affine", "mi_rigid", "mi_affine", "mask_elastic"]
+    "stage",
+    [
+        "mask_rigid",
+        "mask_affine",
+        "mi_rigid",
+        "mi_affine",
+        "mask_elastic",
+        "mi_elastic",
+    ],
 )
 @pytest.mark.parametrize(
     "factors,sigmas", [([4, 2, 1], [2, 1, 0]), ([4, 2], [2, 1]), ([1], [0])]
@@ -57,7 +65,7 @@ def test_optimizer_executes_configured_pyramid(monkeypatch, stage, factors, sigm
     mask = sitk.GetImageFromArray(values.astype(np.uint8))
     mask.SetSpacing((1.2, 1.7, 2.1))
     domain = alignment.distance_map(mask, padding_mm=10, band_mm=15)
-    prefix = "elastic" if stage == "mask_elastic" else "linear"
+    prefix = "elastic" if stage.endswith("elastic") else "linear"
     other = "linear" if prefix == "elastic" else "elastic"
     config = RegistrationConfig.from_mapping(
         {
@@ -70,7 +78,18 @@ def test_optimizer_executes_configured_pyramid(monkeypatch, stage, factors, sigm
         }
     )
     initial = sitk.Euler3DTransform()
-    if stage.startswith("mi_"):
+    if stage == "mi_elastic":
+        transform, _ = alignment.mi_elastic_refine(
+            domain,
+            domain,
+            initial,
+            config,
+            fixed_image=mask,
+            moving_image=mask,
+            fixed_organ=mask,
+            moving_organ=mask,
+        )
+    elif stage.startswith("mi_"):
         transform, _ = alignment.mi_refine(
             mask, mask, mask, mask, initial, config, affine=stage == "mi_affine"
         )

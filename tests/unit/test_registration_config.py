@@ -9,7 +9,7 @@ def test_registration_and_consensus_dice_defaults_are_distinct():
     config = RegistrationConfig()
     assert config.minimum_accepted_organ_dice == 0.5
     assert config.minimum_consensus_dice == 0.8
-    assert config.elastic_trigger_organ_dice == 0.9
+    assert [stage.type for stage in config.stages] == ["mask_rigid", "mask_affine"]
 
 
 def test_output_space_defaults_to_moving_and_rejects_unknown_values():
@@ -22,8 +22,6 @@ def test_output_space_defaults_to_moving_and_rejects_unknown_values():
 @pytest.mark.parametrize(
     "name",
     [
-        "early_stop_organ_dice",
-        "elastic_trigger_organ_dice",
         "consensus_probability_threshold",
     ],
 )
@@ -33,21 +31,6 @@ def test_output_space_defaults_to_moving_and_rejects_unknown_values():
 def test_thresholds_require_finite_numbers(name, value):
     with pytest.raises(ValueError, match=name):
         RegistrationConfig(**{name: value})
-
-
-@pytest.mark.parametrize("value", [0, -0.01, 1.01])
-@pytest.mark.parametrize(
-    "name", ["early_stop_organ_dice", "elastic_trigger_organ_dice"]
-)
-def test_dice_threshold_requires_positive_probability(name, value):
-    with pytest.raises(ValueError, match=name):
-        RegistrationConfig(**{name: value})
-
-
-@pytest.mark.parametrize("value", [0.01, 0.85, 1])
-def test_elastic_trigger_accepts_manifest_probability(value):
-    config = RegistrationConfig.from_mapping({"elastic_trigger_organ_dice": value})
-    assert config.elastic_trigger_organ_dice == value
 
 
 def test_consensus_dice_cannot_be_below_registration_acceptance():
@@ -118,59 +101,6 @@ def test_elastic_qc_limit_order_is_validated():
             minimum_elastic_jacobian_determinant=2,
             maximum_elastic_jacobian_determinant=2,
         )
-
-
-def test_minimum_stage_improvement_partial_override_keeps_defaults():
-    config = RegistrationConfig(minimum_stage_dice_improvement={"pca": 0.01})
-    assert config.minimum_stage_dice_improvement["pca"] == 0.01
-    assert config.minimum_stage_dice_improvement["mask_rigid"] == 0.002
-    assert config.minimum_stage_dice_improvement["mask_affine"] == 0.002
-    assert config.minimum_stage_dice_improvement["mask_elastic"] == 0.005
-
-
-def test_minimum_mi_improvement_partial_override_keeps_defaults():
-    config = RegistrationConfig(minimum_stage_mi_improvement={"mi_affine": 0.01})
-    assert config.minimum_stage_mi_improvement["mi_affine"] == 0.01
-
-
-@pytest.mark.parametrize("value", [None, [], "pca"])
-def test_minimum_stage_improvement_requires_mapping(value):
-    with pytest.raises(ValueError, match="minimum_stage_dice_improvement"):
-        RegistrationConfig(minimum_stage_dice_improvement=value)
-
-
-@pytest.mark.parametrize("value", [-0.01, 1.01, True, None, "0.1", float("nan")])
-def test_minimum_stage_improvement_values_are_probabilities(value):
-    with pytest.raises(ValueError, match="minimum_stage_dice_improvement pca"):
-        RegistrationConfig(minimum_stage_dice_improvement={"pca": value})
-
-
-def test_minimum_stage_improvement_rejects_unknown_stages():
-    with pytest.raises(ValueError, match="Unknown minimum_stage_dice_improvement"):
-        RegistrationConfig(minimum_stage_dice_improvement={"rigid": 0.002})
-
-
-@pytest.mark.parametrize("value", [None, [], "mi_affine"])
-def test_minimum_mi_improvement_requires_mapping(value):
-    with pytest.raises(ValueError, match="minimum_stage_mi_improvement"):
-        RegistrationConfig(minimum_stage_mi_improvement=value)
-
-
-@pytest.mark.parametrize("value", [-0.01, True, None, "0.1", float("nan")])
-def test_minimum_mi_improvement_values_are_nonnegative(value):
-    with pytest.raises(ValueError, match="minimum_stage_mi_improvement mi_affine"):
-        RegistrationConfig(minimum_stage_mi_improvement={"mi_affine": value})
-
-
-def test_minimum_mi_improvement_rejects_unknown_stages():
-    with pytest.raises(ValueError, match="Unknown minimum_stage_mi_improvement"):
-        RegistrationConfig(minimum_stage_mi_improvement={"mi_rigid": 0.002})
-
-
-@pytest.mark.parametrize("value", [-0.01, 1.01, True, None, "0.1", float("nan")])
-def test_mi_stage_dice_decrease_is_a_probability(value):
-    with pytest.raises(ValueError, match="maximum_mi_stage_dice_decrease"):
-        RegistrationConfig(maximum_mi_stage_dice_decrease=value)
 
 
 @pytest.mark.parametrize(

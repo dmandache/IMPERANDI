@@ -109,10 +109,9 @@ and creates shared tumor masks with anchor, majority, intersection, union, or ST
 - `--qc_csv_path` defaults to `register_qc.csv` and records stage Dice and provenance.
 - `--manifest` accepts a built-in name or YAML file; default is `generic`.
 - `--organ_consensus_method`, `--tumor_consensus_method`,
-  `--output_space` (`moving` or `reference`),
-  `--enable_affine_stage`/`--disable_affine_stage`, and
-  `--enable_elastic_stage`/`--disable_elastic_stage`
-  override manifest settings.
+  and `--output_space` (`moving` or `reference`) override manifest settings.
+  Configure the ordered registration steps in manifest `registration.stages`;
+  the former affine/elastic enable flags are no longer accepted.
   Grouping is defined by `registration.grouping_columns` in the manifest.
 - `--num_workers`, `--threads_per_worker`, `--start_method`, and `--timeout_sec`
   control group execution. Timeout defaults to 900 seconds; 0 disables it.

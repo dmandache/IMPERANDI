@@ -1,7 +1,8 @@
 """Manifest-grouped organ registration and tumor consensus.
 
 The library exposes registration configuration, cohort execution and anatomical
-mask QC. ``alignment`` owns mask assessment and pairwise registration; ``cohort``
+mask QC. ``alignment`` owns mask assessment and optimizers; ``pipeline`` executes
+the configured pairwise stage chain; ``cohort``
 owns cohort preparation, fusion, and artifact publication. ``reporting`` formats labels,
 tables, and logs. ``runtime`` adds checkpoints and workers, ``register`` implements
 the CLI, and ``config`` defines settings shared by these modules.

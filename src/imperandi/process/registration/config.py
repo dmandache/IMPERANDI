@@ -1,6 +1,6 @@
 """Small, explicit configuration contract for registration backends."""
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from math import isfinite
 from typing import Mapping
 
@@ -15,27 +15,27 @@ REGISTRATION_STAGES = (
     "mask_affine",
     "mi_affine",
     "mask_elastic",
+    "mi_elastic",
 )
 
-DEFAULT_MINIMUM_STAGE_DICE_IMPROVEMENT = {
-    "geometry": 0.001,
-    "pca": 0.001,
-    "mask_rigid": 0.002,
-    "mask_affine": 0.002,
-    "mask_elastic": 0.005,
-}
-
-DEFAULT_MINIMUM_STAGE_MI_IMPROVEMENT = {
-    "mi_affine": 0.0,
+STAGE_MODELS = {
+    "mask_rigid": "rigid",
+    "mask_affine": "affine",
+    "mi_affine": "affine",
+    "mask_elastic": "elastic",
+    "mi_elastic": "elastic",
 }
 
 
 def _finite_number(value):
-    return (
-        not isinstance(value, bool)
-        and isinstance(value, (int, float))
-        and isfinite(value)
-    )
+    try:
+        return (
+            not isinstance(value, bool)
+            and isinstance(value, (int, float))
+            and isfinite(value)
+        )
+    except OverflowError:
+        return False
 
 
 def _validate_pyramid(shrink_factors, smoothing_sigmas_mm, prefix):
@@ -77,6 +77,177 @@ def _validate_pyramid(shrink_factors, smoothing_sigmas_mm, prefix):
         raise ValueError(f"{sigma_name} must be nonincreasing (coarse to fine)")
 
 
+def _mapping(value, allowed, name):
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{name} must be a mapping")
+    unknown = set(value) - set(allowed)
+    if unknown:
+        raise ValueError(f"Unknown {name} settings: {sorted(unknown, key=str)}")
+    return dict(value)
+
+
+@dataclass(frozen=True)
+class RunCondition:
+    dice_below: float | None = None
+
+
+@dataclass(frozen=True)
+class MetricConfig:
+    roi: str = "organ_band"
+    histogram_bins: int = 50
+    sampling_strategy: str = "regular"
+    sampling_fraction: float = 0.2
+    sampling_seed: int = 42
+
+    def __post_init__(self):
+        if self.roi not in ("organ_band", "organ"):
+            raise ValueError("metric.roi must be organ_band or organ")
+        if type(self.histogram_bins) is not int or not 5 <= self.histogram_bins <= 256:
+            raise ValueError("metric.histogram_bins must be an integer in [5, 256]")
+        if self.sampling_strategy not in ("none", "regular", "random"):
+            raise ValueError("Invalid metric.sampling_strategy")
+        if (
+            not _finite_number(self.sampling_fraction)
+            or not 0 < self.sampling_fraction <= 1
+        ):
+            raise ValueError("metric.sampling_fraction must be in (0, 1]")
+        if type(self.sampling_seed) is not int or not 1 <= self.sampling_seed < 2**32:
+            raise ValueError("metric.sampling_seed must be an integer in [1, 2**32)")
+
+
+@dataclass(frozen=True)
+class OptimizerConfig:
+    iterations: int
+
+
+@dataclass(frozen=True)
+class PyramidConfig:
+    shrink_factors: list[int]
+    smoothing_sigmas_mm: list[float]
+
+
+@dataclass(frozen=True)
+class AcceptanceConfig:
+    minimum_dice_improvement: float | None = None
+    minimum_mi_improvement: float | None = None
+    maximum_dice_decrease: float | None = None
+
+
+@dataclass(frozen=True)
+class StageConfig:
+    type: str
+    run_if: RunCondition
+    metric: MetricConfig | None
+    optimizer: OptimizerConfig
+    pyramid: PyramidConfig
+    acceptance: AcceptanceConfig
+
+    @property
+    def model(self):
+        return STAGE_MODELS[self.type]
+
+    @property
+    def uses_mi(self):
+        return self.type.startswith("mi_")
+
+    @classmethod
+    def resolve(cls, value, config):
+        if isinstance(value, cls):
+            value = asdict(value)
+        raw = _mapping(value, cls.__dataclass_fields__, "stage")
+        name = raw.get("type")
+        if not isinstance(name, str) or name not in STAGE_MODELS:
+            raise ValueError(f"Unknown registration stage: {name}")
+        elastic, mi = STAGE_MODELS[name] == "elastic", name.startswith("mi_")
+        condition = raw.get(
+            "run_if", "always" if mi else {"dice_below": 0.90 if elastic else 0.95}
+        )
+        if condition == "always":
+            condition = {}
+        condition = _mapping(condition, ("dice_below",), "run_if")
+        threshold = condition.get("dice_below")
+        if threshold is not None and (
+            not _finite_number(threshold) or not 0 < threshold <= 1
+        ):
+            raise ValueError("run_if.dice_below must be in (0, 1]")
+        metric = raw.get("metric")
+        if not mi and metric is not None:
+            raise ValueError(f"{name} does not accept MI metric settings")
+        metric = (
+            MetricConfig(
+                **_mapping(
+                    {} if metric is None else metric,
+                    MetricConfig.__dataclass_fields__,
+                    "metric",
+                )
+            )
+            if mi
+            else None
+        )
+        optimizer = _mapping(raw.get("optimizer", {}), ("iterations",), "optimizer")
+        iterations = optimizer.get(
+            "iterations",
+            (
+                config.elastic_optimizer_iterations
+                if elastic
+                else config.maximum_optimizer_iterations
+            ),
+        )
+        if (
+            type(iterations) is not int
+            or iterations < 1
+            or (elastic and iterations > 100)
+        ):
+            raise ValueError(
+                "optimizer.iterations must be positive (elastic maximum 100)"
+            )
+        prefix = "elastic" if elastic else "linear"
+        pyramid = _mapping(
+            raw.get("pyramid", {}), PyramidConfig.__dataclass_fields__, "pyramid"
+        )
+        factors = pyramid.get(
+            "shrink_factors", getattr(config, f"{prefix}_shrink_factors")
+        )
+        sigmas = pyramid.get(
+            "smoothing_sigmas_mm", getattr(config, f"{prefix}_smoothing_sigmas_mm")
+        )
+        _validate_pyramid(factors, sigmas, "stage")
+        acceptance = _mapping(
+            raw.get("acceptance", {}),
+            AcceptanceConfig.__dataclass_fields__,
+            "acceptance",
+        )
+        allowed = (
+            ("minimum_mi_improvement", "maximum_dice_decrease")
+            if mi
+            else ("minimum_dice_improvement",)
+        )
+        for key, val in acceptance.items():
+            if key not in allowed and val is not None:
+                raise ValueError(f"{name} does not accept acceptance.{key}")
+        defaults = (
+            {"minimum_mi_improvement": 0.0, "maximum_dice_decrease": 0.002}
+            if mi
+            else {"minimum_dice_improvement": 0.005 if elastic else 0.002}
+        )
+        resolved = {**defaults, **{k: v for k, v in acceptance.items() if k in allowed}}
+        for key, val in resolved.items():
+            if (
+                not _finite_number(val)
+                or val < 0
+                or (key != "minimum_mi_improvement" and val > 1)
+            ):
+                raise ValueError(f"Invalid acceptance.{key}")
+        return cls(
+            name,
+            RunCondition(threshold),
+            metric,
+            OptimizerConfig(iterations),
+            PyramidConfig(list(factors), list(sigmas)),
+            AcceptanceConfig(**resolved),
+        )
+
+
 @dataclass(frozen=True)
 class RegistrationConfig:
     grouping_columns: list[str] = field(
@@ -87,16 +258,16 @@ class RegistrationConfig:
     organ_consensus_method: str = "anchor"
     tumor_consensus_method: str = "anchor"
     output_space: str = "moving"
-    enable_affine_stage: bool = False
-    enable_elastic_stage: bool = False
-    elastic_trigger_organ_dice: float = 0.90
+    stages: list[StageConfig] = field(
+        default_factory=lambda: [{"type": "mask_rigid"}, {"type": "mask_affine"}]
+    )
+    initializer_minimum_dice_improvement: float = 0.001
     elastic_control_point_spacing_mm: float = 90.0
     elastic_optimizer_iterations: int = 25
     maximum_elastic_displacement_p95_mm: float = 8.0
     maximum_elastic_displacement_mm: float = 12.0
     minimum_elastic_jacobian_determinant: float = 0.5
     maximum_elastic_jacobian_determinant: float = 2.0
-    early_stop_organ_dice: float = 0.95
     partial_mask_boundary_margin_mm: float = 1.0
     accept_partial_organ_masks: bool = True
     minimum_largest_component_fraction: float = 0.8
@@ -104,13 +275,6 @@ class RegistrationConfig:
     minimum_consensus_dice: float = 0.8
     minimum_common_field_of_view_fraction: float = 0.05
     maximum_pca_rotation_degrees: float = 45.0
-    minimum_stage_dice_improvement: dict[str, float] = field(
-        default_factory=lambda: dict(DEFAULT_MINIMUM_STAGE_DICE_IMPROVEMENT)
-    )
-    minimum_stage_mi_improvement: dict[str, float] = field(
-        default_factory=lambda: dict(DEFAULT_MINIMUM_STAGE_MI_IMPROVEMENT)
-    )
-    maximum_mi_stage_dice_decrease: float = 0.002
     maximum_optimizer_iterations: int = 100
     linear_shrink_factors: list[int] = field(default_factory=lambda: [4, 2, 1])
     linear_smoothing_sigmas_mm: list[float] = field(
@@ -150,8 +314,6 @@ class RegistrationConfig:
         for name in (
             "preserve_source_organ_mask",
             "accept_partial_organ_masks",
-            "enable_affine_stage",
-            "enable_elastic_stage",
             "clip_tumor_consensus_to_organ",
         ):
             if type(getattr(self, name)) is not bool:
@@ -161,7 +323,6 @@ class RegistrationConfig:
             "minimum_accepted_organ_dice",
             "minimum_consensus_dice",
             "minimum_common_field_of_view_fraction",
-            "elastic_trigger_organ_dice",
         ):
             value = getattr(self, name)
             if not _finite_number(value) or not 0 < value <= 1:
@@ -202,58 +363,30 @@ class RegistrationConfig:
             or not 1 <= self.elastic_optimizer_iterations <= 100
         ):
             raise ValueError("elastic_optimizer_iterations must be in [1, 100]")
-        for name in ("early_stop_organ_dice", "consensus_probability_threshold"):
-            if not _finite_number(getattr(self, name)):
-                raise ValueError(f"{name} must be a finite numeric threshold")
-        if not 0 < self.early_stop_organ_dice <= 1:
-            raise ValueError("early_stop_organ_dice must be in (0, 1]")
-        if not 0 < self.consensus_probability_threshold < 1:
-            raise ValueError("Invalid Dice or probability threshold")
-        if not isinstance(self.minimum_stage_dice_improvement, Mapping):
-            raise ValueError("minimum_stage_dice_improvement must be a mapping")
-        unknown_delta_stages = set(self.minimum_stage_dice_improvement) - set(
-            DEFAULT_MINIMUM_STAGE_DICE_IMPROVEMENT
-        )
-        if unknown_delta_stages:
-            raise ValueError(
-                "Unknown minimum_stage_dice_improvement stages: "
-                f"{sorted(unknown_delta_stages)}"
-            )
-        minimum_improvement = {
-            **DEFAULT_MINIMUM_STAGE_DICE_IMPROVEMENT,
-            **self.minimum_stage_dice_improvement,
-        }
-        for name, value in minimum_improvement.items():
-            if not _finite_number(value) or not 0 <= value <= 1:
-                raise ValueError(
-                    f"minimum_stage_dice_improvement {name} must be in [0, 1]"
-                )
-        object.__setattr__(self, "minimum_stage_dice_improvement", minimum_improvement)
-        if not isinstance(self.minimum_stage_mi_improvement, Mapping):
-            raise ValueError("minimum_stage_mi_improvement must be a mapping")
-        unknown_mi_stages = set(self.minimum_stage_mi_improvement) - set(
-            DEFAULT_MINIMUM_STAGE_MI_IMPROVEMENT
-        )
-        if unknown_mi_stages:
-            raise ValueError(
-                "Unknown minimum_stage_mi_improvement stages: "
-                f"{sorted(unknown_mi_stages)}"
-            )
-        minimum_mi_improvement = {
-            **DEFAULT_MINIMUM_STAGE_MI_IMPROVEMENT,
-            **self.minimum_stage_mi_improvement,
-        }
-        for name, value in minimum_mi_improvement.items():
-            if not _finite_number(value) or value < 0:
-                raise ValueError(
-                    f"minimum_stage_mi_improvement {name} must be nonnegative"
-                )
-        object.__setattr__(self, "minimum_stage_mi_improvement", minimum_mi_improvement)
         if (
-            not _finite_number(self.maximum_mi_stage_dice_decrease)
-            or not 0 <= self.maximum_mi_stage_dice_decrease <= 1
+            not _finite_number(self.consensus_probability_threshold)
+            or not 0 < self.consensus_probability_threshold < 1
         ):
-            raise ValueError("maximum_mi_stage_dice_decrease must be in [0, 1]")
+            raise ValueError("consensus_probability_threshold must be in (0, 1)")
+        if (
+            not _finite_number(self.initializer_minimum_dice_improvement)
+            or not 0 <= self.initializer_minimum_dice_improvement <= 1
+        ):
+            raise ValueError("initializer_minimum_dice_improvement must be in [0, 1]")
+        if not isinstance(self.stages, list):
+            raise ValueError("stages must be an ordered list")
+        resolved = [StageConfig.resolve(stage, self) for stage in self.stages]
+        names = [stage.type for stage in resolved]
+        if len(names) != len(set(names)):
+            raise ValueError("Registration stage types must be unique")
+        ranks = [
+            {"rigid": 0, "affine": 1, "elastic": 2}[stage.model] for stage in resolved
+        ]
+        if ranks != sorted(ranks):
+            raise ValueError(
+                "Registration stages must order rigid before affine before elastic"
+            )
+        object.__setattr__(self, "stages", resolved)
         if (
             not _finite_number(self.distance_map_crop_padding_mm)
             or self.distance_map_crop_padding_mm < 0

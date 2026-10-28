@@ -144,7 +144,11 @@ def _optional(value):
 
 def _stage_summary(stages):
     parts = []
-    for stage in REGISTRATION_STAGES:
+    requested = stages.get("baseline", {}).get("stage_order", [])
+    ordered = dict.fromkeys(
+        ["baseline", "pca", "geometry", *requested, *REGISTRATION_STAGES]
+    )
+    for stage in ordered:
         if stage not in stages:
             continue
         detail = stages.get(stage, {})
@@ -153,7 +157,7 @@ def _stage_summary(stages):
         status = detail.get("status", "not_run")
         diagnostics = [status]
         if (
-            stage in {"mi_affine", "mask_elastic"}
+            stage in {"mi_affine", "mask_elastic", "mi_elastic"}
             and status != "not_run"
             and not status.startswith("skipped_")
         ):
@@ -177,7 +181,7 @@ def _stages_for_log(stages):
     if geometry.get("status", "not_run") in {
         "not_run",
         "skipped_complete_organ",
-        "skipped_early_stop",
+        "skipped_not_configured",
     }:
         logged.pop("geometry", None)
     return logged

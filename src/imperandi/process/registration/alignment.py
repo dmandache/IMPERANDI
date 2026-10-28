@@ -6,13 +6,10 @@ from itertools import permutations, product
 import numpy as np
 from scipy import ndimage
 
-from .config import REGISTRATION_STAGES
+from .config import MetricConfig, StageConfig
 
 DICE_TOLERANCE = 1e-6
 MI_TOLERANCE = 1e-8
-# Keep the implementation testable while the production MI-affine stage is
-# temporarily disabled. Remove this gate when the stage is ready to return.
-MI_AFFINE_STAGE_ENABLED = False
 
 
 def backend():
@@ -696,39 +693,6 @@ class RegistrationRejected(ValueError):
         self.result = result
 
 
-def _select_candidate(
-    best,
-    score,
-    stage,
-    candidate,
-    candidate_score,
-    candidate_stage,
-    stages,
-    minimum_improvement,
-):
-    """Accept a candidate only when it clears its minimum Dice improvement."""
-    if not np.isfinite(candidate_score):
-        raise ValueError("Nonfinite registration Dice")
-    detail = stages[candidate_stage]
-    improvement = candidate_score - score
-    detail.update(
-        dice=candidate_score,
-        input_dice=score,
-        dice_improvement=improvement,
-        minimum_required_dice_improvement=minimum_improvement,
-        selected=False,
-    )
-    if candidate_score < score - DICE_TOLERANCE:
-        detail.update(status="rejected_worse_dice", fallback_stage=stage)
-        return best, score, stage
-    if improvement < minimum_improvement - DICE_TOLERANCE:
-        detail.update(status="rejected_insufficient_improvement", fallback_stage=stage)
-        return best, score, stage
-    stages[stage]["selected"] = False
-    detail.update(status="evaluated", selected=True)
-    return candidate, candidate_score, candidate_stage
-
-
 def _mi_candidate_rejection(
     candidate_dice,
     dice_guard_reference,
@@ -747,55 +711,6 @@ def _mi_candidate_rejection(
     if improvement < max(minimum_mi_improvement, MI_TOLERANCE):
         return "rejected_insufficient_mi_improvement"
     return None
-
-
-def _select_mi_candidate(
-    best,
-    score,
-    stage,
-    candidate,
-    candidate_dice,
-    candidate_stage,
-    stages,
-    *,
-    dice_guard_reference,
-    input_mi,
-    candidate_mi,
-    minimum_mi_improvement,
-    maximum_dice_decrease,
-    dice_guard_metric,
-):
-    """Accept an MI improvement only when anatomical Dice stays within tolerance."""
-    improvement = candidate_mi - input_mi
-    detail = stages[candidate_stage]
-    detail.update(
-        dice=candidate_dice,
-        input_dice=score,
-        dice_improvement=candidate_dice - score,
-        dice_guard_reference=dice_guard_reference,
-        maximum_allowed_dice_decrease=maximum_dice_decrease,
-        input_mutual_information=input_mi,
-        mutual_information=candidate_mi,
-        mutual_information_improvement=improvement,
-        minimum_required_mi_improvement=minimum_mi_improvement,
-        selection_metric="mattes_mutual_information",
-        dice_guard_metric=dice_guard_metric,
-        selected=False,
-    )
-    rejection = _mi_candidate_rejection(
-        candidate_dice,
-        dice_guard_reference,
-        input_mi,
-        candidate_mi,
-        minimum_mi_improvement,
-        maximum_dice_decrease,
-    )
-    if rejection is not None:
-        detail.update(status=rejection, fallback_stage=stage)
-        return best, score, stage
-    stages[stage]["selected"] = False
-    detail.update(status="evaluated", selected=True)
-    return candidate, candidate_dice, candidate_stage
 
 
 def _record_stage_failure(stages, warnings, name, exc, score, fallback):
@@ -838,19 +753,22 @@ def _configure_pyramid(registration, shrink_factors, smoothing_sigmas_mm):
     registration.SmoothingSigmasAreSpecifiedInPhysicalUnitsOn()
 
 
-def _mask_linear_refine(fixed_dm, moving_dm, initial, config, *, affine):
+def _mask_linear_refine(fixed_dm, moving_dm, initial, config, *, affine, stage=None):
     """Align liver signed-distance maps with a rigid or affine transform."""
     sitk = backend()
+    stage = stage or StageConfig.resolve(
+        {"type": "mask_affine" if affine else "mask_rigid"}, config
+    )
     transform = _linear_transform(initial, affine=affine)
     registration = sitk.ImageRegistrationMethod()
     registration.SetMetricAsMeanSquares()
     registration.SetInterpolator(sitk.sitkLinear)
     registration.SetOptimizerAsRegularStepGradientDescent(
-        1.0, 0.001, config.maximum_optimizer_iterations
+        1.0, 0.001, stage.optimizer.iterations
     )
     registration.SetOptimizerScalesFromPhysicalShift()
     _configure_pyramid(
-        registration, config.linear_shrink_factors, config.linear_smoothing_sigmas_mm
+        registration, stage.pyramid.shrink_factors, stage.pyramid.smoothing_sigmas_mm
     )
     registration.SetInitialTransform(transform, inPlace=True)
     registration.Execute(fixed_dm, moving_dm)
@@ -858,7 +776,7 @@ def _mask_linear_refine(fixed_dm, moving_dm, initial, config, *, affine):
     return transform, registration
 
 
-def mask_rigid_refine(fixed_dm, moving_dm, initial, config):
+def mask_rigid_refine(fixed_dm, moving_dm, initial, config, *, stage=None):
     """Rigidly align liver signed-distance maps."""
     return _mask_linear_refine(
         fixed_dm,
@@ -866,10 +784,11 @@ def mask_rigid_refine(fixed_dm, moving_dm, initial, config):
         initial,
         config,
         affine=False,
+        stage=stage,
     )
 
 
-def mask_affine_refine(fixed_dm, moving_dm, initial, config):
+def mask_affine_refine(fixed_dm, moving_dm, initial, config, *, stage=None):
     """Affinely align liver signed-distance maps."""
     return _mask_linear_refine(
         fixed_dm,
@@ -877,6 +796,7 @@ def mask_affine_refine(fixed_dm, moving_dm, initial, config):
         initial,
         config,
         affine=True,
+        stage=stage,
     )
 
 
@@ -889,27 +809,26 @@ def mi_refine(
     config,
     *,
     affine=False,
+    stage=None,
 ):
     """Refine a linear transform with boundary-band Mattes mutual information."""
     sitk = backend()
+    stage = stage or StageConfig.resolve({"type": "mi_affine"}, config)
     transform = _linear_transform(initial, affine=affine)
     registration = sitk.ImageRegistrationMethod()
-    registration.SetMetricAsMattesMutualInformation(numberOfHistogramBins=50)
-    registration.SetMetricFixedMask(
-        boundary_band(fixed_organ, band_mm=config.organ_boundary_band_half_width_mm)
+    registration.SetMetricAsMattesMutualInformation(
+        numberOfHistogramBins=stage.metric.histogram_bins
     )
-    registration.SetMetricMovingMask(
-        boundary_band(moving_organ, band_mm=config.organ_boundary_band_half_width_mm)
-    )
-    registration.SetMetricSamplingStrategy(registration.REGULAR)
-    registration.SetMetricSamplingPercentage(0.2)
+    registration.SetMetricFixedMask(metric_roi(fixed_organ, config, stage.metric))
+    registration.SetMetricMovingMask(metric_roi(moving_organ, config, stage.metric))
+    configure_sampling(registration, stage.metric)
     registration.SetInterpolator(sitk.sitkLinear)
     registration.SetOptimizerAsRegularStepGradientDescent(
-        1.0, 0.001, config.maximum_optimizer_iterations
+        1.0, 0.001, stage.optimizer.iterations
     )
     registration.SetOptimizerScalesFromPhysicalShift()
     _configure_pyramid(
-        registration, config.linear_shrink_factors, config.linear_smoothing_sigmas_mm
+        registration, stage.pyramid.shrink_factors, stage.pyramid.smoothing_sigmas_mm
     )
     registration.SetInitialTransform(transform, inPlace=True)
     registration.Execute(
@@ -920,6 +839,23 @@ def mi_refine(
     return transform, registration
 
 
+def metric_roi(organ, config, metric):
+    return (
+        backend().Cast(organ > 0, backend().sitkUInt8)
+        if metric.roi == "organ"
+        else boundary_band(organ, band_mm=config.organ_boundary_band_half_width_mm)
+    )
+
+
+def configure_sampling(registration, metric):
+    registration.SetMetricSamplingStrategy(
+        getattr(registration, metric.sampling_strategy.upper())
+    )
+    registration.SetMetricSamplingPercentage(
+        metric.sampling_fraction, metric.sampling_seed
+    )
+
+
 def mutual_information_score(
     fixed_image,
     moving_image,
@@ -927,17 +863,22 @@ def mutual_information_score(
     moving_organ,
     transform,
     config,
+    *,
+    metric=None,
+    support=None,
 ):
     """Return deterministic boundary-band Mattes MI, with higher being better."""
     sitk = backend()
+    metric = metric or MetricConfig()
     evaluator = sitk.ImageRegistrationMethod()
-    evaluator.SetMetricAsMattesMutualInformation(numberOfHistogramBins=50)
+    evaluator.SetMetricAsMattesMutualInformation(
+        numberOfHistogramBins=metric.histogram_bins
+    )
     evaluator.SetMetricFixedMask(
-        boundary_band(fixed_organ, band_mm=config.organ_boundary_band_half_width_mm)
+        support if support is not None else metric_roi(fixed_organ, config, metric)
     )
-    evaluator.SetMetricMovingMask(
-        boundary_band(moving_organ, band_mm=config.organ_boundary_band_half_width_mm)
-    )
+    if support is None:
+        evaluator.SetMetricMovingMask(metric_roi(moving_organ, config, metric))
     evaluator.SetInterpolator(sitk.sitkLinear)
     evaluator.SetInitialTransform(transform)
     # SimpleITK minimizes negative Mattes MI. Negate it so positive deltas mean
@@ -953,47 +894,97 @@ def mutual_information_score(
     return value
 
 
-def mask_elastic_refine(
-    fixed_dm, moving_dm, initial, config, optimization_diagnostics=None
+def elastic_refine(
+    fixed_dm,
+    moving_dm,
+    initial,
+    config,
+    optimization_diagnostics=None,
+    *,
+    stage=None,
+    fixed_image=None,
+    moving_image=None,
+    fixed_organ=None,
+    moving_organ=None,
 ):
-    """Refine an affine mapping with a coarse signed-distance B-spline."""
+    """Optimize one reference-domain B-spline using masks or intensities."""
     sitk = backend()
+    stage = stage or StageConfig.resolve({"type": "mask_elastic"}, config)
+    if stage.uses_mi and any(
+        image is None
+        for image in (fixed_image, moving_image, fixed_organ, moving_organ)
+    ):
+        raise ValueError("MI elastic requires intensity images and organ masks")
     optimization_diagnostics = (
         {} if optimization_diagnostics is None else optimization_diagnostics
     )
     lengths = (np.asarray(fixed_dm.GetSize()) - 1) * np.asarray(fixed_dm.GetSpacing())
     control_spacing = config.elastic_control_point_spacing_mm
     mesh_size = [max(1, int(round(length / control_spacing))) for length in lengths]
-    bspline = sitk.BSplineTransformInitializer(fixed_dm, mesh_size, order=3)
+    if initial.GetName() == "CompositeTransform":
+        if initial.GetNumberOfTransforms() != 2:
+            raise ValueError(
+                "Elastic state must contain one linear transform and one B-spline"
+            )
+        linear = initial.GetNthTransform(0)
+        bspline = sitk.BSplineTransform(initial.GetNthTransform(1))
+    else:
+        linear = initial
+        bspline = sitk.BSplineTransformInitializer(fixed_dm, mesh_size, order=3)
     band = float(config.organ_boundary_band_half_width_mm)
+    fixed_data = fixed_image if stage.uses_mi else fixed_dm
+    moving_data = moving_image if stage.uses_mi else moving_dm
     aligned_moving_dm = sitk.Resample(
-        moving_dm,
+        moving_data,
         fixed_dm,
-        initial,
+        linear,
         sitk.sitkLinear,
         band,
         sitk.sitkFloat32,
     )
     registration = sitk.ImageRegistrationMethod()
-    registration.SetMetricAsMeanSquares()
-    registration.SetMetricFixedMask(
-        sitk.Cast(sitk.Abs(fixed_dm) < band, sitk.sitkUInt8)
+    identity = sitk.Transform(3, sitk.sitkIdentity)
+    fixed_data = sitk.Resample(
+        fixed_data, fixed_dm, identity, sitk.sitkLinear, 0, sitk.sitkFloat32
     )
-    registration.SetMetricMovingMask(
-        sitk.Cast(sitk.Abs(aligned_moving_dm) < band, sitk.sitkUInt8)
+    if stage.uses_mi:
+        registration.SetMetricAsMattesMutualInformation(
+            numberOfHistogramBins=stage.metric.histogram_bins
+        )
+        fixed_roi = resample(
+            metric_roi(fixed_organ, config, stage.metric), fixed_dm, identity
+        )
+        moving_roi = resample(
+            metric_roi(moving_organ, config, stage.metric), fixed_dm, linear
+        )
+        configure_sampling(registration, stage.metric)
+    else:
+        registration.SetMetricAsMeanSquares()
+        fixed_roi = sitk.Cast(sitk.Abs(fixed_dm) < band, sitk.sitkUInt8)
+        moving_roi = sitk.Cast(sitk.Abs(aligned_moving_dm) < band, sitk.sitkUInt8)
+        configure_sampling(registration, MetricConfig(sampling_fraction=0.25))
+    fixed_roi = fixed_roi & resample(
+        coverage_image(fixed_image if fixed_image is not None else fixed_dm),
+        fixed_dm,
+        identity,
     )
-    registration.SetMetricSamplingStrategy(registration.REGULAR)
-    registration.SetMetricSamplingPercentage(0.25)
+    moving_roi = moving_roi & resample(
+        coverage_image(moving_image if moving_image is not None else moving_dm),
+        fixed_dm,
+        linear,
+    )
+    registration.SetMetricFixedMask(fixed_roi)
+    registration.SetMetricMovingMask(moving_roi)
     registration.SetInterpolator(sitk.sitkLinear)
     registration.SetOptimizerAsGradientDescentLineSearch(
         learningRate=0.25,
-        numberOfIterations=config.elastic_optimizer_iterations,
+        numberOfIterations=stage.optimizer.iterations,
         convergenceMinimumValue=1e-4,
         convergenceWindowSize=5,
     )
     registration.SetOptimizerScalesFromPhysicalShift()
     _configure_pyramid(
-        registration, config.elastic_shrink_factors, config.elastic_smoothing_sigmas_mm
+        registration, stage.pyramid.shrink_factors, stage.pyramid.smoothing_sigmas_mm
     )
     registration.SetInitialTransform(bspline, inPlace=True)
     qc_domain = _physical_qc_grid(fixed_dm, control_spacing)
@@ -1036,9 +1027,15 @@ def mask_elastic_refine(
             stop_reasons = ["optimizer_qc_callback_failed"]
             stop_succeeded = bool(registration.StopRegistration())
 
+    def next_level():
+        nonlocal best_metric
+        # Optimizer values from different pyramid levels are not comparable.
+        best_metric = float("inf")
+
+    registration.AddCommand(sitk.sitkMultiResolutionIterationEvent, next_level)
     registration.AddCommand(sitk.sitkIterationEvent, inspect_residual)
     registration.Execute(
-        sitk.Cast(fixed_dm, sitk.sitkFloat32),
+        fixed_data,
         aligned_moving_dm,
     )
     # SimpleITK transform mutation is unsafe while Execute is active.
@@ -1065,464 +1062,32 @@ def mask_elastic_refine(
     if not np.isfinite(bspline.GetParameters()).all():
         raise ValueError("Nonfinite elastic transform")
     composite = sitk.CompositeTransform(3)
-    composite.AddTransform(initial)
+    composite.AddTransform(linear)
     composite.AddTransform(bspline)
     return composite, registration
 
 
-def register_pair(
-    fixed_organ,
-    moving_organ,
-    config,
-    fixed_image=None,
-    moving_image=None,
+def mask_elastic_refine(
+    fixed_dm, moving_dm, initial, config, optimization_diagnostics=None, **kwargs
 ):
-    """Run the staged liver-first registration cascade.
-
-    Every candidate is accepted only when liver Dice improves. Once the selected
-    Dice reaches ``early_stop_organ_dice``, later stages are explicitly skipped.
-    Elastic refinement runs only below ``elastic_trigger_organ_dice`` to avoid
-    expensive processing when the selected registration is already acceptable.
-    Images default to the masks for callers using the low-level mask-only API.
-    """
-
-    sitk = backend()
-    fixed_image = fixed_organ if fixed_image is None else fixed_image
-    moving_image = moving_organ if moving_image is None else moving_image
-    fixed_qc = assess_organ_mask(fixed_organ, config)
-    moving_qc = assess_organ_mask(moving_organ, config)
-    if "invalid" in (fixed_qc.status, moving_qc.status):
-        raise ValueError("Invalid organ mask for registration")
-    partial = fixed_qc.partial or moving_qc.partial
-    if partial and not config.accept_partial_organ_masks:
-        raise ValueError("Partial organ masks are disabled")
-
-    overlaps = {}
-
-    def score_transform(tx, name):
-        if not partial:
-            return dice(fixed_organ, moving_organ, tx)
-        metrics = overlap_qc(fixed_organ, moving_organ, tx)
-        overlaps[name] = metrics
-        if (
-            metrics["common_fov_fraction"]
-            < config.minimum_common_field_of_view_fraction
-            or metrics["common_foreground_voxels"] < 4
-        ):
-            return 0.0
-        return metrics["dice_common_fov"]
-
-    identity = sitk.Euler3DTransform()
-    before = score_transform(identity, "baseline")
-    best, score, stage = identity, before, "baseline"
-    peak_dice = before
-    warnings = []
-    stage_transforms = {"baseline": identity}
-    stages = {name: {"dice": None, "status": "not_run"} for name in REGISTRATION_STAGES}
-    stages["baseline"].update(dice=before, status="evaluated", selected=True)
-    initializer_stage = "geometry" if partial else "pca"
-    pipeline = [
-        initializer_stage,
-        "mask_rigid",
-        "mask_affine",
-        "mi_affine",
-        "mask_elastic",
-    ]
-
-    def minimum_stage_improvement(name):
-        return config.minimum_stage_dice_improvement[name]
-
-    def minimum_mi_improvement(name):
-        return config.minimum_stage_mi_improvement[name]
-
-    dice_metric = "dice_common_fov" if partial else "dice_full"
-
-    if partial:
-        stages["pca"].update(status="skipped_partial_coverage", selected=False)
-    else:
-        stages["geometry"].update(status="skipped_complete_organ", selected=False)
-
-    def reached_target():
-        return score >= config.early_stop_organ_dice
-
-    def skip_remaining(after):
-        for name in pipeline[pipeline.index(after) + 1 :]:
-            if stages[name]["status"] == "not_run":
-                stages[name].update(
-                    status="skipped_early_stop",
-                    input_dice=score,
-                    required_dice=config.early_stop_organ_dice,
-                    selected=False,
-                    fallback_stage=stage,
-                )
-
-    if reached_target():
-        stages["baseline"]["early_stop"] = True
-        for name in pipeline:
-            stages[name].update(
-                status="skipped_early_stop",
-                input_dice=score,
-                required_dice=config.early_stop_organ_dice,
-                selected=False,
-                fallback_stage=stage,
-            )
-
-    if not reached_target():
-        started = time.perf_counter()
-        try:
-            if partial:
-                initial = sitk.CenteredTransformInitializer(
-                    fixed_organ,
-                    moving_organ,
-                    sitk.Euler3DTransform(),
-                    sitk.CenteredTransformInitializerFilter.GEOMETRY,
-                )
-            else:
-                initial = initialize_pca(
-                    fixed_organ,
-                    moving_organ,
-                    config.maximum_pca_rotation_degrees,
-                )
-            initial_score = score_transform(initial, initializer_stage)
-            stage_transforms[initializer_stage] = initial
-            best, score, stage = _select_candidate(
-                best,
-                score,
-                stage,
-                initial,
-                initial_score,
-                initializer_stage,
-                stages,
-                minimum_stage_improvement(initializer_stage),
-            )
-            peak_dice = max(peak_dice, score)
-        except (RuntimeError, ValueError) as exc:
-            _record_stage_failure(
-                stages, warnings, initializer_stage, exc, score, stage
-            )
-        finally:
-            stages[initializer_stage]["elapsed_seconds"] = time.perf_counter() - started
-        if reached_target():
-            stages[initializer_stage]["early_stop"] = True
-            skip_remaining(initializer_stage)
-
-    fixed_dm = moving_dm = None
-    if not reached_target():
-        started = time.perf_counter()
-        try:
-            fixed_dm = distance_map(
-                fixed_organ,
-                padding_mm=config.distance_map_crop_padding_mm,
-                band_mm=config.organ_boundary_band_half_width_mm,
-            )
-            moving_dm = distance_map(
-                moving_organ,
-                padding_mm=config.distance_map_crop_padding_mm,
-                band_mm=config.organ_boundary_band_half_width_mm,
-            )
-            tx, reg = mask_rigid_refine(fixed_dm, moving_dm, best, config)
-            stages["mask_rigid"].update(
-                optimizer_stop=reg.GetOptimizerStopConditionDescription(),
-                optimizer_iteration=int(reg.GetOptimizerIteration()),
-                metric="mean_squares_signed_distance",
-            )
-            candidate = score_transform(tx, "mask_rigid")
-            stage_transforms["mask_rigid"] = tx
-            best, score, stage = _select_candidate(
-                best,
-                score,
-                stage,
-                tx,
-                candidate,
-                "mask_rigid",
-                stages,
-                minimum_stage_improvement("mask_rigid"),
-            )
-            peak_dice = max(peak_dice, score)
-        except (RuntimeError, ValueError) as exc:
-            _record_stage_failure(stages, warnings, "mask_rigid", exc, score, stage)
-        finally:
-            stages["mask_rigid"]["elapsed_seconds"] = time.perf_counter() - started
-        if reached_target():
-            stages["mask_rigid"]["early_stop"] = True
-            skip_remaining("mask_rigid")
-
-    if not reached_target():
-        started = time.perf_counter()
-        try:
-            if fixed_dm is None:
-                fixed_dm = distance_map(
-                    fixed_organ,
-                    padding_mm=config.distance_map_crop_padding_mm,
-                    band_mm=config.organ_boundary_band_half_width_mm,
-                )
-            if moving_dm is None:
-                moving_dm = distance_map(
-                    moving_organ,
-                    padding_mm=config.distance_map_crop_padding_mm,
-                    band_mm=config.organ_boundary_band_half_width_mm,
-                )
-            tx, reg = mask_affine_refine(fixed_dm, moving_dm, best, config)
-            stages["mask_affine"].update(
-                optimizer_stop=reg.GetOptimizerStopConditionDescription(),
-                optimizer_iteration=int(reg.GetOptimizerIteration()),
-                metric="mean_squares_signed_distance",
-            )
-            candidate = score_transform(tx, "mask_affine")
-            stage_transforms["mask_affine"] = tx
-            best, score, stage = _select_candidate(
-                best,
-                score,
-                stage,
-                tx,
-                candidate,
-                "mask_affine",
-                stages,
-                minimum_stage_improvement("mask_affine"),
-            )
-            peak_dice = max(peak_dice, score)
-        except (RuntimeError, ValueError) as exc:
-            _record_stage_failure(stages, warnings, "mask_affine", exc, score, stage)
-        finally:
-            stages["mask_affine"]["elapsed_seconds"] = time.perf_counter() - started
-        if reached_target():
-            stages["mask_affine"]["early_stop"] = True
-            skip_remaining("mask_affine")
-
-    if stages["mi_affine"]["status"] == "not_run" and (
-        not config.enable_affine_stage or not MI_AFFINE_STAGE_ENABLED
-    ):
-        stages["mi_affine"].update(
-            status="skipped_disabled",
-            input_dice=score,
-            selected=False,
-            fallback_stage=stage,
-        )
-    elif stages["mi_affine"]["status"] == "not_run":
-        started = time.perf_counter()
-        try:
-            input_mi = mutual_information_score(
-                fixed_image,
-                moving_image,
-                fixed_organ,
-                moving_organ,
-                best,
-                config,
-            )
-            tx, reg = mi_refine(
-                fixed_image,
-                moving_image,
-                fixed_organ,
-                moving_organ,
-                best,
-                config,
-                affine=True,
-            )
-            stages["mi_affine"].update(
-                optimizer_stop=reg.GetOptimizerStopConditionDescription(),
-                optimizer_iteration=int(reg.GetOptimizerIteration()),
-                metric="mattes_mutual_information",
-            )
-            candidate = score_transform(tx, "mi_affine")
-            candidate_mi = mutual_information_score(
-                fixed_image,
-                moving_image,
-                fixed_organ,
-                moving_organ,
-                tx,
-                config,
-            )
-            stage_transforms["mi_affine"] = tx
-            best, score, stage = _select_mi_candidate(
-                best,
-                score,
-                stage,
-                tx,
-                candidate,
-                "mi_affine",
-                stages,
-                dice_guard_reference=peak_dice,
-                input_mi=input_mi,
-                candidate_mi=candidate_mi,
-                minimum_mi_improvement=minimum_mi_improvement("mi_affine"),
-                maximum_dice_decrease=config.maximum_mi_stage_dice_decrease,
-                dice_guard_metric=dice_metric,
-            )
-            peak_dice = max(peak_dice, score)
-        except (RuntimeError, ValueError) as exc:
-            _record_stage_failure(stages, warnings, "mi_affine", exc, score, stage)
-        finally:
-            stages["mi_affine"]["elapsed_seconds"] = time.perf_counter() - started
-        if reached_target():
-            stages["mi_affine"]["early_stop"] = True
-            skip_remaining("mi_affine")
-
-    selected_inverse = None
-    if (
-        stages["mask_elastic"]["status"] == "not_run"
-        and not config.enable_elastic_stage
-    ):
-        stages["mask_elastic"].update(
-            status="skipped_disabled",
-            input_dice=score,
-            selected=False,
-            fallback_stage=stage,
-        )
-    elif (
-        stages["mask_elastic"]["status"] == "not_run"
-        and score >= config.elastic_trigger_organ_dice
-    ):
-        stages["mask_elastic"].update(
-            status="skipped_acceptable_dice",
-            input_dice=score,
-            required_dice=config.elastic_trigger_organ_dice,
-            selection_metric=dice_metric,
-            selected=False,
-            fallback_stage=stage,
-        )
-    elif stages["mask_elastic"]["status"] == "not_run":
-        started = time.perf_counter()
-        detail = stages["mask_elastic"]
-        detail.update(
-            optimization_elapsed_seconds=0.0,
-            field_qc_elapsed_seconds=0.0,
-            inversion_elapsed_seconds=0.0,
-            round_trip_validation_elapsed_seconds=0.0,
-        )
-        try:
-            input_mi = mutual_information_score(
-                fixed_image,
-                moving_image,
-                fixed_organ,
-                moving_organ,
-                best,
-                config,
-            )
-            if fixed_dm is None:
-                fixed_dm = distance_map(
-                    fixed_organ,
-                    padding_mm=config.distance_map_crop_padding_mm,
-                    band_mm=config.organ_boundary_band_half_width_mm,
-                )
-            if moving_dm is None:
-                moving_dm = distance_map(
-                    moving_organ,
-                    padding_mm=config.distance_map_crop_padding_mm,
-                    band_mm=config.organ_boundary_band_half_width_mm,
-                )
-            optimization_diagnostics = {}
-            optimization_started = time.perf_counter()
-            try:
-                tx, reg = mask_elastic_refine(
-                    fixed_dm,
-                    moving_dm,
-                    best,
-                    config,
-                    optimization_diagnostics,
-                )
-            finally:
-                detail["optimization_elapsed_seconds"] = (
-                    time.perf_counter() - optimization_started
-                )
-                detail.update(optimization_diagnostics)
-            candidate = score_transform(tx, "mask_elastic")
-            candidate_mi = mutual_information_score(
-                fixed_image,
-                moving_image,
-                fixed_organ,
-                moving_organ,
-                tx,
-                config,
-            )
-            stage_transforms["mask_elastic"] = tx
-            detail.update(
-                optimizer_stop=reg.GetOptimizerStopConditionDescription(),
-                optimizer_iteration=int(reg.GetOptimizerIteration()),
-                optimizer_iteration_limit=config.elastic_optimizer_iterations,
-                metric="mean_squares_signed_distance",
-                algorithm="BSplineTransform",
-                control_point_spacing_mm=config.elastic_control_point_spacing_mm,
-                boundary_band_half_width_mm=(config.organ_boundary_band_half_width_mm),
-                input_mutual_information=input_mi,
-                mutual_information=candidate_mi,
-                mutual_information_improvement=candidate_mi - input_mi,
-            )
-            field_qc_started = time.perf_counter()
-            try:
-                field, deformation_qc = elastic_deformation_qc(tx, fixed_dm, config)
-            finally:
-                detail["field_qc_elapsed_seconds"] = (
-                    time.perf_counter() - field_qc_started
-                )
-            detail.update(deformation_qc)
-            minimum_improvement = minimum_stage_improvement("mask_elastic")
-            if deformation_qc["deformation_qc_passed"]:
-                improvement = candidate - score
-                if (
-                    np.isfinite(candidate)
-                    and candidate >= score - DICE_TOLERANCE
-                    and improvement >= minimum_improvement - DICE_TOLERANCE
-                ):
-                    selected_inverse = invert_mask_elastic(
-                        tx,
-                        fixed_dm,
-                        detail,
-                        field,
-                        sitk.Cast(fixed_dm <= 0, sitk.sitkUInt8),
-                    )
-                best, score, stage = _select_candidate(
-                    best,
-                    score,
-                    stage,
-                    tx,
-                    candidate,
-                    "mask_elastic",
-                    stages,
-                    minimum_improvement,
-                )
-            else:
-                if not np.isfinite(candidate):
-                    raise ValueError("Nonfinite registration Dice")
-                detail.update(
-                    dice=candidate,
-                    input_dice=score,
-                    dice_improvement=candidate - score,
-                    minimum_required_dice_improvement=minimum_improvement,
-                    selection_metric=dice_metric,
-                    status="rejected_deformation_qc",
-                    selected=False,
-                    fallback_stage=stage,
-                )
-            peak_dice = max(peak_dice, score)
-        except (RuntimeError, ValueError) as exc:
-            selected_inverse = None
-            _record_stage_failure(
-                stages,
-                warnings,
-                "mask_elastic",
-                exc,
-                score,
-                stage,
-            )
-        finally:
-            stages["mask_elastic"]["elapsed_seconds"] = time.perf_counter() - started
-    selected_stage = "identity" if stage == "baseline" else stage
-    result = TransformResult(
-        best,
-        selected_stage,
-        before,
-        score,
-        warnings,
-        stages,
-        stage_transforms,
-        selected_inverse if selected_inverse is not None else best.GetInverse(),
+    return elastic_refine(
+        fixed_dm, moving_dm, initial, config, optimization_diagnostics, **kwargs
     )
-    for name, tx in stage_transforms.items():
-        if name not in overlaps:
-            overlaps[name] = overlap_qc(fixed_organ, moving_organ, tx)
-        stages[name].update(overlaps[name])
-        stages[name].setdefault("selection_metric", dice_metric)
-    result.overlap = overlaps[stage]
-    result.organ_volume_ratio = fixed_qc.volume_mm3 / moving_qc.volume_mm3
-    result.confidence = registration_confidence(result.overlap, partial, config)
-    return result
+
+
+def mi_elastic_refine(
+    fixed_dm, moving_dm, initial, config, optimization_diagnostics=None, **kwargs
+):
+    kwargs.setdefault("stage", StageConfig.resolve({"type": "mi_elastic"}, config))
+    return elastic_refine(
+        fixed_dm, moving_dm, initial, config, optimization_diagnostics, **kwargs
+    )
+
+
+def register_pair(
+    fixed_organ, moving_organ, config, fixed_image=None, moving_image=None
+):
+    """Execute the configured stage chain from the last accepted mapping."""
+    from .pipeline import register_pair as run
+
+    return run(fixed_organ, moving_organ, config, fixed_image, moving_image)

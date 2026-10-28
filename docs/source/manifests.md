@@ -860,6 +860,52 @@ copies the mask before cleanup. If the merged output
 replaces a source (for example, `output: liver`), write the union and cleanup
 steps to that name and omit its final intersection so the merge stays intact.
 
+### Registration stages
+
+`registration.stages` is an ordered list of `mask_rigid`, `mask_affine`,
+`mi_affine`, `mask_elastic`, and `mi_elastic` steps. It replaces the default
+`mask_rigid -> mask_affine` chain. An empty list runs only baseline evaluation
+and automatic initialization. All linear steps must precede elastic steps,
+and each stage type may appear once. The old enable flags, global stopping
+thresholds, and stage-acceptance maps are no longer supported.
+
+```yaml
+registration:
+  stages:
+    - type: mask_rigid
+    - type: mi_affine
+      metric: {roi: organ_band, sampling_seed: 42}
+      acceptance: {minimum_mi_improvement: 0.0, maximum_dice_decrease: 0.002}
+    - type: mi_elastic
+      run_if: always
+      metric: {roi: organ}
+      optimizer: {iterations: 25}
+```
+
+See [the registration workflow](workflow.md) for objective selection,
+per-stage conditions, deformation limits, and rejection behavior.
+
+### Registration pyramid levels
+
+Shared `linear_shrink_factors` / `linear_smoothing_sigmas_mm` and
+`elastic_shrink_factors` / `elastic_smoothing_sigmas_mm` default to `[4, 2, 1]`
+and `[2.0, 1.0, 0.0]`. Each stage can override them under `pyramid`:
+
+```yaml
+registration:
+  stages:
+    - type: mask_affine
+      pyramid:
+        shrink_factors: [2, 1]
+        smoothing_sigmas_mm: [1.0, 0.0]
+```
+
+The lists must be nonempty and have equal lengths. Shrink factors are strictly
+decreasing positive integers; smoothing widths are finite nonnegative values
+in millimeters, in nonincreasing order. `[1]` / `[0]` uses one unsmoothed level.
+Omitting a final factor of 1 uses a coarser final optimization grid. Acceptance
+still uses full-resolution source data. Pyramid settings do not enable stages.
+
 ### Radiomics
 
 `radiomics.modalities.CT.pyradiomics` and `radiomics.modalities.MR.pyradiomics`

@@ -65,16 +65,6 @@ def add_registration_arguments(parser):
         dest="preserve_source_organ_mask",
         help="Replace organ masks with the mapped reference organ (default).",
     )
-    affine = parser.add_mutually_exclusive_group()
-    affine.add_argument("--enable_affine_stage", action="store_true", default=None)
-    affine.add_argument(
-        "--disable_affine_stage", action="store_false", dest="enable_affine_stage"
-    )
-    elastic = parser.add_mutually_exclusive_group()
-    elastic.add_argument("--enable_elastic_stage", action="store_true", default=None)
-    elastic.add_argument(
-        "--disable_elastic_stage", action="store_false", dest="enable_elastic_stage"
-    )
     parser.add_argument(
         "--num_workers",
         type=int,
@@ -203,8 +193,6 @@ def normalize_registration_args(args):
         tumor_consensus_method=None,
         output_space=None,
         preserve_source_organ_mask=None,
-        enable_affine_stage=None,
-        enable_elastic_stage=None,
     )
     for name, default in defaults.items():
         if not hasattr(args, name):
@@ -236,8 +224,6 @@ def resolve_config(args):
         "tumor_consensus_method",
         "output_space",
         "preserve_source_organ_mask",
-        "enable_affine_stage",
-        "enable_elastic_stage",
     ]:
         value = getattr(args, name)
         if value is not None:
@@ -259,14 +245,13 @@ def main(args):
         planned = prepare_cohort(table, config)
         logger.info(
             "Registration dry run: series=%d, groups=%d, organ_consensus=%s, "
-            "tumor_consensus=%s, output_space=%s, affine=%s, elastic=%s",
+            "tumor_consensus=%s, output_space=%s, stages=%s",
             len(planned),
             planned.registration_group_id.nunique(),
             config.organ_consensus_method,
             config.tumor_consensus_method,
             config.output_space,
-            config.enable_affine_stage,
-            config.enable_elastic_stage,
+            [stage.type for stage in config.stages],
         )
         for _, group in planned.groupby("registration_group_id", sort=True):
             logger.info(

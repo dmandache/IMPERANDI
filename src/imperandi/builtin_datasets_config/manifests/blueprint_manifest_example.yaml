@@ -373,13 +373,10 @@ registration:
   tumor_consensus_method: anchor
   # Publish results on each source scan grid or on the selected reference grid.
   output_space: moving
-  # Run masked MI affine only when earlier stages do not meet the Dice target.
-  enable_affine_stage: false
-  # Run mask-driven B-spline refinement as the optional final stage.
-  enable_elastic_stage: false
-  # Avoid the expensive elastic stage when registration is already acceptable.
-  # Run only below this Dice; use common-FOV Dice for partial masks. Range: (0, 1].
-  elastic_trigger_organ_dice: 0.90
+  # Ordered refinement steps; omit a stage to disable it.
+  stages:
+    - type: mask_rigid
+    - type: mask_affine
   # Approximate B-spline control-point spacing; smaller values deform more locally.
   elastic_control_point_spacing_mm: 90.0
   # Keep the elastic optimization deliberately short and deformation conservative.
@@ -388,8 +385,6 @@ registration:
   maximum_elastic_displacement_mm: 12.0
   minimum_elastic_jacobian_determinant: 0.5
   maximum_elastic_jacobian_determinant: 2.0
-  # Stop the cascade as soon as a selected transform reaches this liver Dice.
-  early_stop_organ_dice: 0.95
   # Completeness heuristics; tune for the dataset and organ, not clinical cutoffs.
   partial_mask_boundary_margin_mm: 1.0
   accept_partial_organ_masks: true
@@ -400,17 +395,6 @@ registration:
   minimum_common_field_of_view_fraction: 0.05
   # Reject PCA orientation candidates requiring a larger rigid rotation.
   maximum_pca_rotation_degrees: 45.0
-  # Minimum Dice improvement required to select each registration stage.
-  minimum_stage_dice_improvement:
-    geometry: 0.001
-    pca: 0.001
-    mask_rigid: 0.002
-    mask_affine: 0.002
-    mask_elastic: 0.005
-  # The MI-affine stage requires MI improvement while Dice stays in tolerance.
-  minimum_stage_mi_improvement:
-    mi_affine: 0.0
-  maximum_mi_stage_dice_decrease: 0.002
   # Maximum iterations per level of linear refinement.
   maximum_optimizer_iterations: 100
   # Paired schedules, coarse to fine. Shrink factors are positive integers in

@@ -170,7 +170,7 @@ def test_equal_volume_does_not_establish_registration_confidence(monkeypatch):
     result = alignment.register_pair(fixed, moving, RegistrationConfig())
     assert result.organ_volume_ratio == 1
     assert result.confidence == "low_confidence"
-    assert result.stages["mi_affine"]["status"] == "skipped_disabled"
+    assert result.stages["mi_affine"]["status"] == "skipped_not_configured"
 
 
 def test_partial_reference_priority_and_qc(tmp_path):
@@ -425,7 +425,6 @@ def test_nonfinite_overlap_is_low_confidence(partial, value):
 @pytest.mark.parametrize(
     "name",
     [
-        "early_stop_organ_dice",
         "minimum_accepted_organ_dice",
         "minimum_consensus_dice",
         "minimum_common_field_of_view_fraction",

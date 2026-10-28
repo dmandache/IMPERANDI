@@ -519,9 +519,7 @@ def _coverage_seam_voxels(output, coverage, source):
     return seams
 
 
-def _fill_unobserved(
-    consensus_distance, coverage, source_distance, *, blend_width_mm
-):
+def _fill_unobserved(consensus_distance, coverage, source_distance, *, blend_width_mm):
     """Blend fields inside coverage, retain source outside, and threshold once."""
     sitk = backend()
     observed = sitk.Cast(coverage > 0, sitk.sitkUInt8)
@@ -801,13 +799,20 @@ def register_cohort(
                         "stages": {
                             stage: {
                                 "dice": 1.0 if stage == "baseline" else None,
+                                "accepted": stage == "baseline",
+                                "selected": stage == "baseline",
                                 "status": (
-                                    "evaluated" if stage == "baseline" else "not_run"
+                                    "accepted"
+                                    if stage == "baseline"
+                                    else "skipped_reference"
                                 ),
                             }
                             for stage in REGISTRATION_STAGES
                         },
                     }
+                    report["stages"]["baseline"]["stage_order"] = [
+                        stage.type for stage in config.stages
+                    ]
                 else:
                     result = pair_registration(
                         reference_organ, organ, config, reference, image

@@ -262,17 +262,16 @@ registration:
   tumor_consensus_method: anchor
   # Publish results on each source scan grid or on the selected reference grid.
   output_space: moving
-  enable_affine_stage: false
-  enable_elastic_stage: false
-  # Avoid expensive elastic processing when registration already meets this Dice.
-  elastic_trigger_organ_dice: 0.90
+  # Ordered refinement steps; omit a stage to disable it.
+  stages:
+    - type: mask_rigid
+    - type: mask_affine
   elastic_control_point_spacing_mm: 90.0
   elastic_optimizer_iterations: 25
   maximum_elastic_displacement_p95_mm: 8.0
   maximum_elastic_displacement_mm: 12.0
   minimum_elastic_jacobian_determinant: 0.5
   maximum_elastic_jacobian_determinant: 2.0
-  early_stop_organ_dice: 0.95
   # Dataset-dependent QC: edge contact suggests partial coverage.
   partial_mask_boundary_margin_mm: 1.0
   accept_partial_organ_masks: true
@@ -281,15 +280,6 @@ registration:
   minimum_consensus_dice: 0.8
   minimum_common_field_of_view_fraction: 0.05
   maximum_pca_rotation_degrees: 45.0
-  minimum_stage_dice_improvement:
-    geometry: 0.001
-    pca: 0.001
-    mask_rigid: 0.002
-    mask_affine: 0.002
-    mask_elastic: 0.005
-  minimum_stage_mi_improvement:
-    mi_affine: 0.0
-  maximum_mi_stage_dice_decrease: 0.002
   maximum_optimizer_iterations: 100
   # Coarse-to-fine optimizer levels; each factor pairs with a sigma in mm.
   # Linear schedules cover mask-rigid, mask-affine, and MI linear refinement.
