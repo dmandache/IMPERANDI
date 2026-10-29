@@ -4,7 +4,14 @@ from dataclasses import asdict, dataclass, field
 from math import isfinite
 from typing import Mapping
 
-TUMOR_CONSENSUS_METHODS = ("anchor", "majority", "intersection", "union", "staple")
+TUMOR_CONSENSUS_METHODS = (
+    "none",
+    "anchor",
+    "majority",
+    "intersection",
+    "union",
+    "staple",
+)
 ORGAN_CONSENSUS_METHODS = ("anchor", "majority")
 OUTPUT_SPACES = ("moving", "reference")
 REGISTRATION_STAGES = (

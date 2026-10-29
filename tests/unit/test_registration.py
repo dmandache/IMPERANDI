@@ -306,6 +306,181 @@ def test_cohort_grouping_anchor_transfer_and_native_preservation(tmp_path):
     assert not any(c.startswith("mask_") for c in set(out) - set(source))
 
 
+@pytest.mark.parametrize("output_space", ["moving", "reference"])
+def test_no_tumor_consensus_preserves_each_scan_without_clipping(
+    tmp_path, output_space
+):
+    rows = [
+        save_scan(tmp_path, "portal", phase="PORTAL_VENOUS"),
+        save_scan(tmp_path, "arterial", offset=4),
+    ]
+    originals = []
+    for index, row in enumerate(rows):
+        mask = sitk.ReadImage(row["mask_liver"])
+        values = np.zeros(tuple(reversed(mask.GetSize())), dtype=np.uint8)
+        # Separate lesions outside the organ expose both accidental fusion and clipping.
+        values[2 + index, 3, 4] = 1
+        tumor = sitk.GetImageFromArray(values)
+        tumor.CopyInformation(mask)
+        sitk.WriteImage(tumor, row["mask_liver_tumor"])
+        originals.append(Path(row["mask_liver_tumor"]).read_bytes())
+    # Accept this scan for registration but exclude it from consensus voting.
+    moving_organ = sitk.ReadImage(rows[1]["mask_liver"])
+    moving_organ[15, 13, 11] = 0
+    sitk.WriteImage(moving_organ, rows[1]["mask_liver"])
+
+    def no_fusion(*args, **kwargs):
+        pytest.fail("none must bypass tumor fusion")
+
+    out, errors = register_cohort(
+        pd.DataFrame(rows),
+        tmp_path / "out",
+        RegistrationConfig(
+            tumor_consensus_method="none",
+            output_space=output_space,
+            stages=[],
+            minimum_consensus_dice=1.0,
+            clip_tumor_consensus_to_organ=True,
+        ),
+        fusion=no_fusion,
+    )
+
+    assert errors.empty
+    assert out.loc[1, "registration_dice_full"] < 1.0
+    assert out.consensus_status.tolist() == ["preserved_source"] * 2
+    assert out.tumor_consensus_input_status.tolist() == ["preserved_source"] * 2
+    assert out.registration_consensus_contributors.tolist() == [0, 0]
+    assert out.registration_consensus_support_policy.tolist() == ["none"] * 2
+    assert out.reg_tumor_native_path.isna().all()
+    for index, row in enumerate(rows):
+        assert Path(row["mask_liver_tumor"]).read_bytes() == originals[index]
+        assert out.loc[index, "source_mask_liver_tumor"] == row["mask_liver_tumor"]
+        result = sitk.ReadImage(out.loc[index, "mask_liver_tumor"])
+        expected = sitk.ReadImage(row["mask_liver_tumor"])
+        np.testing.assert_array_equal(
+            sitk.GetArrayFromImage(result), sitk.GetArrayFromImage(expected)
+        )
+        grid = sitk.ReadImage(out.loc[index, "nifti_path"])
+        assert result.GetSize() == grid.GetSize()
+        assert result.GetOrigin() == grid.GetOrigin()
+        assert result.GetSpacing() == grid.GetSpacing()
+        assert result.GetDirection() == grid.GetDirection()
+        if output_space == "moving":
+            assert out.loc[index, "mask_liver_tumor"] == row["mask_liver_tumor"]
+        else:
+            assert (
+                out.loc[index, "mask_liver_tumor"]
+                == out.loc[index, "reg_tumor_common_path"]
+            )
+
+
+@pytest.mark.parametrize("output_space", ["moving", "reference"])
+@pytest.mark.parametrize("tumor_state", ["missing", "empty", "unreadable"])
+def test_no_tumor_consensus_never_fills_from_another_scan(
+    tmp_path, output_space, tumor_state
+):
+    rows = [
+        save_scan(tmp_path, "portal", phase="PORTAL_VENOUS"),
+        save_scan(tmp_path, "arterial", offset=4),
+    ]
+    path = rows[1]["mask_liver_tumor"]
+    if tumor_state == "missing":
+        rows[1]["mask_liver_tumor"] = None
+    elif tumor_state == "unreadable":
+        Path(path).write_text("not a NIfTI image")
+    else:
+        grid = sitk.ReadImage(rows[1]["nifti_path"])
+        empty = sitk.Image(grid.GetSize(), sitk.sitkUInt8)
+        empty.CopyInformation(grid)
+        sitk.WriteImage(empty, path)
+
+    out, errors = register_cohort(
+        pd.DataFrame(rows),
+        tmp_path / "out",
+        RegistrationConfig(
+            tumor_consensus_method="none", output_space=output_space, stages=[]
+        ),
+    )
+
+    assert out.loc[0, "consensus_status"] == "preserved_source"
+    if tumor_state == "empty":
+        assert errors.empty
+        assert out.loc[1, "consensus_status"] == "preserved_source"
+        result = sitk.ReadImage(out.loc[1, "mask_liver_tumor"])
+        grid = sitk.ReadImage(out.loc[1, "nifti_path"])
+        assert result.GetOrigin() == grid.GetOrigin()
+        assert not sitk.GetArrayFromImage(result).any()
+    elif tumor_state == "missing":
+        assert errors.empty
+        assert out.loc[1, "consensus_status"] == "no_tumor_input"
+        assert pd.isna(out.loc[1, "mask_liver_tumor"])
+    else:
+        assert errors.stage.tolist() == ["tumor_input"]
+        assert out.loc[1, "consensus_status"] == "failed"
+        if output_space == "reference":
+            assert pd.isna(out.loc[1, "mask_liver_tumor"])
+        else:
+            assert out.loc[1, "mask_liver_tumor"] == path
+
+
+def test_no_tumor_consensus_reference_transfer_failure_clears_native_path(
+    tmp_path, monkeypatch
+):
+    from imperandi.process.registration import cohort
+
+    row = save_scan(tmp_path, "portal", phase="PORTAL_VENOUS")
+    original_write = cohort.write_artifact
+
+    def fail_tumor(image, path):
+        if path.name == "tumor_common.nii.gz":
+            raise RuntimeError("tumor write failed")
+        return original_write(image, path)
+
+    monkeypatch.setattr(cohort, "write_artifact", fail_tumor)
+    out, errors = register_cohort(
+        pd.DataFrame([row]),
+        tmp_path / "out",
+        RegistrationConfig(tumor_consensus_method="none", output_space="reference"),
+    )
+    assert errors.stage.tolist() == ["transfer"]
+    assert out.loc[0, "consensus_status"] == "failed"
+    assert pd.isna(out.loc[0, "mask_liver_tumor"])
+    assert pd.isna(out.loc[0, "reg_tumor_common_path"])
+    assert out.loc[0, "source_mask_liver_tumor"] == row["mask_liver_tumor"]
+
+
+def test_switching_from_fusion_to_none_restores_original_tumors(tmp_path):
+    rows = [
+        save_scan(tmp_path, "portal", phase="PORTAL_VENOUS"),
+        save_scan(tmp_path, "arterial", tumor=False),
+    ]
+    output_dir = tmp_path / "out"
+    fused, errors = register_cohort(
+        pd.DataFrame(rows),
+        output_dir,
+        RegistrationConfig(output_space="reference", stages=[]),
+    )
+    assert errors.empty
+    previous_artifacts = fused.reg_tumor_common_path.tolist()
+    assert fused.mask_liver_tumor.notna().all()
+    out, errors = register_cohort(
+        fused,
+        output_dir,
+        RegistrationConfig(tumor_consensus_method="none", stages=[]),
+    )
+    assert errors.empty
+    assert out.loc[0, "mask_liver_tumor"] == rows[0]["mask_liver_tumor"]
+    assert pd.isna(out.loc[1, "mask_liver_tumor"])
+    assert out.reg_tumor_native_path.isna().all()
+    assert not any(Path(path).exists() for path in previous_artifacts)
+
+
+def test_fusion_rejects_none_instead_of_silently_forming_union():
+    mask = organ()
+    with pytest.raises(ValueError, match="without fusion"):
+        fuse_tumors([mask], [mask], tumor_consensus="none")
+
+
 @pytest.mark.parametrize("organ_consensus", ["anchor", "majority"])
 @pytest.mark.parametrize("preserve_source_organ", [False, True])
 def test_reference_output_space_publishes_images_and_masks_on_common_grid(
@@ -329,7 +504,7 @@ def test_reference_output_space_publishes_images_and_masks_on_common_grid(
 
     assert errors.empty
     assert out.source_nifti_path.tolist() == [row["nifti_path"] for row in rows]
-    assert out.nifti_path.equals(out.reg_nifti_path)
+    assert out.nifti_path.tolist() == out.reg_nifti_path.tolist()
     assert out.mask_liver.equals(out.reg_organ_path)
     assert out.mask_liver_tumor.equals(out.reg_tumor_common_path)
     assert out.reg_organ_native_path.isna().all()

@@ -259,6 +259,7 @@ registration:
   organ_mask_column: mask_liver
   tumor_mask_column: mask_liver_tumor
   organ_consensus_method: anchor
+  # Use none to retain each scan's own tumor without fusion or organ clipping.
   tumor_consensus_method: anchor
   # Publish results on each source scan grid or on the selected reference grid.
   output_space: moving

@@ -52,6 +52,42 @@ def paths_for(source):
     return output, errors, build_checkpoint_paths(output, errors, "register")
 
 
+@pytest.mark.parametrize("output_space", ["moving", "reference"])
+@pytest.mark.parametrize("use_cli", [False, True])
+def test_no_tumor_consensus_manifest_cli_and_resume(
+    tmp_path, cohort, monkeypatch, output_space, use_cli
+):
+    manifest = tmp_path / "none.yaml"
+    manifest.write_text(
+        yaml.safe_dump(
+            {
+                "registration": {
+                    "tumor_consensus_method": "anchor" if use_cli else "none"
+                }
+            }
+        )
+    )
+    flags = ["--manifest", str(manifest), "--output_space", output_space]
+    if use_cli:
+        flags.extend(["--tumor_consensus_method", "none"])
+    register.main(args_for(cohort, *flags))
+    output, _, _ = paths_for(cohort)
+    saved = pd.read_csv(output)
+    assert saved.consensus_status.tolist() == ["preserved_source"] * 2
+    if output_space == "moving":
+        assert saved.mask_liver_tumor.equals(saved.source_mask_liver_tumor)
+        assert saved.reg_tumor_native_path.isna().all()
+    else:
+        assert saved.mask_liver_tumor.equals(saved.reg_tumor_common_path)
+
+    def unexpected_run(*args, **kwargs):
+        pytest.fail("Unchanged none outputs should resume from checkpoints")
+
+    monkeypatch.setattr(runtime, "_run_group", unexpected_run)
+    register.main(args_for(cohort, *flags))
+    pd.testing.assert_frame_equal(pd.read_csv(output), saved)
+
+
 def test_manifest_overrides_defaults_and_cli(tmp_path, cohort):
     manifest = tmp_path / "custom.yaml"
     manifest.write_text(

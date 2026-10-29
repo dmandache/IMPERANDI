@@ -366,6 +366,22 @@ Tumor consensus is constrained to that organ when
 `clip_tumor_consensus_to_organ` is enabled. Use `--replace_source_organ_mask` to
 override the manifest and restore organ transfer.
 
+To keep each scan's own tumor segmentation, set
+`registration.tumor_consensus_method: none` or pass `--tumor_consensus_method none`.
+This disables tumor fusion and ignores `clip_tumor_consensus_to_organ`, preserving
+lesions outside the organ mask. With `output_space: moving`, the canonical tumor
+path remains the original path and no `reg_tumor_native_path` artifact is written.
+With `output_space: reference`, each scan's own tumor is resampled with its
+accepted registration transform into `reg_tumor_common_path`. Empty masks stay
+empty; missing masks are never filled from another scan. If an input cannot be
+read or its transfer fails in reference mode, its canonical tumor path is empty
+so it cannot point to a native mask alongside a registered image; its source path
+remains available. Registration acceptance still applies, but
+`minimum_consensus_dice` does not restrict preservation of individual tumors.
+Successful rows record `consensus_status: preserved_source`, zero tumor consensus
+contributors, and support policy `none`. Combine this with
+`preserve_source_organ_mask: true` to keep both segmentations for each scan.
+
 Only artifacts for the selected output space are persisted. Transforms, coverage,
 and probability images remain in-memory intermediates.
 

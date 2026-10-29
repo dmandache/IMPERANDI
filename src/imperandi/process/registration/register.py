@@ -43,7 +43,11 @@ def add_registration_arguments(parser):
         "--manifest", help="Built-in manifest name or YAML path (default: generic)."
     )
     parser.add_argument("--organ_consensus_method", choices=ORGAN_CONSENSUS_METHODS)
-    parser.add_argument("--tumor_consensus_method", choices=TUMOR_CONSENSUS_METHODS)
+    parser.add_argument(
+        "--tumor_consensus_method",
+        choices=TUMOR_CONSENSUS_METHODS,
+        help="Tumor fusion policy; none keeps each scan's own tumor without clipping.",
+    )
     parser.add_argument(
         "--output_space",
         choices=OUTPUT_SPACES,

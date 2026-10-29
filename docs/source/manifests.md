@@ -885,6 +885,20 @@ registration:
 See [the registration workflow](workflow.md) for objective selection,
 per-stage conditions, deformation limits, and rejection behavior.
 
+### Individual tumor masks
+
+Disable tumor fusion while retaining organ registration with:
+
+```yaml
+registration:
+  tumor_consensus_method: none
+  output_space: reference  # Resample each scan's own tumor to the reference grid.
+```
+
+Use `output_space: moving` to retain each original tumor path instead. This mode
+preserves empty masks, leaves missing tumors missing, and bypasses organ clipping.
+Original paths remain in `source_<tumor_mask_column>` in either output space.
+
 ### Registration pyramid levels
 
 Shared `linear_shrink_factors` / `linear_smoothing_sigmas_mm` and

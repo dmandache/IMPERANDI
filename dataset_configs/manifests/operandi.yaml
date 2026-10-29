@@ -677,7 +677,8 @@ registration:
   tumor_mask_column: mask_liver_tumor
   # Organ fusion: anchor or majority.
   organ_consensus_method: majority
-  # Tumor fusion: anchor, majority, intersection, union, or staple.
+  # Tumor fusion: none, anchor, majority, intersection, union, or staple.
+  # none retains each scan's own tumor (resampled for reference output), without clipping.
   tumor_consensus_method: union
   # Baseline and automatic PCA/geometry initialization precede these stages.
   initializer_minimum_dice_improvement: 0.001

@@ -398,6 +398,10 @@ def fuse_tumors(masks, coverages, *, tumor_consensus, threshold=0.5):
     sitk = backend()
     if tumor_consensus not in TUMOR_CONSENSUS_METHODS:
         raise ValueError(f"Unknown tumor consensus: {tumor_consensus}")
+    if tumor_consensus == "none":
+        raise ValueError(
+            "Tumor consensus 'none' preserves individual masks without fusion"
+        )
     if not masks or len(masks) != len(coverages):
         raise ValueError("Consensus requires masks and matching coverage")
     if not 0 < threshold < 1:
@@ -622,7 +626,13 @@ def _record_consensus_inputs(df, indices, contributors, config):
         reasons, sort_keys=True
     )
     df.loc[indices, "registration_consensus_support_policy"] = (
-        "common_fov_only" if config.tumor_consensus_method == "staple" else "per_voxel"
+        "none"
+        if config.tumor_consensus_method == "none"
+        else (
+            "common_fov_only"
+            if config.tumor_consensus_method == "staple"
+            else "per_voxel"
+        )
     )
 
 
@@ -1070,14 +1080,20 @@ def register_cohort(
                 continue
             try:
                 tumor = read_mask(path, loaded[i][0])
-                if not np.count_nonzero(sitk.GetArrayViewFromImage(tumor)):
+                if config.tumor_consensus_method != "none" and not np.count_nonzero(
+                    sitk.GetArrayViewFromImage(tumor)
+                ):
                     df.at[i, "tumor_consensus_input_status"] = "skipped_empty"
                     continue
                 tumors[i] = tumor
                 df.at[i, "tumor_consensus_input_status"] = (
-                    "contributed"
-                    if i in consensus_eligible
-                    else "excluded_minimum_consensus_dice"
+                    "preserved_source"
+                    if config.tumor_consensus_method == "none"
+                    else (
+                        "contributed"
+                        if i in consensus_eligible
+                        else "excluded_minimum_consensus_dice"
+                    )
                 )
             except (RuntimeError, ValueError) as exc:
                 df.at[i, "tumor_consensus_input_status"] = "failed"
@@ -1104,7 +1120,9 @@ def register_cohort(
                         )
 
         contributors = [i for i in tumors if i in consensus_eligible]
-        if config.tumor_consensus_method == "anchor":
+        if config.tumor_consensus_method == "none":
+            contributors = []
+        elif config.tumor_consensus_method == "anchor":
             contributors = contributors[:1]
         for i in tumors:
             if (
@@ -1118,7 +1136,28 @@ def register_cohort(
         )
         df.loc[failed.index[failed], "consensus_status"] = "registration_failed"
         df.loc[list(transforms), "consensus_status"] = "no_tumor_input"
-        if contributors:
+        if config.tumor_consensus_method == "none":
+            # Keep native source paths untouched. Reference outputs must never
+            # retain a native tumor path alongside a successfully warped image.
+            if config.output_space == "reference":
+                df.loc[list(transforms), config.tumor_mask_column] = None
+            for i in transforms:
+                if df.at[i, "tumor_consensus_input_status"] == "failed":
+                    df.at[i, "consensus_status"] = "failed"
+            for i, tumor in tumors.items():
+                try:
+                    if config.output_space == "reference":
+                        path = write_artifact(
+                            resample(tumor, reference, transforms[i]),
+                            directory / ids[i] / "tumor_common.nii.gz",
+                        )
+                        df.at[i, "reg_tumor_common_path"] = path
+                        df.at[i, config.tumor_mask_column] = path
+                    df.at[i, "consensus_status"] = "preserved_source"
+                except (RuntimeError, ValueError) as exc:
+                    df.at[i, "consensus_status"] = "failed"
+                    error(i, "transfer", exc)
+        elif contributors:
             contributor_labels = [
                 df.at[i, "registration_scan_label"] for i in contributors
             ]

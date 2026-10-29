@@ -371,7 +371,8 @@ registration:
   tumor_mask_column: mask_liver_tumor
   # Organ fusion: anchor or majority.
   organ_consensus_method: anchor
-  # Tumor fusion: anchor, majority, intersection, union, or staple.
+  # Tumor fusion: none, anchor, majority, intersection, union, or staple.
+  # none retains each scan's own tumor (resampled for reference output), without clipping.
   tumor_consensus_method: anchor
   # Publish results on each source scan grid or on the selected reference grid.
   output_space: moving
