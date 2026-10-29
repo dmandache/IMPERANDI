@@ -113,6 +113,10 @@ and creates shared tumor masks with anchor, majority, intersection, union, or ST
   Configure the ordered registration steps in manifest `registration.stages`;
   the former affine/elastic enable flags are no longer accepted.
   Grouping is defined by `registration.grouping_columns` in the manifest.
+- `--transform_additional_masks` maps additional `mask_*_path` columns to the
+  reference grid using nearest-neighbor interpolation. Default: false. Use
+  `--no_transform_additional_masks` to override an enabled manifest setting.
+  These flags have no effect with `--output_space moving`.
 - `--num_workers`, `--threads_per_worker`, `--start_method`, and `--timeout_sec`
   control group execution. Timeout defaults to 900 seconds; 0 disables it.
 - Common checkpoint controls apply. `--force` starts fresh; `--retry_failed`

@@ -671,6 +671,8 @@ registration:
   grouping_columns: [patient_key, exam_stage]
   # Publish results on each source scan grid or on the selected reference grid.
   output_space: reference # reference or moving
+  # Also map additional mask_*_path columns when output_space is reference.
+  transform_additional_masks: false
   # Mask-path columns; missing/empty organs skip the series, while missing/empty
   # tumors are omitted from fusion. Originals are retained as source_<column>.
   organ_mask_column: mask_liver_path

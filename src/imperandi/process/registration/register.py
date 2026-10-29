@@ -56,6 +56,19 @@ def add_registration_arguments(parser):
             "the group's common reference grid."
         ),
     )
+    additional = parser.add_mutually_exclusive_group()
+    additional.add_argument(
+        "--transform_additional_masks",
+        action="store_true",
+        default=None,
+        help="Map additional mask paths to reference space with nearest-neighbor interpolation.",
+    )
+    additional.add_argument(
+        "--no_transform_additional_masks",
+        action="store_false",
+        dest="transform_additional_masks",
+        help="Keep additional masks only in source columns in reference space (default).",
+    )
     source = parser.add_mutually_exclusive_group()
     source.add_argument(
         "--preserve_source_organ_mask",
@@ -196,6 +209,7 @@ def normalize_registration_args(args):
         organ_consensus_method=None,
         tumor_consensus_method=None,
         output_space=None,
+        transform_additional_masks=None,
         preserve_source_organ_mask=None,
     )
     for name, default in defaults.items():
@@ -227,6 +241,7 @@ def resolve_config(args):
         "organ_consensus_method",
         "tumor_consensus_method",
         "output_space",
+        "transform_additional_masks",
         "preserve_source_organ_mask",
     ]:
         value = getattr(args, name)

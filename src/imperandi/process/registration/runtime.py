@@ -12,6 +12,7 @@ from pathlib import Path
 import pandas as pd
 from tqdm import tqdm
 
+from imperandi.utils.columns import is_mask_path_column
 from imperandi.utils.logging import log_task_summary, setup_logging
 from imperandi.utils.run_state import (
     CheckpointManager,
@@ -27,7 +28,7 @@ from .reporting import ERROR_COLUMNS, build_error_record, build_qc, group_label
 logger = logging.getLogger(__name__)
 
 # Increment when registration behavior changes so old artifacts are not reused.
-REGISTRATION_SCHEMA = 33
+REGISTRATION_SCHEMA = 35
 
 
 def _has_failed_stage(rows, config):
@@ -179,9 +180,13 @@ def _artifact_paths(rows):
         if c == "registration_log_path"
         or (c.startswith("reg_") and c.endswith("_path"))
     ]
-    return sorted(
-        {str(v) for col in columns for v in rows[col].dropna() if str(v).strip()}
-    )
+    paths = {str(v) for col in columns for v in rows[col].dropna() if str(v).strip()}
+    for column in rows:
+        source = f"source_{column}"
+        if is_mask_path_column(column) and source in rows:
+            published = rows[column].notna() & rows[column].ne(rows[source])
+            paths.update(str(v) for v in rows.loc[published, column] if str(v).strip())
+    return sorted(paths)
 
 
 def _read_checkpoint(path):
@@ -211,11 +216,16 @@ def run_registration(args, table, config, manifest):
         checkpoint_every_sec=args.checkpoint_every_sec,
     )
     inputs = {args.csv_path}
-    for col in [
+    input_columns = [
         "source_nifti_path" if "source_nifti_path" in df else "nifti_path",
         f"source_{config.organ_mask_column}",
         f"source_{config.tumor_mask_column}",
-    ]:
+    ]
+    if config.output_space == "reference" and config.transform_additional_masks:
+        input_columns.extend(
+            f"source_{column}" for column in df if is_mask_path_column(column)
+        )
+    for col in input_columns:
         if col in df:
             inputs.update(str(p) for p in df[col].dropna() if str(p).strip())
     context = prepare_resume_context(
@@ -237,6 +247,7 @@ def run_registration(args, table, config, manifest):
         and (
             c.startswith("reg_")
             or c.startswith("registration_")
+            or is_mask_path_column(c)
             or c
             in {
                 "consensus_status",

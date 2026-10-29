@@ -431,8 +431,9 @@ def test_no_tumor_consensus_never_fills_from_another_scan(
             assert out.loc[1, "mask_liver_tumor_path"] == path
 
 
-def test_no_tumor_consensus_reference_transfer_failure_clears_native_path(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize("tumor_consensus", ["none", "anchor", "majority"])
+def test_reference_tumor_transfer_failure_clears_native_path(
+    tmp_path, monkeypatch, tumor_consensus
 ):
     from imperandi.process.registration import cohort
 
@@ -448,7 +449,9 @@ def test_no_tumor_consensus_reference_transfer_failure_clears_native_path(
     out, errors = register_cohort(
         pd.DataFrame([row]),
         tmp_path / "out",
-        RegistrationConfig(tumor_consensus_method="none", output_space="reference"),
+        RegistrationConfig(
+            tumor_consensus_method=tumor_consensus, output_space="reference"
+        ),
     )
     assert errors.stage.tolist() == ["transfer"]
     assert out.loc[0, "consensus_status"] == "failed"
@@ -491,13 +494,16 @@ def test_fusion_rejects_none_instead_of_silently_forming_union():
 
 @pytest.mark.parametrize("organ_consensus", ["anchor", "majority"])
 @pytest.mark.parametrize("preserve_source_organ", [False, True])
+@pytest.mark.parametrize("transform_additional_masks", [False, True])
 def test_reference_output_space_publishes_images_and_masks_on_common_grid(
-    tmp_path, organ_consensus, preserve_source_organ
+    tmp_path, organ_consensus, preserve_source_organ, transform_additional_masks
 ):
     rows = [
         save_scan(tmp_path, "portal", phase="PORTAL_VENOUS"),
         save_scan(tmp_path, "arterial", offset=4),
     ]
+    for row in rows:
+        row["mask_kidney_path"] = row["mask_liver_path"]
     out, errors = register_cohort(
         pd.DataFrame(rows),
         tmp_path / "out",
@@ -505,6 +511,7 @@ def test_reference_output_space_publishes_images_and_masks_on_common_grid(
             output_space="reference",
             organ_consensus_method=organ_consensus,
             preserve_source_organ_mask=preserve_source_organ,
+            transform_additional_masks=transform_additional_masks,
             tumor_consensus_method="majority",
             maximum_optimizer_iterations=10,
         ),
@@ -517,6 +524,10 @@ def test_reference_output_space_publishes_images_and_masks_on_common_grid(
     assert out.mask_liver_tumor_path.equals(out.reg_tumor_common_path)
     assert out.reg_organ_native_path.isna().all()
     assert out.reg_tumor_native_path.isna().all()
+    assert out.mask_kidney_path.isna().all() == (not transform_additional_masks)
+    assert out.source_mask_kidney_path.tolist() == [
+        row["mask_kidney_path"] for row in rows
+    ]
 
     reference = sitk.ReadImage(rows[0]["nifti_path"])
     expected_geometry = (
@@ -526,7 +537,10 @@ def test_reference_output_space_publishes_images_and_masks_on_common_grid(
         reference.GetDirection(),
     )
     for _, row in out.iterrows():
-        for column in ("nifti_path", "mask_liver_path", "mask_liver_tumor_path"):
+        columns = ["nifti_path", "mask_liver_path", "mask_liver_tumor_path"]
+        if transform_additional_masks:
+            columns.append("mask_kidney_path")
+        for column in columns:
             result = sitk.ReadImage(row[column])
             assert (
                 result.GetSize(),
@@ -534,6 +548,165 @@ def test_reference_output_space_publishes_images_and_masks_on_common_grid(
                 result.GetOrigin(),
                 result.GetDirection(),
             ) == expected_geometry
+
+
+@pytest.mark.parametrize("output_space", ["moving", "reference"])
+@pytest.mark.parametrize("transform_additional_masks", [False, True])
+def test_additional_masks_follow_image_space_even_when_native_grids_match(
+    tmp_path, output_space, transform_additional_masks
+):
+    from imperandi.process.registration.cohort import prepare_cohort
+    from imperandi.extract.radiomics import _get_mask_columns
+
+    rows = [
+        save_scan(tmp_path, "portal", phase="PORTAL_VENOUS"),
+        save_scan(tmp_path, "arterial"),
+        save_scan(tmp_path, "skipped"),
+    ]
+    fixed = sitk.ReadImage(rows[0]["nifti_path"])
+    # A subvoxel transform on an unchanged grid must not interpolate label values.
+    shift = (
+        np.array(fixed.TransformContinuousIndexToPhysicalPoint((2.25, 0.0, 0.0)))
+        - fixed.GetOrigin()
+    )
+    tx = sitk.TranslationTransform(3, shift.tolist())
+    for column in ("nifti_path", "mask_liver_path", "mask_liver_tumor_path"):
+        moving = alignment.resample(fixed, fixed, tx.GetInverse())
+        sitk.WriteImage(moving, rows[1][column])
+    for row in rows:
+        kidney = (
+            sitk.Cast(sitk.ReadImage(row["mask_liver_path"]), sitk.sitkUInt16) * 300
+        )
+        kidney_path = Path(row["mask_liver_path"]).with_name("kidney.nii.gz")
+        sitk.WriteImage(kidney, str(kidney_path))
+        row["mask_kidney_path"] = str(kidney_path)
+        row["mask_kidney_volume"] = 42.0
+    rows[2]["mask_liver_path"] = None
+    originals = {
+        row["mask_kidney_path"]: Path(row["mask_kidney_path"]).read_bytes()
+        for row in rows
+    }
+
+    def translated(*args):
+        return alignment.TransformResult(tx, "geometry", 0.0, 1.0, [])
+
+    out, errors = register_cohort(
+        pd.DataFrame(rows),
+        tmp_path / "out",
+        RegistrationConfig(
+            output_space=output_space,
+            transform_additional_masks=transform_additional_masks,
+        ),
+        pair_registration=translated,
+    )
+    assert errors.empty
+    assert out.loc[2, "registration_status"] == "skipped"
+    assert out.loc[2, "mask_kidney_path"] == rows[2]["mask_kidney_path"]
+    assert out.mask_kidney_volume.tolist() == [42.0] * 3
+    assert out.source_mask_kidney_path.tolist() == [
+        row["mask_kidney_path"] for row in rows
+    ]
+    if output_space == "reference":
+        if transform_additional_masks:
+            expected = sitk.GetArrayFromImage(fixed).astype(np.uint16) * 300
+            for index in (0, 1):
+                mapped = sitk.ReadImage(out.loc[index, "mask_kidney_path"])
+                assert mapped.GetPixelID() == sitk.sitkUInt16
+                np.testing.assert_array_equal(sitk.GetArrayFromImage(mapped), expected)
+                assert mapped.GetOrigin() == fixed.GetOrigin()
+                assert mapped.GetSpacing() == fixed.GetSpacing()
+                assert mapped.GetDirection() == fixed.GetDirection()
+        else:
+            assert out.loc[:1, "mask_kidney_path"].isna().all()
+        assert out.loc[1, "nifti_path"] != rows[1]["nifti_path"]
+        # Radiomics must see only transferred masks alongside the warped image.
+        for column in _get_mask_columns(out):
+            path = out.loc[1, column]
+            assert pd.isna(path) or path != rows[1].get(column)
+    else:
+        assert out.mask_kidney_path.tolist() == [
+            row["mask_kidney_path"] for row in rows
+        ]
+    restored = prepare_cohort(out, RegistrationConfig(output_space="moving"))
+    assert restored.nifti_path.tolist() == [row["nifti_path"] for row in rows]
+    assert restored.mask_kidney_path.tolist() == [
+        row["mask_kidney_path"] for row in rows
+    ]
+    assert all(
+        Path(path).read_bytes() == contents for path, contents in originals.items()
+    )
+
+
+@pytest.mark.parametrize("failure", ["missing_file", "unreadable", "geometry", "write"])
+def test_additional_mask_failures_do_not_publish_native_paths(
+    tmp_path, monkeypatch, failure
+):
+    from imperandi.process.registration import cohort
+
+    row = save_scan(tmp_path, "portal", phase="PORTAL_VENOUS")
+    row["mask_good_path"] = row["mask_liver_path"]
+    row["mask_absent_path"] = None
+    empty = sitk.Image(sitk.ReadImage(row["nifti_path"])) * 0
+    empty_path = tmp_path / "empty.nii.gz"
+    sitk.WriteImage(empty, str(empty_path))
+    row["mask_empty_path"] = str(empty_path)
+    bad_path = tmp_path / "bad.nii.gz"
+    row["mask_bad_path"] = str(bad_path)
+    if failure == "unreadable":
+        bad_path.write_text("not a mask")
+    elif failure in {"geometry", "write"}:
+        if failure == "geometry":
+            empty.SetOrigin((99.0, 99.0, 99.0))
+        sitk.WriteImage(empty, str(bad_path))
+    original_write = cohort.write_artifact
+
+    def write(image, path):
+        if failure == "write" and path.name == "mask_bad_path.nii.gz":
+            raise OSError("unable to write mask")
+        return original_write(image, path)
+
+    monkeypatch.setattr(cohort, "write_artifact", write)
+    out, errors = register_cohort(
+        pd.DataFrame([row]),
+        tmp_path / "out",
+        RegistrationConfig(output_space="reference", transform_additional_masks=True),
+    )
+    assert errors.stage.tolist() == ["additional_mask_transfer:mask_bad_path"]
+    assert out.loc[0, "registration_status"] == "reference"
+    assert pd.isna(out.loc[0, "mask_bad_path"])
+    assert pd.isna(out.loc[0, "mask_absent_path"])
+    assert out.loc[0, "source_mask_bad_path"] == str(bad_path)
+    assert out.loc[0, "mask_good_path"] != row["mask_good_path"]
+    assert not sitk.GetArrayFromImage(
+        sitk.ReadImage(out.loc[0, "mask_empty_path"])
+    ).any()
+
+
+def test_reference_organ_publication_failure_leaves_no_native_canonical_masks(
+    tmp_path, monkeypatch
+):
+    from imperandi.process.registration import cohort
+
+    row = save_scan(tmp_path, "portal", phase="PORTAL_VENOUS")
+    row["mask_kidney_path"] = row["mask_liver_path"]
+    original_write = cohort.write_artifact
+
+    def fail_organ(image, path):
+        if path.name == "organ_registered.nii.gz":
+            raise RuntimeError("organ write failed")
+        return original_write(image, path)
+
+    monkeypatch.setattr(cohort, "write_artifact", fail_organ)
+    out, errors = register_cohort(
+        pd.DataFrame([row]),
+        tmp_path / "out",
+        RegistrationConfig(output_space="reference"),
+    )
+    assert errors.stage.tolist() == ["organ"]
+    assert out.loc[0, "nifti_path"] == out.loc[0, "reg_nifti_path"]
+    for column in (column for column in row if is_mask_path_column(column)):
+        assert pd.isna(out.loc[0, column])
+        assert out.loc[0, f"source_{column}"] == row[column]
 
 
 @pytest.mark.parametrize("output_space", ["moving", "reference"])

@@ -263,6 +263,8 @@ registration:
   tumor_consensus_method: anchor
   # Publish results on each source scan grid or on the selected reference grid.
   output_space: moving
+  # Also map additional mask_*_path columns when output_space is reference.
+  transform_additional_masks: false
   # Ordered refinement steps; omit a stage to disable it.
   stages:
     - type: mask_rigid

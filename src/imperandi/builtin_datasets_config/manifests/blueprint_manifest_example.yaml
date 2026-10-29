@@ -376,6 +376,8 @@ registration:
   tumor_consensus_method: anchor
   # Publish results on each source scan grid or on the selected reference grid.
   output_space: moving
+  # Also map additional mask_*_path columns when output_space is reference.
+  transform_additional_masks: false
   # Baseline evaluation and automatic initialization always precede this list:
   # PCA for complete organs, geometry translation for partial organs. Keep the
   # baseline unless initialization improves Dice by at least this amount.

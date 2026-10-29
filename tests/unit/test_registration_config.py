@@ -37,6 +37,18 @@ def test_output_space_defaults_to_moving_and_rejects_unknown_values():
         RegistrationConfig(output_space="fixed")
 
 
+def test_additional_mask_mapping_is_disabled_by_default():
+    assert RegistrationConfig().transform_additional_masks is False
+
+
+@pytest.mark.parametrize("value", [None, "true", "false", 0, 1, []])
+def test_additional_mask_mapping_requires_boolean(value):
+    with pytest.raises(
+        ValueError, match="transform_additional_masks must be a boolean"
+    ):
+        RegistrationConfig(transform_additional_masks=value)
+
+
 @pytest.mark.parametrize(
     "name",
     [

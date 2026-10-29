@@ -14,6 +14,8 @@ import uuid
 import numpy as np
 import pandas as pd
 
+from imperandi.utils.columns import is_mask_path_column
+
 from .config import (
     ORGAN_CONSENSUS_METHODS,
     REGISTRATION_STAGES,
@@ -158,7 +160,21 @@ def prepare_cohort(table: pd.DataFrame, config) -> pd.DataFrame:
         df["nifti_path"] = df[source_image_column].astype(object)
     elif config.output_space == "reference" and "nifti_path" in df:
         df[source_image_column] = df["nifti_path"]
-    for column in (config.organ_mask_column, config.tumor_mask_column):
+    mask_columns = dict.fromkeys(
+        [
+            config.organ_mask_column,
+            config.tumor_mask_column,
+            *(column for column in df if is_mask_path_column(column)),
+            *(
+                column.removeprefix("source_")
+                for column in df
+                if isinstance(column, str)
+                and column.startswith("source_")
+                and is_mask_path_column(column.removeprefix("source_"))
+            ),
+        ]
+    )
+    for column in mask_columns:
         source = f"source_{column}"
         if source not in df:
             if column == config.organ_mask_column and column not in df:
@@ -655,6 +671,12 @@ def register_cohort(
     config = config or RegistrationConfig()
     sitk = backend()
     df = prepare_cohort(table, config)
+    mask_columns = [column for column in df if is_mask_path_column(column)]
+    additional_mask_columns = [
+        column
+        for column in mask_columns
+        if column not in {config.organ_mask_column, config.tumor_mask_column}
+    ]
     ids = df.registration_scan_id.tolist()
     root = Path(output_dir).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -662,8 +684,7 @@ def register_cohort(
         str(path)
         for column in (
             "nifti_path",
-            f"source_{config.organ_mask_column}",
-            f"source_{config.tumor_mask_column}",
+            *(f"source_{column}" for column in mask_columns),
         )
         for path in df[column].dropna()
         if str(path).strip()
@@ -860,7 +881,41 @@ def register_cohort(
                         resample(image, reference, tx, label=False),
                         pair_dir / "image_registered.nii.gz",
                     )
+                    # A canonical mask must describe the canonical image's
+                    # space. Retain native paths only in source columns until
+                    # a mask has been successfully published on the new grid.
+                    df.loc[i, mask_columns] = None
                     df.at[i, "nifti_path"] = df.at[i, "reg_nifti_path"]
+                    if config.transform_additional_masks:
+                        for column in additional_mask_columns:
+                            source_path = df.at[i, f"source_{column}"]
+                            if pd.isna(source_path) or not str(source_path).strip():
+                                continue
+                            try:
+                                mask = read_mask(
+                                    source_path, image, preserve_labels=True
+                                )
+                                mapped = sitk.Resample(
+                                    mask,
+                                    reference,
+                                    tx,
+                                    sitk.sitkNearestNeighbor,
+                                    0,
+                                    mask.GetPixelID(),
+                                )
+                                df.at[i, column] = write_artifact(
+                                    mapped,
+                                    pair_dir
+                                    / "additional_masks"
+                                    / f"{quote(column, safe='')}.nii.gz",
+                                )
+                            except (
+                                RuntimeError,
+                                ValueError,
+                                TypeError,
+                                OSError,
+                            ) as exc:
+                                error(i, f"additional_mask_transfer:{column}", exc)
                     if config.preserve_source_organ_mask:
                         native_organ = resample(organ, reference, tx)
                     elif config.organ_consensus_method == "anchor":
@@ -1070,11 +1125,7 @@ def register_cohort(
                     df.at[i, "registration_status"]
                 )
                 continue
-            path = (
-                df.at[i, config.tumor_mask_column]
-                if config.tumor_mask_column in df
-                else None
-            )
+            path = df.at[i, f"source_{config.tumor_mask_column}"]
             if _missing_file(path):
                 df.at[i, "tumor_consensus_input_status"] = "skipped_missing"
                 continue
@@ -1137,10 +1188,6 @@ def register_cohort(
         df.loc[failed.index[failed], "consensus_status"] = "registration_failed"
         df.loc[list(transforms), "consensus_status"] = "no_tumor_input"
         if config.tumor_consensus_method == "none":
-            # Keep native source paths untouched. Reference outputs must never
-            # retain a native tumor path alongside a successfully warped image.
-            if config.output_space == "reference":
-                df.loc[list(transforms), config.tumor_mask_column] = None
             for i in transforms:
                 if df.at[i, "tumor_consensus_input_status"] == "failed":
                     df.at[i, "consensus_status"] = "failed"

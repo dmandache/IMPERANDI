@@ -158,8 +158,11 @@ def read_image(path):
     return image
 
 
-def read_mask(path, image):
-    """Require matching native geometry; do not guess a mask's coordinate system."""
+def read_mask(path, image, *, preserve_labels=False):
+    """Validate native geometry and values, returning a binary mask by default.
+
+    ``preserve_labels`` retains the original values and pixel type for transfer.
+    """
     sitk = backend()
     mask = read_image(path)
     if mask.GetSize() != image.GetSize() or any(
@@ -174,7 +177,7 @@ def read_mask(path, image):
     values = sitk.GetArrayViewFromImage(mask)
     if not np.isfinite(values).all() or np.any(values < 0):
         raise ValueError("Mask contains invalid values")
-    return sitk.Cast(mask > 0, sitk.sitkUInt8)
+    return mask if preserve_labels else sitk.Cast(mask > 0, sitk.sitkUInt8)
 
 
 @dataclass(frozen=True)

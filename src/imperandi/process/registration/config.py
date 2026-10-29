@@ -267,6 +267,7 @@ class RegistrationConfig:
     organ_consensus_method: str = "anchor"
     tumor_consensus_method: str = "anchor"
     output_space: str = "moving"
+    transform_additional_masks: bool = False
     stages: list[StageConfig] = field(
         default_factory=lambda: [{"type": "mask_rigid"}, {"type": "mask_affine"}]
     )
@@ -321,6 +322,7 @@ class RegistrationConfig:
             object.__setattr__(self, shrink_name, list(factors))
             object.__setattr__(self, sigma_name, list(sigmas))
         for name in (
+            "transform_additional_masks",
             "preserve_source_organ_mask",
             "accept_partial_organ_masks",
             "clip_tumor_consensus_to_organ",

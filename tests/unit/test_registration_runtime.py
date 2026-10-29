@@ -134,8 +134,10 @@ def test_manifest_overrides_defaults_and_cli(tmp_path, cohort):
     assert isinstance(register.resolve_config(built_in)[0], RegistrationConfig)
 
 
-def test_reference_output_space_is_published_by_runtime(cohort):
+def test_reference_output_space_is_published_by_runtime(cohort, monkeypatch):
     source = pd.read_csv(cohort, dtype=str)
+    source["mask_kidney_path"] = source.mask_liver_path
+    source.to_csv(cohort, index=False)
     register.main(args_for(cohort, "--output_space", "reference"))
 
     output, errors, _ = paths_for(cohort)
@@ -147,6 +149,8 @@ def test_reference_output_space_is_published_by_runtime(cohort):
     assert saved.mask_liver_tumor_path.equals(saved.reg_tumor_common_path)
     assert saved.reg_organ_native_path.isna().all()
     assert saved.reg_tumor_native_path.isna().all()
+    assert saved.mask_kidney_path.isna().all()
+    assert saved.source_mask_kidney_path.tolist() == source.mask_kidney_path.tolist()
     for index, row in saved.iterrows():
         expected_group = (
             cohort.parent
@@ -159,11 +163,17 @@ def test_reference_output_space_is_published_by_runtime(cohort):
         assert log_path.parent == expected_group
         assert Path(row.reg_nifti_path).parent.parent == log_path.parent
 
+    def unexpected_run(*args, **kwargs):
+        pytest.fail("Unchanged reference outputs should resume from checkpoints")
+
+    monkeypatch.setattr(runtime, "_run_group", unexpected_run)
     register.main(args_for(cohort, "--output_space", "reference"))
     resumed = pd.read_csv(output)
     assert resumed.nifti_path.equals(saved.nifti_path)
     assert resumed.mask_liver_path.equals(saved.mask_liver_path)
     assert resumed.mask_liver_tumor_path.equals(saved.mask_liver_tumor_path)
+    assert resumed.mask_kidney_path.isna().all()
+    assert resumed.source_mask_kidney_path.tolist() == source.mask_kidney_path.tolist()
 
 
 def test_reference_criterion_order_changes_selection_and_invalidates_resume(
@@ -822,3 +832,82 @@ def test_preserve_source_organ_mask_manifest_and_cli(tmp_path, cohort, flag, exp
         register.normalize_registration_args(args_for(cohort, *flags))
     )
     assert config.preserve_source_organ_mask is expected
+
+
+@pytest.mark.parametrize("manifest_value", [False, True])
+@pytest.mark.parametrize(
+    "flag", [None, "--transform_additional_masks", "--no_transform_additional_masks"]
+)
+def test_additional_mask_toggle_manifest_and_cli(
+    tmp_path, cohort, manifest_value, flag
+):
+    manifest = tmp_path / "additional.yaml"
+    manifest.write_text(
+        yaml.safe_dump({"registration": {"transform_additional_masks": manifest_value}})
+    )
+    flags = ["--manifest", str(manifest)]
+    if flag:
+        flags.append(flag)
+    config, _ = register.resolve_config(
+        register.normalize_registration_args(args_for(cohort, *flags))
+    )
+    assert config.transform_additional_masks is (
+        manifest_value if flag is None else flag == "--transform_additional_masks"
+    )
+
+
+def test_additional_mask_resume_tracks_sources_outputs_and_toggle(cohort, monkeypatch):
+    source = pd.read_csv(cohort, dtype=str)
+    extra = cohort.parent / "kidney.nii.gz"
+    image = sitk.ReadImage(source.loc[0, "nifti_path"])
+    sitk.WriteImage(image, str(extra))
+    source["mask_kidney_path"] = str(extra)
+    source.to_csv(cohort, index=False)
+    flags = [
+        "--output_space",
+        "reference",
+        "--transform_additional_masks",
+        "--strict_resume",
+    ]
+    output, _, _ = paths_for(cohort)
+    original_run = runtime._run_group
+    calls = []
+
+    def track(*args, **kwargs):
+        calls.append(1)
+        return original_run(*args, **kwargs)
+
+    monkeypatch.setattr(runtime, "_run_group", track)
+    register.main(args_for(cohort, *flags))
+    assert len(calls) == 2
+    saved = pd.read_csv(output)
+    assert saved.mask_kidney_path.notna().all()
+    register.main(args_for(cohort, *flags))
+    assert len(calls) == 2
+    pd.testing.assert_frame_equal(pd.read_csv(output), saved)
+
+    Path(saved.loc[0, "mask_kidney_path"]).unlink()
+    register.main(args_for(cohort, *flags))
+    assert len(calls) == 3
+    assert Path(saved.loc[0, "mask_kidney_path"]).is_file()
+
+    sitk.WriteImage(image * 0, str(extra))
+    register.main(args_for(cohort, *flags))
+    assert len(calls) == 5
+    saved = pd.read_csv(output)
+    assert all(
+        not sitk.GetArrayFromImage(sitk.ReadImage(path)).any()
+        for path in saved.mask_kidney_path
+    )
+
+    register.main(
+        args_for(
+            cohort,
+            "--output_space",
+            "reference",
+            "--no_transform_additional_masks",
+            "--strict_resume",
+        )
+    )
+    assert len(calls) == 7
+    assert pd.read_csv(output).mask_kidney_path.isna().all()

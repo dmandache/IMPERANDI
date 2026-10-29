@@ -358,6 +358,34 @@ prefix described above. Reference-space mode writes one registered image and
 the selected organ/tumor result per successful row, while moving-space mode
 does not write registered images.
 
+Before publishing a reference-space image, registration clears every canonical
+`mask_*_path` value for that row and fills only successfully transferred masks.
+By default, additional masks (such as `mask_kidney_path`) remain available
+in `source_mask_kidney_path`, but their canonical values are empty because they
+have not been transformed. Failed mask transfers also leave empty canonical
+values. Rows whose images stay in native space retain their native mask paths.
+Reruns restore all source masks before processing, including when switching back
+to moving-space output; checkpoint resume preserves the cleared values.
+
+To map additional masks too, set:
+
+```yaml
+registration:
+  output_space: reference
+  transform_additional_masks: true  # Default: false.
+```
+
+The CLI overrides are `--transform_additional_masks` and
+`--no_transform_additional_masks`. Each additional mask uses the scan's accepted
+registration transform with nearest-neighbor interpolation, preserving label
+values and pixel type. These masks are neither fused nor clipped to the organ.
+Original paths remain in `source_mask_*_path`. Empty masks are transferred;
+missing values stay empty. Unreadable masks, incompatible native geometry, and
+transfer failures are recorded per mask in the error table and leave its
+canonical path empty without preventing other masks from transferring.
+Resume checks include additional source files and mapped artifacts. The toggle
+has no effect in moving-space mode, where additional masks retain native paths.
+
 To keep each source organ segmentation, pass `--preserve_source_organ_mask` or set
 `registration.preserve_source_organ_mask: true` in the manifest. Registration still
 aligns organs and maps tumor consensus. With moving-space output, the canonical
