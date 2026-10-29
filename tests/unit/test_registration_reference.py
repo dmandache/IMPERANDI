@@ -146,7 +146,7 @@ def test_planning_discards_stale_organ_volume_without_loading_images():
             Modality="MRI",
             mri_sequence=sequence,
             nifti_path=f"/unavailable/{sequence}.nii.gz",
-            mask_liver="/unavailable/organ.nii.gz",
+            mask_liver_path="/unavailable/organ.nii.gz",
             registration_organ_volume_mm3=volume,
         )
         for sequence, volume in [("T1", 1), ("T2", 1000)]

@@ -55,22 +55,38 @@ def test_guess_default_columns_and_segmentation_columns():
                 "patient_key": "P1",
                 "nifti_path": "scan1.nii.gz",
                 "phase": "portal",
-                "mask_liver": "mask1.nii.gz",
-                "mask_tumor": None,
+                "mask_liver_path": "mask1.nii.gz",
+                "mask_tumor_path": None,
             },
             {
                 "patient_key": "P2",
                 "nifti_path": "scan2.nii.gz",
                 "phase": "arterial",
-                "mask_liver": "",
-                "mask_tumor": None,
+                "mask_liver_path": "",
+                "mask_tumor_path": None,
             },
         ]
     )
 
     assert guess_ct_scan_col(df.columns) == "nifti_path"
     assert guess_phase_col(df.columns) == "phase"
-    assert guess_segmentation_cols(df) == ["mask_liver"]
+    assert guess_segmentation_cols(df) == ["mask_liver_path"]
+
+
+def test_segmentation_discovery_ignores_mask_metrics_and_source_paths():
+    df = pd.DataFrame(
+        {
+            "mask_liver_path": ["liver.nii.gz"],
+            "mask_liver_tumor_path": [None],
+            "mask_liver_volume": [42.0],
+            "mask_affine_status": ["accepted"],
+            "mask_liver": ["legacy.nii.gz"],
+            "source_mask_liver_path": ["original.nii.gz"],
+            "mask__path": ["unnamed.nii.gz"],
+        }
+    )
+    assert guess_segmentation_cols(df) == ["mask_liver_path"]
+    assert guess_segmentation_cols(df.drop(columns="mask_liver_path")) == []
 
 
 def test_image_path_detection_and_column_listing(tmp_path):
@@ -83,12 +99,12 @@ def test_image_path_detection_and_column_listing(tmp_path):
         [
             {
                 "nifti_path": str(ct_path),
-                "mask_liver": str(seg_path),
+                "mask_liver_path": str(seg_path),
                 "phase": "portal",
             },
             {
                 "nifti_path": "relative_scan2.nii.gz",
-                "mask_liver": "",
+                "mask_liver_path": "",
                 "phase": "arterial",
             },
         ]
@@ -96,7 +112,7 @@ def test_image_path_detection_and_column_listing(tmp_path):
 
     assert is_image_path_value(str(ct_path)) is True
     assert is_image_path_value("portal") is False
-    assert get_image_path_columns(df) == ["nifti_path", "mask_liver"]
+    assert get_image_path_columns(df) == ["nifti_path", "mask_liver_path"]
 
 
 def test_validate_image_path_column_requires_ct_values_to_all_be_paths(tmp_path):
@@ -123,17 +139,17 @@ def test_validate_image_path_column_allows_empty_segmentation_values(tmp_path):
     seg_path.touch()
     df = pd.DataFrame(
         [
-            {"mask_liver": str(seg_path)},
-            {"mask_liver": ""},
-            {"mask_liver": None},
+            {"mask_liver_path": str(seg_path)},
+            {"mask_liver_path": ""},
+            {"mask_liver_path": None},
         ]
     )
 
     validate_image_path_column(
         df,
-        "mask_liver",
+        "mask_liver_path",
         allow_empty=True,
-        label="Segmentation column 'mask_liver'",
+        label="Segmentation column 'mask_liver_path'",
     )
 
 
@@ -241,19 +257,19 @@ def test_image_path_column_ratio_and_empty_controls():
 
 
 def test_validate_image_path_column_reports_selection_and_empty_errors():
-    df = pd.DataFrame({"mask_liver": [None, ""]})
+    df = pd.DataFrame({"mask_liver_path": [None, ""]})
 
     with pytest.raises(KeyError, match="Column not found"):
         validate_image_path_column(df, "missing", allow_empty=True)
     with pytest.raises(ValueError, match="contains empty values"):
         validate_image_path_column(
             df,
-            "mask_liver",
+            "mask_liver_path",
             allow_empty=False,
             label="Liver mask",
         )
     with pytest.raises(ValueError, match="does not contain any usable paths"):
-        validate_image_path_column(df, "mask_liver", allow_empty=True)
+        validate_image_path_column(df, "mask_liver_path", allow_empty=True)
 
 
 def test_guess_column_fallbacks_and_preferences():
@@ -268,7 +284,7 @@ def test_guess_column_fallbacks_and_preferences():
     assert guess_phase_col(["description"]) is None
 
 
-def test_guess_segmentation_columns_supports_legacy_and_explicit_preferences():
+def test_nonstandard_segmentation_columns_require_explicit_selection():
     df = pd.DataFrame(
         {
             "liver_path": ["liver.nii.gz"],
@@ -277,7 +293,8 @@ def test_guess_segmentation_columns_supports_legacy_and_explicit_preferences():
         }
     )
 
-    assert guess_segmentation_cols(df) == ["liver_path"]
+    assert guess_segmentation_cols(df) == []
+    assert guess_segmentation_cols(df, preferred="liver_path") == ["liver_path"]
     assert guess_segmentation_cols(df, preferred="custom_mask") == ["custom_mask"]
     assert guess_segmentation_cols(
         df, preferred=["missing", "liver_tumor_path", "custom_mask"]

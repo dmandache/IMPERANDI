@@ -26,11 +26,11 @@ def assert_full_pipeline_outputs(work_dir: Path) -> None:
     assert not converted.empty
     assert len(radiomics) == len(converted)
     assert {"patient_key", "study_id", "series_id"}.issubset(cleaned.columns)
-    assert {"nifti_path", "phase", "liver_path"}.issubset(converted.columns)
+    assert {"nifti_path", "phase", "mask_liver_path"}.issubset(converted.columns)
     assert any("_original_" in column for column in radiomics.columns)
 
     nifti_paths = converted["nifti_path"].dropna().map(Path)
-    liver_paths = converted["liver_path"].dropna().map(Path)
+    liver_paths = converted["mask_liver_path"].dropna().map(Path)
     assert not nifti_paths.empty
     assert not liver_paths.empty
     assert all(path.is_file() for path in nifti_paths)

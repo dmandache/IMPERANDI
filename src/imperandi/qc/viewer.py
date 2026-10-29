@@ -19,6 +19,7 @@ try:
         validate_isotropic_resolution,
     )
     from imperandi.qc.viewer_windowing import normalize_modality, percentile_window
+    from imperandi.qc.viewer_web_data import guess_segmentation_cols
 except ModuleNotFoundError as exc:
     # Allow this file to be loaded directly (for example with
     # importlib.util.spec_from_file_location) without installing IMPERANDI.
@@ -33,6 +34,7 @@ except ModuleNotFoundError as exc:
         validate_isotropic_resolution,
     )
     from viewer_windowing import normalize_modality, percentile_window  # noqa: E402
+    from viewer_web_data import guess_segmentation_cols  # noqa: E402
 
 warnings.filterwarnings("ignore")  # Ignore warnings
 
@@ -146,16 +148,7 @@ class ScanViewer:
 
         # Handle segmentation_cols gracefully
         if segmentation_cols is None:
-            auto_cols = [col for col in df.columns if str(col).startswith("mask_")]
-            if not auto_cols:
-                auto_cols = [
-                    col for col in ["liver_path", "liver_tumor_path"] if col in df
-                ]
-            self.segmentation_cols = [
-                col
-                for col in auto_cols
-                if df[col].apply(lambda v: not self._is_empty_value(v)).any()
-            ]
+            self.segmentation_cols = guess_segmentation_cols(df)
         elif isinstance(segmentation_cols, str):
             self.segmentation_cols = [segmentation_cols]
         else:

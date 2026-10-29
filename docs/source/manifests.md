@@ -722,7 +722,7 @@ Optional task keys include `extra`, `output`, `outputs`, `fetch_output`, and
 `fetch_outputs`. Each modality may define its own `postprocess` block to combine
 logical masks and apply morphological operations in a configurable order.
 The same logical outputs may be used across modalities, for example mapping
-both `liver_lesions` and `liver_lesions_mr` to `mask_liver_tumor`.
+both `liver_lesions` and `liver_lesions_mr` to `mask_liver_tumor_path`.
 
 Task output declarations need not enumerate every mask a backend produces.
 For example, `task: total` may supply `liver` without an explicit `output` or
@@ -736,7 +736,7 @@ Set `postprocess.operations` to an ordered list under each modality. Every step
 names an `op`, its `input` (one mask) or `inputs` (a list), and an `output`.
 Cleanup settings belong to the individual operations that use them.
 Inputs can refer to task outputs or results of earlier steps. Bare logical names,
-`mask_*` column names, and `.nii.gz` filenames are accepted and normalized to
+`mask_*_path` column names, and `.nii.gz` filenames are accepted and normalized to
 logical names.
 
 For example, clean the liver mask, combine it with the tumor mask, clean the
@@ -797,7 +797,7 @@ morphology and component selection.
 
 Masks must be 3-D; logical combinations require matching shapes and affines.
 Positive voxels are treated as foreground. Each distinct output is saved as a
-binary `uint8` NIfTI and appears in the corresponding `mask_<output>` CSV column,
+binary `uint8` NIfTI and appears in the corresponding `mask_<output>_path` CSV column,
 including intermediate outputs. New names create `<output>.nii.gz`; existing
 logical task names write to their configured `fetch_output` filename.
 Reusing an output name replaces its current value for subsequent steps and saves
@@ -805,7 +805,7 @@ its final value.
 Only explicitly named outputs are written. To clip an original mask to a merged
 result, add an `intersection` step with that original mask as the output.
 For example, an output named `liver_tumor` mapped to `fetch_output: liver_lesions`
-updates `liver_lesions.nii.gz`, and `mask_liver_tumor` still points to that file.
+updates `liver_lesions.nii.gz`, and `mask_liver_tumor_path` still points to that file.
 
 The full sequence is computed before any output is written. Postprocessing errors
 fail the row by default (`postprocess.on_failure: fail`). Setting

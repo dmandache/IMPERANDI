@@ -31,8 +31,8 @@ def cohort(tmp_path):
                 Modality="CT",
                 phase="PORTAL_VENOUS",
                 nifti_path=str(path),
-                mask_liver=str(path),
-                mask_liver_tumor=str(path),
+                mask_liver_path=str(path),
+                mask_liver_tumor_path=str(path),
             )
         )
     source = tmp_path / "input.csv"
@@ -75,10 +75,10 @@ def test_no_tumor_consensus_manifest_cli_and_resume(
     saved = pd.read_csv(output)
     assert saved.consensus_status.tolist() == ["preserved_source"] * 2
     if output_space == "moving":
-        assert saved.mask_liver_tumor.equals(saved.source_mask_liver_tumor)
+        assert saved.mask_liver_tumor_path.equals(saved.source_mask_liver_tumor_path)
         assert saved.reg_tumor_native_path.isna().all()
     else:
-        assert saved.mask_liver_tumor.equals(saved.reg_tumor_common_path)
+        assert saved.mask_liver_tumor_path.equals(saved.reg_tumor_common_path)
 
     def unexpected_run(*args, **kwargs):
         pytest.fail("Unchanged none outputs should resume from checkpoints")
@@ -143,8 +143,8 @@ def test_reference_output_space_is_published_by_runtime(cohort):
     assert pd.read_csv(errors).empty
     assert saved.source_nifti_path.tolist() == source.nifti_path.tolist()
     assert saved.nifti_path.equals(saved.reg_nifti_path)
-    assert saved.mask_liver.equals(saved.reg_organ_path)
-    assert saved.mask_liver_tumor.equals(saved.reg_tumor_common_path)
+    assert saved.mask_liver_path.equals(saved.reg_organ_path)
+    assert saved.mask_liver_tumor_path.equals(saved.reg_tumor_common_path)
     assert saved.reg_organ_native_path.isna().all()
     assert saved.reg_tumor_native_path.isna().all()
     for index, row in saved.iterrows():
@@ -162,8 +162,8 @@ def test_reference_output_space_is_published_by_runtime(cohort):
     register.main(args_for(cohort, "--output_space", "reference"))
     resumed = pd.read_csv(output)
     assert resumed.nifti_path.equals(saved.nifti_path)
-    assert resumed.mask_liver.equals(saved.mask_liver)
-    assert resumed.mask_liver_tumor.equals(saved.mask_liver_tumor)
+    assert resumed.mask_liver_path.equals(saved.mask_liver_path)
+    assert resumed.mask_liver_tumor_path.equals(saved.mask_liver_tumor_path)
 
 
 def test_reference_criterion_order_changes_selection_and_invalidates_resume(
@@ -566,9 +566,9 @@ def test_changed_inputs_and_forced_runs_recompute(
     register.main(args_for(cohort, *flags))
     if change == "mask":
         row = pd.read_csv(cohort).iloc[0]
-        image = sitk.ReadImage(row.mask_liver)
+        image = sitk.ReadImage(row.mask_liver_path)
         image[0, 0, 0] = 1
-        sitk.WriteImage(image, row.mask_liver)
+        sitk.WriteImage(image, row.mask_liver_path)
     elif change == "manifest":
         manifest.write_text("registration:\n  tumor_consensus_method: union\n")
     else:
@@ -767,9 +767,9 @@ def test_qc_and_canonical_paths_survive_resume_and_qc_restoration(monkeypatch, c
     qc_before = pd.read_csv(qc_path)
     assert set(qc_before.registration_scan_id) == set(first.registration_scan_id)
     assert first.registration_qc_path.eq(str(qc_path.resolve())).all()
-    assert first.mask_liver.equals(first.reg_organ_native_path)
-    assert first.mask_liver_tumor.equals(first.reg_tumor_native_path)
-    assert first.source_mask_liver.equals(pd.read_csv(cohort).mask_liver)
+    assert first.mask_liver_path.equals(first.reg_organ_native_path)
+    assert first.mask_liver_tumor_path.equals(first.reg_tumor_native_path)
+    assert first.source_mask_liver_path.equals(pd.read_csv(cohort).mask_liver_path)
     qc_path.unlink()
 
     def no_work(groups, *args, **kwargs):

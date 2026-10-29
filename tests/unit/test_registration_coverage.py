@@ -55,8 +55,8 @@ def save_row(tmp_path, name, mask, phase):
         Modality="CT",
         phase=phase,
         nifti_path=str(path),
-        mask_liver=str(path),
-        mask_liver_tumor=str(path),
+        mask_liver_path=str(path),
+        mask_liver_tumor_path=str(path),
     )
 
 
@@ -224,7 +224,7 @@ def test_volume_criterion_uses_native_physical_volume_for_reference_and_anchor(
         # Before QC the smaller portal scan is first; after QC the volume-first
         # policy must put the two larger organs ahead of it, including fallback.
         reference = save_row(tmp_path, "reference", sphere(5, 2.2), "NATIVE")
-        reference["mask_liver_tumor"] = None
+        reference["mask_liver_tumor_path"] = None
         rows.append(reference)
         config = RegistrationConfig(
             reference_selection_priority=[
@@ -266,7 +266,7 @@ def test_fallback_anchor_keeps_complete_organs_ahead_of_partial_organs(tmp_path)
         save_row(tmp_path, "complete", complete, "NATIVE"),
         save_row(tmp_path, "partial", partial_mask(complete), "ARTERIAL"),
     ]
-    rows[0]["mask_liver_tumor"] = None
+    rows[0]["mask_liver_tumor_path"] = None
     out, errors = register_cohort(
         pd.DataFrame(rows),
         tmp_path / "out",

@@ -63,8 +63,8 @@ imperandi segment \
   --crop --crop-margin-mm 50
 ```
 
-Mask columns are named `mask_<output>`, such as `mask_liver` and
-`mask_liver_tumor`. The built-in manifest dispatches CT rows to CT tasks and
+Mask columns are named `mask_<output>_path`, such as `mask_liver_path` and
+`mask_liver_tumor_path`. The built-in manifest dispatches CT rows to CT tasks and
 MR/MRI rows to the corresponding `_mr` tasks.
 
 With `--crop`, the source NIfTI and every output mask are cropped in place to
@@ -91,7 +91,7 @@ imperandi radiomics \
 
 The phase command writes canonical `phase` provenance and adds `totalseg_*`
 fields only for rows that reach the prediction strategy. Radiomics discovers
-all populated `mask_*` columns and appends feature columns to the table.
+all populated `mask_*_path` columns and appends feature columns to the table.
 
 ## 6. Check failures before analysis
 

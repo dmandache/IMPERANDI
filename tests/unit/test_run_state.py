@@ -7,6 +7,7 @@ import argparse
 import logging
 import pandas as pd
 
+from imperandi.utils.columns import MASK_PATH_COLUMN_PATTERN
 from imperandi.utils.run_state import (
     STATE_SCHEMA_VERSION,
     CheckpointManager,
@@ -603,18 +604,54 @@ def test_semantic_new_optional_column_invalidates_only_populated_rows(tmp_path):
     before = fingerprint_csv_semantic(
         csv_path,
         columns=["volume_id", "nifti_path", "Modality"],
-        dynamic_prefixes=["mask_"],
+        dynamic_patterns=[MASK_PATH_COLUMN_PATTERN],
     )
 
     enriched = base.copy()
-    enriched["mask_liver"] = [pd.NA, "liver-v2.nii.gz"]
+    enriched["mask_liver_path"] = [pd.NA, "liver-v2.nii.gz"]
     enriched.to_csv(csv_path, index=False)
     after = fingerprint_csv_semantic(
         csv_path,
         columns=["volume_id", "nifti_path", "Modality"],
-        dynamic_prefixes=["mask_"],
+        dynamic_patterns=[MASK_PATH_COLUMN_PATTERN],
     )
 
     assert before.input_fingerprint != after.input_fingerprint
     assert before.row_fingerprints["v1"] == after.row_fingerprints["v1"]
     assert before.row_fingerprints["v2"] != after.row_fingerprints["v2"]
+
+
+def test_mask_filepath_fingerprints_ignore_metrics_but_track_file_contents(tmp_path):
+    mask = tmp_path / "liver.nii.gz"
+    mask.write_bytes(b"original mask")
+    csv_path = tmp_path / "cohort.csv"
+    frame = pd.DataFrame(
+        {
+            "volume_id": ["v1"],
+            "mask_liver_path": [str(mask)],
+            "mask_liver_volume": [42.0],
+            "mask_affine_status": ["accepted"],
+            "source_mask_liver_path": ["original.nii.gz"],
+        }
+    )
+
+    def fingerprint():
+        frame.to_csv(csv_path, index=False)
+        return fingerprint_csv_semantic(
+            csv_path,
+            columns=["volume_id"],
+            dynamic_patterns=[MASK_PATH_COLUMN_PATTERN],
+            artifact_patterns=[MASK_PATH_COLUMN_PATTERN],
+            strict=True,
+        )
+
+    before = fingerprint()
+    assert before.input_fingerprint["artifact_columns"] == ["mask_liver_path"]
+    frame["mask_liver_volume"] = 123.0
+    frame["mask_affine_status"] = "rejected"
+    frame["mask_rigid_dice"] = 0.9
+    frame["source_mask_liver_path"] = "other-original.nii.gz"
+    assert fingerprint() == before
+
+    mask.write_bytes(b"changed mask")
+    assert fingerprint().row_fingerprints["v1"] != before.row_fingerprints["v1"]

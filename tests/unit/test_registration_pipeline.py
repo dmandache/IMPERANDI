@@ -503,7 +503,7 @@ def test_mi_elastic_cohort_outputs_and_stage_reports(tmp_path, images, output_sp
                 "study_id": "s",
                 "Modality": "CT",
                 "nifti_path": str(image_path),
-                "mask_liver": str(mask_path),
+                "mask_liver_path": str(mask_path),
             }
         )
     tx = elastic(mask, 0.1)
@@ -544,7 +544,7 @@ def test_mi_elastic_cohort_outputs_and_stage_reports(tmp_path, images, output_sp
     assert registered.registration_selected_stage == "mi_elastic"
     detail = json.loads(registered.registration_stage_details)
     assert detail["mi_elastic"]["accepted"]
-    actual = sitk.ReadImage(registered.mask_liver)
+    actual = sitk.ReadImage(registered.mask_liver_path)
     assert actual.GetSize() == mask.GetSize()
     assert set(np.unique(sitk.GetArrayFromImage(actual))) <= {0, 1}
     if output_space == "reference":

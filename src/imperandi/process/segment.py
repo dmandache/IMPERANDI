@@ -54,6 +54,7 @@ from imperandi.utils.logging import (
     setup_logging,
 )
 from imperandi.utils.manifest import load_manifest
+from imperandi.utils.columns import MASK_PATH_COLUMN_PATTERN, is_mask_path_column
 from imperandi.utils.misc import print_args
 from imperandi.utils.checkpoint_cli import add_checkpoint_arguments
 from imperandi.utils.run_state import (
@@ -562,7 +563,7 @@ def _output_to_column(output_name: str) -> str:
     value = str(output_name).strip()
     if value.endswith(".nii.gz"):
         value = value[: -len(".nii.gz")]
-    return f"mask_{value or 'unnamed'}"
+    return f"mask_{value or 'unnamed'}_path"
 
 
 def _output_to_filename(output_name: str) -> str:
@@ -573,7 +574,7 @@ def _output_to_filename(output_name: str) -> str:
 
 
 def build_output_column_map(tasks: List[Dict[str, Any]]) -> Dict[str, str]:
-    """Map each unique logical task output to its ``mask_*`` CSV column."""
+    """Map each unique logical task output to its ``mask_*_path`` CSV column."""
     output_to_column: Dict[str, str] = {}
     for task in tasks:
         for output_name in infer_task_outputs(task):
@@ -1157,7 +1158,7 @@ def process_single_volume(
         if crop_margin_mm is not None:
             for column_name, value in row.items():
                 if (
-                    str(column_name).startswith("mask_")
+                    is_mask_path_column(column_name)
                     and isinstance(value, (str, Path))
                     and str(value).strip()
                 ):
@@ -1502,6 +1503,7 @@ def main(args: argparse.Namespace) -> None:
     source_id_signature = source_id_resume_signature(args.csv_path)
     checkpoint_signature = {
         "segmentation": tasks_config,
+        "mask_path_column_pattern": MASK_PATH_COLUMN_PATTERN,
     }
     if source_id_signature:
         checkpoint_signature["source_id"] = source_id_signature
@@ -1510,13 +1512,15 @@ def main(args: argparse.Namespace) -> None:
         checkpoint_signature=checkpoint_signature,
     )
     semantic_columns = ["volume_id", "nifti_path", "Modality"]
-    semantic_dynamic_prefixes = ["mask_"] if crop_margin_mm is not None else []
+    semantic_mask_patterns = (
+        [MASK_PATH_COLUMN_PATTERN] if crop_margin_mm is not None else []
+    )
     semantic_fp = fingerprint_csv_semantic(
         args.csv_path,
         columns=semantic_columns,
-        dynamic_prefixes=semantic_dynamic_prefixes,
+        dynamic_patterns=semantic_mask_patterns,
         artifact_columns=["nifti_path"],
-        artifact_prefixes=semantic_dynamic_prefixes,
+        artifact_patterns=semantic_mask_patterns,
         strict=bool(getattr(args, "strict_resume", False)),
     )
 
@@ -2272,9 +2276,9 @@ def main(args: argparse.Namespace) -> None:
     final_semantic_fp = fingerprint_csv_semantic(
         args.csv_path,
         columns=semantic_columns,
-        dynamic_prefixes=semantic_dynamic_prefixes,
+        dynamic_patterns=semantic_mask_patterns,
         artifact_columns=["nifti_path"],
-        artifact_prefixes=semantic_dynamic_prefixes,
+        artifact_patterns=semantic_mask_patterns,
         strict=bool(getattr(args, "strict_resume", False)),
     )
     try:
@@ -2285,9 +2289,9 @@ def main(args: argparse.Namespace) -> None:
         final_semantic_fp = fingerprint_csv_semantic(
             output_path,
             columns=semantic_columns,
-            dynamic_prefixes=semantic_dynamic_prefixes,
+            dynamic_patterns=semantic_mask_patterns,
             artifact_columns=["nifti_path"],
-            artifact_prefixes=semantic_dynamic_prefixes,
+            artifact_patterns=semantic_mask_patterns,
             strict=bool(getattr(args, "strict_resume", False)),
         )
     ckpt.finalize_state(

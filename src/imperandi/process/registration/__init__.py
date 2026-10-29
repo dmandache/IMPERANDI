@@ -7,7 +7,7 @@ owns cohort preparation, fusion, and artifact publication. ``reporting`` formats
 tables, and logs. ``runtime`` adds checkpoints and workers, ``register`` implements
 the CLI, and ``config`` defines settings shared by these modules.
 SimpleITK is loaded only when image processing starts. Original mask paths are
-retained in ``source_mask_*`` columns.
+retained in ``source_mask_*_path`` columns.
 """
 
 from .config import RegistrationConfig

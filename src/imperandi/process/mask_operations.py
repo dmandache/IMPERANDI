@@ -12,6 +12,8 @@ import nibabel as nib
 import numpy as np
 from scipy import ndimage
 
+from imperandi.utils.columns import is_mask_path_column
+
 _ALIASES = {
     "or": "union",
     "and": "intersection",
@@ -33,10 +35,14 @@ class MaskGeometryError(ValueError):
 
 
 def normalize_mask_key(value: Any, *, field: str) -> str:
-    """Accept logical names, mask_* columns, and .nii.gz filenames."""
+    """Accept logical names, mask_*_path columns, and .nii.gz filenames."""
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{field} must be a non-empty mask name.")
-    key = value.strip().removesuffix(".nii.gz").removeprefix("mask_")
+    key = value.strip()
+    if is_mask_path_column(key):
+        key = key.removeprefix("mask_").removesuffix("_path")
+    else:
+        key = key.removesuffix(".nii.gz").removeprefix("mask_")
     if not key or key in {".", ".."} or "/" in key or "\\" in key:
         raise ValueError(f"{field} must name a mask in the segmentation directory.")
     return key

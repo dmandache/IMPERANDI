@@ -6,6 +6,21 @@ from typing import Iterable
 
 import pandas as pd
 
+try:
+    from imperandi.utils.columns import is_mask_path_column
+except ModuleNotFoundError as exc:
+    # Support viewers launched directly from the source directory.
+    if exc.name != "imperandi":
+        raise
+    from importlib.util import module_from_spec, spec_from_file_location
+
+    spec = spec_from_file_location(
+        "_imperandi_columns", Path(__file__).resolve().parents[1] / "utils/columns.py"
+    )
+    columns_module = module_from_spec(spec)
+    spec.loader.exec_module(columns_module)
+    is_mask_path_column = columns_module.is_mask_path_column
+
 FILTER_ALL_COLUMNS = "__all_columns__"
 SUPPORTED_IMAGE_PATH_SUFFIXES = (
     ".nii",
@@ -196,9 +211,7 @@ def guess_segmentation_cols(
 ) -> list[str]:
     """Choose populated segmentation path columns for viewer overlays."""
     if preferred is None:
-        columns = [c for c in df.columns if str(c).startswith("mask_")]
-        if not columns:
-            columns = [c for c in ["liver_path", "liver_tumor_path"] if c in df.columns]
+        columns = [c for c in df.columns if is_mask_path_column(c)]
     elif isinstance(preferred, str):
         columns = [preferred]
     else:

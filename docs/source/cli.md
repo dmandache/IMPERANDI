@@ -166,7 +166,7 @@ imperandi radiomics [CSV_PATH] [CSV_PATH_OUT] [OPTIONS]
 ```
 
 Requires a separate PyRadiomics installation (see
-[installation](installation.md)), `nifti_path`, and `mask_*` columns.
+[installation](installation.md)), `nifti_path`, and `mask_*_path` columns.
 
 - `--manifest NAME_OR_YAML`: load settings and filters from `radiomics`; use
   `radiomics.modalities.CT.pyradiomics` and `.MR.pyradiomics` for separate settings

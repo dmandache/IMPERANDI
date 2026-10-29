@@ -4,6 +4,8 @@ from dataclasses import asdict, dataclass, field
 from math import isfinite
 from typing import Mapping
 
+from imperandi.utils.columns import is_mask_path_column
+
 TUMOR_CONSENSUS_METHODS = (
     "none",
     "anchor",
@@ -260,8 +262,8 @@ class RegistrationConfig:
     grouping_columns: list[str] = field(
         default_factory=lambda: ["patient_key", "study_id", "Modality"]
     )
-    organ_mask_column: str = "mask_liver"
-    tumor_mask_column: str = "mask_liver_tumor"
+    organ_mask_column: str = "mask_liver_path"
+    tumor_mask_column: str = "mask_liver_tumor_path"
     organ_consensus_method: str = "anchor"
     tumor_consensus_method: str = "anchor"
     output_space: str = "moving"
@@ -439,8 +441,8 @@ class RegistrationConfig:
                 "maximum_elastic_jacobian_determinant"
             )
         for name in (self.organ_mask_column, self.tumor_mask_column):
-            if not isinstance(name, str) or not name.strip():
-                raise ValueError("Column names must be nonempty strings")
+            if not is_mask_path_column(name):
+                raise ValueError("Mask filepath columns must be named mask_<name>_path")
         if (
             not isinstance(self.grouping_columns, list)
             or not self.grouping_columns

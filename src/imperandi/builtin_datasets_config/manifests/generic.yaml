@@ -256,8 +256,8 @@ segmentation:
 # Explicit CLI consensus-method and optional-stage options override these settings.
 registration:
   grouping_columns: [patient_key, study_id, Modality]
-  organ_mask_column: mask_liver
-  tumor_mask_column: mask_liver_tumor
+  organ_mask_column: mask_liver_path
+  tumor_mask_column: mask_liver_tumor_path
   organ_consensus_method: anchor
   # Use none to retain each scan's own tumor without fusion or organ clipping.
   tumor_consensus_method: anchor

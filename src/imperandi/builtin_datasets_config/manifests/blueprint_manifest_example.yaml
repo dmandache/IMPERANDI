@@ -300,7 +300,7 @@ segmentation:
         #   fetch_outputs: [backend_a, backend_b]
         #   extra: {}
       postprocess:
-        # Bare logical names, mask_* column names, and *.nii.gz names are accepted.
+        # Bare logical names, mask_*_path column names, and *.nii.gz names are accepted.
         # Steps execute in order; outputs can be used by later steps.
         operations:
           - op: largest_cc
@@ -367,8 +367,8 @@ registration:
   grouping_columns: [patient_key, study_id, Modality]
   # Mask-path columns; missing/empty organs skip the series, while missing/empty
   # tumors are omitted from fusion. Originals are retained as source_<column>.
-  organ_mask_column: mask_liver
-  tumor_mask_column: mask_liver_tumor
+  organ_mask_column: mask_liver_path
+  tumor_mask_column: mask_liver_tumor_path
   # Organ fusion: anchor or majority.
   organ_consensus_method: anchor
   # Tumor fusion: none, anchor, majority, intersection, union, or staple.

@@ -33,6 +33,24 @@ def run_operations(directory, operations, aliases=None):
     return normalized
 
 
+def test_operations_resolve_mask_filepath_columns_to_logical_names(tmp_path):
+    save_mask(tmp_path, "a", np.ones((2, 2, 2)))
+    normalized = run_operations(
+        tmp_path,
+        [{"op": "not", "input": "mask_a_path", "output": "mask_result_path"}],
+    )
+    assert normalized[0]["inputs"] == ["a"]
+    assert normalized[0]["output"] == "result"
+    assert not read_mask(tmp_path, "result").any()
+
+
+@pytest.mark.parametrize(
+    "name", ["nerve_path", "nerve_path.nii.gz", "mask_nerve_path_path"]
+)
+def test_mask_name_path_suffix_is_preserved(name):
+    assert ops.normalize_mask_key(name, field="input") == "nerve_path"
+
+
 @pytest.mark.parametrize(
     "op,expected",
     [
@@ -497,7 +515,7 @@ def test_main_reads_manifest_and_exports_every_operation_output(tmp_path, monkey
         "merged": "merged",
         "final": "final",
     }.items():
-        assert Path(row[f"mask_{name}"]).name == f"{filename}.nii.gz"
+        assert Path(row[f"mask_{name}_path"]).name == f"{filename}.nii.gz"
         assert not read_mask(tmp_path, filename).any()
     assert not (tmp_path / "a.nii.gz").exists()
 
@@ -514,7 +532,7 @@ def test_empty_operations_disable_postprocessing():
         }
     )
     assert segment.build_segmentation_output_maps(config) == (
-        {"a": "mask_a"},
+        {"a": "mask_a_path"},
         {"a": "a"},
         set(),
     )

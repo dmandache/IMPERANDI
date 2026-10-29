@@ -204,14 +204,7 @@ class ScanPanelViewer(param.Parameterized):
             self.phase_col = None
 
         if segmentation_cols is None:
-            auto_cols = [c for c in self.df.columns if str(c).startswith("mask_")]
-            if not auto_cols:
-                auto_cols = [
-                    c
-                    for c in ["liver_path", "liver_tumor_path"]
-                    if c in self.df.columns
-                ]
-            self.segmentation_cols = auto_cols
+            self.segmentation_cols = guess_segmentation_cols(self.df)
         elif isinstance(segmentation_cols, str):
             self.segmentation_cols = [segmentation_cols]
         else:

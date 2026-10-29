@@ -8,6 +8,7 @@ import os
 import tempfile
 import time
 from dataclasses import dataclass
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -238,8 +239,10 @@ def fingerprint_dataframe_semantic(
     *,
     columns: Sequence[str] = (),
     dynamic_prefixes: Sequence[str] = (),
+    dynamic_patterns: Sequence[str] = (),
     artifact_columns: Sequence[str] = (),
     artifact_prefixes: Sequence[str] = (),
+    artifact_patterns: Sequence[str] = (),
     strict: bool = False,
     preferred_column: str = "volume_id",
     source_column: str = "_source_idx",
@@ -249,6 +252,7 @@ def fingerprint_dataframe_semantic(
     This is intended for pipeline stages that progressively enrich one mutable
     cohort CSV. Columns written by unrelated downstream stages do not affect the
     fingerprint, while relevant row changes can be detected independently.
+    Dynamic and artifact patterns use shell-style matching of whole column names.
     """
     work = ensure_source_id_column(
         df.copy(),
@@ -261,6 +265,7 @@ def fingerprint_dataframe_semantic(
         column
         for column in work.columns
         if any(str(column).startswith(prefix) for prefix in dynamic_prefixes)
+        or any(fnmatchcase(str(column), pattern) for pattern in dynamic_patterns)
     )
     selected_columns = list(dict.fromkeys([*requested, *dynamic]))
     missing_columns = [column for column in requested if column not in work.columns]
@@ -275,6 +280,7 @@ def fingerprint_dataframe_semantic(
         column
         for column in present_columns
         if any(column.startswith(prefix) for prefix in artifact_prefixes)
+        or any(fnmatchcase(column, pattern) for pattern in artifact_patterns)
     )
 
     row_fingerprints: dict[str, str] = {}
@@ -321,6 +327,9 @@ def fingerprint_dataframe_semantic(
             "columns": present_columns,
             "missing_columns": missing_columns,
             "dynamic_prefixes": list(dynamic_prefixes),
+            **(
+                {"dynamic_patterns": list(dynamic_patterns)} if dynamic_patterns else {}
+            ),
             "artifact_columns": sorted(artifact_names),
             "strict_artifacts": bool(strict),
             "row_count": int(len(work)),
@@ -335,8 +344,10 @@ def fingerprint_csv_semantic(
     *,
     columns: Sequence[str] = (),
     dynamic_prefixes: Sequence[str] = (),
+    dynamic_patterns: Sequence[str] = (),
     artifact_columns: Sequence[str] = (),
     artifact_prefixes: Sequence[str] = (),
+    artifact_patterns: Sequence[str] = (),
     strict: bool = False,
     preferred_column: str = "volume_id",
 ) -> SemanticFingerprint:
@@ -348,8 +359,10 @@ def fingerprint_csv_semantic(
         df,
         columns=columns,
         dynamic_prefixes=dynamic_prefixes,
+        dynamic_patterns=dynamic_patterns,
         artifact_columns=artifact_columns,
         artifact_prefixes=artifact_prefixes,
+        artifact_patterns=artifact_patterns,
         strict=strict,
         preferred_column=preferred_column,
     )

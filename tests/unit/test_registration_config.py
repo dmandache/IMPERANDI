@@ -12,6 +12,24 @@ def test_registration_and_consensus_dice_defaults_are_distinct():
     assert [stage.type for stage in config.stages] == ["mask_rigid", "mask_affine"]
 
 
+@pytest.mark.parametrize("field", ["organ_mask_column", "tumor_mask_column"])
+@pytest.mark.parametrize(
+    "column", ["mask_liver", "mask_rigid_status", "liver_path", "mask__path", "", None]
+)
+def test_registration_requires_mask_filepath_column_names(field, column):
+    with pytest.raises(ValueError, match="mask_<name>_path"):
+        RegistrationConfig(**{field: column})
+
+
+def test_registration_accepts_custom_mask_filepath_columns():
+    config = RegistrationConfig(
+        organ_mask_column="mask_kidney_left_path",
+        tumor_mask_column="mask_kidney_left_tumor_path",
+    )
+    assert config.organ_mask_column == "mask_kidney_left_path"
+    assert config.tumor_mask_column == "mask_kidney_left_tumor_path"
+
+
 def test_output_space_defaults_to_moving_and_rejects_unknown_values():
     assert RegistrationConfig().output_space == "moving"
     assert RegistrationConfig(output_space="reference").output_space == "reference"

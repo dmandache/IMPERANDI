@@ -17,7 +17,7 @@ DICOM roots / archives
  convert ----> nifti_index.csv with paths + NIfTI images
         |
         v
- segment ----> nifti_index.csv with mask_* paths + NIfTI masks
+ segment ----> nifti_index.csv with mask_*_path paths + NIfTI masks
         |
         v
  phase ------> canonical phase + provenance
@@ -69,12 +69,12 @@ tasks using `Modality`, followed by modality-specific mask post-processing.
 `phase` resolves the manifest's ordered ontology, metadata-rule, and
 TotalSegmentator strategies, invoking prediction only where earlier strategies
 did not resolve a phase.
-`radiomics` computes PyRadiomics features for every `mask_*` column, including
+`radiomics` computes PyRadiomics features for every `mask_*_path` column, including
 an organ-minus-tumor strategy when paired organ and tumor masks are present.
 
 Phase can run immediately after conversion or after segmentation. Segmentation
 must precede radiomics, and a phase-filtered radiomics manifest must receive a
-table containing both `mask_*` columns and the canonical `phase` column.
+table containing both `mask_*_path` columns and the canonical `phase` column.
 
 ## Registration
 
@@ -115,8 +115,10 @@ mutual-information (MI) affine, and optional mask-driven B-spline refinement. Th
 low-level rigid MI refinement remains
 available through `mi_refine(..., affine=False)`, but is not part of the active
 cascade.
-Default masks are `mask_liver` and
-`mask_liver_tumor`; masks must match their native image geometry.
+Default masks are `mask_liver_path` and
+`mask_liver_tumor_path`; masks must match their native image geometry.
+Custom `organ_mask_column` and `tumor_mask_column` settings must also use
+`mask_<name>_path` names.
 
 Organ consensus choices are `anchor` and `majority`. Organ masks are transferred
 as unclamped signed-distance fields in physical millimetres with linear
@@ -331,16 +333,16 @@ segmentation quality.
 
 Registration writes new NIfTI files and never modifies the source images or masks.
 By default, `registration.output_space: moving` (or `--output_space moving`) keeps
-`nifti_path` on the original scan and replaces `mask_liver` with the configured
+`nifti_path` on the original scan and replaces `mask_liver_path` with the configured
 organ consensus transferred to that scan's native grid
 (`reg_organ_native_path`). Near the observed-coverage
 boundary, consensus and source distance fields are blended over
 `organ_coverage_blend_width_mm` (default 3 mm) and thresholded once. Consensus is
 never inferred outside observed coverage; those voxels retain the source mask.
 Successful tumor consensus replaces
-`mask_liver_tumor` with the common tumor mask on the same native grid
-(`reg_tumor_native_path`). Original paths are preserved as `source_mask_liver`
-and `source_mask_liver_tumor` (in general, `source_<configured_mask_column>`).
+`mask_liver_tumor_path` with the common tumor mask on the same native grid
+(`reg_tumor_native_path`). Original paths are preserved as `source_mask_liver_path`
+and `source_mask_liver_tumor_path` (in general, `source_<configured_mask_column>`).
 A rerun uses these source columns as its input masks; it never feeds previous
 consensus back into fusion. Failed stages retain their original canonical paths,
 so inspect `registration_status` and `consensus_status` before downstream analysis.
@@ -348,7 +350,7 @@ Existing radiomics now consumes the native-space registered masks automatically.
 
 Set `registration.output_space: reference` (or `--output_space reference`) to
 publish every successful scan on its group's selected common reference grid.
-In this mode `nifti_path`, `mask_liver`, and `mask_liver_tumor` point to
+In this mode `nifti_path`, `mask_liver_path`, and `mask_liver_tumor_path` point to
 `reg_nifti_path`, `reg_organ_path`, and `reg_tumor_common_path`, respectively,
 and therefore always have matching geometry. The original image is retained in
 `source_nifti_path`; the original mask columns continue to use the `source_`

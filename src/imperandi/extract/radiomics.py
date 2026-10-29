@@ -13,6 +13,7 @@ from imperandi.utils.logging import (
     log_task_summary,
     setup_logging,
 )
+from imperandi.utils.columns import MASK_PATH_COLUMN_PATTERN, is_mask_path_column
 from imperandi.utils.misc import print_args
 from imperandi.utils.manifest import load_manifest
 from imperandi.utils.checkpoint_cli import add_checkpoint_arguments
@@ -786,7 +787,7 @@ def extract_radiomics_organ_minus_tumor(
 
 
 def _get_mask_columns(df: pd.DataFrame) -> list[str]:
-    return [col for col in df.columns if col.startswith("mask_")]
+    return [col for col in df.columns if is_mask_path_column(col)]
 
 
 def _build_dataset_strategy(mask_columns: list[str]) -> list[str]:
@@ -795,12 +796,12 @@ def _build_dataset_strategy(mask_columns: list[str]) -> list[str]:
     mask_columns_set = set(mask_columns_sorted)
 
     for mask_col in mask_columns_sorted:
-        prefix = mask_col.replace("mask_", "", 1)
+        prefix = mask_col.removeprefix("mask_").removesuffix("_path")
         if prefix.endswith("_tumor"):
             strategy.append(f"{prefix}: all on {mask_col}")
             continue
 
-        tumor_col = f"{mask_col}_tumor"
+        tumor_col = f"mask_{prefix}_tumor_path"
         if tumor_col in mask_columns_set:
             strategy.append(
                 f"{prefix}: shape on {mask_col}; non_shape on {prefix}_minus_tumor; "
@@ -817,7 +818,7 @@ def _build_dataset_strategy(mask_columns: list[str]) -> list[str]:
 def _log_dataset_strategy(mask_columns: list[str]) -> None:
     strategy = _build_dataset_strategy(mask_columns)
     if not strategy:
-        logger.info("Radiomics strategy (dataset): no mask_* columns found")
+        logger.info("Radiomics strategy (dataset): no mask_*_path columns found")
         return
 
     logger.info(
@@ -851,7 +852,7 @@ def _extract_row_features(
 
     mask_columns_set = set(mask_columns)
     for mask_col in mask_columns:
-        prefix = mask_col.replace("mask_", "", 1)
+        prefix = mask_col.removeprefix("mask_").removesuffix("_path")
         mask_path = row.get(mask_col)
 
         if prefix.endswith("_tumor"):
@@ -864,7 +865,7 @@ def _extract_row_features(
                 row_idx=row_idx,
             )
         else:
-            tumor_col = f"{mask_col}_tumor"
+            tumor_col = f"mask_{prefix}_tumor_path"
             tumor_path = row.get(tumor_col) if tumor_col in mask_columns_set else None
             roi_features, roi_msg = extract_radiomics_organ_minus_tumor(
                 image_path,
@@ -964,9 +965,9 @@ def main(args: argparse.Namespace) -> None:
     semantic_fp = fingerprint_csv_semantic(
         args.csv_path,
         columns=semantic_columns,
-        dynamic_prefixes=["mask_"],
+        dynamic_patterns=[MASK_PATH_COLUMN_PATTERN],
         artifact_columns=["nifti_path"],
-        artifact_prefixes=["mask_"],
+        artifact_patterns=[MASK_PATH_COLUMN_PATTERN],
         strict=bool(getattr(args, "strict_resume", False)),
     )
     exclude_hash_args = {

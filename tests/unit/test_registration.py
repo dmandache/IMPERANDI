@@ -11,6 +11,7 @@ from imperandi.process.registration import alignment
 from imperandi.process.registration.cohort import fuse_organs, fuse_tumors
 from imperandi.process.registration.alignment import register_pair
 from imperandi.process.registration.reporting import build_qc
+from imperandi.utils.columns import is_mask_path_column
 
 sitk = pytest.importorskip("SimpleITK")
 
@@ -268,8 +269,8 @@ def save_scan(
         "phase": phase,
         "mri_sequence": "T1",
         "nifti_path": str(directory / "image.nii.gz"),
-        "mask_liver": str(directory / "organ.nii.gz"),
-        "mask_liver_tumor": str(directory / "tumor.nii.gz") if tumor else None,
+        "mask_liver_path": str(directory / "organ.nii.gz"),
+        "mask_liver_tumor_path": str(directory / "tumor.nii.gz") if tumor else None,
     }
 
 
@@ -281,29 +282,31 @@ def test_cohort_grouping_anchor_transfer_and_native_preservation(tmp_path):
         save_scan(tmp_path, "mr", modality="MRI"),
     ]
     source = pd.DataFrame(rows)
+    source["mask_liver_volume"] = 42.0
+    source["mask_review_status"] = "reviewed"
     out, errors = register_cohort(
         source,
         tmp_path / "out",
         RegistrationConfig(maximum_optimizer_iterations=10),
     )
     assert errors.empty
-    unchanged = [c for c in source if not c.startswith("mask_")]
+    unchanged = [c for c in source if not is_mask_path_column(c)]
     pd.testing.assert_frame_equal(out[unchanged], source[unchanged])
-    for column in ["mask_liver", "mask_liver_tumor"]:
+    for column in ["mask_liver_path", "mask_liver_tumor_path"]:
         pd.testing.assert_series_equal(
             out[f"source_{column}"], source[column], check_names=False
         )
-    assert out.mask_liver.equals(out.reg_organ_native_path)
-    assert out.mask_liver_tumor.equals(out.reg_tumor_native_path)
+    assert out.mask_liver_path.equals(out.reg_organ_native_path)
+    assert out.mask_liver_tumor_path.equals(out.reg_tumor_native_path)
     assert out.registration_group_id.nunique() == 3
     assert out.loc[0, "registration_reference_id"] == out.loc[1, "registration_scan_id"]
     native = sitk.ReadImage(out.loc[0, "reg_tumor_native_path"])
-    expected = sitk.ReadImage(rows[0]["mask_liver"])
+    expected = sitk.ReadImage(rows[0]["mask_liver_path"])
     assert native.GetOrigin() == expected.GetOrigin()
     assert np.array_equal(
         sitk.GetArrayFromImage(native), sitk.GetArrayFromImage(expected)
     )
-    assert not any(c.startswith("mask_") for c in set(out) - set(source))
+    assert not any(is_mask_path_column(c) for c in set(out) - set(source))
 
 
 @pytest.mark.parametrize("output_space", ["moving", "reference"])
@@ -316,18 +319,18 @@ def test_no_tumor_consensus_preserves_each_scan_without_clipping(
     ]
     originals = []
     for index, row in enumerate(rows):
-        mask = sitk.ReadImage(row["mask_liver"])
+        mask = sitk.ReadImage(row["mask_liver_path"])
         values = np.zeros(tuple(reversed(mask.GetSize())), dtype=np.uint8)
         # Separate lesions outside the organ expose both accidental fusion and clipping.
         values[2 + index, 3, 4] = 1
         tumor = sitk.GetImageFromArray(values)
         tumor.CopyInformation(mask)
-        sitk.WriteImage(tumor, row["mask_liver_tumor"])
-        originals.append(Path(row["mask_liver_tumor"]).read_bytes())
+        sitk.WriteImage(tumor, row["mask_liver_tumor_path"])
+        originals.append(Path(row["mask_liver_tumor_path"]).read_bytes())
     # Accept this scan for registration but exclude it from consensus voting.
-    moving_organ = sitk.ReadImage(rows[1]["mask_liver"])
+    moving_organ = sitk.ReadImage(rows[1]["mask_liver_path"])
     moving_organ[15, 13, 11] = 0
-    sitk.WriteImage(moving_organ, rows[1]["mask_liver"])
+    sitk.WriteImage(moving_organ, rows[1]["mask_liver_path"])
 
     def no_fusion(*args, **kwargs):
         pytest.fail("none must bypass tumor fusion")
@@ -353,10 +356,13 @@ def test_no_tumor_consensus_preserves_each_scan_without_clipping(
     assert out.registration_consensus_support_policy.tolist() == ["none"] * 2
     assert out.reg_tumor_native_path.isna().all()
     for index, row in enumerate(rows):
-        assert Path(row["mask_liver_tumor"]).read_bytes() == originals[index]
-        assert out.loc[index, "source_mask_liver_tumor"] == row["mask_liver_tumor"]
-        result = sitk.ReadImage(out.loc[index, "mask_liver_tumor"])
-        expected = sitk.ReadImage(row["mask_liver_tumor"])
+        assert Path(row["mask_liver_tumor_path"]).read_bytes() == originals[index]
+        assert (
+            out.loc[index, "source_mask_liver_tumor_path"]
+            == row["mask_liver_tumor_path"]
+        )
+        result = sitk.ReadImage(out.loc[index, "mask_liver_tumor_path"])
+        expected = sitk.ReadImage(row["mask_liver_tumor_path"])
         np.testing.assert_array_equal(
             sitk.GetArrayFromImage(result), sitk.GetArrayFromImage(expected)
         )
@@ -366,10 +372,12 @@ def test_no_tumor_consensus_preserves_each_scan_without_clipping(
         assert result.GetSpacing() == grid.GetSpacing()
         assert result.GetDirection() == grid.GetDirection()
         if output_space == "moving":
-            assert out.loc[index, "mask_liver_tumor"] == row["mask_liver_tumor"]
+            assert (
+                out.loc[index, "mask_liver_tumor_path"] == row["mask_liver_tumor_path"]
+            )
         else:
             assert (
-                out.loc[index, "mask_liver_tumor"]
+                out.loc[index, "mask_liver_tumor_path"]
                 == out.loc[index, "reg_tumor_common_path"]
             )
 
@@ -383,9 +391,9 @@ def test_no_tumor_consensus_never_fills_from_another_scan(
         save_scan(tmp_path, "portal", phase="PORTAL_VENOUS"),
         save_scan(tmp_path, "arterial", offset=4),
     ]
-    path = rows[1]["mask_liver_tumor"]
+    path = rows[1]["mask_liver_tumor_path"]
     if tumor_state == "missing":
-        rows[1]["mask_liver_tumor"] = None
+        rows[1]["mask_liver_tumor_path"] = None
     elif tumor_state == "unreadable":
         Path(path).write_text("not a NIfTI image")
     else:
@@ -406,21 +414,21 @@ def test_no_tumor_consensus_never_fills_from_another_scan(
     if tumor_state == "empty":
         assert errors.empty
         assert out.loc[1, "consensus_status"] == "preserved_source"
-        result = sitk.ReadImage(out.loc[1, "mask_liver_tumor"])
+        result = sitk.ReadImage(out.loc[1, "mask_liver_tumor_path"])
         grid = sitk.ReadImage(out.loc[1, "nifti_path"])
         assert result.GetOrigin() == grid.GetOrigin()
         assert not sitk.GetArrayFromImage(result).any()
     elif tumor_state == "missing":
         assert errors.empty
         assert out.loc[1, "consensus_status"] == "no_tumor_input"
-        assert pd.isna(out.loc[1, "mask_liver_tumor"])
+        assert pd.isna(out.loc[1, "mask_liver_tumor_path"])
     else:
         assert errors.stage.tolist() == ["tumor_input"]
         assert out.loc[1, "consensus_status"] == "failed"
         if output_space == "reference":
-            assert pd.isna(out.loc[1, "mask_liver_tumor"])
+            assert pd.isna(out.loc[1, "mask_liver_tumor_path"])
         else:
-            assert out.loc[1, "mask_liver_tumor"] == path
+            assert out.loc[1, "mask_liver_tumor_path"] == path
 
 
 def test_no_tumor_consensus_reference_transfer_failure_clears_native_path(
@@ -444,9 +452,9 @@ def test_no_tumor_consensus_reference_transfer_failure_clears_native_path(
     )
     assert errors.stage.tolist() == ["transfer"]
     assert out.loc[0, "consensus_status"] == "failed"
-    assert pd.isna(out.loc[0, "mask_liver_tumor"])
+    assert pd.isna(out.loc[0, "mask_liver_tumor_path"])
     assert pd.isna(out.loc[0, "reg_tumor_common_path"])
-    assert out.loc[0, "source_mask_liver_tumor"] == row["mask_liver_tumor"]
+    assert out.loc[0, "source_mask_liver_tumor_path"] == row["mask_liver_tumor_path"]
 
 
 def test_switching_from_fusion_to_none_restores_original_tumors(tmp_path):
@@ -462,15 +470,15 @@ def test_switching_from_fusion_to_none_restores_original_tumors(tmp_path):
     )
     assert errors.empty
     previous_artifacts = fused.reg_tumor_common_path.tolist()
-    assert fused.mask_liver_tumor.notna().all()
+    assert fused.mask_liver_tumor_path.notna().all()
     out, errors = register_cohort(
         fused,
         output_dir,
         RegistrationConfig(tumor_consensus_method="none", stages=[]),
     )
     assert errors.empty
-    assert out.loc[0, "mask_liver_tumor"] == rows[0]["mask_liver_tumor"]
-    assert pd.isna(out.loc[1, "mask_liver_tumor"])
+    assert out.loc[0, "mask_liver_tumor_path"] == rows[0]["mask_liver_tumor_path"]
+    assert pd.isna(out.loc[1, "mask_liver_tumor_path"])
     assert out.reg_tumor_native_path.isna().all()
     assert not any(Path(path).exists() for path in previous_artifacts)
 
@@ -505,8 +513,8 @@ def test_reference_output_space_publishes_images_and_masks_on_common_grid(
     assert errors.empty
     assert out.source_nifti_path.tolist() == [row["nifti_path"] for row in rows]
     assert out.nifti_path.tolist() == out.reg_nifti_path.tolist()
-    assert out.mask_liver.equals(out.reg_organ_path)
-    assert out.mask_liver_tumor.equals(out.reg_tumor_common_path)
+    assert out.mask_liver_path.equals(out.reg_organ_path)
+    assert out.mask_liver_tumor_path.equals(out.reg_tumor_common_path)
     assert out.reg_organ_native_path.isna().all()
     assert out.reg_tumor_native_path.isna().all()
 
@@ -518,7 +526,7 @@ def test_reference_output_space_publishes_images_and_masks_on_common_grid(
         reference.GetDirection(),
     )
     for _, row in out.iterrows():
-        for column in ("nifti_path", "mask_liver", "mask_liver_tumor"):
+        for column in ("nifti_path", "mask_liver_path", "mask_liver_tumor_path"):
             result = sitk.ReadImage(row[column])
             assert (
                 result.GetSize(),
@@ -568,7 +576,7 @@ def test_manifest_grouping_columns_control_cross_modality_registration(
         log_path = Path(row.registration_log_path)
         assert log_path.is_file()
         assert log_path.parent == expected_group
-        for column in ("mask_liver", "mask_liver_tumor"):
+        for column in ("mask_liver_path", "mask_liver_tumor_path"):
             artifact_path = Path(row[column])
             assert artifact_path.is_file()
             assert artifact_path.parent.parent == log_path.parent
@@ -653,7 +661,7 @@ def test_tumor_resampling_failure_preserves_organ_registration(monkeypatch, tmp_
     )
     assert out.loc[0, "registration_status"] == "reference"
     assert out.loc[0, "consensus_status"] == "failed"
-    assert out.loc[0, "mask_liver_tumor"] == row["mask_liver_tumor"]
+    assert out.loc[0, "mask_liver_tumor_path"] == row["mask_liver_tumor_path"]
     assert errors.stage.tolist() == ["consensus"]
     assert errors.error.tolist() == ["tumor resampling failed"]
 
@@ -799,12 +807,12 @@ def test_majority_organ_consensus_is_written_to_native_grids(tmp_path):
         save_scan(tmp_path, "portal", phase="PORTAL_VENOUS"),
         save_scan(tmp_path, "arterial"),
     ]
-    moving = sitk.ReadImage(rows[1]["mask_liver"])
+    moving = sitk.ReadImage(rows[1]["mask_liver_path"])
     values = sitk.GetArrayFromImage(moving)
     values[11, 13, 15] = 0
     altered = sitk.GetImageFromArray(values)
     altered.CopyInformation(moving)
-    sitk.WriteImage(altered, rows[1]["mask_liver"])
+    sitk.WriteImage(altered, rows[1]["mask_liver_path"])
 
     out, errors = register_cohort(
         pd.DataFrame(rows),
@@ -815,7 +823,7 @@ def test_majority_organ_consensus_is_written_to_native_grids(tmp_path):
     )
 
     assert errors.empty
-    assert out.mask_liver.equals(out.reg_organ_native_path)
+    assert out.mask_liver_path.equals(out.reg_organ_native_path)
     for index, path in enumerate(out.reg_organ_native_path):
         consensus = sitk.ReadImage(path)
         assert consensus.GetPixelID() == sitk.sitkUInt8
@@ -835,7 +843,7 @@ def test_invalid_mask_and_missing_tumor(tmp_path):
     assert errors.empty
     assert out.consensus_status.tolist() == ["no_tumor_input"]
     assert out.tumor_consensus_input_status.tolist() == ["skipped_missing"]
-    rows[0]["mask_liver"] = str(tmp_path / "missing.nii.gz")
+    rows[0]["mask_liver_path"] = str(tmp_path / "missing.nii.gz")
     out, errors = register_cohort(pd.DataFrame(rows), tmp_path / "out2")
     assert out.registration_status.tolist() == ["skipped"]
     assert out.registration_skip_reason.tolist() == ["missing_organ_mask"]
@@ -849,10 +857,10 @@ def test_empty_organ_is_skipped_and_excluded_from_active_group(tmp_path):
         save_scan(tmp_path, "portal", phase="PORTAL_VENOUS"),
         save_scan(tmp_path, "empty", phase="ARTERIAL"),
     ]
-    empty = sitk.ReadImage(rows[1]["mask_liver"])
+    empty = sitk.ReadImage(rows[1]["mask_liver_path"])
     empty = sitk.Image(empty.GetSize(), sitk.sitkUInt8)
     empty.CopyInformation(sitk.ReadImage(rows[1]["nifti_path"]))
-    sitk.WriteImage(empty, rows[1]["mask_liver"])
+    sitk.WriteImage(empty, rows[1]["mask_liver_path"])
 
     out, errors = register_cohort(pd.DataFrame(rows), tmp_path / "out")
 
@@ -875,7 +883,7 @@ def test_empty_tumor_is_excluded_from_consensus(tmp_path):
     image = sitk.ReadImage(rows[1]["nifti_path"])
     empty = sitk.Image(image.GetSize(), sitk.sitkUInt8)
     empty.CopyInformation(image)
-    sitk.WriteImage(empty, rows[1]["mask_liver_tumor"])
+    sitk.WriteImage(empty, rows[1]["mask_liver_tumor_path"])
 
     out, errors = register_cohort(
         pd.DataFrame(rows),
@@ -895,7 +903,7 @@ def test_empty_tumor_is_excluded_from_consensus(tmp_path):
 
 def test_unreadable_organ_mask_remains_an_input_failure(tmp_path):
     row = save_scan(tmp_path, "corrupt")
-    Path(row["mask_liver"]).write_text("not a NIfTI image")
+    Path(row["mask_liver_path"]).write_text("not a NIfTI image")
 
     out, errors = register_cohort(pd.DataFrame([row]), tmp_path / "out")
 
@@ -915,7 +923,7 @@ def test_anchor_falls_back_to_moving_mask(tmp_path):
     )
     assert errors.empty
     transferred = sitk.ReadImage(out.loc[0, "reg_tumor_native_path"])
-    expected = sitk.ReadImage(rows[0]["mask_liver"])
+    expected = sitk.ReadImage(rows[0]["mask_liver_path"])
     assert np.array_equal(
         sitk.GetArrayFromImage(transferred), sitk.GetArrayFromImage(expected)
     )
@@ -1200,7 +1208,11 @@ def test_native_canonical_masks_preserve_files_and_rerun_sources(tmp_path, caplo
     originals = {
         path: Path(path).read_bytes()
         for row in rows
-        for path in [row["nifti_path"], row["mask_liver"], row["mask_liver_tumor"]]
+        for path in [
+            row["nifti_path"],
+            row["mask_liver_path"],
+            row["mask_liver_tumor_path"],
+        ]
     }
     first, errors = register_cohort(
         source,
@@ -1210,7 +1222,7 @@ def test_native_canonical_masks_preserve_files_and_rerun_sources(tmp_path, caplo
     assert errors.empty
     for i, row in first.iterrows():
         scan = sitk.ReadImage(row.nifti_path)
-        for column in ["mask_liver", "mask_liver_tumor"]:
+        for column in ["mask_liver_path", "mask_liver_tumor_path"]:
             assert row[column] != rows[i][column]
             assert row[f"source_{column}"] == rows[i][column]
             mask = sitk.ReadImage(row[column])
@@ -1238,12 +1250,14 @@ def test_native_canonical_masks_preserve_files_and_rerun_sources(tmp_path, caplo
         RegistrationConfig(maximum_optimizer_iterations=10),
     )
     assert errors.empty
-    assert second.source_mask_liver.equals(first.source_mask_liver)
-    assert second.source_mask_liver_tumor.equals(first.source_mask_liver_tumor)
-    assert second.mask_liver_tumor.tolist() == first.mask_liver_tumor.tolist()
+    assert second.source_mask_liver_path.equals(first.source_mask_liver_path)
+    assert second.source_mask_liver_tumor_path.equals(
+        first.source_mask_liver_tumor_path
+    )
+    assert second.mask_liver_tumor_path.tolist() == first.mask_liver_tumor_path.tolist()
     assert not (group_directory / "old-run").exists()
     assert "Overwriting registration outputs" in caplog.text
-    assert all(Path(path).is_file() for path in second.mask_liver_tumor)
+    assert all(Path(path).is_file() for path in second.mask_liver_tumor_path)
     assert all(Path(path).read_bytes() == data for path, data in originals.items())
 
 
@@ -1451,7 +1465,7 @@ def test_scan_labels_number_series_within_each_group():
             "phase": phase,
             "series_id": f"PRIVATE-{index}",
             "nifti_path": f"/private/location/scan-{index}.nii.gz",
-            "mask_liver": f"/private/location/liver-{index}.nii.gz",
+            "mask_liver_path": f"/private/location/liver-{index}.nii.gz",
         }
         for index, phase in enumerate(
             ["NATIVE", "DELAYED", "OTHER", "ARTERIAL", "OTHER", "PORTAL_VENOUS"]
@@ -1507,8 +1521,8 @@ def test_rejected_pair_keeps_qc_and_original_canonical_paths(tmp_path):
     out, errors = register_cohort(
         pd.DataFrame(rows), tmp_path / "out", pair_registration=rejected
     )
-    assert out.loc[1, "mask_liver"] == rows[1]["mask_liver"]
-    assert out.loc[1, "mask_liver_tumor"] == rows[1]["mask_liver_tumor"]
+    assert out.loc[1, "mask_liver_path"] == rows[1]["mask_liver_path"]
+    assert out.loc[1, "mask_liver_tumor_path"] == rows[1]["mask_liver_tumor_path"]
     qc = build_qc(out, errors, RegistrationConfig()).set_index("registration_scan_id")
     moving = qc.loc[out.loc[1, "registration_scan_id"]]
     assert moving.dice_mask_rigid == 0.2
@@ -1522,13 +1536,13 @@ def test_keep_source_segmentation_maps_tumor_to_source_organ(tmp_path, keep):
         save_scan(tmp_path, "portal", phase="PORTAL_VENOUS"),
         save_scan(tmp_path, "arterial", tumor=False, offset=4),
     ]
-    source_organ = sitk.ReadImage(rows[1]["mask_liver"])
+    source_organ = sitk.ReadImage(rows[1]["mask_liver_path"])
     values = sitk.GetArrayFromImage(source_organ)
     values[11, 13, 15] = 0
     altered = sitk.GetImageFromArray(values)
     altered.CopyInformation(source_organ)
-    sitk.WriteImage(altered, rows[1]["mask_liver"])
-    original_bytes = Path(rows[1]["mask_liver"]).read_bytes()
+    sitk.WriteImage(altered, rows[1]["mask_liver_path"])
+    original_bytes = Path(rows[1]["mask_liver_path"]).read_bytes()
     out, errors = register_cohort(
         pd.DataFrame(rows),
         tmp_path / "out",
@@ -1539,13 +1553,13 @@ def test_keep_source_segmentation_maps_tumor_to_source_organ(tmp_path, keep):
     )
     assert errors.empty
     assert out.consensus_status.eq("single_contributor").all()
-    assert Path(rows[1]["mask_liver"]).read_bytes() == original_bytes
+    assert Path(rows[1]["mask_liver_path"]).read_bytes() == original_bytes
     if keep:
-        assert out.mask_liver.tolist() == [r["mask_liver"] for r in rows]
+        assert out.mask_liver_path.tolist() == [r["mask_liver_path"] for r in rows]
         assert out.reg_organ_native_path.isna().all()
         assert not list((tmp_path / "out").rglob("organ_native.nii.gz"))
     else:
-        assert out.mask_liver.equals(out.reg_organ_native_path)
+        assert out.mask_liver_path.equals(out.reg_organ_native_path)
     native = sitk.ReadImage(out.loc[1, "reg_tumor_native_path"])
     assert native.GetOrigin() == source_organ.GetOrigin()
     assert sitk.GetArrayFromImage(native)[11, 13, 15] == (0 if keep else 1)
@@ -1560,7 +1574,7 @@ def test_keep_source_segmentation_maps_tumor_to_source_organ(tmp_path, keep):
             ),
         )
         assert errors.empty
-        assert rerun.mask_liver.tolist() == out.source_mask_liver.tolist()
+        assert rerun.mask_liver_path.tolist() == out.source_mask_liver_path.tolist()
 
 
 def test_preserve_source_organ_mask_requires_boolean():
@@ -1589,5 +1603,5 @@ def test_preserve_source_organ_mask_bypasses_organ_consensus(monkeypatch, tmp_pa
     )
 
     assert errors.empty
-    assert out.loc[0, "mask_liver"] == row["mask_liver"]
+    assert out.loc[0, "mask_liver_path"] == row["mask_liver_path"]
     assert pd.isna(out.loc[0, "reg_organ_native_path"])

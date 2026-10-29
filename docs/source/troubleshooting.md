@@ -23,7 +23,7 @@ and requires Git and network access:
 python -m pip install "pyradiomics @ git+https://github.com/AIM-Harvard/pyradiomics.git@master"
 ```
 
-Confirm the input has `nifti_path` and at least one populated `mask_*` column.
+Confirm the input has `nifti_path` and at least one populated `mask_*_path` column.
 
 ## No DICOM files are found
 
