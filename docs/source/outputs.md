@@ -6,16 +6,44 @@ columns and adds or normalizes the fields needed downstream.
 | Stage | Main output | Error/auxiliary output | Key additions |
 |---|---|---|---|
 | `parse` | `dicom_index.csv` | `dicom_index_errors.csv`; optional `dicom_tags_snapshot.ndjson` | IDs, `dicom_path`, selected DICOM tags |
-| `clean` | `<input>_clean.csv` | — | volume grouping, normalized date/time, ordering and geometry fields |
-| `ingest` | `dicom_index_clean.csv` | parse artifacts | parsed and curated volume rows |
+| `clean` | `<input>_clean.csv` | selection and QC exports when phase curation is enabled | volume grouping, normalized date/time, ordering and geometry fields |
+| `ingest` | `dicom_index_clean.csv` | parse artifacts; selection and QC exports when phase curation is enabled | parsed and curated volume rows |
 | `convert` | `nifti_index.csv` | `conv_errors.csv` | `nifti_path` |
 | `segment` | input CSV in place, or `--csv_path_out` | `seg_errors.csv` and warning report when applicable | `mask_<output>_path` paths |
-| `phase` | input CSV in place, or `--csv_path_out` | `phase_errors.csv` | canonical `phase`, provenance columns, and `totalseg_*` predictions when used |
+| `phase` | input CSV in place, or `--csv_path_out` | `phase_errors.csv`; selection and QC exports | canonical `phase`, provenance columns, and `totalseg_*` predictions when used |
 | `register` | `<input>_registered.csv` | `register_errors.csv`, `register_qc.csv`, one JSONL log per group, checkpoint/state files | Canonical image/mask paths in the configured moving or common-reference output space, original `source_*` paths, registration status/QC fields, and selected-space artifact paths |
 | `radiomics` | `<input>_radiomics.csv` | `radiomics_errors.csv` | ROI-prefixed PyRadiomics features |
 
 Defaults are relative to the input CSV or selected output directory. Explicit
 paths are recommended in scheduled pipelines.
+
+## Curation and selection exports
+
+A `phase_curation` cleaning step (including the built-in `generic` ingest flow)
+and the `phase` command write these additional tables:
+
+| File | Contents | Intended use |
+| --- | --- | --- |
+| `<input_stem>_curated.csv` | Best eligible CT volume per phase or MR volume per sequence/phase slot, per exam (`selected_long`) | Optional input to subsequent processing stages |
+| `qc_<input_stem>_curated.csv` | One row per exam and modality, with selection slots, candidate descriptions, scores, and provenance (`selected_wide`) | Review selections; do not use as a processing input |
+| `qc_unresolved_phase.csv` | Rows unresolved after the configured strategies, before fallback, with raw evidence retained | Investigate unresolved phases, including rows excluded from selection |
+
+The full main output retains every surviving row; selection does not reduce it.
+Use it to process all candidates, or use the selected CSV for representative
+volumes. Both must contain the image or mask paths needed by the next stage.
+
+These filenames and their directory derive from the **input** CSV, even when
+`--csv_path_out` names a different location. For `ingest`, the input is its
+intermediate `dicom_index.csv`, producing `dicom_index_curated.csv` and
+`qc_dicom_index_curated.csv`. With multiple cleaning inputs, the first supplies
+the location and stem. Cleaning without a `phase_curation` step skips these exports.
+
+Only `phase` supports `--selected_csv_path /path/to/selected.csv`; its wide QC
+output then becomes `/path/to/qc_selected.csv`, with `qc_unresolved_phase.csv`
+in that directory. Selection and QC files are replaced on subsequent exports,
+including completed phase resumes; keep separate directories for runs whose
+reports you want to preserve. See [Best series per exam](manifests.md#best-series-per-exam)
+for grouping, ranking, and fallback behavior.
 
 ## Identity and traceability
 

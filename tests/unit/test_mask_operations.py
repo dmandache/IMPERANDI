@@ -636,8 +636,18 @@ def test_postprocess_runtime_failure_policy(tmp_path, monkeypatch, policy, error
         assert resolved == {"a": "a"}
 
 
-@pytest.mark.parametrize("manifest", ["generic", "blueprint_manifest_example"])
-def test_builtin_segmentation_manifests_validate(manifest):
+@pytest.mark.parametrize(
+    "manifest",
+    [
+        "generic",
+        str(
+            Path(__file__).resolve().parents[2]
+            / "examples"
+            / "blueprint_manifest_example.yaml"
+        ),
+    ],
+)
+def test_builtin_and_example_segmentation_manifests_validate(manifest):
     config = segment.load_segmentation_config(
         manifest, base_path=Path(segment.__file__).parent
     )

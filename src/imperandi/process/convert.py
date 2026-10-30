@@ -149,6 +149,7 @@ def add_convert_arguments(
         parser,
         default_rows=DEFAULT_CHECKPOINT_EVERY_ROWS,
         default_sec=DEFAULT_CHECKPOINT_EVERY_SEC,
+        include_retry_failed=True,
     )
     if include_manifest:
         parser.add_argument(
@@ -697,6 +698,7 @@ def main(args):
     can_resume = resume_ctx["can_resume"]
     can_partial_resume = resume_ctx["can_partial_resume"]
     already_finished = resume_ctx["already_finished"]
+    deferred_failed_ids = resume_ctx["deferred_failed_indices"]
     ckpt = CheckpointManager(paths=paths, config=resume_ctx["config"])
 
     if already_finished:
@@ -761,13 +763,14 @@ def main(args):
             len(completed_indices),
             max(0, len(df_all) - len(completed_indices)),
         )
+    current_source_ids = set(df_all["_source_idx"])
     if (can_resume or can_partial_resume) and paths.error_checkpoint_path.exists():
         err_ckpt = pd.read_csv(paths.error_checkpoint_path)
         for _, row in err_ckpt.iterrows():
             if "_source_idx" in row:
                 try:
                     source_idx = normalize_source_id(row["_source_idx"])
-                    if source_idx in completed_indices:
+                    if source_idx in current_source_ids:
                         errors_by_idx[source_idx] = row.to_dict()
                 except Exception:
                     continue
@@ -778,7 +781,7 @@ def main(args):
         else set()
     )
 
-    resumed_ids = set(df_all["_source_idx"]) & completed_indices
+    resumed_ids = current_source_ids & (completed_indices | deferred_failed_ids)
     resume_failed_count = len(resumed_ids & set(errors_by_idx))
     run_counts = {"converted": 0, "skipped": 0, "failed": 0}
 
@@ -800,7 +803,9 @@ def main(args):
         keep_cache=args.keep_archive_cache,
         max_depth=args.archive_max_depth,
     ) as archive_session:
-        work_df = df_all[~df_all["_source_idx"].isin(completed_indices)].copy()
+        work_df = df_all[
+            ~df_all["_source_idx"].isin(completed_indices | deferred_failed_ids)
+        ].copy()
         work_df = work_df.reset_index(drop=True)
         work_df, df_archive_err = materialize_archive_dicom_paths(
             work_df, archive_session
@@ -813,14 +818,15 @@ def main(args):
                     if not source_idx:
                         continue
                     errors_by_idx[source_idx] = row.to_dict()
-                    completed_indices.add(source_idx)
+                    ckpt.mark_processed()
 
         def _on_result(k: int, export_path, error_row, status: str) -> None:
             ckpt.mark_processed()
             if status in run_counts:
                 run_counts[status] += 1
             source_idx = normalize_source_id(work_df.iloc[k]["_source_idx"])
-            completed_indices.add(source_idx)
+            if status in {"converted", "skipped"} and export_path is not None:
+                completed_indices.add(source_idx)
             if export_path is not None:
                 mask = df_all["_source_idx"] == source_idx
                 df_all.loc[mask, "nifti_path"] = str(export_path)
@@ -849,7 +855,6 @@ def main(args):
         else:
             logger.info("No volumes require conversion; skipping conversion workers.")
 
-        _checkpoint_write(force=True)
         _checkpoint_write(force=True)
 
     if args.verbose:
@@ -886,6 +891,8 @@ def main(args):
         if args.verbose:
             report_volumes(df_err)
         atomic_write_csv(df_err, args.error_csv_path, index=False)
+    elif Path(args.error_csv_path).exists():
+        Path(args.error_csv_path).unlink()
 
     log_task_summary(
         logger,

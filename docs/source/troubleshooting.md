@@ -61,6 +61,14 @@ detect every in-place content change. Use `--strict_resume` when inputs may have
 changed without a path/metadata change, or `--no_resume` to deliberately start
 fresh. Do not combine outputs from manifests with different task definitions.
 
+## A failed volume is skipped on resume
+
+For `convert`, `segment`, `phase`, `radiomics`, and `register`, repeat the original
+command with `--retry_failed` after resolving the cause. Keep its input/output
+paths and settings unchanged to reuse successful work. Normal resume preserves
+recorded failures without retrying them. Successful retries clear their errors.
+Use `--no_resume` to start fresh; for `parse`/`ingest`, this rereads all inputs.
+
 ## Multiprocessing hangs or exhausts memory
 
 Reduce `--num_workers` and, for segmentation, keep the default

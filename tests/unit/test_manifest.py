@@ -9,15 +9,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from imperandi.utils.manifest import load_manifest, resolve_hook
 
+BLUEPRINT_MANIFEST = str(
+    Path(__file__).resolve().parents[2] / "examples" / "blueprint_manifest_example.yaml"
+)
+
 
 @pytest.mark.parametrize(
     ("manifest_name", "dataset_name"),
     [
         ("generic", "generic"),
-        ("blueprint_manifest_example", "blueprint_example"),
+        (BLUEPRINT_MANIFEST, "blueprint_example"),
     ],
 )
-def test_bundled_manifests_are_loadable(manifest_name, dataset_name):
+def test_builtin_and_example_manifests_are_loadable(manifest_name, dataset_name):
     base_path = Path(__file__).resolve().parents[2] / "src" / "imperandi"
 
     manifest = load_manifest(manifest_name, base_path=base_path)
@@ -41,7 +45,7 @@ def test_bundled_manifests_are_loadable(manifest_name, dataset_name):
     "manifest_name",
     [
         "generic",
-        "blueprint_manifest_example",
+        BLUEPRINT_MANIFEST,
     ],
 )
 def test_registration_manifests_use_ordered_reference_criteria(manifest_name):

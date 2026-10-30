@@ -27,7 +27,8 @@ One manifest configures the main data path:
 4. `phase_curation` defines canonical phase resolution during `clean` and
    after optional TotalSegmentator prediction during `phase`.
 5. `segmentation` defines TotalSegmentator mask tasks and post-processing.
-6. `radiomics` defines PyRadiomics settings and cohort filters.
+6. `registration` defines grouping, alignment stages, consensus, and output space.
+7. `radiomics` defines PyRadiomics settings and cohort filters.
 
 The `cleaning.steps` order is executable configuration. In particular,
 `modality_curation` should run after volume grouping and acquisition ordering,
@@ -573,6 +574,12 @@ Named profiles use these mappings:
 | Multiart | All arterial |
 | Mask+Multiart | First native, then arterial |
 
+A combined label such as `axial t1 caipi fs art port 90s` uses the ART-PORT
+profile rather than assigning all volumes portal from `90s`. An isolated
+combined label remains unresolved. Across series, endpoint assignment requires
+a complete, distinct acquisition-order or clock field; the clock supplies order,
+not a post-injection delay.
+
 Vendor `PhN` numbering alone does not identify a phase: `Ph1` is not automatically
 arterial. A compatible unnumbered native establishes postcontrast context for
 numbered acquisitions. An unlabelled acquisition matching the same protocol
@@ -882,7 +889,7 @@ registration:
       optimizer: {iterations: 25}
 ```
 
-See [the registration workflow](workflow.md) for objective selection,
+See [the registration workflow](registration.md) for objective selection,
 per-stage conditions, deformation limits, and rejection behavior.
 
 ### Individual tumor masks

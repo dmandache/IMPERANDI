@@ -31,14 +31,19 @@ def log_finished_resume_summary(
         error_key = "_source_idx" if "_source_idx" in prior_errors else "idx"
         if error_key in prior_errors:
             prior_failed_ids = normalize_source_ids(prior_errors[error_key])
-    prior_failed_count = len(resumed_ids & prior_failed_ids)
+    expected_ids = resumed_ids | normalize_source_ids(
+        (state or {}).get("failed_indices", [])
+    )
+    prior_failed_ids &= expected_ids
+    successful_ids = resumed_ids - prior_failed_ids
+    prior_failed_count = len(prior_failed_ids)
     log_task_summary(
         logger,
         task_name,
         processed_rows=0,
         succeeded_rows=0,
-        skipped_rows=len(resumed_ids),
-        resumed_rows=len(resumed_ids) - prior_failed_count,
+        skipped_rows=len(resumed_ids | prior_failed_ids),
+        resumed_rows=len(successful_ids),
         extra_counts={"skipped by resume after prior failure": prior_failed_count},
     )
 
@@ -50,6 +55,7 @@ DEFAULT_HASH_EXCLUDE_KEYS = frozenset(
         "checkpoint_every_rows",
         "checkpoint_every_sec",
         "strict_resume",
+        "retry_failed",
     }
 )
 
@@ -575,10 +581,35 @@ def prepare_resume_context(
         args_hash=args_hash,
         input_fingerprint=input_fp,
     )
+    # Keep recorded failures separate from successful completion, including old
+    # checkpoints that stored both in completed_indices. Only compatible failures
+    # are deferred: changed inputs must be evaluated again regardless of this flag.
+    # Registration manages its group-level retry policy in its own runner.
+    failed_ids: set[str] = set()
+    if task_is_compatible and command in {"convert", "segment", "phase", "radiomics"}:
+        if paths.error_checkpoint_path.exists():
+            prior_errors = pd.read_csv(paths.error_checkpoint_path)
+            error_key = "_source_idx" if "_source_idx" in prior_errors else "idx"
+            if error_key in prior_errors:
+                failed_ids = normalize_source_ids(prior_errors[error_key])
+        if failed_ids:
+            state = dict(state)
+            state["failed_indices"] = sorted(failed_ids)
+            state["completed_indices"] = sorted(
+                normalize_source_ids(state.get("completed_indices", [])) - failed_ids
+            )
     finished_state = state_is_compatible and bool((state or {}).get("finished"))
     output_exists = Path(output_path).exists()
     checkpoint_exists = paths.main_checkpoint_path.exists()
-    already_finished = finished_state and output_exists
+    retry_failed = bool(getattr(args, "retry_failed", False))
+    deferred_failed_ids = (
+        failed_ids
+        if state_is_compatible and checkpoint_exists and not retry_failed
+        else set()
+    )
+    already_finished = (
+        finished_state and output_exists and not (retry_failed and failed_ids)
+    )
     can_resume = state_is_compatible and checkpoint_exists
     can_partial_resume = (
         task_is_compatible
@@ -594,6 +625,7 @@ def prepare_resume_context(
         "can_resume": can_resume,
         "can_partial_resume": can_partial_resume,
         "already_finished": already_finished,
+        "deferred_failed_indices": deferred_failed_ids,
         "config": CheckpointConfig(
             command=command,
             args_hash=args_hash,

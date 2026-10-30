@@ -1,8 +1,10 @@
 Quality-control Dashboards
-===================
+==========================
+
+See :doc:`../viewers` for notebook and browser launch examples.
 
 Interactive viewer in Jupyter Notebook
----------------
+--------------------------------------
 
 .. figure:: https://raw.githubusercontent.com/dmandache/IMPERANDI/main/static/viewer-demo.png
    :alt: Viewer interface example
@@ -16,7 +18,7 @@ Interactive viewer in Jupyter Notebook
    :undoc-members:
 
 Viewer resampling helpers
-------------------
+-------------------------
 
 .. automodule:: imperandi.qc.viewer_resample
    :members:
