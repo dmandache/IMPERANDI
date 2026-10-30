@@ -75,27 +75,67 @@ post-processing, so logical and morphological operations run on the cropped
 grid. Crop bounds are clipped to the true image size and never introduce padded
 voxels.
 
-## 5. Extract phase and radiomics
+## 5. Resolve contrast phase
 
 ```bash
 imperandi phase \
   --csv_path ./project/tables/nifti_index_segmented.csv \
   --csv_path_out ./project/tables/nifti_index_phased.csv \
   --manifest generic
+```
 
+The phase command writes canonical `phase` provenance and adds `totalseg_*`
+fields only for rows that reach the prediction strategy. It also writes a selected
+cohort and QC tables. The examples continue with the full cohort; see
+[Outputs](outputs.md#curation-and-selection-exports) to choose representative
+volumes instead.
+
+## 6. Optionally register organs and masks
+
+Install `imperandi[registration]` (see [Installation](installation.md)), then run:
+
+```bash
+imperandi register \
+  --csv_path ./project/tables/nifti_index_phased.csv \
+  --csv_path_out ./project/tables/nifti_index_registered.csv \
+  --output_dir ./project/registration \
+  --manifest generic
+```
+
+By default, groups are defined by patient, study, and modality. Images remain on
+their native grids; canonical organ and tumor mask paths point to the consensus
+results for successful rows. Review `register_qc.csv` and registration/consensus
+statuses before using these masks. Original mask paths remain in `source_*`
+columns. See [Registration](registration.md) for common-reference output and
+options that preserve individual segmentations.
+
+## 7. Extract radiomics
+
+Install PyRadiomics separately using the [installation guide](installation.md).
+For the workflow without registration:
+
+```bash
 imperandi radiomics \
   --csv_path ./project/tables/nifti_index_phased.csv \
   --csv_path_out ./project/tables/nifti_index_radiomics.csv \
   --manifest generic
 ```
 
-The phase command writes canonical `phase` provenance and adds `totalseg_*`
-fields only for rows that reach the prediction strategy. Radiomics discovers
-all populated `mask_*_path` columns and appends feature columns to the table.
+If you ran registration, use `nifti_index_registered.csv` as `--csv_path` to
+extract features using the registered masks. Radiomics discovers populated
+`mask_*_path` columns and appends feature columns for the retained rows.
 
-## 6. Check failures before analysis
+The `generic` manifest retains only `ARTERIAL` and `PORTAL_VENOUS` rows for
+radiomics. Other phases are excluded from the resulting table. Edit
+`radiomics.filters` in a custom manifest, or use `--skip_filter` to disable all
+CLI and manifest filters. A manifest filter takes precedence over `--filter`
+for the same column; adding a CLI phase filter will not override `generic`.
+
+## 8. Check failures before analysis
 
 Each heavy stage writes a command-specific error CSV. Review those reports and
 row counts rather than treating a zero process exit alone as proof that every
 volume succeeded. See [Outputs](outputs.md) for the complete file map.
 
+Open the resulting image-and-mask table in a [QC viewer](viewers.md) to inspect
+segmentations and alignment alongside the tabular reports.

@@ -8,11 +8,11 @@ IMPERANDI: DICOM Curation and CT/MRI Preprocessing
 
 `IMPERANDI <https://github.com/dmandache/IMPERANDI/>`_ [IMaging PREprocessing And Normalization for Diagnostic
 Interoperability] is a Python framework and command-line interface for
-turning heterogeneous CT DICOM exports into traceable, analysis-ready cohorts.
+turning heterogeneous CT/MR DICOM exports into traceable, analysis-ready cohorts.
 
 IMPERANDI discovers DICOM data, curates metadata,
 converts volumes to NIfTI, runs configurable segmentation and contrast-phase
-analysis, extracts radiomics, and supports interactive quality control.
+analysis, optionally registers organs and combines masks, extracts radiomics, and supports interactive quality control.
 
 .. note::
 
@@ -34,6 +34,8 @@ Start here
    installation
    quickstart
    workflow
+   registration
+   viewers
    cli
    outputs
    manifests

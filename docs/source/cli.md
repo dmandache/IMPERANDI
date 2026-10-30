@@ -100,7 +100,9 @@ imperandi register [CSV_PATH] [CSV_PATH_OUT] [OPTIONS]
 ```
 
 Requires `imperandi[registration]`. Aligns organs within manifest-defined groups
-and creates shared tumor masks with anchor, majority, intersection, union, or STAPLE.
+and optionally creates shared tumor masks with anchor, majority, intersection,
+union, or STAPLE. Use `--tumor_consensus_method none` to retain individual tumor
+segmentations without fusion.
 
 - `--csv_path` and `--csv_path_out` provide named alternatives to positional paths.
   Defaults: `./nifti_index.csv` and `<input_stem>_registered.csv`.
@@ -131,7 +133,7 @@ sequence. File paths and source series IDs remain in the CSV/QC tables and are
 omitted from logs.
 
 Input, output, error, QC, and checkpoint paths must be distinct. Resume checks both
-referenced input files and derived artifacts. See [Registration workflow](workflow.md#registration)
+referenced input files and derived artifacts. See [Registration workflow](registration.md)
 for grouping, coverage, status, and checkpoint semantics.
 
 ## `phase`
@@ -181,7 +183,9 @@ Requires a separate PyRadiomics installation (see
 - `--error_csv_path`: defaults to `radiomics_errors.csv`.
 
 When a manifest contains PyRadiomics settings, they take precedence over an
-explicit YAML path and a warning is emitted.
+explicit YAML path and a warning is emitted. Manifest filters also take
+precedence over `--filter` for the same column. Change the manifest to alter
+those filters, or use `--skip_filter` to disable all filtering.
 
 ## Shared long-running options
 

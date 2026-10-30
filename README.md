@@ -15,14 +15,6 @@
   <img src="https://img.shields.io/badge/code%20style-black-000000.svg" alt="Black">
 </p>
 
-<!-- ![image](https://raw.githubusercontent.com/dmandache/IMPERANDI/main/static/imperandi-logo-with-name.png) 
-![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue)
-[![Documentation](https://app.readthedocs.org/projects/imperandi/badge/?version=latest)](https://imperandi.readthedocs.io/en/latest/)
-[![Code style](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
-![Linting](https://img.shields.io/badge/lint-ruff-red)
-![Tests](https://github.com/dmandache/IMPERANDI/actions/workflows/tests.yml/badge.svg?branch=main)
-[![codecov](https://codecov.io/gh/dmandache/IMPERANDI/branch/main/graph/badge.svg)](https://codecov.io/gh/dmandache/IMPERANDI) -->
-
 IMPERANDI is a Python framework and CLI for transforming heterogeneous DICOM collections into analysis-ready CT and MR imaging cohorts. It standardizes identifiers, curates imaging series and volume-level metadata, converts selected volumes to NIfTI, and supports downstream segmentation, contrast-phase identification, radiomics extraction, and quality control within a coherent, reproducible pipeline.
 
 ## Google Colab demos
@@ -33,6 +25,69 @@ Try IMPERANDI on three public TCGA-LIHC patients:
 | --- | --- | --- |
 | [Light demo](examples/demos/demo_light.ipynb) | DICOM ingestion, metadata phase curation, and QC. | [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/dmandache/IMPERANDI/blob/main/examples/demos/demo_light.ipynb) |
 | [Full demo](examples/demos/demo_full.ipynb) | Adds NIfTI conversion, liver segmentation, radiomics, the interactive viewer and TorchIO preprocessing into a PyTorch batch. | [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/dmandache/IMPERANDI/blob/main/examples/demos/demo_full.ipynb) |
+
+## What IMPERANDI does
+
+| Stage | Purpose |
+| --- | --- |
+| `parse`, `clean`, `ingest` | Discover DICOM folders and archives, harmonize identifiers, curate CT/MR metadata, and select representative volumes. |
+| `convert` | Convert curated volumes to NIfTI with source traceability. |
+| `segment` | Run modality-specific segmentation and configurable mask post-processing. |
+| `phase` | Resolve contrast phase using ordered metadata, ontology, and optional model strategies. |
+| `register` | Align organs within configured groups and optionally build consensus masks in native or reference space. |
+| `radiomics` | Extract features from images and masks with modality-specific settings and cohort filters. |
+| Quality control | Inspect cohort tables, images, and masks in notebook or web viewers. |
+
+Stages exchange CSV tables with image and mask paths. Long-running stages support
+checkpoints and resume; error and QC reports preserve per-volume outcomes.
+
+## Install
+
+Requires Python 3.10–3.13:
+
+```bash
+python -m pip install imperandi
+```
+
+Optional extras include `imperandi[segment]`, `imperandi[registration]`, and
+`imperandi[viewer]`. PyRadiomics requires a separate installation, including with
+`[all]`. See the [installation guide](docs/source/installation.md) for commands,
+source installs, and dependency details.
+
+## First cohort
+
+```bash
+imperandi ingest --root_path /path/to/dicom --output_dir ./tables --manifest generic
+imperandi convert --csv_path ./tables/dicom_index_clean.csv --output_dir ./nifti
+```
+
+This produces `tables/dicom_index_clean.csv` and `tables/nifti_index.csv`, plus
+curation and error reports. Review [outputs](docs/source/outputs.md) before
+continuing. The [quickstart](docs/source/quickstart.md) adds segmentation, phase
+resolution, optional registration, and radiomics with explicit output paths.
+Use `imperandi COMMAND --help` for the options in your installed version.
+
+## Guides and examples
+
+- [Workflow](docs/source/workflow.md): stage dependencies, cohort selection, and resume.
+- [CLI reference](docs/source/cli.md): commands and important options.
+- [Configuration](docs/source/manifests.md): YAML manifests, hooks, curation, and processing settings.
+- [Registration](docs/source/registration.md): grouping, alignment, consensus, output spaces, and QC.
+- [Quality-control viewers](docs/source/viewers.md): notebook and browser launch examples.
+- [Examples](examples/README.md): public-data demos and scientific benchmarks.
+- [IRCAD workflow](tests/slow/ircad/README.md): dataset download and pipeline instructions.
+- [Troubleshooting](docs/source/troubleshooting.md): common installation and processing issues.
+
+Start custom configuration by copying the built-in `generic` YAML and passing its
+path with `--manifest ./site-a.yaml`. Repository-specific OPERANDI settings live in
+`dataset_configs/` and are loaded by explicit path; they are not installed with
+the package.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, notebook cleanup,
+checks, and pull requests. [Dataset-backed tests](tests/slow/README.md) document
+the optional full-pipeline validation workflows.
 
 ## Disclaimers
 
@@ -47,427 +102,3 @@ IMPERANDI should not be assumed to de-identify input DICOM data. Users are respo
 ### Funding
 
 This work performed under the RHU OPERANDI project was supported in part by the French National Research Agency (Agence Nationale de la Recherche, ANR) as its 3rd PIA, integrated to France 2030 plan under reference _ANR-21-RHUS-0012._
-
-## Why IMPERANDI matters
-
-- Reduces manual data wrangling by turning raw DICOM trees into structured cohort tables.
-- Improves reproducibility with explicit CSV outputs at every stage and deterministic ID logic.
-- Improves reliability on real hospital exports with archive support, failure tracking, and resumable workflows.
-- Keeps adoption practical in secure environments with a lightweight Python-first toolchain.
-
-![image](https://raw.githubusercontent.com/dmandache/IMPERANDI/main/static/imperandi-banner.png)
-
-## Current framework functionalities
-
-### 1) Ingest and harmonize imaging metadata (`parse` + `clean` = `ingest`)
-
-- Uses paths from existing `DICOMDIR` indexes on disk or inside archives, or scans DICOM files from folders, globbed roots, and nested archives (`.zip`, `.tar`, `.tar.gz`, `.tgz`).
-- Extracts selected DICOM header tags into a raw metadata table (`dicom_index.csv`).
-- Builds stable patient/study/series identifiers from tags, folder structure, or hybrid fallback rules.
-- Applies manifest-driven hooks for patient-key standardization and derived columns.
-- Cleans and curates cohorts by filtering modality/noise patterns, localizers, non-target anatomy, non-axial acquisitions, and implausible scan geometry.
-- Aggregates slices into robust volume-level records and computes exam/acquisition ordering.
-
-Impact: turns fragmented acquisition data into a consistent cohort backbone that downstream models and analytics can trust.
-
-### 2) Convert DICOM volumes to NIfTI (`convert`)
-
-- Converts curated DICOM volume rows to NIfTI in parallel using `dicom2nifti`.
-- Preserves source-to-output traceability in a CSV (`nifti_path` per row).
-- Handles archive-backed DICOM paths transparently via on-demand materialization.
-- Writes explicit conversion error tables without aborting the whole run.
-
-Impact: creates a standardized imaging representation for model training, segmentation, and feature extraction at scale.
-
-### 3) Configurable segmentation (`segment`)
-
-- Runs configurable task pipelines (default backend: TotalSegmentator).
-- Dispatches CT and MRI volumes to separate manifest-defined
-  TotalSegmentator model lists.
-- Adds optional post-processing (mask merge, closing, hole filling, largest connected component).
-- Uses multiprocessing with timeout controls and produces warning/error tracking CSVs.
-
-Impact: converts CT and MR volumes into ready-to-use anatomical/tumor masks
-with operational safeguards for large cohort processing.
-
-### 4) Contrast phase curation (`phase`)
-
-- Resolves an ordered YAML-defined fallback chain across explicit ontology,
-  metadata rules, and TotalSegmentator prediction.
-- Restricts the bundled TotalSegmentator phase predictor to CT by default.
-- Appends canonical `phase` provenance and `totalseg_*` prediction fields when
-  model inference is needed.
-- Captures per-row failures into dedicated error outputs.
-
-Impact: enables phase-aware stratification and analysis without manual review of every study.
-
-### 5) Radiomics feature extraction (`radiomics`)
-
-- Extracts PyRadiomics features for organ and tumor regions from CT/MRI + masks.
-- Includes a organ-minus-tumor extraction path for cleaner parenchyma characterization.
-- Supports optional cohort filtering controls and error-aware output generation.
-- Supports separate CT/MR settings under `radiomics.modalities`, or shared settings from `--pyradiomics_settings /path/to/Params.yaml` or `radiomics.pyradiomics`.
-
-Impact: accelerates feature exctraction for prognostic and response modeling pipelines.
-
-### 6) Interactive quality control viewer (Jupyter)
-
-- Provides a 3D CT/MRI + mask viewer for cohort navigation and quick visual QA.
-- Uses HU windows for CT and percentile windows (1st–99th by default) for MRI.
-- Supports patient/date/modality/phase exploration, mask overlays, window presets, and keyboard navigation.
-
-Impact: shortens the feedback loop between pipeline outputs and clinical/imaging validation.
-
-![image](https://raw.githubusercontent.com/dmandache/IMPERANDI/main/static/viewer-demo.png)
-
-## CLI overview
-
-IMPERANDI ships a single CLI with these subcommands:
-
-- `parse`: scan DICOMs and build metadata index tables.
-- `clean`: filter and normalize parsed metadata.
-- `ingest`: run `parse` then `clean`.
-- `convert`: convert indexed DICOM volumes to NIfTI.
-- `segment`: run configurable segmentation on NIfTI volumes (requires _TotalSegmentator_, install with `.[segment]`).
-- `phase`: resolve canonical contrast phase; a TotalSegmentator fallback requires
-  `.[segment]`.
-- `radiomics`: extract radiomics features from NIfTI volumes and masks (requires a separate PyRadiomics installation; see below).
-
-Get help:
-
-```bash
-imperandi --help
-imperandi parse --help
-imperandi clean --help
-imperandi ingest --help
-imperandi convert --help
-imperandi segment --help
-imperandi phase --help
-imperandi radiomics --help
-```
-
-## Install
-
-Install from PyPI:
-
-```bash
-python -m pip install imperandi
-```
-
-Editable source install:
-
-```bash
-python -m pip install -e .
-```
-
-Segmentation dependencies:
-
-```bash
-python -m pip install -e ".[segment]"
-```
-
-Radiomics dependencies (requires Git):
-
-PyRadiomics is installed separately from Git to keep IMPERANDI's package metadata
-compatible with PyPI. This extra step also applies to `[all]` and `[all-dev]`.
-
-```bash
-python -m pip install "pyradiomics @ git+https://github.com/AIM-Harvard/pyradiomics.git@master"
-```
-
-Notebook and web quality-control viewers:
-
-```bash
-python -m pip install -e ".[viewer]"
-```
-
-Development and test tooling:
-
-```bash
-python -m pip install -e ".[dev]"
-```
-
-Enable tracked git hooks (recommended):
-
-```bash
-git config core.hooksPath .githooks
-```
-
-With hooks enabled, `git push` strips output/execution state from changed `*.ipynb` files, stages those changes, and stops once so you can commit the cleaned notebooks.
-
-Install all runtime features:
-
-```bash
-python -m pip install -e ".[all]"
-python -m pip install "pyradiomics @ git+https://github.com/AIM-Harvard/pyradiomics.git@master"
-```
-
-Install all runtime features, development tools, and slow-test dependencies:
-
-```bash
-python -m pip install -e ".[all-dev]"
-python -m pip install "pyradiomics @ git+https://github.com/AIM-Harvard/pyradiomics.git@master"
-```
-
-Optional Jupyter kernel setup:
-
-```bash
-python -m ipykernel install --user --name imperandi310 --display-name "IMPERANDI (Python 3.10)"
-```
-
-## Quickstart
-
-Run ingest (parse + clean):
-
-```bash
-imperandi ingest \
-  --root_path /path/to/dicom \
-  --output_dir /path/to/output \
-  --manifest generic
-```
-
-Convert to NIfTI:
-
-```bash
-imperandi convert \
-  --csv_path /path/to/output/dicom_index_clean.csv \
-  --output_dir /path/to/nifti_root \
-  --csv_path_out /path/to/output/nifti_index.csv
-```
-
-Run segmentation:
-
-```bash
-imperandi segment \
-  --csv_path /path/to/output/nifti_index.csv \
-  --csv_path_out /path/to/output/nifti_index_segmented.csv \
-  --crop --crop-margin-mm 50
-```
-
-Use `--manifest /path/to/manifest.yaml` to configure ordered logical and
-morphological mask operations under each modality's `postprocess.operations`.
-See the [mask operation examples](docs/source/manifests.md#sequential-mask-operations).
-`--crop` crops each source NIfTI and all of its output masks in place to their
-shared foreground bounding box. The in-bounds margin defaults to 50 mm and can
-be changed with `--crop-margin-mm`. Cropping runs before configured mask
-post-processing, so morphological operations use the reduced grid. Bounds are
-clipped to the true image size; cropping never pads with synthetic voxels.
-The same behavior can be set persistently with `segmentation.crop` and
-`segmentation.crop_margin_mm` in the manifest; CLI values take precedence, and
-`--no-crop` disables manifest-enabled cropping for one run.
-
-Curate contrast phase:
-
-```bash
-imperandi phase \
-  --csv_path /path/to/output/nifti_index_segmented.csv \
-  --csv_path_out /path/to/output/nifti_index_phased.csv \
-  --manifest generic
-```
-
-Extract radiomics:
-
-```bash
-imperandi radiomics \
-  --csv_path /path/to/output/nifti_index_phased.csv \
-  --csv_path_out /path/to/output/nifti_index_radiomics.csv
-```
-
-Extract radiomics with explicit PyRadiomics YAML settings:
-
-```bash
-imperandi radiomics \
-  --csv_path /path/to/output/nifti_index_phased.csv \
-  --pyradiomics_settings /path/to/Params.yaml \
-  --csv_path_out /path/to/output/nifti_index_radiomics.csv
-```
-
-Use manifest-defined radiomics settings:
-
-```bash
-imperandi radiomics \
-  --csv_path /path/to/output/nifti_index_phased.csv \
-  --manifest generic \
-  --csv_path_out /path/to/output/nifti_index_radiomics.csv
-```
-
-If both `--manifest` and `--pyradiomics_settings` are provided, IMPERANDI warns and
-prefers manifest `radiomics` settings when that section exists.
-
-## Core outputs
-
-- `parse`:
-  - `dicom_index.csv` (resolved IDs and selected DICOM tags)
-  - optional `dicom_tags_snapshot.ndjson` (full recursive tags on a sampled subset, via `--snapshot_tags`)
-- `clean`:
-  - cleaned cohort table (default `<input>_clean.csv`)
-- `convert`:
-  - NIfTI-enriched cohort table (`nifti_index.csv` by default)
-  - conversion failures (`conv_errors.csv` by default)
-- `segment`, `phase`, `radiomics`:
-  - enriched cohort table + command-specific error CSV
-
-## Configuration
-
-IMPERANDI configuration is done through YAML dataset manifests and optional hooks.
-Manifests hold the declarative settings, while hooks provide Python-based
-customization when a static file is not enough.
-
-Generic manifests shipped with the package live in:
-
-- `src/imperandi/builtin_datasets_config/manifests/*.yaml`
-
-Their built-in hooks live in:
-
-- `src/imperandi/builtin_datasets_config/hooks/`
-
-Repository-specific OPERANDI configuration lives in `dataset_configs/` and
-is intentionally not included in installed packages. Load it only by its
-explicit YAML path, for example
-`--manifest ./dataset_configs/manifests/operandi.yaml`.
-
-You can pass a built-in manifest name (such as `generic`) or a custom manifest
-path. The usual customization flow is to copy a built-in YAML file, edit
-`id_extraction`, `id_standardization`, `derived_columns`,
-`phase_curation`, `segmentation`, and `radiomics`, then run with
-`--manifest ./site-a.yaml`. JSON manifests are not accepted.
-
-`phase_curation.strategies` is an ordered fallback chain. It can contain an
-explicit site ontology, IMPERANDI's metadata rules, TotalSegmentator phase
-prediction, or any combination. The canonical result is written to `phase`,
-with its provenance in `phase_source`, `phase_confidence`, and `phase_reason`.
-
-Hooks are normal Python callables referenced by manifest keys
-`hook_module` and `function`: `id_standardization` hook rewrites
-`patient_key`, while `derived_columns` hook can add fields based on an existing column.
-
-Configure radiomics separately for CT and MR under
-`radiomics.modalities.<modality>.pyradiomics`. Each entry is a complete PyRadiomics
-parameter mapping, selected using the CSV's `Modality` column (`MRI` aliases `MR`):
-
-```yaml
-radiomics:
-  modalities:
-    CT:
-      pyradiomics:
-        setting:
-          binWidth: 25
-          resegmentRange: [-150, 250]
-    MR:
-      pyradiomics:
-        setting:
-          binWidth: 25
-```
-
-Every modality retained after filtering must have a configuration. Existing
-`radiomics.pyradiomics` mappings and `--pyradiomics_settings` files still apply
-one shared configuration to all rows. Use either `modalities` or the shared
-`pyradiomics` mapping in a manifest. Without explicit settings, CT keeps its
-existing defaults and MR omits the CT intensity range. Older tables without a
-`Modality` column continue to use CT defaults.
-
-Official PyRadiomics parameter guide:
-[PyRadiomics customization docs](https://pyradiomics.readthedocs.io/en/latest/customization.html).
-
-For configuring segmentation, define CT and/or MR task lists under
-`segmentation.modalities`. CT uses TotalSegmentator tasks such as `total`, while
-MR uses the corresponding `_mr` models such as `total_mr`. Logical output names
-can stay consistent across modalities in the cohort CSV.
-Official TotalSegmentator task guide:
-[TotalSegmentator subtasks guide](https://github.com/wasserth/TotalSegmentator#subtasks).
-
-Full IMPERANDI configuration guide: [Documentation](https://imperandi.readthedocs.io/en/latest/manifests.html).
-
-## Performance and reliability notes
-
-- Parallel execution controls are available for heavy stages (`parse`, `convert`, `segment`).
-- Long-running stages (`parse`, `convert`, `segment`, `phase`, `radiomics`) use a unified checkpoint interface:
-  `--checkpoint_every_rows`, `--checkpoint_every_sec`, `--no_resume`, `--strict_resume`.
-- Resume is enabled by default; pass `--no_resume` to disable it.
-- `parse` reads tags from defaults (`DEFAULT_DICOM_TAGS`) plus `--tags`; use `--snapshot_tags` for full recursive tag snapshots on sampled data.
-- `parse` auto-detects archive-heavy inputs from a deterministic root sample (`--archive_detect_sample_size`) and can switch to archive-aware mode at runtime when needed.
-- Archive workflows are bounded by depth and include path-safety protections.
-- Most commands support `--dry-run` for pipeline planning and CI smoke checks.
-
-## Contributing
-
-Bug reports, feature requests, documentation improvements, and code contributions
-are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, testing,
-and pull request guidance.
-
-## Testing
-
-Fast tests are organized under `tests/unit` and run in normal CI:
-
-```bash
-python -m pytest -m "not slow"
-```
-
-Dataset-backed tests run the complete ingest, convert, segment, phase, and
-radiomics workflow on small IRCAD and TCGA-LIHC cohorts. Downloaded inputs and
-generated outputs stay outside version control:
-
-```bash
-python -m pip install -e '.[all-dev]'
-python -m pip install "pyradiomics @ git+https://github.com/AIM-Harvard/pyradiomics.git@master"
-python tests/slow/ircad/download.py
-python tests/slow/tcga_lihc/download.py
-python -m pytest tests/slow -m slow
-```
-
-Each dataset can also run independently:
-
-```bash
-bash tests/slow/ircad/pipeline.sh
-bash tests/slow/tcga_lihc/pipeline.sh
-```
-
-See [`tests/slow/README.md`](tests/slow/README.md) for layout, environment
-overrides, and dataset-specific instructions.
-
-## Use Case on [IRCAD Dataset](https://www.ircad.fr/research/data-sets/liver-segmentation-3d-ircadb-01/)
-
-Download the dataset (~800MB):
-
-```bash
-wget https://cloud.ircad.fr/index.php/s/JN3z7EynBiwYyjy/download -O ircad.zip
-```
-
-Unzip the archive:
-
-```bash
-unzip ircad.zip -d ircad_dicom
-```
-
-After extraction, your structure should look similar to:
-```
-ircad_dicom/
-└── 3Dircadb1/
-    ├── 3Dircadb1.1/
-    │   ├── PATIENT_DICOM.zip/
-    │   ├── MASKS_DICOM.zip/
-    │   └── ...
-```
-
-Install package:
-
-```bash
-conda create -n imperandi310 python=3.10
-conda activate imperandi310
-pip install -e .[all]
-python -m pip install "pyradiomics @ git+https://github.com/AIM-Harvard/pyradiomics.git@master"
-```
-
-Execute pipeline:
-```bash
-imperandi ingest "ircad_dicom/3Dircadb1/**/PATIENT_DICOM*" . --snapshot_tags
-imperandi convert dicom_index_clean.csv ircad_nifti/
-imperandi segment nifti_index.csv
-imperandi phase nifti_index.csv
-imperandi radiomics nifti_index.csv
-```
-
-Inspect results with dashboards:
-- explore images & segmentations with the interactive viewer
-- inspect DICOM tags
-- basic radiomics statistics

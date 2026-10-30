@@ -28,7 +28,9 @@ imperandi --help
 
 ## Optional features
 
-The base installation supports DICOM ingest and NIfTI conversion. Install only
+The base installation supports DICOM ingest and NIfTI conversion. For a PyPI
+installation, use named extras such as `python -m pip install "imperandi[registration]"`.
+The editable commands below run from a source checkout. Install only
 the heavier feature sets needed by your workflow. PyRadiomics must be installed
 separately from Git, including when using `[all]` or `[all-dev]`.
 This keeps IMPERANDI's package metadata compatible with PyPI. The separate
@@ -37,6 +39,9 @@ installation requires Git and network access:
 ```bash
 # TotalSegmentator-based segmentation and phase-prediction fallback
 python -m pip install -e ".[segment]"
+
+# Organ registration (SimpleITK)
+python -m pip install -e ".[registration]"
 
 # PyRadiomics extraction
 python -m pip install "pyradiomics @ git+https://github.com/AIM-Harvard/pyradiomics.git@master"
@@ -59,6 +64,9 @@ python -m pip install "pyradiomics @ git+https://github.com/AIM-Harvard/pyradiom
 TotalSegmentator may download model weights the first time a segmentation task
 runs. Plan for network access and sufficient local storage at installation or
 model-prefetch time; cohort processing can then run in a controlled environment.
+
+See [Quality-control viewers](viewers.md) for runnable notebook and browser
+examples after installing the `viewer` extra.
 
 ## Build these docs
 
