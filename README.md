@@ -36,7 +36,7 @@ Try IMPERANDI on three public TCGA-LIHC patients:
 | `phase` | Resolve contrast phase using ordered metadata, ontology, and optional model strategies. |
 | `register` | Align organs within configured groups and optionally build consensus masks in native or reference space. |
 | `radiomics` | Extract features from images and masks with modality-specific settings and cohort filters. |
-| Quality control | Inspect cohort tables, images, and masks in notebook or web viewers. |
+| Lightweight viewer | Inspect cohort tables, images, and masks in notebook or web viewers. |
 
 Stages exchange CSV tables with image and mask paths. Long-running stages support
 checkpoints and resume; error and QC reports preserve per-volume outcomes.
