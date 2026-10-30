@@ -35,7 +35,10 @@ from imperandi.curation.selection_export import (
 )
 from imperandi.process.convert import temporary_nifti_from_dicom
 from imperandi.utils.manifest import load_manifest
-from imperandi.utils.logging import setup_logging
+from imperandi.utils.logging import (
+    log_script_namespace,
+    setup_logging,
+)
 from imperandi.utils.misc import print_args
 from imperandi.utils.checkpoint_cli import add_checkpoint_arguments
 from imperandi.utils.run_state import (
@@ -334,6 +337,13 @@ def main(args: argparse.Namespace) -> None:
     if "phase_curation" not in manifest:
         raise ValueError("Manifest must define a phase_curation section.")
     phase_curation = validate_phase_curation(manifest["phase_curation"])
+    effective_args = log_script_namespace(
+        logger, __file__, args, phase_curation=phase_curation
+    )
+    if getattr(args, "dry_run", False):
+        logger.info("Dry run: phase")
+        print_args(effective_args)
+        return
     logger.info(
         "Phase strategy order: %s",
         " -> ".join(
@@ -699,8 +709,4 @@ if __name__ == "__main__":
     setup_logging()
     args = parse_arguments()
     setup_logging(verbose=getattr(args, "verbose", False))
-    if getattr(args, "dry_run", False):
-        logger.info("Dry run: phase")
-        print_args(args)
-        raise SystemExit(0)
     main(args)

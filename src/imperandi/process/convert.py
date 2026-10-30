@@ -19,7 +19,12 @@ from imperandi.utils.archive_io import (
     is_archive_uri,
 )
 from imperandi.utils.files import copy_files_to_temp_dir, check_file, is_valid_nifti
-from imperandi.utils.logging import log_task_summary, setup_logging
+from imperandi.utils.logging import (
+    log_script_namespace,
+    log_task_summary,
+    setup_logging,
+)
+from imperandi.utils.manifest import load_manifest
 from imperandi.utils.misc import report_volumes, report_change, print_args
 from imperandi.utils.checkpoint_cli import add_checkpoint_arguments
 from imperandi.utils.run_state import (
@@ -535,7 +540,10 @@ def convert_dicom_to_nifti_parallel(
     df["volume_ordinal_in_series"] = df.groupby("series_id").cumcount() + 1
 
     if "series_dir" not in df.columns:
-        df["series_dir"] = df.apply(_dicom_series_dir, axis=1)
+        if df.empty:
+            df["series_dir"] = pd.Series(index=df.index, dtype="object")
+        else:
+            df["series_dir"] = df.apply(_dicom_series_dir, axis=1)
 
     # Use ProcessPoolExecutor to parallelize the task.
     with ProcessPoolExecutor(max_workers=num_workers) as executor:
@@ -625,6 +633,27 @@ def main(args):
     """
     output_path = Path(args.csv_path_out)
     error_path = Path(args.error_csv_path)
+    manifest_config = None
+    # Conversion is manifest-independent: resolve a manifest only for dry-run
+    # introspection, never as a prerequisite for execution or checkpoint reuse.
+    if (
+        getattr(args, "dry_run", False)
+        and hasattr(args, "manifest")
+        and args.manifest
+    ):
+        manifest_config = load_manifest(
+            args.manifest,
+            base_path=Path(__file__).resolve().parents[1],
+        )
+
+    effective_args = log_script_namespace(
+        logger, __file__, args, checkpoint_manifest_config=manifest_config
+    )
+    if getattr(args, "dry_run", False):
+        logger.info("Dry run: convert")
+        print_args(effective_args)
+        return
+
     exclude_hash_args = {
         "csv_path_out",
         "dry_run",
@@ -712,11 +741,6 @@ def main(args):
         logger.info("Before conversion:")
         report_volumes(df_all)
     df_prev = df_all.copy()
-
-    if args.dry_run:
-        logger.info("Dry run: convert")
-        print_args(args)
-        return
 
     completed_indices: set[str] = set()
     errors_by_idx: dict[str, dict] = {}
@@ -814,13 +838,18 @@ def main(args):
         convert_kwargs = {"on_result": _on_result}
         if semantic_reprocess_ids:
             convert_kwargs["force_source_ids"] = semantic_reprocess_ids
-        _, _ = convert_dicom_to_nifti_parallel(
-            work_df,
-            args.output_dir,
-            True,
-            args.num_workers,
-            **convert_kwargs,
-        )
+        if not work_df.empty:
+            _, _ = convert_dicom_to_nifti_parallel(
+                work_df,
+                args.output_dir,
+                True,
+                args.num_workers,
+                **convert_kwargs,
+            )
+        else:
+            logger.info("No volumes require conversion; skipping conversion workers.")
+
+        _checkpoint_write(force=True)
         _checkpoint_write(force=True)
 
     if args.verbose:
@@ -880,9 +909,5 @@ def main(args):
 if __name__ == "__main__":
     setup_logging()
     args = parse_arguments()
-    if args.dry_run:
-        logger.info("Dry run: convert")
-        print_args(args)
-        raise SystemExit(0)
     setup_logging(verbose=getattr(args, "verbose", False))
     main(args)

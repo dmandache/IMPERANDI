@@ -9,6 +9,11 @@ imperandi [--log-level LEVEL] [--log-file PATH] [--quiet] COMMAND [OPTIONS]
 Global options must appear before the subcommand. `--log-level` accepts normal
 Python logging levels such as `DEBUG`, `INFO`, and `WARNING`.
 
+Each stage logs its execution arguments after resolving manifest settings.
+The namespace includes the stage's effective configuration and preserves its
+documented override rules. `--dry-run` also reports resolved settings before
+processing data; `ingest` reports both its parse and clean stages.
+
 Run `imperandi COMMAND --help` for the authoritative option list in your
 installed version.
 
@@ -88,6 +93,47 @@ modalities are retained without segmentation.
 
 The output table overwrites the input unless `--csv_path_out` is supplied.
 
+## `register`
+
+```bash
+imperandi register [CSV_PATH] [CSV_PATH_OUT] [OPTIONS]
+```
+
+Requires `imperandi[registration]`. Aligns organs within manifest-defined groups
+and creates shared tumor masks with anchor, majority, intersection, union, or STAPLE.
+
+- `--csv_path` and `--csv_path_out` provide named alternatives to positional paths.
+  Defaults: `./nifti_index.csv` and `<input_stem>_registered.csv`.
+- `--output_dir` defaults to `registration` beside the input CSV.
+- `--error_csv_path` defaults to `register_errors.csv`.
+- `--qc_csv_path` defaults to `register_qc.csv` and records stage Dice and provenance.
+- `--manifest` accepts a built-in name or YAML file; default is `generic`.
+- `--organ_consensus_method`, `--tumor_consensus_method`,
+  and `--output_space` (`moving` or `reference`) override manifest settings.
+  Configure the ordered registration steps in manifest `registration.stages`;
+  the former affine/elastic enable flags are no longer accepted.
+  Grouping is defined by `registration.grouping_columns` in the manifest.
+- `--transform_additional_masks` maps additional `mask_*_path` columns to the
+  reference grid using nearest-neighbor interpolation. Default: false. Use
+  `--no_transform_additional_masks` to override an enabled manifest setting.
+  These flags have no effect with `--output_space moving`.
+- `--num_workers`, `--threads_per_worker`, `--start_method`, and `--timeout_sec`
+  control group execution. Timeout defaults to 900 seconds; 0 disables it.
+- Common checkpoint controls apply. `--force` starts fresh; `--retry_failed`
+  retries groups with recorded errors while retaining valid completed groups.
+- `--dry-run` validates the group plan without creating artifacts; `--verbose`
+  enables verbose logging.
+
+Progress logs identify each group once with its configured columns and values.
+Messages within that group use only the
+series position and group total (for example `series=1/6`) plus phase or
+sequence. File paths and source series IDs remain in the CSV/QC tables and are
+omitted from logs.
+
+Input, output, error, QC, and checkpoint paths must be distinct. Resume checks both
+referenced input files and derived artifacts. See [Registration workflow](workflow.md#registration)
+for grouping, coverage, status, and checkpoint semantics.
+
 ## `phase`
 
 ```bash
@@ -124,7 +170,7 @@ imperandi radiomics [CSV_PATH] [CSV_PATH_OUT] [OPTIONS]
 ```
 
 Requires a separate PyRadiomics installation (see
-[installation](installation.md)), `nifti_path`, and `mask_*` columns.
+[installation](installation.md)), `nifti_path`, and `mask_*_path` columns.
 
 - `--manifest NAME_OR_YAML`: load settings and filters from `radiomics`; use
   `radiomics.modalities.CT.pyradiomics` and `.MR.pyradiomics` for separate settings
@@ -139,6 +185,6 @@ explicit YAML path and a warning is emitted.
 
 ## Shared long-running options
 
-`parse`, `convert`, `segment`, `phase`, and `radiomics` accept checkpoint and
+`parse`, `convert`, `segment`, `phase`, `register`, and `radiomics` accept checkpoint and
 resume options described in [Workflow](workflow.md). All commands support
 `--dry-run`.

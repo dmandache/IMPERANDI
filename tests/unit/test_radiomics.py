@@ -265,8 +265,11 @@ def test_main_selects_settings_by_modality(tmp_path, monkeypatch, source_kind):
             {
                 "nifti_path": str(image_path),
                 "Modality": modality,
-                "mask_liver": "liver.nii.gz",
-                "mask_liver_tumor": "tumor.nii.gz",
+                "mask_liver_path": "liver.nii.gz",
+                "mask_liver_tumor_path": "tumor.nii.gz",
+                "mask_liver_volume": 42.0,
+                "mask_affine_status": "accepted",
+                "source_mask_liver_path": "original.nii.gz",
                 "phase": phase,
             }
             for modality, phase in [
@@ -304,6 +307,11 @@ def test_main_selects_settings_by_modality(tmp_path, monkeypatch, source_kind):
     def fake_extract(
         image_path, mask_path, tumor_path=None, *, prefix, extractors, **kwargs
     ):
+        assert prefix in {"liver", "liver_tumor"}
+        if prefix == "liver":
+            assert tumor_path == "tumor.nii.gz"
+        else:
+            assert mask_path == "tumor.nii.gz"
         settings = extractors["all"]
         assert extractors["shape"] == extractors["non_shape"] == settings
         # Expose both the selected value and unwanted CT-to-MR inheritance.
@@ -640,8 +648,8 @@ def test_main_writes_output_and_error_csv(tmp_path, monkeypatch):
     csv_path = tmp_path / "nifti_index.csv"
     pd.DataFrame(
         [
-            {"nifti_path": str(good_nifti), "mask_liver": str(good_mask)},
-            {"nifti_path": str(bad_nifti), "mask_liver": str(bad_mask)},
+            {"nifti_path": str(good_nifti), "mask_liver_path": str(good_mask)},
+            {"nifti_path": str(bad_nifti), "mask_liver_path": str(bad_mask)},
         ]
     ).to_csv(csv_path, index=False)
 
@@ -704,7 +712,7 @@ def test_main_resume_skips_completed_rows(tmp_path, monkeypatch):
     good_mask.write_text("mask")
     csv_path = tmp_path / "nifti_index.csv"
     pd.DataFrame(
-        [{"nifti_path": str(good_nifti), "mask_liver": str(good_mask)}]
+        [{"nifti_path": str(good_nifti), "mask_liver_path": str(good_mask)}]
     ).to_csv(csv_path, index=False)
 
     calls = {"count": 0}
@@ -770,12 +778,12 @@ def test_main_resume_only_tracks_radiomics_manifest_section(tmp_path, monkeypatc
         [
             {
                 "nifti_path": str(portal_nifti),
-                "mask_liver": str(portal_mask),
+                "mask_liver_path": str(portal_mask),
                 "phase": "portal",
             },
             {
                 "nifti_path": str(arterial_nifti),
-                "mask_liver": str(arterial_mask),
+                "mask_liver_path": str(arterial_mask),
                 "phase": "arterial",
             },
         ]
@@ -855,7 +863,7 @@ def test_main_preserves_foreign_columns_from_existing_output(tmp_path, monkeypat
     mask.write_text("mask")
     csv_path = tmp_path / "nifti_index.csv"
     out_path = tmp_path / "out.csv"
-    pd.DataFrame([{"nifti_path": str(nifti), "mask_liver": str(mask)}]).to_csv(
+    pd.DataFrame([{"nifti_path": str(nifti), "mask_liver_path": str(mask)}]).to_csv(
         csv_path, index=False
     )
     pd.DataFrame([{"nifti_path": str(nifti), "foreign_col": "keep"}]).to_csv(
@@ -912,8 +920,16 @@ def test_main_does_not_filter_phase_by_default(tmp_path, monkeypatch):
     csv_path = tmp_path / "nifti_index.csv"
     pd.DataFrame(
         [
-            {"nifti_path": str(nifti_a), "mask_liver": str(mask_a), "phase": "mixte"},
-            {"nifti_path": str(nifti_b), "mask_liver": str(mask_b), "phase": "portal"},
+            {
+                "nifti_path": str(nifti_a),
+                "mask_liver_path": str(mask_a),
+                "phase": "mixte",
+            },
+            {
+                "nifti_path": str(nifti_b),
+                "mask_liver_path": str(mask_b),
+                "phase": "portal",
+            },
         ]
     ).to_csv(csv_path, index=False)
 
@@ -967,19 +983,19 @@ def test_main_applies_explicit_filters_from_manifest_and_cli(tmp_path, monkeypat
         [
             {
                 "nifti_path": str(nifti_a),
-                "mask_liver": str(mask_a),
+                "mask_liver_path": str(mask_a),
                 "phase": "portal",
                 "followup_months": 0,
             },
             {
                 "nifti_path": str(nifti_b),
-                "mask_liver": str(mask_b),
+                "mask_liver_path": str(mask_b),
                 "phase": "arteriel",
                 "followup_months": 0,
             },
             {
                 "nifti_path": str(nifti_c),
-                "mask_liver": str(mask_c),
+                "mask_liver_path": str(mask_c),
                 "phase": "portal",
                 "followup_months": 3,
             },
@@ -1158,15 +1174,15 @@ def test_create_radiomics_extractors_rejects_multiple_sources():
 
 def test_build_dataset_strategy_describes_extractor_plan():
     strategy = radiomics_module._build_dataset_strategy(
-        ["mask_liver", "mask_liver_tumor", "mask_kidney"]
+        ["mask_liver_path", "mask_liver_tumor_path", "mask_kidney_path"]
     )
 
-    assert "kidney: all on mask_kidney (no paired tumor mask column)" in strategy
+    assert "kidney: all on mask_kidney_path (no paired tumor mask column)" in strategy
     assert (
-        "liver: shape on mask_liver; non_shape on liver_minus_tumor; "
-        "fallback all on mask_liver if mask_liver_tumor missing/empty"
+        "liver: shape on mask_liver_path; non_shape on liver_minus_tumor; "
+        "fallback all on mask_liver_path if mask_liver_tumor_path missing/empty"
     ) in strategy
-    assert "liver_tumor: all on mask_liver_tumor" in strategy
+    assert "liver_tumor: all on mask_liver_tumor_path" in strategy
 
 
 def test_extract_radiomics_organ_minus_tumor_uses_shape_and_non_shape_extractors(

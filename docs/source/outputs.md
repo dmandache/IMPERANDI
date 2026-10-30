@@ -9,8 +9,9 @@ columns and adds or normalizes the fields needed downstream.
 | `clean` | `<input>_clean.csv` | — | volume grouping, normalized date/time, ordering and geometry fields |
 | `ingest` | `dicom_index_clean.csv` | parse artifacts | parsed and curated volume rows |
 | `convert` | `nifti_index.csv` | `conv_errors.csv` | `nifti_path` |
-| `segment` | input CSV in place, or `--csv_path_out` | `seg_errors.csv` and warning report when applicable | `mask_<output>` paths |
+| `segment` | input CSV in place, or `--csv_path_out` | `seg_errors.csv` and warning report when applicable | `mask_<output>_path` paths |
 | `phase` | input CSV in place, or `--csv_path_out` | `phase_errors.csv` | canonical `phase`, provenance columns, and `totalseg_*` predictions when used |
+| `register` | `<input>_registered.csv` | `register_errors.csv`, `register_qc.csv`, one JSONL log per group, checkpoint/state files | Canonical image/mask paths in the configured moving or common-reference output space, original `source_*` paths, registration status/QC fields, and selected-space artifact paths |
 | `radiomics` | `<input>_radiomics.csv` | `radiomics_errors.csv` | ROI-prefixed PyRadiomics features |
 
 Defaults are relative to the input CSV or selected output directory. Explicit
@@ -29,15 +30,28 @@ behavior. It is removed from finalized user-facing tables.
 ## Image and mask paths
 
 `nifti_path` identifies the converted image. Segmentation outputs are stored in
-columns beginning with `mask_`; their exact set is the union of the configured
+columns matching `mask_<output>_path`; their exact set is the union of the configured
 CT and MR task outputs. A row only populates outputs from its matching
 `segmentation.modalities` block, and rows whose modality is not configured keep
 those columns empty. Paths may be absolute depending on the supplied output
 directory, so moving a dataset can invalidate a table. If portability matters,
 move artifacts and rewrite paths as one controlled operation.
 
+Mask filepath columns must use the `mask_<output>_path` convention. Metrics and
+registration status columns such as `mask_liver_volume` and `mask_affine_status`
+are not mask paths and are excluded from automatic mask discovery. Registration
+preserves original paths in `source_mask_<output>_path` columns; these backups are
+also excluded from automatic discovery.
+
+For existing cohort CSVs, rename only mask filepath columns, for example
+`mask_liver` to `mask_liver_path` and `source_mask_liver` to
+`source_mask_liver_path`, and update the registration mask-column settings in
+custom manifests. Leave metric and status columns unchanged. Segmentation uses
+the new names on subsequent runs; checkpoints from the old naming scheme are
+invalidated.
+
 When `segment --crop` is enabled, the files referenced by `nifti_path` and the
-row's populated `mask_*` columns are cropped in place to the same voxel bounds.
+row's populated `mask_*_path` columns are cropped in place to the same voxel bounds.
 Their affines are translated to preserve world coordinates; their CSV paths do
 not change. Cropping occurs before segmentation post-processing. Requested
 margins are clipped to the true image extent; no synthetic padding is added.
@@ -49,11 +63,10 @@ complete while some rows fail, making these tables part of the expected output
 rather than disposable logs. Check all of the following before downstream use:
 
 1. expected input and output row counts;
-2. missing `nifti_path` or `mask_*` values;
+2. missing `nifti_path` or `mask_*_path` values;
 3. command-specific error and warning tables;
 4. whether filtering intentionally reduced radiomics rows.
 
 Checkpoint files and JSON state may appear beside the configured main/error
 outputs during resumable runs. They are implementation artifacts, not cohort
 tables, and should not be passed to the next stage.
-

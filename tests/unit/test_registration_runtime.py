@@ -1,0 +1,913 @@
+"""Registration runtime contracts: resume, manifests, workers, and interruption."""
+
+import json
+import logging
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import pytest
+import yaml
+
+from imperandi.process.registration import register, runtime
+from imperandi.process.registration.config import RegistrationConfig
+from imperandi.utils.run_state import build_checkpoint_paths
+
+sitk = pytest.importorskip("SimpleITK")
+
+
+@pytest.fixture
+def cohort(tmp_path):
+    rows = []
+    for n in range(2):
+        organ = np.zeros((8, 9, 10), np.uint8)
+        organ[2:6, 2:7, 2:8] = 1
+        path = tmp_path / f"scan{n}.nii.gz"
+        sitk.WriteImage(sitk.GetImageFromArray(organ), str(path))
+        rows.append(
+            dict(
+                patient_key="001",
+                study_id=f"visit{n}",
+                Modality="CT",
+                phase="PORTAL_VENOUS",
+                nifti_path=str(path),
+                mask_liver_path=str(path),
+                mask_liver_tumor_path=str(path),
+            )
+        )
+    source = tmp_path / "input.csv"
+    pd.DataFrame(rows).to_csv(source, index=False)
+    return source
+
+
+def args_for(source, *flags):
+    return register.build_parser().parse_args(
+        [str(source), "--timeout_sec", "0", *flags]
+    )
+
+
+def paths_for(source):
+    output = source.with_name(source.stem + "_registered.csv")
+    errors = output.with_name("register_errors.csv")
+    return output, errors, build_checkpoint_paths(output, errors, "register")
+
+
+@pytest.mark.parametrize("output_space", ["moving", "reference"])
+@pytest.mark.parametrize("use_cli", [False, True])
+def test_no_tumor_consensus_manifest_cli_and_resume(
+    tmp_path, cohort, monkeypatch, output_space, use_cli
+):
+    manifest = tmp_path / "none.yaml"
+    manifest.write_text(
+        yaml.safe_dump(
+            {
+                "registration": {
+                    "tumor_consensus_method": "anchor" if use_cli else "none"
+                }
+            }
+        )
+    )
+    flags = ["--manifest", str(manifest), "--output_space", output_space]
+    if use_cli:
+        flags.extend(["--tumor_consensus_method", "none"])
+    register.main(args_for(cohort, *flags))
+    output, _, _ = paths_for(cohort)
+    saved = pd.read_csv(output)
+    assert saved.consensus_status.tolist() == ["preserved_source"] * 2
+    if output_space == "moving":
+        assert saved.mask_liver_tumor_path.equals(saved.source_mask_liver_tumor_path)
+        assert saved.reg_tumor_native_path.isna().all()
+    else:
+        assert saved.mask_liver_tumor_path.equals(saved.reg_tumor_common_path)
+
+    def unexpected_run(*args, **kwargs):
+        pytest.fail("Unchanged none outputs should resume from checkpoints")
+
+    monkeypatch.setattr(runtime, "_run_group", unexpected_run)
+    register.main(args_for(cohort, *flags))
+    pd.testing.assert_frame_equal(pd.read_csv(output), saved)
+
+
+def test_manifest_overrides_defaults_and_cli(tmp_path, cohort):
+    manifest = tmp_path / "custom.yaml"
+    manifest.write_text(
+        yaml.safe_dump(
+            {
+                "registration": {
+                    "organ_consensus_method": "anchor",
+                    "tumor_consensus_method": "majority",
+                    "output_space": "moving",
+                    "stages": [{"type": "mi_affine"}],
+                }
+            }
+        )
+    )
+    args = register.normalize_registration_args(
+        args_for(cohort, "--manifest", str(manifest))
+    )
+    config, _ = register.resolve_config(args)
+    assert config.organ_consensus_method == "anchor"
+    assert config.tumor_consensus_method == "majority"
+    assert config.output_space == "moving"
+    assert config.stages[0].type == "mi_affine"
+    override = register.normalize_registration_args(
+        args_for(
+            cohort,
+            "--manifest",
+            str(manifest),
+            "--organ_consensus_method",
+            "majority",
+            "--tumor_consensus_method",
+            "union",
+            "--output_space",
+            "reference",
+        )
+    )
+    config, _ = register.resolve_config(override)
+    assert config.organ_consensus_method == "majority"
+    assert config.tumor_consensus_method == "union"
+    assert config.output_space == "reference"
+    assert config.stages[0].type == "mi_affine"
+    built_in = register.normalize_registration_args(
+        args_for(cohort, "--manifest", "generic")
+    )
+    assert isinstance(register.resolve_config(built_in)[0], RegistrationConfig)
+
+
+def test_reference_output_space_is_published_by_runtime(cohort, monkeypatch):
+    source = pd.read_csv(cohort, dtype=str)
+    source["mask_kidney_path"] = source.mask_liver_path
+    source.to_csv(cohort, index=False)
+    register.main(args_for(cohort, "--output_space", "reference"))
+
+    output, errors, _ = paths_for(cohort)
+    saved = pd.read_csv(output)
+    assert pd.read_csv(errors).empty
+    assert saved.source_nifti_path.tolist() == source.nifti_path.tolist()
+    assert saved.nifti_path.equals(saved.reg_nifti_path)
+    assert saved.mask_liver_path.equals(saved.reg_organ_path)
+    assert saved.mask_liver_tumor_path.equals(saved.reg_tumor_common_path)
+    assert saved.reg_organ_native_path.isna().all()
+    assert saved.reg_tumor_native_path.isna().all()
+    assert saved.mask_kidney_path.isna().all()
+    assert saved.source_mask_kidney_path.tolist() == source.mask_kidney_path.tolist()
+    for index, row in saved.iterrows():
+        expected_group = (
+            cohort.parent
+            / "registration"
+            / "001"
+            / source.loc[index, "study_id"]
+            / "CT"
+        )
+        log_path = Path(row.registration_log_path)
+        assert log_path.parent == expected_group
+        assert Path(row.reg_nifti_path).parent.parent == log_path.parent
+
+    def unexpected_run(*args, **kwargs):
+        pytest.fail("Unchanged reference outputs should resume from checkpoints")
+
+    monkeypatch.setattr(runtime, "_run_group", unexpected_run)
+    register.main(args_for(cohort, "--output_space", "reference"))
+    resumed = pd.read_csv(output)
+    assert resumed.nifti_path.equals(saved.nifti_path)
+    assert resumed.mask_liver_path.equals(saved.mask_liver_path)
+    assert resumed.mask_liver_tumor_path.equals(saved.mask_liver_tumor_path)
+    assert resumed.mask_kidney_path.isna().all()
+    assert resumed.source_mask_kidney_path.tolist() == source.mask_kidney_path.tolist()
+
+
+def test_reference_criterion_order_changes_selection_and_invalidates_resume(
+    tmp_path, cohort
+):
+    table = pd.read_csv(cohort, dtype=str)
+    table["study_id"] = "same-visit"
+    table["Modality"] = "MR"
+    table["mri_sequence"] = ["T1", "T2"]
+    table["PixelSpacingXY"] = [1, 0.5]
+    table.to_csv(cohort, index=False)
+    priorities = [{"mri_sequence": ["T1", "T2"]}, {"PixelSpacingXY": "min"}]
+    manifest = tmp_path / "reference.yaml"
+    output, _, _ = paths_for(cohort)
+    for criteria, expected in [(priorities, 0), (priorities[::-1], 1)]:
+        manifest.write_text(
+            yaml.safe_dump(
+                {
+                    "registration": {
+                        "maximum_optimizer_iterations": 1,
+                        "reference_selection_priority": criteria,
+                    }
+                }
+            )
+        )
+        register.main(args_for(cohort, "--manifest", str(manifest)))
+        result = pd.read_csv(output)
+        assert result.loc[expected, "registration_status"] == "reference"
+        assert result.registration_reference_id.eq(
+            result.loc[expected, "registration_scan_id"]
+        ).all()
+
+
+@pytest.mark.parametrize("entry_point", ["cli", "module"])
+@pytest.mark.parametrize("override", [False, True])
+def test_startup_log_contains_effective_manifest_settings(
+    tmp_path, cohort, caplog, entry_point, override
+):
+    from imperandi import cli
+
+    manifest = tmp_path / "logging.yaml"
+    manifest.write_text(
+        yaml.safe_dump(
+            {
+                "registration": {
+                    "organ_consensus_method": "anchor",
+                    "tumor_consensus_method": "majority",
+                    "stages": [{"type": "mi_affine"}],
+                    "maximum_optimizer_iterations": 17,
+                }
+            }
+        )
+    )
+    flags = ["--manifest", str(manifest), "--dry-run"]
+    if override:
+        flags += [
+            "--organ_consensus_method",
+            "majority",
+            "--tumor_consensus_method",
+            "union",
+        ]
+    args = args_for(cohort, *flags)
+    with caplog.at_level(logging.INFO):
+        if entry_point == "cli":
+            cli._handle_register(args)
+        else:
+            register.main(args)
+    records = [
+        r
+        for r in caplog.records
+        if "Running register.py with namespace:" in r.getMessage()
+    ]
+    assert len(records) == 1
+    logged = records[0].args[1]
+    assert logged.organ_consensus_method == ("majority" if override else "anchor")
+    assert logged.tumor_consensus_method == ("union" if override else "majority")
+    assert logged.stages[0]["type"] == "mi_affine"
+    assert logged.maximum_optimizer_iterations == 17
+    assert logged.manifest == str(manifest)
+    assert logged.csv_path == str(cohort)
+    assert not any(name.startswith("_") for name in vars(logged))
+
+
+def test_default_error_and_qc_filenames_follow_output_directory(cohort, tmp_path):
+    output = tmp_path / "custom_result.csv"
+    args = register.normalize_registration_args(
+        args_for(cohort, "--csv_path_out", str(output))
+    )
+    assert Path(args.error_csv_path) == tmp_path / "register_errors.csv"
+    assert Path(args.qc_csv_path) == tmp_path / "register_qc.csv"
+
+
+def test_dry_run_no_backend_or_writes(monkeypatch, cohort, tmp_path):
+    def unavailable():
+        raise AssertionError("Dry run must not load backend")
+
+    monkeypatch.setattr(runtime, "backend", unavailable)
+    before = set(tmp_path.rglob("*"))
+    register.main(args_for(cohort, "--dry-run"))
+    assert set(tmp_path.rglob("*")) == before
+
+
+def test_finished_run_skips_and_restores_missing_final_csv(monkeypatch, cohort):
+    register.main(args_for(cohort))
+    output, errors, paths = paths_for(cohort)
+    original = output.read_bytes()
+    stat = output.stat().st_mtime_ns
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("No completed group should run")
+        yield
+
+    monkeypatch.setattr(runtime, "iter_group_results", forbidden)
+    register.main(args_for(cohort))
+    assert output.stat().st_mtime_ns == stat
+    # Recover a deleted final table from checkpoints without processing images.
+    output.unlink()
+    monkeypatch.setattr(runtime, "iter_group_results", lambda *a, **k: (x for x in ()))
+    register.main(args_for(cohort))
+    assert output.read_bytes() == original
+    assert errors.exists() and paths.state_path.exists()
+    assert json.loads(paths.state_path.read_text())["finished"]
+
+
+def test_registration_behavior_change_invalidates_resume(monkeypatch, cohort):
+    current_schema = runtime.REGISTRATION_SCHEMA
+    monkeypatch.setattr(runtime, "REGISTRATION_SCHEMA", current_schema - 1)
+    register.main(args_for(cohort))
+    monkeypatch.setattr(runtime, "REGISTRATION_SCHEMA", current_schema)
+    actual = runtime.iter_group_results
+    observed = []
+
+    def tracking(groups, *args, **kwargs):
+        observed.extend(key for key, _ in groups)
+        yield from actual(groups, *args, **kwargs)
+
+    monkeypatch.setattr(runtime, "iter_group_results", tracking)
+    register.main(args_for(cohort))
+    assert len(observed) == 2
+
+
+def test_stage_order_and_parameters_invalidate_resume(monkeypatch, cohort, tmp_path):
+    manifest = tmp_path / "stages.yaml"
+    plans = [
+        [{"type": "mask_affine"}, {"type": "mi_affine"}],
+        [{"type": "mi_affine"}, {"type": "mask_affine"}],
+        [
+            {"type": "mi_affine", "metric": {"sampling_seed": 43}},
+            {"type": "mask_affine"},
+        ],
+    ]
+    actual = runtime.iter_group_results
+    observed = []
+
+    def tracking(groups, *args, **kwargs):
+        observed.extend(key for key, _ in groups)
+        yield from actual(groups, *args, **kwargs)
+
+    monkeypatch.setattr(runtime, "iter_group_results", tracking)
+    for plan in plans:
+        manifest.write_text(yaml.safe_dump({"registration": {"stages": plan}}))
+        register.main(args_for(cohort, "--manifest", str(manifest)))
+        assert len(observed) == 2
+        observed.clear()
+        register.main(args_for(cohort, "--manifest", str(manifest)))
+        assert observed == []
+
+
+@pytest.mark.parametrize(
+    "flag",
+    [
+        "--enable_affine_stage",
+        "--disable_affine_stage",
+        "--enable_elastic_stage",
+        "--disable_elastic_stage",
+    ],
+)
+def test_removed_stage_flags_are_rejected(cohort, flag):
+    with pytest.raises(SystemExit):
+        args_for(cohort, flag)
+
+
+def test_retry_failed_recomputes_recovered_mi_failure(monkeypatch, cohort, tmp_path):
+    from imperandi.process.registration import alignment
+
+    table = pd.read_csv(cohort, dtype=str)
+    table["study_id"] = "same-visit"
+    table.to_csv(cohort, index=False)
+
+    class Optimizer:
+        def GetOptimizerStopConditionDescription(self):
+            return "test"
+
+        def GetOptimizerIteration(self):
+            return 1
+
+    monkeypatch.setattr(alignment, "dice", lambda *args: 0.5)
+    monkeypatch.setattr(
+        alignment,
+        "overlap_qc",
+        lambda *args: {
+            "dice_full": 0.5,
+            "dice_common_fov": 0.5,
+            "common_fov_fraction": 1.0,
+            "common_foreground_voxels": 100,
+        },
+    )
+    monkeypatch.setattr(
+        alignment,
+        "mask_rigid_refine",
+        lambda *args, **kwargs: (sitk.Euler3DTransform(), Optimizer()),
+    )
+    monkeypatch.setattr(
+        alignment,
+        "mask_affine_refine",
+        lambda *args, **kwargs: (sitk.AffineTransform(3), Optimizer()),
+    )
+
+    manifest = tmp_path / "mi.yaml"
+    manifest.write_text(
+        yaml.safe_dump({"registration": {"stages": [{"type": "mi_affine"}]}})
+    )
+
+    def fail_mi(*args, **kwargs):
+        raise ValueError("deliberate MI failure")
+
+    monkeypatch.setattr(alignment, "mi_refine", fail_mi)
+    register.main(args_for(cohort, "--manifest", str(manifest)))
+    output, errors, _ = paths_for(cohort)
+    saved = pd.read_csv(output)
+    assert not saved.registration_status.eq("failed").any()
+    assert pd.read_csv(errors).empty
+    assert (
+        saved.registration_stage_details.map(
+            lambda value: json.loads(value)["mi_affine"]["status"] == "failed"
+        ).sum()
+        == 1
+    )
+    monkeypatch.setattr(
+        alignment,
+        "mi_refine",
+        lambda *args, **kwargs: (sitk.Euler3DTransform(), Optimizer()),
+    )
+    actual_groups = runtime.iter_group_results
+    observed = []
+
+    def tracking(groups, *args, **kwargs):
+        observed.extend(key for key, _ in groups)
+        yield from actual_groups(groups, *args, **kwargs)
+
+    monkeypatch.setattr(runtime, "iter_group_results", tracking)
+    register.main(args_for(cohort, "--manifest", str(manifest)))
+    assert observed == []
+    register.main(args_for(cohort, "--manifest", str(manifest), "--retry_failed"))
+    assert len(observed) == 1
+    observed.clear()
+    # Identical masks now produce an expected no-improvement rejection, which
+    # must not be confused with an optimizer or validation failure on retry.
+    register.main(args_for(cohort, "--manifest", str(manifest), "--retry_failed"))
+    assert observed == []
+
+
+def test_in_process_group_failure_is_recorded_and_other_groups_continue(
+    monkeypatch, cohort
+):
+    actual = runtime.register_cohort
+    previous_threads = sitk.ProcessObject.GetGlobalDefaultNumberOfThreads()
+
+    def fail_one(table, *args, **kwargs):
+        if table.iloc[0].study_id == "visit0":
+            raise ValueError("deliberate group failure")
+        return actual(table, *args, **kwargs)
+
+    monkeypatch.setattr(runtime, "register_cohort", fail_one)
+    register.main(args_for(cohort))
+    output, error_path, _ = paths_for(cohort)
+    result = pd.read_csv(output).set_index("study_id")
+    assert result.loc["visit0", "registration_status"] == "failed"
+    assert result.loc["visit1", "registration_status"] == "reference"
+    assert pd.read_csv(error_path).error.tolist() == [
+        "ValueError: deliberate group failure"
+    ]
+    assert sitk.ProcessObject.GetGlobalDefaultNumberOfThreads() == previous_threads
+
+
+def test_in_process_interrupt_propagates_and_restores_threads(monkeypatch, tmp_path):
+    previous = sitk.ProcessObject.GetGlobalDefaultNumberOfThreads()
+
+    def interrupt(*args):
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(runtime, "register_cohort", interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        list(
+            runtime.iter_group_results(
+                [("group", pd.DataFrame())],
+                tmp_path,
+                RegistrationConfig(),
+                timeout_sec=0,
+            )
+        )
+    assert sitk.ProcessObject.GetGlobalDefaultNumberOfThreads() == previous
+
+
+def test_registration_uses_shared_task_summary(caplog, cohort):
+    caplog.set_level(logging.INFO)
+    register.main(args_for(cohort))
+    assert (
+        "Registration summary: 2 total, 2 registered, 0 reused, 0 failed"
+    ) in caplog.text
+    assert "Registration done ✔" in caplog.text
+
+    caplog.clear()
+    register.main(args_for(cohort))
+    assert (
+        "Registration summary: 2 total, 0 registered, 2 reused, 0 failed"
+    ) in caplog.text
+
+
+def test_interruption_resumes_only_committed_group(monkeypatch, cohort):
+    actual = runtime.iter_group_results
+
+    def interrupted(groups, *args, **kwargs):
+        iterator = actual(groups, *args, **kwargs)
+        try:
+            yield next(iterator)
+            raise KeyboardInterrupt()
+        finally:
+            iterator.close()
+
+    monkeypatch.setattr(runtime, "iter_group_results", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        register.main(args_for(cohort, "--checkpoint_every_rows", "100"))
+    output, _, paths = paths_for(cohort)
+    assert not output.exists()
+    state = json.loads(paths.state_path.read_text())
+    assert len(state["completed_indices"]) == 1
+    assert not state.get("finished", False)
+    observed = []
+
+    def tracking(groups, *args, **kwargs):
+        observed.extend(key for key, _ in groups)
+        yield from actual(groups, *args, **kwargs)
+
+    monkeypatch.setattr(runtime, "iter_group_results", tracking)
+    register.main(args_for(cohort))
+    assert len(observed) == 1
+    assert observed[0] not in state["completed_indices"]
+    assert len(pd.read_csv(output)) == 2
+
+
+@pytest.mark.parametrize("mutation", ["delete", "modify"])
+def test_missing_artifact_recomputes_only_affected_group(
+    monkeypatch, cohort, mutation, caplog
+):
+    register.main(args_for(cohort))
+    output, _, _ = paths_for(cohort)
+    first = pd.read_csv(output)
+    stale = Path(first.loc[0, "registration_log_path"]).parent / "old-run" / "stale.txt"
+    stale.parent.mkdir()
+    stale.write_text("obsolete")
+    sibling = Path(first.loc[1, "registration_log_path"]).parent / "keep.txt"
+    sibling.write_text("reused group")
+    caplog.clear()
+    artifact = Path(first.loc[0, "reg_tumor_native_path"])
+    if mutation == "delete":
+        artifact.unlink()
+    else:
+        artifact.write_bytes(artifact.read_bytes() + b"modified")
+    actual = runtime.iter_group_results
+    observed = []
+
+    def tracking(groups, *args, **kwargs):
+        observed.extend(key for key, _ in groups)
+        yield from actual(groups, *args, **kwargs)
+
+    monkeypatch.setattr(runtime, "iter_group_results", tracking)
+    register.main(args_for(cohort))
+    second = pd.read_csv(output)
+    assert observed == [first.loc[0, "registration_group_id"]]
+    assert (
+        second.loc[1, "reg_tumor_native_path"] == first.loc[1, "reg_tumor_native_path"]
+    )
+    assert Path(second.loc[0, "reg_tumor_native_path"]).is_file()
+    assert (
+        second.loc[0, "reg_tumor_native_path"] == first.loc[0, "reg_tumor_native_path"]
+    )
+    assert not stale.parent.exists()
+    assert sibling.read_text() == "reused group"
+    assert caplog.text.count("Overwriting registration outputs") == 1
+
+
+@pytest.mark.parametrize("change", ["mask", "manifest", "force", "no_resume"])
+def test_changed_inputs_and_forced_runs_recompute(
+    monkeypatch, cohort, tmp_path, change
+):
+    manifest = tmp_path / "settings.yaml"
+    manifest.write_text("registration:\n  tumor_consensus_method: anchor\n")
+    flags = ["--manifest", str(manifest)]
+    register.main(args_for(cohort, *flags))
+    if change == "mask":
+        row = pd.read_csv(cohort).iloc[0]
+        image = sitk.ReadImage(row.mask_liver_path)
+        image[0, 0, 0] = 1
+        sitk.WriteImage(image, row.mask_liver_path)
+    elif change == "manifest":
+        manifest.write_text("registration:\n  tumor_consensus_method: union\n")
+    else:
+        flags += ["--" + change]
+    actual = runtime.iter_group_results
+    seen = []
+
+    def tracking(groups, *args, **kwargs):
+        seen.extend(key for key, _ in groups)
+        yield from actual(groups, *args, **kwargs)
+
+    monkeypatch.setattr(runtime, "iter_group_results", tracking)
+    register.main(args_for(cohort, *flags))
+    assert len(seen) == 2
+
+
+def test_strict_resume_hashes_referenced_inputs_and_artifacts(cohort):
+    register.main(args_for(cohort, "--strict_resume"))
+    _, _, paths = paths_for(cohort)
+    state = json.loads(paths.state_path.read_text())
+    assert len(state["input_fingerprint"]) == 3
+    assert all("sha256" in item for item in state["input_fingerprint"])
+    assert all(
+        "sha256" in item for group in state["artifacts"].values() for item in group
+    )
+
+
+def test_retry_failed_and_preserve_errors(monkeypatch, cohort):
+    real = runtime.iter_group_results
+
+    def fail(groups, *args, **kwargs):
+        for key, _ in groups:
+            yield key, None, "deliberate worker failure"
+
+    monkeypatch.setattr(runtime, "iter_group_results", fail)
+    register.main(args_for(cohort))
+    output, errors, _ = paths_for(cohort)
+    assert len(pd.read_csv(errors)) == 2
+    assert pd.read_csv(output).registration_status.eq("failed").all()
+    monkeypatch.setattr(runtime, "iter_group_results", real)
+    register.main(args_for(cohort))
+    assert len(pd.read_csv(errors)) == 2
+    register.main(args_for(cohort, "--retry_failed"))
+    assert pd.read_csv(errors).empty
+    assert pd.read_csv(output).registration_status.eq("reference").all()
+
+
+def test_real_spawn_workers(cohort):
+    register.main(args_for(cohort, "--num_workers", "2", "--timeout_sec", "90"))
+    output, errors, _ = paths_for(cohort)
+    assert pd.read_csv(errors).empty
+    assert pd.read_csv(output).registration_status.eq("reference").all()
+
+
+def test_hard_timeout_is_recorded(cohort):
+    # Startup itself takes longer than this; verify timed-out processes cannot
+    # subsequently publish successful rows or leave active children.
+    before = {p.pid for p in runtime.mp.active_children()}
+    register.main(args_for(cohort, "--timeout_sec", "0.001", "--num_workers", "2"))
+    output, errors, _ = paths_for(cohort)
+    assert pd.read_csv(output).registration_status.eq("failed").all()
+    assert pd.read_csv(errors).error.str.contains("timeout").all()
+    assert {p.pid for p in runtime.mp.active_children()} == before
+
+
+@pytest.mark.parametrize(
+    "flag,value",
+    [("--num_workers", "0"), ("--timeout_sec", "-1"), ("--checkpoint_every_rows", "0")],
+)
+def test_runtime_argument_validation(cohort, flag, value):
+    with pytest.raises(ValueError):
+        register.normalize_registration_args(args_for(cohort, flag, value))
+
+
+@pytest.mark.parametrize("trigger", ["rows", "time"])
+def test_checkpoint_thresholds_commit_complete_groups(monkeypatch, cohort, trigger):
+    from imperandi.utils import run_state
+
+    clock = [1000.0]
+    monkeypatch.setattr(run_state, "now_epoch", lambda: clock[0])
+    # The shared manager reads time.time through now_epoch; its elapsed clock is
+    # advanced after the first group, before the parent checks checkpoint limits.
+    monkeypatch.setattr(run_state.time, "time", lambda: clock[0])
+    real = runtime.iter_group_results
+    observed = []
+
+    def tracking(groups, *args, **kwargs):
+        iterator = real(groups, *args, **kwargs)
+        try:
+            first = next(iterator)
+            clock[0] += 2
+            yield first
+            state = json.loads(paths_for(cohort)[2].state_path.read_text())
+            observed.append(state["completed_indices"])
+            yield from iterator
+        finally:
+            iterator.close()
+
+    monkeypatch.setattr(runtime, "iter_group_results", tracking)
+    flags = (
+        ["--checkpoint_every_rows", "1", "--checkpoint_every_sec", "100"]
+        if trigger == "rows"
+        else ["--checkpoint_every_rows", "100", "--checkpoint_every_sec", "1"]
+    )
+    register.main(args_for(cohort, *flags))
+    assert len(observed) == 1
+    assert len(observed[0]) == 1
+
+
+def test_invalid_manifest_dry_run_does_not_create_outputs(cohort, tmp_path):
+    manifest = tmp_path / "invalid.yaml"
+    manifest.write_text("registration:\n  unknown_option: true\n")
+    with pytest.raises(ValueError, match="Unknown registration"):
+        register.main(args_for(cohort, "--manifest", str(manifest), "--dry-run"))
+    assert not paths_for(cohort)[0].exists()
+    assert not (tmp_path / "registration").exists()
+
+
+def test_pyramid_manifest_resolves_and_validates_during_dry_run(cohort, tmp_path):
+    manifest = tmp_path / "pyramid.yaml"
+    settings = {
+        "linear_shrink_factors": [8, 4, 2],
+        "linear_smoothing_sigmas_mm": [4, 2, 1],
+        "elastic_shrink_factors": [4, 2],
+        "elastic_smoothing_sigmas_mm": [2, 1],
+    }
+    manifest.write_text(yaml.safe_dump({"registration": settings}))
+    args = args_for(cohort, "--manifest", str(manifest), "--dry-run")
+    config, _ = register.resolve_config(register.normalize_registration_args(args))
+    for name, value in settings.items():
+        assert getattr(config, name) == value
+    register.main(args)
+    settings["elastic_smoothing_sigmas_mm"] = [2, 1, 0]
+    manifest.write_text(yaml.safe_dump({"registration": settings}))
+    with pytest.raises(ValueError, match="same number of levels"):
+        register.main(args)
+    assert not paths_for(cohort)[0].exists()
+    assert not (tmp_path / "registration").exists()
+
+
+@pytest.mark.parametrize(
+    "name,value",
+    [
+        ("linear_shrink_factors", [8, 4, 2]),
+        ("linear_smoothing_sigmas_mm", [4, 2, 1]),
+        ("elastic_shrink_factors", [8, 4, 2]),
+        ("elastic_smoothing_sigmas_mm", [4, 2, 1]),
+    ],
+)
+def test_changed_pyramid_settings_invalidate_resume(monkeypatch, cohort, name, value):
+    args = register.normalize_registration_args(args_for(cohort))
+    table = pd.read_csv(cohort)
+    config = RegistrationConfig()
+    runtime.run_registration(args, table, config, {})
+    actual = runtime.iter_group_results
+    observed = []
+
+    def tracking(groups, *args, **kwargs):
+        observed.extend(key for key, _ in groups)
+        yield from actual(groups, *args, **kwargs)
+
+    monkeypatch.setattr(runtime, "iter_group_results", tracking)
+    runtime.run_registration(args, table, config, {})
+    assert observed == []
+    runtime.run_registration(args, table, RegistrationConfig(**{name: value}), {})
+    assert len(observed) == 2
+
+
+def test_missing_error_checkpoint_reprocesses_instead_of_losing_errors(
+    monkeypatch, cohort
+):
+    def fail(groups, *args, **kwargs):
+        for key, _ in groups:
+            yield key, None, "failure"
+
+    monkeypatch.setattr(runtime, "iter_group_results", fail)
+    register.main(args_for(cohort))
+    paths_for(cohort)[2].error_checkpoint_path.unlink()
+    seen = []
+
+    def track(groups, *args, **kwargs):
+        seen.extend(groups)
+        yield from fail(groups, *args, **kwargs)
+
+    monkeypatch.setattr(runtime, "iter_group_results", track)
+    register.main(args_for(cohort))
+    assert len(seen) == 2
+    assert len(pd.read_csv(paths_for(cohort)[1])) == 2
+
+
+def test_qc_and_canonical_paths_survive_resume_and_qc_restoration(monkeypatch, cohort):
+    register.main(args_for(cohort))
+    output, _, _ = paths_for(cohort)
+    first = pd.read_csv(output)
+    qc_path = output.with_name("register_qc.csv")
+    qc_before = pd.read_csv(qc_path)
+    assert set(qc_before.registration_scan_id) == set(first.registration_scan_id)
+    assert first.registration_qc_path.eq(str(qc_path.resolve())).all()
+    assert first.mask_liver_path.equals(first.reg_organ_native_path)
+    assert first.mask_liver_tumor_path.equals(first.reg_tumor_native_path)
+    assert first.source_mask_liver_path.equals(pd.read_csv(cohort).mask_liver_path)
+    qc_path.unlink()
+
+    def no_work(groups, *args, **kwargs):
+        assert not groups
+        yield from ()
+
+    monkeypatch.setattr(runtime, "iter_group_results", no_work)
+    register.main(args_for(cohort))
+    second = pd.read_csv(output)
+    pd.testing.assert_frame_equal(second, first)
+    pd.testing.assert_frame_equal(pd.read_csv(qc_path), qc_before)
+
+
+def test_worker_failures_appear_in_qc(cohort):
+    register.main(args_for(cohort, "--timeout_sec", "0.001"))
+    output, _, _ = paths_for(cohort)
+    qc = pd.read_csv(output.with_name("register_qc.csv"))
+    assert len(qc) == 2
+    assert qc.registration_status.eq("failed").all()
+    assert qc.errors.str.contains("timeout").all()
+    assert qc.dice_mask_rigid.isna().all()
+    assert qc.dice_mask_affine.isna().all()
+
+
+def test_custom_qc_output_and_path_collision(cohort, tmp_path):
+    qc = tmp_path / "quality.csv"
+    register.main(args_for(cohort, "--qc_csv_path", str(qc)))
+    assert len(pd.read_csv(qc)) == 2
+    with pytest.raises(ValueError, match="differ"):
+        register.main(args_for(cohort, "--qc_csv_path", str(cohort)))
+
+
+@pytest.mark.parametrize(
+    "flag,expected",
+    [
+        (None, True),
+        ("--preserve_source_organ_mask", True),
+        ("--replace_source_organ_mask", False),
+    ],
+)
+def test_preserve_source_organ_mask_manifest_and_cli(tmp_path, cohort, flag, expected):
+    manifest = tmp_path / "keep.yaml"
+    manifest.write_text(
+        yaml.safe_dump({"registration": {"preserve_source_organ_mask": True}})
+    )
+    flags = ["--manifest", str(manifest)]
+    if flag:
+        flags.append(flag)
+    config, _ = register.resolve_config(
+        register.normalize_registration_args(args_for(cohort, *flags))
+    )
+    assert config.preserve_source_organ_mask is expected
+
+
+@pytest.mark.parametrize("manifest_value", [False, True])
+@pytest.mark.parametrize(
+    "flag", [None, "--transform_additional_masks", "--no_transform_additional_masks"]
+)
+def test_additional_mask_toggle_manifest_and_cli(
+    tmp_path, cohort, manifest_value, flag
+):
+    manifest = tmp_path / "additional.yaml"
+    manifest.write_text(
+        yaml.safe_dump({"registration": {"transform_additional_masks": manifest_value}})
+    )
+    flags = ["--manifest", str(manifest)]
+    if flag:
+        flags.append(flag)
+    config, _ = register.resolve_config(
+        register.normalize_registration_args(args_for(cohort, *flags))
+    )
+    assert config.transform_additional_masks is (
+        manifest_value if flag is None else flag == "--transform_additional_masks"
+    )
+
+
+def test_additional_mask_resume_tracks_sources_outputs_and_toggle(cohort, monkeypatch):
+    source = pd.read_csv(cohort, dtype=str)
+    extra = cohort.parent / "kidney.nii.gz"
+    image = sitk.ReadImage(source.loc[0, "nifti_path"])
+    sitk.WriteImage(image, str(extra))
+    source["mask_kidney_path"] = str(extra)
+    source.to_csv(cohort, index=False)
+    flags = [
+        "--output_space",
+        "reference",
+        "--transform_additional_masks",
+        "--strict_resume",
+    ]
+    output, _, _ = paths_for(cohort)
+    original_run = runtime._run_group
+    calls = []
+
+    def track(*args, **kwargs):
+        calls.append(1)
+        return original_run(*args, **kwargs)
+
+    monkeypatch.setattr(runtime, "_run_group", track)
+    register.main(args_for(cohort, *flags))
+    assert len(calls) == 2
+    saved = pd.read_csv(output)
+    assert saved.mask_kidney_path.notna().all()
+    register.main(args_for(cohort, *flags))
+    assert len(calls) == 2
+    pd.testing.assert_frame_equal(pd.read_csv(output), saved)
+
+    Path(saved.loc[0, "mask_kidney_path"]).unlink()
+    register.main(args_for(cohort, *flags))
+    assert len(calls) == 3
+    assert Path(saved.loc[0, "mask_kidney_path"]).is_file()
+
+    sitk.WriteImage(image * 0, str(extra))
+    register.main(args_for(cohort, *flags))
+    assert len(calls) == 5
+    saved = pd.read_csv(output)
+    assert all(
+        not sitk.GetArrayFromImage(sitk.ReadImage(path)).any()
+        for path in saved.mask_kidney_path
+    )
+
+    register.main(
+        args_for(
+            cohort,
+            "--output_space",
+            "reference",
+            "--no_transform_additional_masks",
+            "--strict_resume",
+        )
+    )
+    assert len(calls) == 7
+    assert pd.read_csv(output).mask_kidney_path.isna().all()

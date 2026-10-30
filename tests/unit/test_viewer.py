@@ -149,7 +149,10 @@ def viewer(monkeypatch):
                 "phase": "portal",
                 "Modality": "CT",
                 "scan": "scan-1",
-                "mask_liver": "mask-1",
+                "mask_liver_path": "mask-1",
+                "mask_liver_volume": 42.0,
+                "mask_affine_status": "accepted",
+                "source_mask_liver_path": "original-mask",
                 "SeriesDescription": "Baseline",
             },
             {
@@ -158,7 +161,7 @@ def viewer(monkeypatch):
                 "phase": "arterial",
                 "Modality": "MR",
                 "scan": "scan-2",
-                "mask_liver": "mask-2",
+                "mask_liver_path": "mask-2",
             },
         ]
     )
@@ -170,10 +173,10 @@ def viewer(monkeypatch):
 
 def test_viewer_initialization_loads_data_and_builds_jump_controls(viewer):
     assert isinstance(viewer, ScanViewer)
-    assert viewer.segmentation_cols == ["mask_liver"]
-    assert viewer.seg_colormaps == {"mask_liver": "jet"}
+    assert viewer.segmentation_cols == ["mask_liver_path"]
+    assert viewer.seg_colormaps == {"mask_liver_path": "jet"}
     assert viewer.ct_scan_raw.shape == (2, 3, 4)
-    assert viewer.segmentations["mask_liver"].shape == (2, 3, 4)
+    assert viewer.segmentations["mask_liver_path"].shape == (2, 3, 4)
     assert viewer.patient_dropdown.options == (("P1", "P1"), ("P2", "P2"))
     assert viewer.patient_dropdown.disabled is False
     assert viewer.date_dropdown.options == (("2024-01-01", "2024-01-01"),)
@@ -202,14 +205,14 @@ def test_viewer_initialization_loads_data_and_builds_jump_controls(viewer):
     assert viewer.progress_bar.layout.visibility == "hidden"
 
 
-def test_viewer_auto_detects_legacy_segmentations_and_ignores_empty_values(monkeypatch):
+def test_viewer_auto_detects_mask_paths_and_ignores_empty_values(monkeypatch):
     monkeypatch.setattr(CTScanViewer, "init_widgets", lambda _self: None)
     monkeypatch.setattr(CTScanViewer, "load_data", lambda _self: None)
     frame = pd.DataFrame(
         {
             "scan": ["scan-1"],
-            "liver_path": ["liver-mask"],
-            "liver_tumor_path": [None],
+            "mask_liver_path": ["liver-mask"],
+            "mask_liver_tumor_path": [None],
             "totalseg_phase": ["venous"],
         }
     )
@@ -217,7 +220,7 @@ def test_viewer_auto_detects_legacy_segmentations_and_ignores_empty_values(monke
     instance = CTScanViewer(frame, "scan", exploration_mode="random")
 
     assert instance.phase_col == "totalseg_phase"
-    assert instance.segmentation_cols == ["liver_path"]
+    assert instance.segmentation_cols == ["mask_liver_path"]
     assert instance.explored_history == [0]
     assert instance.history_index == 0
 
@@ -416,7 +419,7 @@ def test_slice_controls_and_lesion_centering_follow_plane(
         seg[expected_center, :, :] = 1
     else:
         seg[:, expected_center, :] = 1
-    viewer.segmentations = {"mask_liver": seg}
+    viewer.segmentations = {"mask_liver_path": seg}
     viewer.plane_selector.value = plane
     viewer.update_slice_slider()
 
@@ -441,7 +444,7 @@ def test_update_display_handles_all_planes_visibility_and_output_fallback(
         viewer.update_display()
         assert viewer.ax.images
 
-    viewer.seg_visibility["mask_liver"].value = False
+    viewer.seg_visibility["mask_liver_path"].value = False
     viewer.update_display()
     assert viewer.ax.get_legend() is None
 
@@ -472,13 +475,13 @@ def test_load_data_skips_missing_masks_and_reports_failed_mask_load(
                 "date": "2024-03-03",
                 "phase": "delayed",
                 "scan": "scan",
-                "mask_none": None,
-                "mask_bad": "bad-mask",
+                "mask_none_path": None,
+                "mask_bad_path": "bad-mask",
             }
         ]
     )
     viewer.current_index = 0
-    viewer.segmentation_cols = ["mask_none", "mask_bad"]
+    viewer.segmentation_cols = ["mask_none_path", "mask_bad_path"]
     viewer.seg_visibility = {}
 
     def fake_load(path, **_kwargs):
@@ -490,7 +493,7 @@ def test_load_data_skips_missing_masks_and_reports_failed_mask_load(
     viewer.load_data()
 
     assert viewer.segmentations == {}
-    assert "failed to load segmentation mask_bad" in capsys.readouterr().out
+    assert "failed to load segmentation mask_bad_path" in capsys.readouterr().out
 
 
 def test_load_data_disables_navigation_while_scan_is_loading(viewer, monkeypatch):

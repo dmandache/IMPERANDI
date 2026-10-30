@@ -300,7 +300,7 @@ segmentation:
         #   fetch_outputs: [backend_a, backend_b]
         #   extra: {}
       postprocess:
-        # Bare logical names, mask_* column names, and *.nii.gz names are accepted.
+        # Bare logical names, mask_*_path column names, and *.nii.gz names are accepted.
         # Steps execute in order; outputs can be used by later steps.
         operations:
           - op: largest_cc
@@ -353,6 +353,168 @@ segmentation:
           - op: intersection
             inputs: [liver_tumor, liver]
             output: liver_tumor
+
+# ---------------------------------------------------------------------------
+# Registration
+# ---------------------------------------------------------------------------
+# Align organs and fuse tumors within manifest-defined groups.
+# Matching CLI options override consensus/output settings; the manifest defines
+# the stage chain. This blueprint demonstrates all five refinement stages.
+# The generic manifest uses only mask_rigid -> mask_affine.
+registration:
+  # Rows sharing every listed value form one registration group. Include
+  # Modality for separate CT/MR groups; omit it to permit cross-modality groups.
+  grouping_columns: [patient_key, study_id, Modality]
+  # Mask-path columns; missing/empty organs skip the series, while missing/empty
+  # tumors are omitted from fusion. Originals are retained as source_<column>.
+  organ_mask_column: mask_liver_path
+  tumor_mask_column: mask_liver_tumor_path
+  # Organ fusion: anchor or majority.
+  organ_consensus_method: anchor
+  # Tumor fusion: none, anchor, majority, intersection, union, or staple.
+  # none retains each scan's own tumor (resampled for reference output), without clipping.
+  tumor_consensus_method: anchor
+  # Publish results on each source scan grid or on the selected reference grid.
+  output_space: moving
+  # Also map additional mask_*_path columns when output_space is reference.
+  transform_additional_masks: false
+  # Baseline evaluation and automatic initialization always precede this list:
+  # PCA for complete organs, geometry translation for partial organs. Keep the
+  # baseline unless initialization improves Dice by at least this amount.
+  initializer_minimum_dice_improvement: 0.001
+  # This list replaces the default chain. Omit steps to disable them; stages: []
+  # requests initialization only. Each type can appear once. Order rigid before
+  # affine before elastic; mask and MI may appear in either order within a model.
+  # Useful shorter chains (replace the list below with the desired type entries):
+  #   Organ shape:         mask_rigid -> mask_affine -> mask_elastic
+  #   Intensity alignment: mask_rigid -> mi_affine -> mi_elastic
+  #   Shape then texture:  mask_rigid -> mask_affine -> mask_elastic -> mi_elastic
+  #
+  # Each step starts from the last ACCEPTED mapping. Rejection or failure keeps
+  # that mapping and its inverse, then continues to the next configured step.
+  # Mask stages minimize signed-distance error and require Dice improvement.
+  # MI stages optimize image intensities and require MI improvement with a Dice
+  # guard. Organ masks remain required for every chain; tumors never drive fitting.
+  stages:
+    # Correct translation/rotation without scaling. Omitted optimizer and pyramid
+    # settings inherit the shared linear defaults below.
+    - type: mask_rigid
+      run_if: {dice_below: 0.95}
+      acceptance:
+        minimum_dice_improvement: 0.002
+
+    # Refine organ shape with scale/shear. This stage overrides the shared
+    # iteration limit and pyramid; other stages keep their own resolved defaults.
+    - type: mask_affine
+      run_if: {dice_below: 0.95}
+      optimizer: {iterations: 80}
+      pyramid:
+        shrink_factors: [2, 1]
+        smoothing_sigmas_mm: [1.0, 0.0]
+      acceptance:
+        minimum_dice_improvement: 0.002
+
+    # Refine the accepted affine using intensities near the organ boundary.
+    # High organ Dice does not prove intensity alignment: "always" attempts this
+    # step even when preceding mask stages were skipped for sufficient Dice.
+    - type: mi_affine
+      run_if: always
+      metric:
+        roi: organ_band              # organ_band or organ (interior features).
+        histogram_bins: 50           # Integer in [5, 256].
+        sampling_strategy: regular   # none, regular, or random.
+        sampling_fraction: 0.2       # Fraction in (0, 1]; ignored for "none".
+        sampling_seed: 42            # Positive seed; regular sampling also jitters.
+      acceptance:
+        minimum_mi_improvement: 0.0  # Still requires improvement above tolerance.
+        maximum_dice_decrease: 0.002 # Relative to peak accepted Dice, not last step.
+
+    # Correct remaining local shape mismatch only below this Dice. A skipped
+    # step records skipped_acceptable_dice and does not skip subsequent steps.
+    # Because MI affine precedes this step, acceptance also preserves its MI.
+    - type: mask_elastic
+      run_if: {dice_below: 0.90}
+      optimizer: {iterations: 25}
+      acceptance:
+        minimum_dice_improvement: 0.005
+
+    # Align internal intensity features. If mask_elastic was accepted, refine
+    # the SAME B-spline, preserving its mesh and frozen linear mapping. Otherwise
+    # initialize one B-spline from identity after the last accepted linear step.
+    - type: mi_elastic
+      run_if: always
+      metric:
+        roi: organ
+        # Other MI settings inherit their defaults (50 bins, regular sampling,
+        # fraction 0.2, seed 42); they do not inherit mi_affine's custom settings.
+      optimizer: {iterations: 15}
+      pyramid:
+        shrink_factors: [2, 1]
+        smoothing_sigmas_mm: [1.0, 0.0]
+      acceptance:
+        minimum_mi_improvement: 0.0
+        maximum_dice_decrease: 0.002
+
+  # MI needs actual intensity images with nonconstant signal in the chosen ROI.
+  # Acceptance evaluates full-resolution source data on shared physical support,
+  # independently of sampled optimizer values. Partial organs use common-FOV Dice.
+  # Shared settings below supply defaults; per-stage settings take precedence.
+  # Approximate B-spline control-point spacing; smaller values deform more locally.
+  elastic_control_point_spacing_mm: 90.0
+  # Default iterations per elastic pyramid level; per-stage range is [1, 100].
+  elastic_optimizer_iterations: 25
+  # Both elastic objectives validate the ENTIRE current B-spline against these
+  # limits, plus inverse round-trip consistency, before accepting it. Limits do
+  # not reset between stages. Jacobian limits apply to the residual deformation;
+  # full-transform Jacobian extrema are reported separately.
+  maximum_elastic_displacement_p95_mm: 8.0
+  maximum_elastic_displacement_mm: 12.0
+  minimum_elastic_jacobian_determinant: 0.5
+  maximum_elastic_jacobian_determinant: 2.0
+  # Completeness heuristics; tune for the dataset and organ, not clinical cutoffs.
+  partial_mask_boundary_margin_mm: 1.0
+  accept_partial_organ_masks: true
+  minimum_largest_component_fraction: 0.8
+  # Accept lower-overlap registrations as recipients without letting them vote.
+  minimum_accepted_organ_dice: 0.5
+  minimum_consensus_dice: 0.8
+  minimum_common_field_of_view_fraction: 0.05
+  # Reject PCA orientation candidates requiring a larger rigid rotation.
+  maximum_pca_rotation_degrees: 45.0
+  # Default maximum iterations per level of linear refinement.
+  maximum_optimizer_iterations: 100
+  # Paired schedules, coarse to fine. Shrink factors are positive integers in
+  # strictly decreasing order; sigmas are nonincreasing, nonnegative mm widths.
+  # Supply both lists when changing their length. A final factor 1 uses the
+  # original optimization grid; omitting it can trade accuracy for speed.
+  linear_shrink_factors: [4, 2, 1]
+  linear_smoothing_sigmas_mm: [2.0, 1.0, 0.0]
+  # Shared B-spline schedule for both elastic objectives unless overridden by a
+  # stage's pyramid. These settings do not add elastic steps to the stage list.
+  elastic_shrink_factors: [4, 2, 1]
+  elastic_smoothing_sigmas_mm: [2.0, 1.0, 0.0]
+  # Distance-map crop margin in mm.
+  distance_map_crop_padding_mm: 25.0
+  # Signed-distance clamp and MI boundary-band half-width in mm.
+  organ_boundary_band_half_width_mm: 15.0
+  # Keep original organ masks while mapping tumor consensus.
+  preserve_source_organ_mask: false
+  # Clip transferred tumors to the registered organ.
+  clip_tumor_consensus_to_organ: true
+  # Majority/STAPLE probability cutoff.
+  consensus_probability_threshold: 0.5
+  # Criteria are evaluated in list order, one column per item. A category list
+  # gives most-to-least preferred values; min/max orders finite numeric values.
+  # Later criteria break ties. Missing/unlisted values rank last per criterion.
+  # Complete organs always precede partial organs. Move the organ-volume max
+  # criterion earlier to make size more important than phase or resolution.
+  reference_selection_priority:
+    - Modality: [CT, MR]
+    - phase: [PORTAL_VENOUS, ARTERIAL, DELAYED, NATIVE]
+    - mri_sequence: [T1, T2, DWI]
+    - PixelSpacingXY: min
+    - SliceThickness: min
+    - registration_organ_volume_mm3: max
 
 # ---------------------------------------------------------------------------
 # Radiomics

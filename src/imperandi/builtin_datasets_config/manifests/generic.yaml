@@ -252,6 +252,63 @@ segmentation:
       #       input: liver_all
       #       output: liver_all
 
+# Manifest-grouped organ registration and shared tumor segmentation.
+# Explicit CLI consensus-method and optional-stage options override these settings.
+registration:
+  grouping_columns: [patient_key, study_id, Modality]
+  organ_mask_column: mask_liver_path
+  tumor_mask_column: mask_liver_tumor_path
+  organ_consensus_method: anchor
+  # Use none to retain each scan's own tumor without fusion or organ clipping.
+  tumor_consensus_method: anchor
+  # Publish results on each source scan grid or on the selected reference grid.
+  output_space: moving
+  # Also map additional mask_*_path columns when output_space is reference.
+  transform_additional_masks: false
+  # Ordered refinement steps; omit a stage to disable it.
+  stages:
+    - type: mask_rigid
+    - type: mask_affine
+  elastic_control_point_spacing_mm: 90.0
+  elastic_optimizer_iterations: 25
+  maximum_elastic_displacement_p95_mm: 8.0
+  maximum_elastic_displacement_mm: 12.0
+  minimum_elastic_jacobian_determinant: 0.5
+  maximum_elastic_jacobian_determinant: 2.0
+  # Dataset-dependent QC: edge contact suggests partial coverage.
+  partial_mask_boundary_margin_mm: 1.0
+  accept_partial_organ_masks: true
+  minimum_largest_component_fraction: 0.8
+  minimum_accepted_organ_dice: 0.5
+  minimum_consensus_dice: 0.8
+  minimum_common_field_of_view_fraction: 0.05
+  maximum_pca_rotation_degrees: 45.0
+  maximum_optimizer_iterations: 100
+  # Coarse-to-fine optimizer levels; each factor pairs with a sigma in mm.
+  # Linear schedules cover mask-rigid, mask-affine, and MI linear refinement.
+  linear_shrink_factors: [4, 2, 1]
+  linear_smoothing_sigmas_mm: [2.0, 1.0, 0.0]
+  # Used only when elastic refinement is enabled.
+  elastic_shrink_factors: [4, 2, 1]
+  elastic_smoothing_sigmas_mm: [2.0, 1.0, 0.0]
+  distance_map_crop_padding_mm: 25.0
+  # Signed-distance clamp and MI boundary-band half-width in mm.
+  organ_boundary_band_half_width_mm: 15.0
+  # Unclamped transfer-field crop and smooth native coverage transition.
+  organ_distance_field_padding_mm: 10.0
+  organ_coverage_blend_width_mm: 3.0
+  # Keep original organ masks while mapping tumor consensus.
+  preserve_source_organ_mask: false
+  clip_tumor_consensus_to_organ: true
+  consensus_probability_threshold: 0.5
+  reference_selection_priority:
+    - Modality: [CT, MR]
+    - phase: [PORTAL_VENOUS, DELAYED, ARTERIAL, NATIVE, UNKNOWN]
+    - mri_sequence: [T1, T2, DWI]
+    - PixelSpacingXY: min
+    - SliceThickness: min
+    - registration_organ_volume_mm3: max
+
 radiomics:
   # `pyradiomics` follows the native PyRadiomics parameter-file structure.
   modalities:

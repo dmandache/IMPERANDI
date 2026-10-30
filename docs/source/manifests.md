@@ -722,7 +722,7 @@ Optional task keys include `extra`, `output`, `outputs`, `fetch_output`, and
 `fetch_outputs`. Each modality may define its own `postprocess` block to combine
 logical masks and apply morphological operations in a configurable order.
 The same logical outputs may be used across modalities, for example mapping
-both `liver_lesions` and `liver_lesions_mr` to `mask_liver_tumor`.
+both `liver_lesions` and `liver_lesions_mr` to `mask_liver_tumor_path`.
 
 Task output declarations need not enumerate every mask a backend produces.
 For example, `task: total` may supply `liver` without an explicit `output` or
@@ -736,7 +736,7 @@ Set `postprocess.operations` to an ordered list under each modality. Every step
 names an `op`, its `input` (one mask) or `inputs` (a list), and an `output`.
 Cleanup settings belong to the individual operations that use them.
 Inputs can refer to task outputs or results of earlier steps. Bare logical names,
-`mask_*` column names, and `.nii.gz` filenames are accepted and normalized to
+`mask_*_path` column names, and `.nii.gz` filenames are accepted and normalized to
 logical names.
 
 For example, clean the liver mask, combine it with the tumor mask, clean the
@@ -797,7 +797,7 @@ morphology and component selection.
 
 Masks must be 3-D; logical combinations require matching shapes and affines.
 Positive voxels are treated as foreground. Each distinct output is saved as a
-binary `uint8` NIfTI and appears in the corresponding `mask_<output>` CSV column,
+binary `uint8` NIfTI and appears in the corresponding `mask_<output>_path` CSV column,
 including intermediate outputs. New names create `<output>.nii.gz`; existing
 logical task names write to their configured `fetch_output` filename.
 Reusing an output name replaces its current value for subsequent steps and saves
@@ -805,12 +805,15 @@ its final value.
 Only explicitly named outputs are written. To clip an original mask to a merged
 result, add an `intersection` step with that original mask as the output.
 For example, an output named `liver_tumor` mapped to `fetch_output: liver_lesions`
-updates `liver_lesions.nii.gz`, and `mask_liver_tumor` still points to that file.
+updates `liver_lesions.nii.gz`, and `mask_liver_tumor_path` still points to that file.
 
-The full sequence is computed before any output is written. Missing or
-unreadable input files always fail the row. Geometry errors also fail by default;
-`postprocess.on_failure: warn_only` records a warning and returns the input masks
-without reporting derived outputs when geometry prevents the sequence completing.
+The full sequence is computed before any output is written. Postprocessing errors
+fail the row by default (`postprocess.on_failure: fail`). Setting
+`postprocess.on_failure: warn_only` records a warning and retains successfully
+segmented mask paths in the CSV without reporting derived outputs from the failed
+sequence. This includes missing or unreadable inputs, geometry errors, and
+operation or output-writing errors. It does not roll back files already written
+before an output-writing error. Segmentation and cropping errors still fail the row.
 Unknown operations, inappropriate parameters, and references to later results
 are rejected during manifest validation. If an initial backend mask is also the
 output of a later step, declare it in the task's `output`/`outputs` or ROI subset
@@ -856,6 +859,66 @@ Include the cleanup operations needed for the dataset. A `union` with one input
 copies the mask before cleanup. If the merged output
 replaces a source (for example, `output: liver`), write the union and cleanup
 steps to that name and omit its final intersection so the merge stays intact.
+
+### Registration stages
+
+`registration.stages` is an ordered list of `mask_rigid`, `mask_affine`,
+`mi_affine`, `mask_elastic`, and `mi_elastic` steps. It replaces the default
+`mask_rigid -> mask_affine` chain. An empty list runs only baseline evaluation
+and automatic initialization. All linear steps must precede elastic steps,
+and each stage type may appear once. The old enable flags, global stopping
+thresholds, and stage-acceptance maps are no longer supported.
+
+```yaml
+registration:
+  stages:
+    - type: mask_rigid
+    - type: mi_affine
+      metric: {roi: organ_band, sampling_seed: 42}
+      acceptance: {minimum_mi_improvement: 0.0, maximum_dice_decrease: 0.002}
+    - type: mi_elastic
+      run_if: always
+      metric: {roi: organ}
+      optimizer: {iterations: 25}
+```
+
+See [the registration workflow](workflow.md) for objective selection,
+per-stage conditions, deformation limits, and rejection behavior.
+
+### Individual tumor masks
+
+Disable tumor fusion while retaining organ registration with:
+
+```yaml
+registration:
+  tumor_consensus_method: none
+  output_space: reference  # Resample each scan's own tumor to the reference grid.
+```
+
+Use `output_space: moving` to retain each original tumor path instead. This mode
+preserves empty masks, leaves missing tumors missing, and bypasses organ clipping.
+Original paths remain in `source_<tumor_mask_column>` in either output space.
+
+### Registration pyramid levels
+
+Shared `linear_shrink_factors` / `linear_smoothing_sigmas_mm` and
+`elastic_shrink_factors` / `elastic_smoothing_sigmas_mm` default to `[4, 2, 1]`
+and `[2.0, 1.0, 0.0]`. Each stage can override them under `pyramid`:
+
+```yaml
+registration:
+  stages:
+    - type: mask_affine
+      pyramid:
+        shrink_factors: [2, 1]
+        smoothing_sigmas_mm: [1.0, 0.0]
+```
+
+The lists must be nonempty and have equal lengths. Shrink factors are strictly
+decreasing positive integers; smoothing widths are finite nonnegative values
+in millimeters, in nonincreasing order. `[1]` / `[0]` uses one unsmoothed level.
+Omitting a final factor of 1 uses a coarser final optimization grid. Acceptance
+still uses full-resolution source data. Pyramid settings do not enable stages.
 
 ### Radiomics
 

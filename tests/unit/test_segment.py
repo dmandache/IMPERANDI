@@ -320,6 +320,39 @@ def test_process_single_volume_crops_image_and_resolved_masks(tmp_path):
     assert nib.load(tmp_path / "liver.nii.gz").shape == (2, 4, 2)
 
 
+def test_cropping_only_collects_mask_filepath_columns(tmp_path, monkeypatch):
+    image = tmp_path / "scan.nii.gz"
+    mask = tmp_path / "kidney.nii.gz"
+    metric = tmp_path / "metrics.csv"
+    for path in (image, mask, metric):
+        path.touch()
+    captured = {}
+
+    def fake_segment(*args, **kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(segment_module, "segment_volume", fake_segment)
+    result = segment_module.process_single_volume(
+        0,
+        {
+            "nifti_path": str(image),
+            "mask_kidney_path": str(mask),
+            "mask_metrics": str(metric),
+            "mask_affine_status": "accepted",
+            "mask_kidney_volume": 42.0,
+            "source_mask_kidney_path": str(metric),
+            "mask_liver_path": None,
+        },
+        {"tasks": []},
+        verbose=False,
+        force=False,
+        crop_margin_mm=0,
+    )
+    assert result[2] is None
+    assert captured["crop_mask_paths"] == [mask]
+
+
 def test_segment_volume_crops_before_morphological_postprocessing(tmp_path):
     affine = np.eye(4)
     image_path = tmp_path / "scan.nii.gz"
@@ -699,7 +732,7 @@ def test_operations_fail_at_fetch_without_writing_partial_merge(
     assert present.read_bytes() == original
 
 
-def test_undeclared_missing_mask_fails_after_all_tasks_run(tmp_path):
+def test_undeclared_missing_mask_warns_after_all_tasks_run(tmp_path):
     nifti = tmp_path / "vol.nii.gz"
     save_nifti(np.zeros((4, 4, 4)), np.eye(4), nifti)
     config = segment_module.validate_segmentation_config(
@@ -736,7 +769,7 @@ def test_undeclared_missing_mask_fails_after_all_tasks_run(tmp_path):
             name = "spleen" if task == "total" else "liver_lesions"
             save_nifti(np.ones((4, 4, 4)), np.eye(4), output_dir / f"{name}.nii.gz")
 
-    _, out_dir, error, _, _ = segment_module.process_single_volume(
+    _, out_dir, error, warning, outputs = segment_module.process_single_volume(
         0,
         {"nifti_path": str(nifti), "Modality": "CT"},
         config,
@@ -745,9 +778,11 @@ def test_undeclared_missing_mask_fails_after_all_tasks_run(tmp_path):
         backend=MissingLiverBackend(),
     )
     assert calls == ["total", "liver_lesions"]
-    assert out_dir is None
-    assert "liver.nii.gz" in error
-    assert "No such file" in error
+    assert out_dir == str(tmp_path)
+    assert error is None
+    assert "liver.nii.gz" in warning
+    assert "No such file" in warning
+    assert outputs == {"liver_tumor": "liver_lesions", "spleen": "spleen"}
     assert not (tmp_path / "merged.nii.gz").exists()
 
 
@@ -970,7 +1005,7 @@ def test_main_dispatches_totalsegmentator_models_by_modality(tmp_path, monkeypat
 
     assert calls == [("CT", "total"), ("MRI", "total_mr")]
     out = pd.read_csv(args.csv_path_out)
-    assert out["mask_liver"].notna().all()
+    assert out["mask_liver_path"].notna().all()
 
 
 def test_main_writes_mask_columns(tmp_path, monkeypatch):
@@ -1061,12 +1096,12 @@ def test_main_writes_mask_columns(tmp_path, monkeypatch):
     segment_module.main(args)
 
     out_df = pd.read_csv(args.csv_path_out)
-    assert "mask_liver" in out_df.columns
-    assert "mask_vessels" in out_df.columns
-    assert "mask_merged" in out_df.columns
-    assert out_df.loc[0, "mask_liver"].endswith("liver.nii.gz")
-    assert out_df.loc[0, "mask_vessels"].endswith("vessels.nii.gz")
-    assert out_df.loc[0, "mask_merged"].endswith("merged.nii.gz")
+    assert "mask_liver_path" in out_df.columns
+    assert "mask_vessels_path" in out_df.columns
+    assert "mask_merged_path" in out_df.columns
+    assert out_df.loc[0, "mask_liver_path"].endswith("liver.nii.gz")
+    assert out_df.loc[0, "mask_vessels_path"].endswith("vessels.nii.gz")
+    assert out_df.loc[0, "mask_merged_path"].endswith("merged.nii.gz")
 
 
 def test_main_maps_fetch_output_path_into_logical_mask_column(tmp_path, monkeypatch):
@@ -1157,10 +1192,10 @@ def test_main_maps_fetch_output_path_into_logical_mask_column(tmp_path, monkeypa
     segment_module.main(args)
 
     out_df = pd.read_csv(args.csv_path_out)
-    assert "mask_liver_tumor" in out_df.columns
-    assert out_df.loc[0, "mask_liver"].endswith("liver.nii.gz")
-    assert out_df.loc[0, "mask_liver_tumor"].endswith("liver_lesion.nii.gz")
-    assert out_df.loc[0, "mask_merged"].endswith("merged.nii.gz")
+    assert "mask_liver_tumor_path" in out_df.columns
+    assert out_df.loc[0, "mask_liver_path"].endswith("liver.nii.gz")
+    assert out_df.loc[0, "mask_liver_tumor_path"].endswith("liver_lesion.nii.gz")
+    assert out_df.loc[0, "mask_merged_path"].endswith("merged.nii.gz")
 
 
 def test_main_adds_mask_columns_for_runtime_inferred_outputs(tmp_path, monkeypatch):
@@ -1212,8 +1247,74 @@ def test_main_adds_mask_columns_for_runtime_inferred_outputs(tmp_path, monkeypat
     segment_module.main(args)
 
     out_df = pd.read_csv(args.csv_path_out)
-    assert "mask_runtime_inferred" in out_df.columns
-    assert out_df.loc[0, "mask_runtime_inferred"].endswith("runtime_inferred.nii.gz")
+    assert "mask_runtime_inferred_path" in out_df.columns
+    assert out_df.loc[0, "mask_runtime_inferred_path"].endswith(
+        "runtime_inferred.nii.gz"
+    )
+
+
+@pytest.mark.parametrize("policy", ["fail", "warn_only"])
+def test_main_preserves_segmented_paths_after_postprocess_warning(
+    tmp_path, monkeypatch, policy
+):
+    nifti = tmp_path / "vol.nii.gz"
+    save_nifti(np.ones((3, 3, 3)), np.eye(4), nifti)
+    # A stale derived file must not be published after the operation fails.
+    save_nifti(np.ones((3, 3, 3)), np.eye(4), tmp_path / "merged.nii.gz")
+    csv_path = tmp_path / "input.csv"
+    pd.DataFrame([{"nifti_path": str(nifti), "Modality": "CT"}]).to_csv(
+        csv_path, index=False
+    )
+    manifest = tmp_path / "manifest.yaml"
+    write_segmentation_manifest(
+        manifest,
+        {
+            "tasks": [
+                {"task": "total", "output": "liver", "fetch_output": "backend_liver"}
+            ],
+            "postprocess": {
+                "on_failure": policy,
+                "operations": [
+                    {"op": "union", "inputs": ["liver", "missing"], "output": "merged"}
+                ],
+            },
+        },
+    )
+
+    class Backend:
+        def run(self, *, output_dir, **kwargs):
+            save_nifti(
+                np.ones((3, 3, 3)), np.eye(4), output_dir / "backend_liver.nii.gz"
+            )
+
+    monkeypatch.setattr(segment_module, "TotalSegmentatorBackend", Backend)
+    monkeypatch.setattr(
+        segment_module, "prefetch_totalsegmentator_models", lambda *a, **k: None
+    )
+    patch_strategy(monkeypatch, mode="serial", max_workers=1, max_in_flight=1)
+    args = argparse.Namespace(
+        csv_path=str(csv_path),
+        csv_path_out=str(tmp_path / "out.csv"),
+        error_csv_path=str(tmp_path / "errors.csv"),
+        manifest=str(manifest),
+        num_workers=1,
+        verbose=False,
+        force=False,
+        start_method="spawn",
+        timeout_sec=10,
+    )
+    segment_module.main(args)
+    row = pd.read_csv(args.csv_path_out).iloc[0]
+    assert (tmp_path / "backend_liver.nii.gz").is_file()
+    assert pd.isna(row.mask_merged_path)
+    if policy == "warn_only":
+        assert row.mask_liver_path == str(tmp_path / "backend_liver.nii.gz")
+        assert "missing.nii.gz" in row.warning_message
+        assert "Postprocess operations failed" in row.warning_message
+        assert not Path(args.error_csv_path).exists()
+    else:
+        assert pd.isna(row.mask_liver_path)
+        assert "missing.nii.gz" in Path(args.error_csv_path).read_text()
 
 
 def test_main_records_warning_when_merged_mask_missing(tmp_path, monkeypatch):
@@ -1294,7 +1395,7 @@ def test_main_records_warning_when_merged_mask_missing(tmp_path, monkeypatch):
     out_df = pd.read_csv(args.csv_path_out)
     assert "warning_message" in out_df.columns
     assert "missing postprocess mask" in out_df.loc[0, "warning_message"]
-    assert pd.isna(out_df.loc[0, "mask_merged"])
+    assert pd.isna(out_df.loc[0, "mask_merged_path"])
 
 
 def test_main_single_worker_avoids_process_pool(tmp_path, monkeypatch):
@@ -1354,7 +1455,7 @@ def test_main_single_worker_avoids_process_pool(tmp_path, monkeypatch):
     segment_module.main(args)
 
     out_df = pd.read_csv(args.csv_path_out)
-    assert out_df.loc[0, "mask_liver"].endswith("liver.nii.gz")
+    assert out_df.loc[0, "mask_liver_path"].endswith("liver.nii.gz")
 
 
 def test_main_uses_strategy_effective_worker_count(tmp_path, monkeypatch):
@@ -1411,7 +1512,7 @@ def test_main_uses_strategy_effective_worker_count(tmp_path, monkeypatch):
 
     segment_module.main(args)
     out_df = pd.read_csv(args.csv_path_out)
-    assert out_df.loc[0, "mask_liver"].endswith("liver.nii.gz")
+    assert out_df.loc[0, "mask_liver_path"].endswith("liver.nii.gz")
 
 
 def test_main_uses_strategy_effective_start_method(tmp_path, monkeypatch):
@@ -1866,7 +1967,7 @@ def test_queued_future_does_not_consume_execution_timeout(tmp_path, monkeypatch)
     segment_module.main(args)
 
     out = pd.read_csv(args.csv_path_out)
-    assert out["mask_liver"].notna().all()
+    assert out["mask_liver_path"].notna().all()
     assert not Path(args.error_csv_path).exists()
 
 
@@ -2236,7 +2337,7 @@ def test_main_subprocess_mode_currently_degrades_to_serial(tmp_path, monkeypatch
 
     segment_module.main(args)
     out_df = pd.read_csv(args.csv_path_out)
-    assert out_df.loc[0, "mask_liver"].endswith("liver.nii.gz")
+    assert out_df.loc[0, "mask_liver_path"].endswith("liver.nii.gz")
 
 
 @pytest.mark.parametrize(
@@ -2467,13 +2568,13 @@ def test_main_does_not_blank_existing_mask_or_warning_columns(tmp_path, monkeypa
             {
                 "nifti_path": str(nifti_a),
                 "Modality": "CT",
-                "mask_liver": "preexisting-a",
+                "mask_liver_path": "preexisting-a",
                 "warning_message": "warn-a",
             },
             {
                 "nifti_path": str(nifti_b),
                 "Modality": "CT",
-                "mask_liver": "preexisting-b",
+                "mask_liver_path": "preexisting-b",
                 "warning_message": "warn-b",
             },
         ]
@@ -2523,6 +2624,6 @@ def test_main_does_not_blank_existing_mask_or_warning_columns(tmp_path, monkeypa
     segment_module.main(args)
 
     out_df = pd.read_csv(args.csv_path_out)
-    assert str(nifti_a.parent / "liver.nii.gz") == out_df.loc[0, "mask_liver"]
-    assert out_df.loc[1, "mask_liver"] == "preexisting-b"
+    assert str(nifti_a.parent / "liver.nii.gz") == out_df.loc[0, "mask_liver_path"]
+    assert out_df.loc[1, "mask_liver_path"] == "preexisting-b"
     assert out_df.loc[1, "warning_message"] == "warn-b"

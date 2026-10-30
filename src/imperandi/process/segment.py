@@ -48,8 +48,14 @@ from imperandi.process.mask_operations import (
     validate_operations,
 )
 from imperandi.utils.misc import report_volumes  # type: ignore
-from imperandi.utils.logging import log_task_summary, setup_logging
+from imperandi.utils.logging import (
+    log_script_namespace,
+    log_task_summary,
+    setup_logging,
+)
 from imperandi.utils.manifest import load_manifest
+from imperandi.utils.columns import MASK_PATH_COLUMN_PATTERN, is_mask_path_column
+from imperandi.utils.misc import print_args
 from imperandi.utils.checkpoint_cli import add_checkpoint_arguments
 from imperandi.utils.run_state import (
     log_finished_resume_summary,
@@ -557,7 +563,7 @@ def _output_to_column(output_name: str) -> str:
     value = str(output_name).strip()
     if value.endswith(".nii.gz"):
         value = value[: -len(".nii.gz")]
-    return f"mask_{value or 'unnamed'}"
+    return f"mask_{value or 'unnamed'}_path"
 
 
 def _output_to_filename(output_name: str) -> str:
@@ -568,7 +574,7 @@ def _output_to_filename(output_name: str) -> str:
 
 
 def build_output_column_map(tasks: List[Dict[str, Any]]) -> Dict[str, str]:
-    """Map each unique logical task output to its ``mask_*`` CSV column."""
+    """Map each unique logical task output to its ``mask_*_path`` CSV column."""
     output_to_column: Dict[str, str] = {}
     for task in tasks:
         for output_name in infer_task_outputs(task):
@@ -917,6 +923,7 @@ def segment_volume(
         if verbose:
             logger.info("Masks saved for %s", task_name)
 
+    backend_outputs = dict(output_to_fetch)
     if postprocess:
         for name in operation_sources(operations):
             output_to_fetch.setdefault(name, name)
@@ -949,16 +956,17 @@ def segment_volume(
     ):
         try:
             apply_operations(output_dir, operations, output_to_fetch)
-        except MaskGeometryError as exc:
+        except Exception as exc:
             if postprocess.get("on_failure", "fail") == "fail":
                 raise
             message = f"Postprocess operations failed: {exc}"
             logger.warning(message)
             warnings.append(message)
-            # A failed sequence must not advertise stale derived masks.
+            # Retain completed segmentation outputs, not missing operation
+            # inputs or stale derived masks from an unsuccessful sequence.
             if resolved_output_to_fetch is not None:
                 resolved_output_to_fetch.clear()
-                resolved_output_to_fetch.update(output_to_fetch)
+                resolved_output_to_fetch.update(backend_outputs)
             return warnings
     elif verbose:
         logger.info("Skip postprocess – completed operations and masks are unchanged")
@@ -1150,7 +1158,7 @@ def process_single_volume(
         if crop_margin_mm is not None:
             for column_name, value in row.items():
                 if (
-                    str(column_name).startswith("mask_")
+                    is_mask_path_column(column_name)
                     and isinstance(value, (str, Path))
                     and str(value).strip()
                 ):
@@ -1481,9 +1489,21 @@ def main(args: argparse.Namespace) -> None:
         base_path=Path(__file__).resolve().parents[1],
     )
     crop_margin_mm = _requested_crop_margin(args, tasks_config)
+    effective_args = log_script_namespace(
+        logger,
+        __file__,
+        args,
+        segmentation=tasks_config,
+        manifest=manifest_arg or "generic",
+    )
+    if getattr(args, "dry_run", False):
+        logger.info("Dry run: segment")
+        print_args(effective_args)
+        return
     source_id_signature = source_id_resume_signature(args.csv_path)
     checkpoint_signature = {
         "segmentation": tasks_config,
+        "mask_path_column_pattern": MASK_PATH_COLUMN_PATTERN,
     }
     if source_id_signature:
         checkpoint_signature["source_id"] = source_id_signature
@@ -1492,13 +1512,15 @@ def main(args: argparse.Namespace) -> None:
         checkpoint_signature=checkpoint_signature,
     )
     semantic_columns = ["volume_id", "nifti_path", "Modality"]
-    semantic_dynamic_prefixes = ["mask_"] if crop_margin_mm is not None else []
+    semantic_mask_patterns = (
+        [MASK_PATH_COLUMN_PATTERN] if crop_margin_mm is not None else []
+    )
     semantic_fp = fingerprint_csv_semantic(
         args.csv_path,
         columns=semantic_columns,
-        dynamic_prefixes=semantic_dynamic_prefixes,
+        dynamic_patterns=semantic_mask_patterns,
         artifact_columns=["nifti_path"],
-        artifact_prefixes=semantic_dynamic_prefixes,
+        artifact_patterns=semantic_mask_patterns,
         strict=bool(getattr(args, "strict_resume", False)),
     )
 
@@ -2254,9 +2276,9 @@ def main(args: argparse.Namespace) -> None:
     final_semantic_fp = fingerprint_csv_semantic(
         args.csv_path,
         columns=semantic_columns,
-        dynamic_prefixes=semantic_dynamic_prefixes,
+        dynamic_patterns=semantic_mask_patterns,
         artifact_columns=["nifti_path"],
-        artifact_prefixes=semantic_dynamic_prefixes,
+        artifact_patterns=semantic_mask_patterns,
         strict=bool(getattr(args, "strict_resume", False)),
     )
     try:
@@ -2267,9 +2289,9 @@ def main(args: argparse.Namespace) -> None:
         final_semantic_fp = fingerprint_csv_semantic(
             output_path,
             columns=semantic_columns,
-            dynamic_prefixes=semantic_dynamic_prefixes,
+            dynamic_patterns=semantic_mask_patterns,
             artifact_columns=["nifti_path"],
-            artifact_prefixes=semantic_dynamic_prefixes,
+            artifact_patterns=semantic_mask_patterns,
             strict=bool(getattr(args, "strict_resume", False)),
         )
     ckpt.finalize_state(
@@ -2308,8 +2330,4 @@ if __name__ == "__main__":
     setup_logging()
     args = build_parser().parse_args()
     args = normalize_segment_args(args)
-    if getattr(args, "dry_run", False):
-        logger.info("Dry run: segment")
-        logger.info("%s", args)
-        raise SystemExit(0)
     main(args)

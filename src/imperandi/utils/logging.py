@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import argparse
 import logging
 import os
+from pathlib import Path
 import sys
 from typing import Mapping, Optional
 
@@ -21,6 +23,17 @@ class _ConsoleHandler(logging.StreamHandler):
         if encoding:
             return text.encode(encoding, errors="backslashreplace").decode(encoding)
         return text
+
+
+def log_script_namespace(
+    logger, script_file: str, args: argparse.Namespace, **settings
+) -> argparse.Namespace:
+    """Log resolved settings without mutating arguments or exposing CLI handlers."""
+    namespace = argparse.Namespace(
+        **{k: v for k, v in {**vars(args), **settings}.items() if not k.startswith("_")}
+    )
+    logger.info("🚀 Running %s with namespace: %s", Path(script_file).name, namespace)
+    return namespace
 
 
 def _coerce_level(level: Optional[str | int]) -> int:
