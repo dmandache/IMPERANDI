@@ -10,6 +10,7 @@ def add_checkpoint_arguments(
     default_sec: int,
     include_resume: bool = True,
     include_strict: bool = True,
+    include_retry_failed: bool = False,
 ) -> None:
     """Add checkpoint frequency and resume controls to a CLI parser.
 
@@ -19,6 +20,7 @@ def add_checkpoint_arguments(
         default_sec: Default maximum seconds between flushes.
         include_resume: Add the ``--no_resume`` switch when true.
         include_strict: Add the ``--strict_resume`` switch when true.
+        include_retry_failed: Add opt-in retries for recorded volume failures.
     """
     parser.add_argument(
         "--checkpoint_every_rows",
@@ -39,6 +41,16 @@ def add_checkpoint_arguments(
             dest="resume",
             default=True,
             help="Disable resume from matching checkpoint state.",
+        )
+    if include_retry_failed:
+        parser.add_argument(
+            "--retry_failed",
+            action="store_true",
+            default=False,
+            help=(
+                "Retry recorded failures on resume while retaining successful volumes. "
+                "By default, matching failures are retained without retrying."
+            ),
         )
     if include_strict:
         parser.add_argument(

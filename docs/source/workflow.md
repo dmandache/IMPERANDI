@@ -142,6 +142,7 @@ match. Common controls are:
 - `--no_resume`: ignore matching checkpoint state and start a fresh run.
 - `--strict_resume`: hash input contents instead of relying on the lightweight
   fingerprint; this is safer but slower on large inputs.
+- `--retry_failed`: retry recorded failures while preserving successful results, even after a completed run. Supported by `convert`, `segment`, `phase`, `radiomics`, and `registration`. By default, resume skips previous failures. Successful retries clear their error records.
 
 Changing material arguments or task-relevant inputs invalidates an incompatible
 checkpoint. For cohort CSVs that are enriched in place, resume fingerprints are

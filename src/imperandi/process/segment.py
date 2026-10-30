@@ -1382,6 +1382,7 @@ def add_segment_arguments(
         parser,
         default_rows=DEFAULT_CHECKPOINT_EVERY_ROWS,
         default_sec=DEFAULT_CHECKPOINT_EVERY_SEC,
+        include_retry_failed=True,
     )
     if include_manifest:
         parser.add_argument(
@@ -1549,6 +1550,7 @@ def main(args: argparse.Namespace) -> None:
     can_resume = resume_ctx["can_resume"]
     can_partial_resume = resume_ctx["can_partial_resume"]
     already_finished = resume_ctx["already_finished"]
+    deferred_failed_ids = resume_ctx["deferred_failed_indices"]
     ckpt = CheckpointManager(paths=paths, config=resume_ctx["config"])
 
     if already_finished:
@@ -1668,6 +1670,7 @@ def main(args: argparse.Namespace) -> None:
     )
 
     errors_by_idx: Dict[str, str] = {}
+    current_source_ids = set(df["_source_idx"])
     if (can_resume or can_partial_resume) and paths.error_checkpoint_path.exists():
         err_ckpt = pd.read_csv(paths.error_checkpoint_path)
         err_key = "_source_idx" if "_source_idx" in err_ckpt.columns else "idx"
@@ -1675,12 +1678,13 @@ def main(args: argparse.Namespace) -> None:
             for _, row in err_ckpt.iterrows():
                 try:
                     source_idx = normalize_source_id(row[err_key])
-                    if source_idx in completed_indices:
+                    if source_idx in current_source_ids:
                         errors_by_idx[source_idx] = str(row["error_message"])
                 except Exception:
                     continue
 
-    resume_failed_count = len(completed_indices & set(errors_by_idx))
+    resume_failed_count = len(deferred_failed_ids & set(errors_by_idx))
+    resume_skipped_count += resume_failed_count
 
     modality_skipped_count = 0
     for idx in df.index[~eligible_by_modality]:
@@ -1721,7 +1725,8 @@ def main(args: argparse.Namespace) -> None:
         result_output_to_fetch: Dict[str, str] | None = None,
     ) -> None:
         source_idx = normalize_source_id(df.at[idx, "_source_idx"])
-        completed_indices.add(source_idx)
+        if not err_msg:
+            completed_indices.add(source_idx)
         ckpt.mark_processed()
 
         if out_dir:
@@ -2162,7 +2167,8 @@ def main(args: argparse.Namespace) -> None:
         i
         for i in list(df.index)
         if bool(eligible_by_modality.at[i])
-        and normalize_source_id(df.at[i, "_source_idx"]) not in completed_indices
+        and normalize_source_id(df.at[i, "_source_idx"])
+        not in (completed_indices | deferred_failed_ids)
     ]
     processed_source_ids = {
         normalize_source_id(df.at[i, "_source_idx"]) for i in row_indices
@@ -2269,6 +2275,9 @@ def main(args: argparse.Namespace) -> None:
             report_volumes(err_df)
         except Exception:
             logger.debug("report_volumes() failed – continuing")
+
+    if not errors_by_idx and Path(args.error_csv_path).exists():
+        Path(args.error_csv_path).unlink()
 
     # Segmentation may crop source NIfTI/mask artifacts in place. Refresh the
     # semantic baseline after a successful run so strict content hashing does

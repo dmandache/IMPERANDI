@@ -532,6 +532,7 @@ def add_radiomics_arguments(
         parser,
         default_rows=DEFAULT_CHECKPOINT_EVERY_ROWS,
         default_sec=DEFAULT_CHECKPOINT_EVERY_SEC,
+        include_retry_failed=True,
     )
     if include_dry_run:
         parser.add_argument(
@@ -995,6 +996,7 @@ def main(args: argparse.Namespace) -> None:
     can_resume = resume_ctx["can_resume"]
     can_partial_resume = resume_ctx["can_partial_resume"]
     already_finished = resume_ctx["already_finished"]
+    deferred_failed_ids = resume_ctx["deferred_failed_indices"]
     ckpt = CheckpointManager(paths=paths, config=resume_ctx["config"])
 
     if already_finished:
@@ -1064,18 +1066,20 @@ def main(args: argparse.Namespace) -> None:
             max(0, len(df) - len(completed_indices)),
         )
     errors_by_idx: dict[str, dict[str, Any]] = {}
+    current_source_ids = set(df["_source_idx"])
     if (can_resume or can_partial_resume) and paths.error_checkpoint_path.exists():
         err_ckpt = pd.read_csv(paths.error_checkpoint_path)
         for _, row in err_ckpt.iterrows():
             if "_source_idx" in row:
                 try:
                     source_idx = normalize_source_id(row["_source_idx"])
-                    if source_idx in completed_indices:
+                    if source_idx in current_source_ids:
                         errors_by_idx[source_idx] = row.to_dict()
                 except Exception:
                     pass
 
-    resume_failed_count = len(completed_indices & set(errors_by_idx))
+    resume_failed_count = len(deferred_failed_ids & set(errors_by_idx))
+    resume_skipped_count += resume_failed_count
 
     def _checkpoint_write(*, force: bool = False) -> None:
         err_df = (
@@ -1093,7 +1097,8 @@ def main(args: argparse.Namespace) -> None:
     row_indices = [
         idx
         for idx in df.index.tolist()
-        if normalize_source_id(df.at[idx, "_source_idx"]) not in completed_indices
+        if normalize_source_id(df.at[idx, "_source_idx"])
+        not in (completed_indices | deferred_failed_ids)
     ]
     processed_source_ids = {
         normalize_source_id(df.at[idx, "_source_idx"]) for idx in row_indices
@@ -1115,7 +1120,6 @@ def main(args: argparse.Namespace) -> None:
             error_row = row.to_dict()
             error_row["error_message"] = messages[0]
             errors_by_idx[src_idx] = error_row
-            completed_indices.add(src_idx)
             ckpt.mark_processed()
             _checkpoint_write(force=False)
             continue
@@ -1123,6 +1127,7 @@ def main(args: argparse.Namespace) -> None:
         for key, value in features.items():
             df.at[idx, key] = value
         if features:
+            completed_indices.add(src_idx)
             if src_idx in errors_by_idx:
                 del errors_by_idx[src_idx]
         else:
@@ -1132,7 +1137,6 @@ def main(args: argparse.Namespace) -> None:
             )
             errors_by_idx[src_idx] = error_row
 
-        completed_indices.add(src_idx)
         ckpt.mark_processed()
         _checkpoint_write(force=False)
 
@@ -1153,6 +1157,8 @@ def main(args: argparse.Namespace) -> None:
         )
         atomic_write_csv(df_err, args.error_csv_path, index=False)
         logger.warning("%d rows failed -> %s", len(df_err), args.error_csv_path)
+    if not errors_by_idx and Path(args.error_csv_path).exists():
+        Path(args.error_csv_path).unlink()
     ckpt.finalize_state(
         completed_indices=completed_indices,
         input_fingerprint=semantic_fp.input_fingerprint,

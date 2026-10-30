@@ -176,6 +176,7 @@ def add_phase_arguments(
         parser,
         default_rows=DEFAULT_CHECKPOINT_EVERY_ROWS,
         default_sec=DEFAULT_CHECKPOINT_EVERY_SEC,
+        include_retry_failed=True,
     )
     if include_dry_run:
         parser.add_argument(
@@ -438,6 +439,7 @@ def main(args: argparse.Namespace) -> None:
     can_resume = resume_ctx["can_resume"]
     can_partial_resume = resume_ctx["can_partial_resume"]
     already_finished = resume_ctx["already_finished"]
+    deferred_failed_ids = resume_ctx["deferred_failed_indices"]
     ckpt = CheckpointManager(paths=paths, config=resume_ctx["config"])
 
     if already_finished:
@@ -478,6 +480,7 @@ def main(args: argparse.Namespace) -> None:
     resume_skipped_count = 0
     prefilled_skipped_count = 0
     prediction_skipped_count = 0
+    current_source_ids = set(df["_source_idx"])
     if can_resume:
         completed_indices = normalize_source_ids(
             (state or {}).get("completed_indices", [])
@@ -489,7 +492,7 @@ def main(args: argparse.Namespace) -> None:
                 if "_source_idx" in row:
                     try:
                         source_idx = normalize_source_id(row["_source_idx"])
-                        if source_idx:
+                        if source_idx in current_source_ids:
                             errors_by_idx[source_idx] = row.to_dict()
                     except Exception:
                         pass
@@ -508,7 +511,7 @@ def main(args: argparse.Namespace) -> None:
             for _, row in err_ckpt.iterrows():
                 if "_source_idx" in row:
                     source_idx = normalize_source_id(row["_source_idx"])
-                    if source_idx in completed_indices:
+                    if source_idx in current_source_ids:
                         errors_by_idx[source_idx] = row.to_dict()
 
     semantic_reprocess_ids = (
@@ -516,7 +519,8 @@ def main(args: argparse.Namespace) -> None:
         if can_partial_resume
         else set()
     )
-    resume_failed_count = len(completed_indices & set(errors_by_idx))
+    resume_failed_count = len(deferred_failed_ids & set(errors_by_idx))
+    resume_skipped_count += resume_failed_count
 
     needs_prediction = phase_needs_strategy(
         df,
@@ -600,7 +604,8 @@ def main(args: argparse.Namespace) -> None:
         idx
         for idx in df.index.tolist()
         if bool(needs_prediction.at[idx])
-        and normalize_source_id(df.at[idx, "_source_idx"]) not in completed_indices
+        and normalize_source_id(df.at[idx, "_source_idx"])
+        not in (completed_indices | deferred_failed_ids)
     ]
     phase_extractor = None
 
@@ -624,6 +629,7 @@ def main(args: argparse.Namespace) -> None:
             force_nifti_conversion=force_nifti_conversion,
         )
         if phase_info:
+            completed_indices.add(src_idx)
             for key, value in phase_info.items():
                 df.at[idx, key] = value
             if src_idx in errors_by_idx:
@@ -634,7 +640,6 @@ def main(args: argparse.Namespace) -> None:
             errors_by_idx[src_idx] = error_row
             if args.verbose and err_msg:
                 logger.warning("Row %s failed: %s", idx, err_msg)
-        completed_indices.add(src_idx)
         ckpt.mark_processed()
         _checkpoint_write(force=False)
 
@@ -663,6 +668,8 @@ def main(args: argparse.Namespace) -> None:
         )
         atomic_write_csv(df_err, args.error_csv_path, index=False)
         logger.warning("%d rows failed -> %s", len(df_err), args.error_csv_path)
+    if not errors_by_idx and Path(args.error_csv_path).exists():
+        Path(args.error_csv_path).unlink()
     final_semantic_fp = semantic_fp
     try:
         same_csv = Path(args.csv_path).resolve() == output_path.resolve()

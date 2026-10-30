@@ -190,5 +190,9 @@ those filters, or use `--skip_filter` to disable all filtering.
 ## Shared long-running options
 
 `parse`, `convert`, `segment`, `phase`, `register`, and `radiomics` accept checkpoint and
-resume options described in [Workflow](workflow.md). All commands support
-`--dry-run`.
+resume options described in [Workflow](workflow.md). `convert`, `segment`, `phase`,
+`radiomics`, and `register` also accept `--retry_failed`: normal resume retains
+recorded failures; this flag retries them while reusing successful work. It does
+not change the checkpoint signature. Combine `--no_resume` with the original
+command to start fresh instead. `parse`/`ingest` do not expose `--retry_failed`.
+All commands support `--dry-run`.
