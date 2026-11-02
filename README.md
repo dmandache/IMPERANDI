@@ -2,7 +2,7 @@
   <a href="#">
   <img src="https://raw.githubusercontent.com/dmandache/IMPERANDI/main/static/imperandi-logo-with-name.png"
        alt="IMPERANDI"
-       width="100%">
+       width="280px">
   </a>
 </p>
 
