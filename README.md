@@ -62,15 +62,15 @@ Try IMPERANDI on three public TCGA-LIHC patients:
 ```text
 DICOM folders / archives
           |
-     parse + clean (ingest)
+        parse ------------> DICOM index (slice-level metadata CSV)
           |
-     volume-level CSV -----> selected cohort + QC reports
+        clean ------------> selected cohort (volume-level CSV)
           |
         convert ----------> NIfTI images
           |
-        segment ----------> masks
+        segment ----------> organ + tumor masks
           |
-         phase -----------> phase provenance + refreshed selection
+         phase -----------> phase provenance + selection per category
           |
         register ---------> organ alignment + tumor consensus 
           |
@@ -534,3 +534,7 @@ IMPERANDI should not be assumed to de-identify input DICOM data. Users are respo
 ### Funding
 
 This work performed under the RHU OPERANDI project was supported in part by the French National Research Agency (Agence Nationale de la Recherche, ANR) as its 3rd PIA, integrated to France 2030 plan under reference _ANR-21-RHUS-0012._
+
+## Support
+
+You can support our work by giving the repo a star ⭐ to increase visibility.
