@@ -1,6 +1,6 @@
 <p align="center">
   <a href="#">
-  <img src="https://raw.githubusercontent.com/dmandache/IMPERANDI/main/static/imperandi-banner.png"
+  <img src="https://raw.githubusercontent.com/dmandache/IMPERANDI/main/static/imperandi-logo-with-name.png"
        alt="IMPERANDI"
        width="100%">
   </a>
@@ -46,6 +46,14 @@ Try IMPERANDI on three public TCGA-LIHC patients:
 | [Full demo](examples/demos/demo_full.ipynb) | Adds NIfTI conversion, liver segmentation, radiomics, the interactive viewer and TorchIO preprocessing into a PyTorch batch. | [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/dmandache/IMPERANDI/blob/main/examples/demos/demo_full.ipynb) |
 
 ## What IMPERANDI does
+
+<p align="center">
+  <a href="#">
+  <img src="https://raw.githubusercontent.com/dmandache/IMPERANDI/main/static/imperandi-banner.png"
+       alt="IMPERANDI"
+       width="100%">
+  </a>
+</p>
 
 | Stage | Purpose | Main result |
 | --- | --- | --- |
