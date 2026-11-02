@@ -1,7 +1,9 @@
 <p align="center">
+  <a href="#">
   <img src="https://raw.githubusercontent.com/dmandache/IMPERANDI/main/static/imperandi-banner.png"
        alt="IMPERANDI"
        width="100%">
+  </a>
 </p>
 
 <p align="center">
