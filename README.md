@@ -331,7 +331,7 @@ YAML path and are not installed with the package.
 ## Outputs and cohort selection
 
 The main cohort table preserves source identifiers and accumulates artifact paths
-and results. Core columns include `patient_key`, `study_id`, `series_id`,
+and results. Core columns include `patient_key`, `study_id`, `series_id`, `volume_id`,
 `dicom_path`, `nifti_path`, `mask_<output>_path`, and canonical `phase` provenance.
 `dicom_path` may represent multiple instances or archive members; do not assume
 it is one ordinary file path.
