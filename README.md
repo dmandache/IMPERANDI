@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/dmandache/IMPERANDI/main/static/imperandi-logo-with-name.png"
+  <img src="https://raw.githubusercontent.com/dmandache/IMPERANDI/main/static/imperandi-banner.png"
        alt="IMPERANDI"
        width="380">
 </p>
