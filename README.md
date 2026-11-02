@@ -66,11 +66,11 @@ DICOM folders / archives
           |
         clean ------------> selected cohort (volume-level CSV)
           |
+        phase ------------> phase provenance + selection per category
+          |
         convert ----------> NIfTI images
           |
         segment ----------> organ + tumor masks
-          |
-         phase -----------> phase provenance + selection per category
           |
         register ---------> organ alignment + tumor consensus 
           |
