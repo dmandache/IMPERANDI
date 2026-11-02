@@ -1,7 +1,7 @@
 <p align="center">
   <img src="https://raw.githubusercontent.com/dmandache/IMPERANDI/main/static/imperandi-banner.png"
        alt="IMPERANDI"
-       width="380">
+       width="100%">
 </p>
 
 <p align="center">
