@@ -440,11 +440,11 @@ import pandas as pd
 from imperandi.qc.viewer import ScanViewer
 
 cohort = pd.read_csv("./project/tables/nifti_index_phased.csv")
-viewer = ScanViewer(cohort, ct_scan_col="nifti_path", phase_col="phase")
+viewer = ScanViewer(cohort, scan_col="nifti_path", phase_col="phase")
 ```
 
 Constructing `ScanViewer` displays its controls and discovers mask path columns
-automatically. Despite the `ct_scan_col` name, the viewer supports both CT and MR.
+automatically. The viewer supports both CT and MR.
 For registered outputs, load `nifti_index_registered.csv` instead.
 
 For the browser viewer, run from a source checkout with the viewer extra installed:

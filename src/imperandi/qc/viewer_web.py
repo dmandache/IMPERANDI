@@ -23,7 +23,7 @@ try:
         FILTER_ALL_COLUMNS,
         filter_dataframe,
         get_image_path_columns,
-        guess_ct_scan_col,
+        guess_scan_col,
         guess_phase_col,
         guess_segmentation_cols,
         validate_image_path_column,
@@ -40,7 +40,7 @@ except ModuleNotFoundError:
         FILTER_ALL_COLUMNS,
         filter_dataframe,
         get_image_path_columns,
-        guess_ct_scan_col,
+        guess_scan_col,
         guess_phase_col,
         guess_segmentation_cols,
         validate_image_path_column,
@@ -170,7 +170,7 @@ class ScanPanelViewer(param.Parameterized):
     def __init__(
         self,
         df,
-        ct_scan_col,
+        scan_col,
         segmentation_cols=None,
         phase_col=None,
         orientation="LAS",
@@ -184,7 +184,7 @@ class ScanPanelViewer(param.Parameterized):
         super().__init__(**params)
 
         self.df = df.reset_index(drop=True)
-        self.ct_scan_col = ct_scan_col
+        self.scan_col = scan_col
         self.orientation = orientation
 
         self.patient_col = "patient_key" if "patient_key" in self.df.columns else None
@@ -536,7 +536,7 @@ class ScanPanelViewer(param.Parameterized):
 
         row = self.df.iloc[self.current_index]
 
-        ct_path = row[self.ct_scan_col]
+        ct_path = row[self.scan_col]
         self.ct_scan_raw = load_nifti(
             ct_path,
             orientation=self.orientation,
@@ -727,8 +727,8 @@ class ScanPanelViewer(param.Parameterized):
                     f"<tr><td><b>{tag}</b></td><td>{format_value(row[tag])}</td></tr>"
                 )
 
-        path = row.get(self.ct_scan_col, "")
-        rows.append(f"<tr><td><b>{self.ct_scan_col}</b></td><td>{path}</td></tr>")
+        path = row.get(self.scan_col, "")
+        rows.append(f"<tr><td><b>{self.scan_col}</b></td><td>{path}</td></tr>")
 
         return f"""
         <div style="max-height:320px; overflow-y:auto; font-size:13px;">
@@ -828,7 +828,7 @@ class ScanPanelApp:
     def __init__(
         self,
         initial_csv=None,
-        ct_scan_col="nifti_path",
+        scan_col="nifti_path",
         segmentation_cols=None,
         phase_col=None,
         orientation="LAS",
@@ -838,7 +838,7 @@ class ScanPanelApp:
         self.isotropic_resolution_mm = validate_isotropic_resolution(
             isotropic_resolution_mm
         )
-        self.preferred_ct_col = ct_scan_col
+        self.preferred_scan_col = scan_col
         self.preferred_phase_col = phase_col
         self.preferred_seg_cols = segmentation_cols
 
@@ -895,7 +895,7 @@ class ScanPanelApp:
         )
         self.load_upload_button.on_click(self._load_uploaded_dataframe)
 
-        self.ct_col_widget = pn.widgets.Select(
+        self.scan_col_widget = pn.widgets.Select(
             name="Scan column",
             options=[],
             sizing_mode="stretch_width",
@@ -1001,12 +1001,12 @@ class ScanPanelApp:
         columns = list(self.source_df.columns)
         path_columns = get_image_path_columns(self.source_df, allow_empty=True)
 
-        ct_default = guess_ct_scan_col(path_columns, self.preferred_ct_col)
+        scan_default = guess_scan_col(path_columns, self.preferred_scan_col)
         phase_default = guess_phase_col(columns, self.preferred_phase_col)
         seg_defaults = guess_segmentation_cols(self.source_df, self.preferred_seg_cols)
 
-        self.ct_col_widget.options = path_columns
-        self.ct_col_widget.value = ct_default if ct_default in path_columns else None
+        self.scan_col_widget.options = path_columns
+        self.scan_col_widget.value = scan_default if scan_default in path_columns else None
 
         self.phase_col_widget.options = [("None", None)] + [(c, c) for c in columns]
         self.phase_col_widget.value = (
@@ -1121,8 +1121,8 @@ class ScanPanelApp:
             self._set_viewer_message("No rows are available to display.")
             return
 
-        ct_scan_col = self.ct_col_widget.value
-        if ct_scan_col is None:
+        scan_col = self.scan_col_widget.value
+        if scan_col is None:
             self._set_viewer_message(
                 "Select the scan path column to open the viewer."
             )
@@ -1135,9 +1135,9 @@ class ScanPanelApp:
         try:
             validate_image_path_column(
                 self.filtered_df,
-                ct_scan_col,
+                scan_col,
                 allow_empty=False,
-                label=f"Scan column '{ct_scan_col}'",
+                label=f"Scan column '{scan_col}'",
             )
         except Exception as exc:
             self._set_viewer_message(str(exc))
@@ -1167,7 +1167,7 @@ class ScanPanelApp:
         try:
             self.viewer = ScanPanelViewer(
                 df=self.filtered_df,
-                ct_scan_col=ct_scan_col,
+                scan_col=scan_col,
                 segmentation_cols=segmentation_cols or None,
                 phase_col=phase_col,
                 orientation=self.orientation,
@@ -1179,7 +1179,7 @@ class ScanPanelApp:
                 self._set_status(f"Could not open viewer: {exc}", kind="error")
             return
 
-        self.preferred_ct_col = ct_scan_col
+        self.preferred_scan_col = scan_col
         self.preferred_phase_col = phase_col
         self.preferred_seg_cols = segmentation_cols
         self.viewer_container.objects = [self.viewer.panel()]
@@ -1200,7 +1200,7 @@ class ScanPanelApp:
         )
 
         schema_controls = pn.Card(
-            self.ct_col_widget,
+            self.scan_col_widget,
             self.phase_col_widget,
             self.seg_cols_widget,
             self.resolution_widget,
@@ -1249,7 +1249,7 @@ class ScanPanelApp:
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--csv", default=None)
-parser.add_argument("--scan-col", "--ct-col", dest="scan_col", default="nifti_path")
+parser.add_argument("--scan-col", default="nifti_path")
 parser.add_argument("--phase-col", default=None)
 parser.add_argument("--seg-cols", nargs="*", default=None)
 parser.add_argument(
@@ -1257,14 +1257,9 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
-# Backwards-compatible imports for callers using the former CT-specific names.
-CTScanPanelViewer = ScanPanelViewer
-CTScanPanelApp = ScanPanelApp
-
-
 app = ScanPanelApp(
     initial_csv=args.csv,
-    ct_scan_col=args.scan_col,
+    scan_col=args.scan_col,
     segmentation_cols=args.seg_cols,
     phase_col=args.phase_col,
     isotropic_resolution_mm=args.isotropic_resolution_mm,

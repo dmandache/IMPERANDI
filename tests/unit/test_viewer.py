@@ -14,7 +14,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from imperandi.qc import viewer as viewer_module
-from imperandi.qc.viewer import CTScanViewer, ScanViewer, clip_hu_values, load_nifti
+from imperandi.qc.viewer import ScanViewer, clip_hu_values, load_nifti
 from imperandi.qc.viewer_windowing import normalize_modality, percentile_window
 
 
@@ -33,11 +33,11 @@ def test_viewer_can_be_loaded_directly_without_imperandi_import(monkeypatch):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
 
-    assert module.CTScanViewer is module.ScanViewer
+    assert callable(module.ScanViewer)
 
 
 def _build_viewer(patient_values, date_values, patient_value, date_value):
-    viewer = CTScanViewer.__new__(CTScanViewer)
+    viewer = ScanViewer.__new__(ScanViewer)
     viewer.patient_dropdown = widgets.Dropdown(
         options=[(value, value) for value in patient_values],
         value=patient_value,
@@ -139,7 +139,7 @@ def viewer(monkeypatch):
     monkeypatch.setattr(viewer_module, "load_nifti", fake_load)
     monkeypatch.setattr(viewer_module, "clear_output", lambda **_kwargs: None)
     monkeypatch.setattr(viewer_module, "display", lambda *_widgets: None)
-    monkeypatch.setattr(CTScanViewer, "_try_enable_widget_backend", lambda _self: None)
+    monkeypatch.setattr(ScanViewer, "_try_enable_widget_backend", lambda _self: None)
 
     frame = pd.DataFrame(
         [
@@ -165,7 +165,7 @@ def viewer(monkeypatch):
             },
         ]
     )
-    instance = CTScanViewer(frame, "scan", isotropic_resolution_mm=2.0)
+    instance = ScanViewer(frame, scan_col="scan", isotropic_resolution_mm=2.0)
     yield instance
     plt = viewer_module.plt
     plt.close(instance.fig)
@@ -206,8 +206,8 @@ def test_viewer_initialization_loads_data_and_builds_jump_controls(viewer):
 
 
 def test_viewer_auto_detects_mask_paths_and_ignores_empty_values(monkeypatch):
-    monkeypatch.setattr(CTScanViewer, "init_widgets", lambda _self: None)
-    monkeypatch.setattr(CTScanViewer, "load_data", lambda _self: None)
+    monkeypatch.setattr(ScanViewer, "init_widgets", lambda _self: None)
+    monkeypatch.setattr(ScanViewer, "load_data", lambda _self: None)
     frame = pd.DataFrame(
         {
             "scan": ["scan-1"],
@@ -217,7 +217,7 @@ def test_viewer_auto_detects_mask_paths_and_ignores_empty_values(monkeypatch):
         }
     )
 
-    instance = CTScanViewer(frame, "scan", exploration_mode="random")
+    instance = ScanViewer(frame, scan_col="scan", exploration_mode="random")
 
     assert instance.phase_col == "totalseg_phase"
     assert instance.segmentation_cols == ["mask_liver_path"]
@@ -226,8 +226,8 @@ def test_viewer_auto_detects_mask_paths_and_ignores_empty_values(monkeypatch):
 
 
 def test_viewer_stably_sorts_rows_for_navigation(monkeypatch):
-    monkeypatch.setattr(CTScanViewer, "init_widgets", lambda _self: None)
-    monkeypatch.setattr(CTScanViewer, "load_data", lambda _self: None)
+    monkeypatch.setattr(ScanViewer, "init_widgets", lambda _self: None)
+    monkeypatch.setattr(ScanViewer, "load_data", lambda _self: None)
     frame = pd.DataFrame(
         [
             {
@@ -282,7 +282,7 @@ def test_viewer_stably_sorts_rows_for_navigation(monkeypatch):
         index=[9, 8, 7, 6, 5, 4],
     )
 
-    instance = CTScanViewer(frame, "scan")
+    instance = ScanViewer(frame, scan_col="scan")
 
     assert instance.df["scan"].tolist() == [
         "study-2",
@@ -297,8 +297,8 @@ def test_viewer_stably_sorts_rows_for_navigation(monkeypatch):
 
 
 def test_viewer_sorts_phases_in_clinical_order_then_preserves_rest(monkeypatch):
-    monkeypatch.setattr(CTScanViewer, "init_widgets", lambda _self: None)
-    monkeypatch.setattr(CTScanViewer, "load_data", lambda _self: None)
+    monkeypatch.setattr(ScanViewer, "init_widgets", lambda _self: None)
+    monkeypatch.setattr(ScanViewer, "load_data", lambda _self: None)
     phases = [
         "OTHER",
         "HEPATOBILIARY",
@@ -318,7 +318,7 @@ def test_viewer_sorts_phases_in_clinical_order_then_preserves_rest(monkeypatch):
         }
     )
 
-    instance = CTScanViewer(frame, "scan")
+    instance = ScanViewer(frame, scan_col="scan")
 
     assert instance.df["phase"].tolist() == [
         "NATIVE",
@@ -677,7 +677,7 @@ def test_modality_and_percentile_helpers_handle_mri_and_nonfinite_voxels():
 
 
 def test_scan_navigation_uses_ordered_and_random_history(monkeypatch):
-    instance = CTScanViewer.__new__(CTScanViewer)
+    instance = ScanViewer.__new__(ScanViewer)
     instance.df = pd.DataFrame({"scan": ["a", "b", "c"]})
     instance.current_index = 2
     instance.exploration_mode = "ordered"
@@ -778,7 +778,7 @@ def test_duplicate_phase_scan_navigation_visits_every_row_forward_and_backward(
 
 
 def test_random_previous_at_history_start_prints_message(capsys):
-    instance = CTScanViewer.__new__(CTScanViewer)
+    instance = ScanViewer.__new__(ScanViewer)
     instance.exploration_mode = "random"
     instance.history_index = 0
 

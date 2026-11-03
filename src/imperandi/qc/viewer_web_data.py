@@ -160,10 +160,8 @@ def validate_image_path_column(
     )
 
 
-def guess_ct_scan_col(
-    columns: Iterable[str], preferred: str | None = None
-) -> str | None:
-    """Choose the most likely CT image path column from column names."""
+def guess_scan_col(columns: Iterable[str], preferred: str | None = None) -> str | None:
+    """Choose the most likely image path column from column names."""
     columns = list(columns)
     if preferred in columns:
         return preferred

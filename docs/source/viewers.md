@@ -28,14 +28,14 @@ from imperandi.qc.viewer import ScanViewer
 df = pd.read_csv("./project/tables/nifti_index_phased.csv")
 viewer = ScanViewer(
     df,
-    ct_scan_col="nifti_path",
+    scan_col="nifti_path",
     segmentation_cols=["mask_liver_path", "mask_liver_tumor_path"],
     phase_col="phase",
 )
 ```
 
-Constructing `ScanViewer` displays the controls. Despite the parameter name
-`ct_scan_col`, it supports both CT and MR. Omit `segmentation_cols` to discover
+Constructing `ScanViewer` displays the controls. The viewer supports both CT
+and MR. Omit `segmentation_cols` to discover
 mask path columns automatically. CT uses HU windows; MR uses percentile windows
 (1st–99th by default). Select a patient, exam, phase, and anatomical plane to
 review images and overlays.

@@ -11,7 +11,7 @@ from imperandi.qc.viewer_web_data import (
     FILTER_ALL_COLUMNS,
     filter_dataframe,
     get_image_path_columns,
-    guess_ct_scan_col,
+    guess_scan_col,
     guess_phase_col,
     guess_segmentation_cols,
     is_empty_value,
@@ -68,7 +68,7 @@ def test_guess_default_columns_and_segmentation_columns():
         ]
     )
 
-    assert guess_ct_scan_col(df.columns) == "nifti_path"
+    assert guess_scan_col(df.columns) == "nifti_path"
     assert guess_phase_col(df.columns) == "phase"
     assert guess_segmentation_cols(df) == ["mask_liver_path"]
 
@@ -273,11 +273,11 @@ def test_validate_image_path_column_reports_selection_and_empty_errors():
 
 
 def test_guess_column_fallbacks_and_preferences():
-    assert guess_ct_scan_col(["custom", "ct_path"], preferred="custom") == "custom"
-    assert guess_ct_scan_col(["patient", "derived_nifti_path"]) == "derived_nifti_path"
-    assert guess_ct_scan_col(["patient", "volume_path"]) == "volume_path"
-    assert guess_ct_scan_col(["patient", "description"]) == "patient"
-    assert guess_ct_scan_col([]) is None
+    assert guess_scan_col(["custom", "ct_path"], preferred="custom") == "custom"
+    assert guess_scan_col(["patient", "derived_nifti_path"]) == "derived_nifti_path"
+    assert guess_scan_col(["patient", "volume_path"]) == "volume_path"
+    assert guess_scan_col(["patient", "description"]) == "patient"
+    assert guess_scan_col([]) is None
 
     assert guess_phase_col(["reviewed", "phase"], preferred="reviewed") == "reviewed"
     assert guess_phase_col(["totalseg_phase"]) == "totalseg_phase"

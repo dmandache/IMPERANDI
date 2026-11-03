@@ -117,7 +117,7 @@ class ScanViewer:
     def __init__(
         self,
         df,
-        ct_scan_col,
+        scan_col,
         segmentation_cols=None,
         phase_col=None,
         HU_min=-100,
@@ -127,7 +127,7 @@ class ScanViewer:
         scale_bar_cm=DEFAULT_SCALE_BAR_CM,
         scale_bar_color=DEFAULT_SCALE_BAR_COLOR,
     ):
-        self.ct_scan_col = ct_scan_col
+        self.scan_col = scan_col
         self.patient_col = "patient_key" if "patient_key" in df.columns else None
         self.date_col = "date" if "date" in df.columns else None
         self.modality_col = next(
@@ -1273,7 +1273,7 @@ class ScanViewer:
             self.progress_bar.value = 0.1
             try:
                 scan = load_nifti(
-                    row[self.ct_scan_col],
+                    row[self.scan_col],
                     isotropic_resolution_mm=self.isotropic_resolution_mm,
                     order=1,
                 )
@@ -1467,7 +1467,7 @@ class ScanViewer:
         error_html = ""
         if load_error is not None:
             identity = [f"Scan {self.current_index + 1}/{len(self.df)}"]
-            for column in ("volume_id", "study_id", self.ct_scan_col):
+            for column in ("volume_id", "study_id", self.scan_col):
                 if column in row.index and not self._is_empty_value(row[column]):
                     identity.append(f"{column}={self._format_value(row[column])}")
             error_text = f"{type(load_error).__name__}: {load_error}"
@@ -1530,7 +1530,3 @@ class ScanViewer:
                 self.load_data()
             else:
                 print("Already at the first explored scan.")
-
-
-# Backwards-compatible import for notebooks using the former CT-specific name.
-CTScanViewer = ScanViewer
