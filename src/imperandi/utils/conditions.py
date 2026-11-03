@@ -1,4 +1,4 @@
-"""Shared manifest predicates for cleaning filters and phase assignments."""
+"""Shared manifest predicates for cleaning, radiomics, and phase assignments."""
 
 from __future__ import annotations
 
@@ -164,4 +164,31 @@ def rules_mask(df: pd.DataFrame, rules: list[Mapping], logic: str) -> pd.Series:
     for rule in rules[1:]:
         current = rule_mask(df, rule)
         mask = mask & current if logic == "and" else mask | current
+    return mask
+
+
+def validate_filter_group(group: Mapping, field: str) -> dict:
+    """Validate a keep/discard filter using the shared rule syntax."""
+    if not isinstance(group, Mapping):
+        raise ValueError(f"{field} must be a mapping.")
+    if group.get("kind") not in {"keep", "discard"}:
+        raise ValueError("Filter steps must define kind='keep' or 'discard'.")
+    normalized = {**group, **validate_rule_group(group, field)}
+    if "keep_null" in group and not isinstance(group["keep_null"], bool):
+        raise ValueError("Filter steps must define keep_null as a boolean.")
+    return normalized
+
+
+def filter_mask(df: pd.DataFrame, group: Mapping) -> pd.Series:
+    """Return rows to retain for a validated keep/discard filter."""
+    mask = rules_mask(df, group["rules"], group.get("logic", "and"))
+    if group["kind"] == "discard":
+        mask = ~mask
+    if group.get("keep_null"):
+        columns = {rule["column"] for rule in group["rules"]}
+        mask |= rules_mask(
+            df,
+            [{"column": column, "op": "is_null"} for column in columns],
+            "or",
+        )
     return mask

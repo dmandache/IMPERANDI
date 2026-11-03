@@ -66,7 +66,15 @@ def test_startup_logs_resolved_manifest_on_dry_run(command, tmp_path, caplog):
         elif name == "segment.py":
             assert logged.segmentation["modalities"]["CT"]["tasks"]
         elif name == "radiomics.py":
-            assert logged.filters == {"phase": ["MANIFEST_PHASE"]}
+            assert logged.filters == [
+                {
+                    "kind": "keep",
+                    "logic": "and",
+                    "rules": [
+                        {"column": "phase", "op": "in", "value": ["MANIFEST_PHASE"]}
+                    ],
+                }
+            ]
             assert (
                 logged.pyradiomics_settings["modalities"]["CT"]["setting"]["binWidth"]
                 == 17
@@ -407,8 +415,12 @@ def test_cli_radiomics_accepts_repeatable_filter_flags(tmp_path, capsys):
         line for line in output.splitlines() if line.strip().startswith("filters")
     )
     assert exit_code == 0
-    assert "'phase': ['portal', 'arteriel']" in filters_line
-    assert "'followup_months': ['0', '3']" in filters_line
+    assert (
+        "'column': 'phase', 'op': 'in', 'value': ['portal', 'arteriel']" in filters_line
+    )
+    assert (
+        "'column': 'followup_months', 'op': 'in', 'value': ['0', '3']" in filters_line
+    )
 
 
 def test_cli_parse_accepts_snapshot_flags(tmp_path):

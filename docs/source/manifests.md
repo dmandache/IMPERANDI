@@ -173,7 +173,9 @@ radiomics:
         imageType:
           Original: {}
   filters:
-    phase: [ARTERIAL, PORTAL_VENOUS]
+    - kind: keep
+      rules:
+        - {column: phase, op: in, value: [ARTERIAL, PORTAL_VENOUS]}
 ```
 
 Copy a built-in YAML manifest as the starting point because the full built-in
@@ -945,8 +947,29 @@ For a shared configuration, the existing `radiomics.pyradiomics` mapping and
 `modalities` or the shared `pyradiomics` mapping; configurations are not merged.
 Manifest settings take precedence over the CLI settings file.
 
-`radiomics.filters` maps an existing cohort column to its accepted values. Use
-the canonical `phase` output for phase-based filtering.
+`radiomics.filters` accepts a list of filters using the same `kind`, `logic`,
+`rules`, and `keep_null` options as [cleaning filters](#cleaning-filters).
+Filters run in order on cohort rows; `type` and `scope` are unnecessary.
+All cleaning operators and null/list matching semantics are shared. Unlike
+cleaning, radiomics reports an error if a referenced column is absent.
+
+```yaml
+radiomics:
+  filters:
+    - kind: keep
+      logic: and
+      rules:
+        - {column: phase, op: in, value: [PORTAL_VENOUS, ARTERIAL]}
+        - {column: followup_months, op: lte, value: 6}
+    - kind: discard
+      rules:
+        - {column: SeriesDescription, op: icontains, value: localizer}
+```
+
+The existing column-to-accepted-values mapping remains supported, as does
+`--filter column=value1,value2`. Manifest rules override CLI filters for every
+column they reference; other CLI filters are combined with the manifest filters.
+`--skip_filter` disables both. Use the canonical `phase` output for phase filters.
 
 ## Validation checklist
 
