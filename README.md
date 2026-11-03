@@ -99,8 +99,8 @@ package for DICOM ingest and NIfTI conversion:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install imperandi
+pip install --upgrade pip
+pip install imperandi
 imperandi --help
 ```
 
@@ -115,19 +115,19 @@ Install the features your workflow needs into the same environment:
 
 | Feature | Install command |
 | --- | --- |
-| Segmentation and image-based phase prediction | `python -m pip install "imperandi[segment]"` |
-| Organ registration with SimpleITK | `python -m pip install "imperandi[registration]"` |
-| Notebook and browser QC viewers | `python -m pip install "imperandi[viewer]"` |
-| All packaged runtime extras, including registration dependencies | `python -m pip install "imperandi[all]"` |
-| Test, lint, and formatting tools | `python -m pip install "imperandi[dev]"` |
-| Public-dataset test downloader | `python -m pip install "imperandi[slow]"` |
-| Runtime, development, and dataset-test dependencies | `python -m pip install "imperandi[all-dev]"` |
+| Segmentation and image-based phase prediction | `pip install "imperandi[segment]"` |
+| Organ registration with SimpleITK | `pip install "imperandi[registration]"` |
+| Notebook and browser QC viewers | `pip install "imperandi[viewer]"` |
+| All packaged runtime extras, including registration dependencies | `pip install "imperandi[all]"` |
+| Test, lint, and formatting tools | `pip install "imperandi[dev]"` |
+| Public-dataset test downloader | `pip install "imperandi[slow]"` |
+| Runtime, development, and dataset-test dependencies | `pip install "imperandi[all-dev]"` |
 
 **PyRadiomics is installed separately**, including when using `all` or `all-dev`.
 The project's installation workflow uses Git and requires Git to be available:
 
 ```bash
-python -m pip install "pyradiomics @ git+https://github.com/AIM-Harvard/pyradiomics.git@master"
+pip install "pyradiomics @ git+https://github.com/AIM-Harvard/pyradiomics.git@master"
 ```
 
 TotalSegmentator may download model weights on first use. Allow network access
@@ -142,12 +142,12 @@ With your virtual environment activated:
 ```bash
 git clone https://github.com/dmandache/IMPERANDI.git
 cd IMPERANDI
-python -m pip install -e .
+pip install -e .
 ```
 
 For editable installs with extras, use commands such as
-`python -m pip install -e ".[segment,viewer]"` or
-`python -m pip install -e ".[all-dev]"`.
+`pip install -e ".[segment,viewer]"` or
+`pip install -e ".[all-dev]"`.
 
 ## Quickstart
 
@@ -274,10 +274,10 @@ If you ran step 5, use `nifti_index_registered.csv` as the input to extract from
 its masks. Radiomics discovers populated `mask_*_path` columns and applies the
 manifest's CT or MR settings.
 
-**The `generic` manifest retains only `ARTERIAL` and `PORTAL_VENOUS` rows for
-radiomics.** Other phases are excluded from the output. Edit `radiomics.filters`
-in a custom manifest, or pass `--skip_filter` to disable both manifest and CLI
-filters. A CLI `--filter` does not override a manifest filter for the same column.
+Organ shape features are computed from the entire organ mask. Intensity and
+texture features are computed from the organ mask with its paired tumor mask
+subtracted, when available. If the tumor mask is missing or empty, all features
+are computed from the entire organ mask.
 
 ## Configuration
 
@@ -503,8 +503,8 @@ an example full-pipeline Slurm job.
 From a source checkout with your virtual environment activated:
 
 ```bash
-python -m pip install -e ".[all-dev]"
-python -m pip install "pyradiomics @ git+https://github.com/AIM-Harvard/pyradiomics.git@master"
+pip install -e ".[all-dev]"
+pip install "pyradiomics @ git+https://github.com/AIM-Harvard/pyradiomics.git@master"
 python -m ruff check .
 python -m pytest -m "not slow"
 ```
@@ -516,7 +516,7 @@ Dataset-backed tests require prepared data and optional dependencies; follow
 To build the documentation:
 
 ```bash
-python -m pip install -r docs/requirements.txt
+pip install -r docs/requirements.txt
 sphinx-build -W --keep-going -b html docs/source docs/build/html
 ```
 
