@@ -14,6 +14,7 @@ from imperandi.utils.logging import (
     setup_logging,
 )
 from imperandi.utils.columns import MASK_PATH_COLUMN_PATTERN, is_mask_path_column
+from imperandi.utils.conditions import filter_mask, validate_filter_group
 from imperandi.utils.misc import print_args
 from imperandi.utils.manifest import load_manifest
 from imperandi.utils.checkpoint_cli import add_checkpoint_arguments
@@ -272,11 +273,41 @@ def _normalize_cli_filters(filter_args: Optional[list[str]]) -> dict[str, list[s
     return normalized
 
 
-def _load_manifest_radiomics_filters(
-    manifest_arg: Optional[str],
-) -> dict[str, list[Any]]:
+def _normalize_filter_groups(raw_filters: Any) -> list[dict]:
+    """Convert legacy column/value filters to the cleaning filter syntax."""
+    if raw_filters is None:
+        return []
+    if isinstance(raw_filters, dict):
+        groups = []
+        for column, values in raw_filters.items():
+            column_name = str(column).strip()
+            if not column_name:
+                raise ValueError("Radiomics filters contain an empty column name.")
+            if not isinstance(values, list) or not values:
+                raise ValueError(
+                    f"Radiomics filters[{column_name!r}] must be a non-empty list."
+                )
+            groups.append(
+                {
+                    "kind": "keep",
+                    "rules": [{"column": column_name, "op": "in", "value": values}],
+                }
+            )
+    elif isinstance(raw_filters, list):
+        groups = raw_filters
+    else:
+        raise ValueError(
+            "Radiomics filters must be an object or a list of filter groups."
+        )
+    return [
+        validate_filter_group(group, f"radiomics.filters[{index}]")
+        for index, group in enumerate(groups)
+    ]
+
+
+def _load_manifest_radiomics_filters(manifest_arg: Optional[str]) -> list[dict]:
     if not manifest_arg:
-        return {}
+        return []
 
     manifest = load_manifest(
         manifest_arg,
@@ -284,36 +315,16 @@ def _load_manifest_radiomics_filters(
     )
     radiomics_settings = manifest.get("radiomics")
     if radiomics_settings is None:
-        return {}
+        return []
     if not isinstance(radiomics_settings, dict):
         raise ValueError(
             "Manifest radiomics settings must be an object under key 'radiomics'."
         )
+    return _normalize_filter_groups(radiomics_settings.get("filters"))
 
-    raw_filters = radiomics_settings.get("filters")
-    if raw_filters is None:
-        return {}
-    if not isinstance(raw_filters, dict):
-        raise ValueError("Manifest radiomics.filters must be an object.")
 
-    normalized: dict[str, list[Any]] = {}
-    for column, values in raw_filters.items():
-        column_name = str(column).strip()
-        if not column_name:
-            raise ValueError(
-                "Manifest radiomics.filters contains an empty column name."
-            )
-        if not isinstance(values, list):
-            raise ValueError(
-                f"Manifest radiomics.filters[{column_name!r}] must be a list."
-            )
-        if not values:
-            raise ValueError(
-                f"Manifest radiomics.filters[{column_name!r}] must not be empty."
-            )
-        normalized[column_name] = values
-
-    return normalized
+def _filter_columns(filters: list[dict]) -> set[str]:
+    return {rule["column"] for group in filters for rule in group["rules"]}
 
 
 def _resolve_pyradiomics_settings_source(
@@ -405,55 +416,56 @@ def _create_extractors_for_rows(
     return row_modalities, extractors
 
 
-def _resolve_radiomics_filters(args: argparse.Namespace) -> dict[str, list[Any]]:
+def _resolve_radiomics_filters(args: argparse.Namespace) -> list[dict]:
     if getattr(args, "skip_filter", False):
         logger.info("Radiomics row filters skipped via --skip_filter")
-        return {}
+        return []
 
     cli_filters = getattr(args, "filters", {}) or {}
     manifest_filters = _load_manifest_radiomics_filters(getattr(args, "manifest", None))
-    effective_filters = dict(cli_filters)
-
-    if manifest_filters:
-        overlapping_columns = sorted(set(cli_filters) & set(manifest_filters))
-        for column in overlapping_columns:
-            logger.info(
-                "Manifest radiomics filter overrides CLI filter for column '%s'",
-                column,
-            )
-        effective_filters.update(manifest_filters)
-
-    if effective_filters:
-        logger.info("Radiomics row filters resolved: %s", effective_filters)
-    else:
-        logger.info("Radiomics row filters resolved: none")
+    manifest_columns = _filter_columns(manifest_filters)
+    for column in sorted(set(cli_filters) & manifest_columns):
+        logger.info(
+            "Manifest radiomics filter overrides CLI filter for column '%s'",
+            column,
+        )
+    effective_filters = (
+        _normalize_filter_groups(
+            {
+                column: values
+                for column, values in cli_filters.items()
+                if column not in manifest_columns
+            }
+        )
+        + manifest_filters
+    )
+    logger.info("Radiomics row filters resolved: %s", effective_filters or "none")
     return effective_filters
 
 
 def _apply_explicit_filters(
     df: pd.DataFrame,
-    filters: dict[str, list[Any]],
+    filters: list[dict],
 ) -> pd.DataFrame:
     if not filters:
         logger.info("No radiomics row filters applied; keeping %d rows", len(df))
         return df
 
-    missing_columns = [column for column in filters if column not in df.columns]
+    missing_columns = _filter_columns(filters) - set(df.columns)
     if missing_columns:
         raise ValueError(
             "Radiomics filter column(s) missing from input CSV: "
             + ", ".join(sorted(missing_columns))
         )
 
-    filtered = df.copy()
+    filtered = df
     logger.info("Applying radiomics row filters to %d rows", len(filtered))
-    for column, allowed_values in filters.items():
+    for group in filters:
         before_count = len(filtered)
-        filtered = filtered[filtered[column].isin(allowed_values)]
+        filtered = filtered[filter_mask(filtered, group)].copy()
         logger.info(
-            "Radiomics filter applied | column=%s | values=%s | rows=%d -> %d",
-            column,
-            allowed_values,
+            "Radiomics filter applied | filter=%s | rows=%d -> %d",
+            group,
             before_count,
             len(filtered),
         )
@@ -961,7 +973,7 @@ def main(args: argparse.Namespace) -> None:
         "volume_id",
         "nifti_path",
         "Modality",
-        *sorted(effective_filters),
+        *sorted(_filter_columns(effective_filters)),
     ]
     semantic_fp = fingerprint_csv_semantic(
         args.csv_path,

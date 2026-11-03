@@ -331,6 +331,6 @@ radiomics:
         imageType:
           Original: {}
   filters:
-    # Each key is a cohort-table column; a row is retained when its value is in
-    # the configured list. Multiple filter keys are combined with AND.
-    phase: [PORTAL_VENOUS, ARTERIAL]
+    - kind: keep
+      rules:
+        - {column: phase, op: in, value: [PORTAL_VENOUS, ARTERIAL]}

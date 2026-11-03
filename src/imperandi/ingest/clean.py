@@ -45,9 +45,9 @@ from imperandi.utils.misc import print_args, report_volumes, report_change
 from imperandi.utils.dicom_timing import DICOM_CLOCK_DTYPES
 from imperandi.utils.conditions import (
     SUPPORTED_OPERATORS,
+    filter_mask,
     rule_mask,
-    rules_mask,
-    validate_rule_group,
+    validate_filter_group,
 )
 from imperandi.ingest.defaults import (
     DEFAULT_DICOM_TAGS,
@@ -2148,13 +2148,9 @@ def validate_cleaning_manifest(manifest: dict) -> list[dict]:
             _get_hook_outputs(step)
 
         if step_type == "filter":
-            if step.get("kind") not in {"keep", "discard"}:
-                raise ValueError("Filter steps must define kind='keep' or 'discard'.")
+            step.update(validate_filter_group(step, f"cleaning.steps[{index - 1}]"))
             if step.get("scope") not in {"row", "volume"}:
                 raise ValueError("Filter steps must define scope='row' or 'volume'.")
-            step.update(validate_rule_group(step, f"cleaning.steps[{index - 1}]"))
-            if "keep_null" in step and not isinstance(step["keep_null"], bool):
-                raise ValueError("Filter steps must define keep_null as a boolean.")
 
         _validate_step_config(step)
 
@@ -2362,15 +2358,7 @@ def _run_filter_step(df: pd.DataFrame, step: dict) -> pd.DataFrame:
         )
         return df
 
-    mask = rules_mask(df, step["rules"], step.get("logic", "and"))
-    if step.get("keep_null"):
-        null_mask = rules_mask(
-            df,
-            [{"column": column, "op": "is_null"} for column in required_columns],
-            "or",
-        )
-        mask = mask | null_mask if step["kind"] == "keep" else mask & ~null_mask
-    return df[mask if step["kind"] == "keep" else ~mask].copy()
+    return df[filter_mask(df, step)].copy()
 
 
 def _safe_uid_keyword(value):

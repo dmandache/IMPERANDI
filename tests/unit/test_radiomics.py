@@ -459,11 +459,13 @@ def test_resolve_radiomics_filters_prefers_manifest_for_same_column(
 
     filters = radiomics_module._resolve_radiomics_filters(args)
 
-    assert filters == {
-        "phase": ["portal"],
-        "followup_months": ["0", "3"],
-        "site": ["A"],
-    }
+    assert filters == radiomics_module._normalize_filter_groups(
+        {
+            "followup_months": ["0", "3"],
+            "phase": ["portal"],
+            "site": ["A"],
+        }
+    )
 
 
 def test_resolve_radiomics_filters_skip_filter_bypasses_manifest_and_cli(tmp_path):
@@ -475,20 +477,22 @@ def test_resolve_radiomics_filters_skip_filter_bypasses_manifest_and_cli(tmp_pat
         manifest=str(manifest_path),
     )
 
-    assert radiomics_module._resolve_radiomics_filters(args) == {}
+    assert radiomics_module._resolve_radiomics_filters(args) == []
 
 
 def test_apply_explicit_filters_requires_existing_columns():
     df = pd.DataFrame([{"phase": "portal"}])
 
     with pytest.raises(ValueError, match="missing from input CSV"):
-        radiomics_module._apply_explicit_filters(df, {"site": ["A"]})
+        radiomics_module._apply_explicit_filters(
+            df, radiomics_module._normalize_filter_groups({"site": ["A"]})
+        )
 
 
 def test_apply_explicit_filters_keeps_rows_when_no_filters():
     df = pd.DataFrame([{"phase": "mixte"}, {"phase": "portal"}])
 
-    out = radiomics_module._apply_explicit_filters(df, {})
+    out = radiomics_module._apply_explicit_filters(df, [])
 
     pd.testing.assert_frame_equal(out, df)
 
@@ -504,10 +508,101 @@ def test_apply_explicit_filters_uses_and_semantics_and_preserves_order():
 
     out = radiomics_module._apply_explicit_filters(
         df,
-        {"phase": ["portal"], "followup_months": [0, 3]},
+        radiomics_module._normalize_filter_groups(
+            {"phase": ["portal"], "followup_months": [0, 3]}
+        ),
     )
 
     assert out["row_id"].tolist() == ["keep-1", "keep-2"]
+
+
+@pytest.mark.parametrize("kind, expected", [("keep", [4, 1, 3]), ("discard", [1, 2])])
+def test_radiomics_filter_groups_share_cleaning_semantics(kind, expected):
+    df = pd.DataFrame(
+        {
+            "phase": [["portal", "arterial"], [], ["other"], ["other"]],
+            "months": [0, None, 2, 6],
+            "description": ["diagnostic", "diagnostic", "LOCALIZER", "diagnostic"],
+        },
+        index=[4, 1, 2, 3],
+    )
+    groups = radiomics_module._normalize_filter_groups(
+        [
+            {
+                "kind": kind,
+                "logic": "or",
+                "keep_null": True,
+                "rules": [
+                    {"column": "phase", "op": "in", "value": ["portal"]},
+                    {"column": "months", "op": "gte", "value": 6},
+                ],
+            },
+        ]
+    )
+    out = radiomics_module._apply_explicit_filters(df, groups)
+    assert out.index.tolist() == expected
+
+    groups.append(
+        radiomics_module._normalize_filter_groups(
+            [
+                {
+                    "kind": "discard",
+                    "rules": [
+                        {
+                            "column": "description",
+                            "op": "icontains",
+                            "value": "localizer",
+                        }
+                    ],
+                }
+            ]
+        )[0]
+    )
+    out = radiomics_module._apply_explicit_filters(df, groups)
+    assert out.index.tolist() == [index for index in expected if index != 2]
+
+
+@pytest.mark.parametrize(
+    "group, message",
+    [
+        (None, "must be a mapping"),
+        ({"kind": "invalid", "rules": []}, "kind="),
+        ({"kind": "keep", "rules": []}, "non-empty 'rules'"),
+        (
+            {"kind": "keep", "rules": [{"column": "phase", "op": "invalid"}]},
+            "Unsupported filter operator",
+        ),
+        (
+            {"kind": "keep", "rules": [{"column": "phase", "op": "eq"}]},
+            "requires a 'value'",
+        ),
+        (
+            {
+                "kind": "keep",
+                "logic": "xor",
+                "rules": [{"column": "phase", "op": "is_null"}],
+            },
+            "logic must be",
+        ),
+        (
+            {
+                "kind": "keep",
+                "keep_null": "true",
+                "rules": [{"column": "phase", "op": "is_null"}],
+            },
+            "keep_null as a boolean",
+        ),
+        (
+            {"kind": "keep", "rules": [{"column": "phase", "op": "is_null"}] * 2},
+            "for multiple rules",
+        ),
+    ],
+)
+def test_manifest_radiomics_validates_filter_groups(tmp_path, group, message):
+    manifest_path = tmp_path / "manifest.yaml"
+    manifest_path.write_text(yaml.safe_dump({"radiomics": {"filters": [group]}}))
+    with pytest.raises(ValueError, match=message):
+        radiomics_module._load_manifest_radiomics_filters(str(manifest_path))
 
 
 def test_configure_pyradiomics_output_toggles_logger_state():
@@ -765,7 +860,10 @@ def test_main_resume_skips_completed_rows(tmp_path, monkeypatch):
     assert dep_calls["count"] == 1
 
 
-def test_main_resume_only_tracks_radiomics_manifest_section(tmp_path, monkeypatch):
+@pytest.mark.parametrize("declarative", [False, True])
+def test_main_resume_only_tracks_radiomics_manifest_section(
+    tmp_path, monkeypatch, declarative
+):
     portal_nifti = tmp_path / "portal.nii.gz"
     arterial_nifti = tmp_path / "arterial.nii.gz"
     portal_mask = tmp_path / "portal_mask.nii.gz"
@@ -789,9 +887,25 @@ def test_main_resume_only_tracks_radiomics_manifest_section(tmp_path, monkeypatc
         ]
     ).to_csv(csv_path, index=False)
     manifest_path = tmp_path / "manifest.yaml"
-    manifest_path.write_text(
-        '{"dataset_name": "v1", "radiomics": {"filters": {"phase": ["portal"]}}}'
-    )
+
+    def write_manifest(dataset_name, phase):
+        filters = (
+            [
+                {
+                    "kind": "keep",
+                    "rules": [{"column": "phase", "op": "eq", "value": phase}],
+                }
+            ]
+            if declarative
+            else {"phase": [phase]}
+        )
+        manifest_path.write_text(
+            yaml.safe_dump(
+                {"dataset_name": dataset_name, "radiomics": {"filters": filters}}
+            )
+        )
+
+    write_manifest("v1", "portal")
 
     monkeypatch.setattr(
         radiomics_module,
@@ -841,19 +955,22 @@ def test_main_resume_only_tracks_radiomics_manifest_section(tmp_path, monkeypatc
     )
     radiomics_module.main(args)
 
-    manifest_path.write_text(
-        '{"dataset_name": "v1", "radiomics": {"filters": {"phase": ["arterial"]}}}'
-    )
+    write_manifest("v1", "arterial")
     args.resume = True
     radiomics_module.main(args)
 
     # Changes outside the command-specific section must not invalidate resume.
-    manifest_path.write_text(
-        '{"dataset_name": "v2", "radiomics": {"filters": {"phase": ["arterial"]}}}'
-    )
+    write_manifest("v2", "arterial")
     radiomics_module.main(args)
 
     assert processed == ["portal.nii.gz", "arterial.nii.gz"]
+
+    # Referenced rule columns must participate in semantic resume fingerprints.
+    updated = pd.read_csv(csv_path)
+    updated["phase"] = ["arterial", "portal"]
+    updated.to_csv(csv_path, index=False)
+    radiomics_module.main(args)
+    assert processed == ["portal.nii.gz", "arterial.nii.gz", "portal.nii.gz"]
 
 
 def test_main_preserves_foreign_columns_from_existing_output(tmp_path, monkeypatch):
@@ -968,7 +1085,10 @@ def test_main_does_not_filter_phase_by_default(tmp_path, monkeypatch):
     assert sorted(out_df["phase"].tolist()) == ["mixte", "portal"]
 
 
-def test_main_applies_explicit_filters_from_manifest_and_cli(tmp_path, monkeypatch):
+@pytest.mark.parametrize("declarative", [False, True])
+def test_main_applies_explicit_filters_from_manifest_and_cli(
+    tmp_path, monkeypatch, declarative
+):
     nifti_a = tmp_path / "a.nii.gz"
     nifti_b = tmp_path / "b.nii.gz"
     nifti_c = tmp_path / "c.nii.gz"
@@ -1002,7 +1122,17 @@ def test_main_applies_explicit_filters_from_manifest_and_cli(tmp_path, monkeypat
         ]
     ).to_csv(csv_path, index=False)
     manifest_path = tmp_path / "manifest.yaml"
-    manifest_path.write_text('{"radiomics": {"filters": {"phase": ["portal"]}}}')
+    filters = (
+        [
+            {
+                "kind": "keep",
+                "rules": [{"column": "phase", "op": "eq", "value": "portal"}],
+            }
+        ]
+        if declarative
+        else {"phase": ["portal"]}
+    )
+    manifest_path.write_text(yaml.safe_dump({"radiomics": {"filters": filters}}))
 
     monkeypatch.setattr(
         radiomics_module,
