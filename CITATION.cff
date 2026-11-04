@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it."
+type: software
+title: "IMPERANDI: IMaging PREprocessing And Normalization for Diagnostic Interoperability"
+abstract: >-
+  Python framework and command-line interface that turns heterogeneous DICOM
+  collections into traceable, analysis-ready CT and MR imaging cohorts, with
+  NIfTI conversion, segmentation, contrast-phase curation, registration,
+  radiomics extraction and interactive quality control.
+authors:
+  - family-names: Mandache
+    given-names: Diana
+    orcid: "https://orcid.org/0000-0002-7160-4093"
+  - family-names: Vilgrain
+    given-names: Valérie
+  - family-names: Allassonnière
+    given-names: Stéphanie
+doi: 10.5281/zenodo.21951322   # concept DOI from Zenodo
+license: Apache-2.0
+repository-code: "https://github.com/dmandache/IMPERANDI"
+url: "https://imperandi.readthedocs.io/"
+repository-artifact: "https://pypi.org/project/imperandi/"
