@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <a href="https://doi.org/10.5281/zenodo.21951322"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.zenodo.21951322.svg" alt="DOI"></a>
+  <a href="https://doi.org/10.5281/zenodo.21951322"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.21951322.svg" alt="DOI"></a>
   <a href="https://pypi.org/project/imperandi/"><img src="https://img.shields.io/pypi/v/imperandi.svg" alt="PyPI"></a>
   <a href="https://pypistats.com/packages/imperandi"><img src="https://pypistats.com/api/badges/imperandi?period=month" alt="PyPI Stats"></a>
   <img src="https://img.shields.io/badge/Python-3.10–3.13-blue" alt="Python 3.10–3.13">
