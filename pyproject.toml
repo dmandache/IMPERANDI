@@ -11,13 +11,23 @@ authors = [
   { name = "Diana Mandache" },
 ]
 keywords = [
-  "medical-imaging",
-  "dicom",
-  "nifti",
-  "medical-image-processing",
-  "healthcare-ai",
-  "mri",
-  "ct",
+  "dicom", "nifti", "medical-imaging", "medical-image-processing",
+  "radiomics", "pyradiomics", "totalsegmentator", "segmentation",
+  "image-registration", "radiology", "ct", "mri", "liver",
+  "cohort-building", "healthcare-ai", "reproducibility",
+]
+classifiers = [
+  "Intended Audience :: Science/Research",
+  "Intended Audience :: Healthcare Industry",
+  "Topic :: Scientific/Engineering :: Medical Science Apps.",
+  "Topic :: Scientific/Engineering :: Image Processing",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Operating System :: OS Independent",
 ]
 readme = { text = "See [README.md on GitHub](https://github.com/dmandache/IMPERANDI#readme) for more details.", content-type = "text/markdown" }
 requires-python = ">=3.10,<3.14"
@@ -38,6 +48,8 @@ Homepage = "https://github.com/dmandache/IMPERANDI"
 Repository = "https://github.com/dmandache/IMPERANDI"
 Documentation = "https://imperandi.readthedocs.io/"
 Issues = "https://github.com/dmandache/IMPERANDI/issues"
+Discussions = "https://github.com/dmandache/IMPERANDI/discussions"
+Changelog = "https://github.com/dmandache/IMPERANDI/releases"
 
 [project.optional-dependencies]
 registration = ["SimpleITK"]
