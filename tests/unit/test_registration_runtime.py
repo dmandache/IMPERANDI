@@ -2,6 +2,7 @@
 
 import json
 import logging
+from ast import literal_eval
 from pathlib import Path
 
 import numpy as np
@@ -247,14 +248,17 @@ def test_startup_log_contains_effective_manifest_settings(
         if "Running register.py with namespace:" in r.getMessage()
     ]
     assert len(records) == 1
-    logged = records[0].args[1]
-    assert logged.organ_consensus_method == ("majority" if override else "anchor")
-    assert logged.tumor_consensus_method == ("union" if override else "majority")
-    assert logged.stages[0]["type"] == "mi_affine"
-    assert logged.maximum_optimizer_iterations == 17
-    assert logged.manifest == str(manifest)
-    assert logged.csv_path == str(cohort)
-    assert not any(name.startswith("_") for name in vars(logged))
+    formatted = records[0].args[1]
+    assert "with namespace:\n" in records[0].getMessage()
+    assert "\n" in formatted
+    logged = literal_eval(formatted)
+    assert logged["organ_consensus_method"] == ("majority" if override else "anchor")
+    assert logged["tumor_consensus_method"] == ("union" if override else "majority")
+    assert logged["stages"][0]["type"] == "mi_affine"
+    assert logged["maximum_optimizer_iterations"] == 17
+    assert logged["manifest"] == str(manifest)
+    assert logged["csv_path"] == str(cohort)
+    assert not any(name.startswith("_") for name in logged)
 
 
 def test_default_error_and_qc_filenames_follow_output_directory(cohort, tmp_path):
