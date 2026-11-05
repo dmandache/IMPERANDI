@@ -6,6 +6,7 @@ import argparse
 import logging
 import os
 from pathlib import Path
+from pprint import pformat
 import sys
 from typing import Mapping, Optional
 
@@ -25,6 +26,12 @@ class _ConsoleHandler(logging.StreamHandler):
         return text
 
 
+def format_namespace(args: argparse.Namespace) -> str:
+    """Pretty-print public arguments consistently for logs and console output."""
+    values = {key: value for key, value in vars(args).items() if not key.startswith("_")}
+    return pformat(values, indent=4, width=88)
+
+
 def log_script_namespace(
     logger, script_file: str, args: argparse.Namespace, **settings
 ) -> argparse.Namespace:
@@ -32,7 +39,11 @@ def log_script_namespace(
     namespace = argparse.Namespace(
         **{k: v for k, v in {**vars(args), **settings}.items() if not k.startswith("_")}
     )
-    logger.info("🚀 Running %s with namespace: %s", Path(script_file).name, namespace)
+    logger.info(
+        "🚀 Running %s with namespace:\n%s",
+        Path(script_file).name,
+        format_namespace(namespace),
+    )
     return namespace
 
 

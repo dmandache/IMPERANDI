@@ -36,6 +36,7 @@ from imperandi.curation.selection_export import (
 from imperandi.process.convert import temporary_nifti_from_dicom
 from imperandi.utils.manifest import load_manifest
 from imperandi.utils.logging import (
+    format_namespace,
     log_script_namespace,
     setup_logging,
 )
@@ -239,7 +240,11 @@ def parse_arguments() -> argparse.Namespace:
     parser = build_parser()
     args = parser.parse_args()
     args = normalize_phase_args(args)
-    logger.info("🚀 Running %s script with arguments: %s", Path(__file__).name, args)
+    logger.info(
+        "🚀 Running %s script with arguments:\n%s",
+        Path(__file__).name,
+        format_namespace(args),
+    )
     return args
 
 

@@ -1,4 +1,5 @@
 import sys
+from ast import literal_eval
 from pathlib import Path
 import json
 import os
@@ -49,24 +50,27 @@ def test_startup_logs_resolved_manifest_on_dry_run(command, tmp_path, caplog):
     expected = ["parse.py", "clean.py"] if command == "ingest" else [f"{command}.py"]
     assert [r.args[0] for r in records] == expected
     for record in records:
-        name, logged = record.args
-        assert logged.manifest == str(path)
-        assert not hasattr(logged, "_handler")
+        name, formatted = record.args
+        assert "with namespace:\n" in record.getMessage()
+        assert "\n" in formatted
+        logged = literal_eval(formatted)
+        assert logged["manifest"] == str(path)
+        assert "_handler" not in logged
         if name == "parse.py":
-            assert logged.id_standardization == manifest["id_standardization"]
+            assert logged["id_standardization"] == manifest["id_standardization"]
         elif name == "clean.py":
-            assert logged.cleaning["steps"]
+            assert logged["cleaning"]["steps"]
         elif name == "convert.py":
-            assert logged.checkpoint_manifest_config == manifest
+            assert logged["checkpoint_manifest_config"] == manifest
         elif name == "phase.py":
             assert (
-                logged.phase_curation["strategies"][0]["name"]
+                logged["phase_curation"]["strategies"][0]["name"]
                 == manifest["phase_curation"]["strategies"][0]["name"]
             )
         elif name == "segment.py":
-            assert logged.segmentation["modalities"]["CT"]["tasks"]
+            assert logged["segmentation"]["modalities"]["CT"]["tasks"]
         elif name == "radiomics.py":
-            assert logged.filters == [
+            assert logged["filters"] == [
                 {
                     "kind": "keep",
                     "logic": "and",
@@ -76,10 +80,10 @@ def test_startup_logs_resolved_manifest_on_dry_run(command, tmp_path, caplog):
                 }
             ]
             assert (
-                logged.pyradiomics_settings["modalities"]["CT"]["setting"]["binWidth"]
+                logged["pyradiomics_settings"]["modalities"]["CT"]["setting"]["binWidth"]
                 == 17
             )
-            assert logged.pyradiomics_settings_source == "manifest"
+            assert logged["pyradiomics_settings_source"] == "manifest"
             assert args.filters == {"phase": ["CLI_PHASE"]}
     assert set(tmp_path.rglob("*")) == before
 
@@ -161,10 +165,8 @@ def test_cli_clean_accepts_positional_csv_path_and_csv_path_out(tmp_path, capsys
         ]
     )
 
-    output = capsys.readouterr().out.replace("\\\\", "\\")
-    csv_path_out_line = next(
-        line for line in output.splitlines() if line.strip().startswith("csv_path_out")
-    )
+    output = capsys.readouterr().out
+    csv_path_out_line = literal_eval(output)["csv_path_out"]
     assert exit_code == 0
     assert str(csv_out) in csv_path_out_line
 
@@ -186,10 +188,8 @@ def test_cli_clean_prefers_flag_csv_path_out_over_positional(tmp_path, capsys):
         ]
     )
 
-    output = capsys.readouterr().out.replace("\\\\", "\\")
-    csv_path_out_line = next(
-        line for line in output.splitlines() if line.strip().startswith("csv_path_out")
-    )
+    output = capsys.readouterr().out
+    csv_path_out_line = literal_eval(output)["csv_path_out"]
     assert exit_code == 0
     assert str(csv_out_opt) in csv_path_out_line
 
@@ -245,10 +245,8 @@ def test_cli_phase_accepts_positional_csv_path_and_csv_path_out(tmp_path, capsys
         ]
     )
 
-    output = capsys.readouterr().out.replace("\\\\", "\\")
-    csv_path_out_line = next(
-        line for line in output.splitlines() if line.strip().startswith("csv_path_out")
-    )
+    output = capsys.readouterr().out
+    csv_path_out_line = literal_eval(output)["csv_path_out"]
     assert exit_code == 0
     assert str(csv_out) in csv_path_out_line
 
@@ -270,10 +268,8 @@ def test_cli_phase_prefers_flag_csv_path_out_over_positional(tmp_path, capsys):
         ]
     )
 
-    output = capsys.readouterr().out.replace("\\\\", "\\")
-    csv_path_out_line = next(
-        line for line in output.splitlines() if line.strip().startswith("csv_path_out")
-    )
+    output = capsys.readouterr().out
+    csv_path_out_line = literal_eval(output)["csv_path_out"]
     assert exit_code == 0
     assert str(csv_out_opt) in csv_path_out_line
 
@@ -308,10 +304,8 @@ def test_cli_radiomics_accepts_positional_csv_path_and_csv_path_out(tmp_path, ca
         ]
     )
 
-    output = capsys.readouterr().out.replace("\\\\", "\\")
-    csv_path_out_line = next(
-        line for line in output.splitlines() if line.strip().startswith("csv_path_out")
-    )
+    output = capsys.readouterr().out
+    csv_path_out_line = literal_eval(output)["csv_path_out"]
     assert exit_code == 0
     assert str(csv_out) in csv_path_out_line
 
@@ -333,10 +327,8 @@ def test_cli_radiomics_prefers_flag_csv_path_out_over_positional(tmp_path, capsy
         ]
     )
 
-    output = capsys.readouterr().out.replace("\\\\", "\\")
-    csv_path_out_line = next(
-        line for line in output.splitlines() if line.strip().startswith("csv_path_out")
-    )
+    output = capsys.readouterr().out
+    csv_path_out_line = literal_eval(output)["csv_path_out"]
     assert exit_code == 0
     assert str(csv_out_opt) in csv_path_out_line
 
@@ -410,10 +402,8 @@ def test_cli_radiomics_accepts_repeatable_filter_flags(tmp_path, capsys):
         ]
     )
 
-    output = capsys.readouterr().out.replace("\\\\", "\\")
-    filters_line = next(
-        line for line in output.splitlines() if line.strip().startswith("filters")
-    )
+    output = capsys.readouterr().out
+    filters_line = repr(literal_eval(output)["filters"])
     assert exit_code == 0
     assert (
         "'column': 'phase', 'op': 'in', 'value': ['portal', 'arteriel']" in filters_line
@@ -486,11 +476,9 @@ def test_cli_parse_resume_enabled_by_default(tmp_path, capsys):
     )
 
     output = capsys.readouterr().out
-    resume_line = next(
-        line for line in output.splitlines() if line.strip().startswith("resume")
-    )
+    resume = literal_eval(output)["resume"]
     assert exit_code == 0
-    assert resume_line.strip().endswith("True")
+    assert resume is True
 
 
 def test_cli_parse_no_resume_disables_resume(tmp_path, capsys):
@@ -510,11 +498,9 @@ def test_cli_parse_no_resume_disables_resume(tmp_path, capsys):
     )
 
     output = capsys.readouterr().out
-    resume_line = next(
-        line for line in output.splitlines() if line.strip().startswith("resume")
-    )
+    resume = literal_eval(output)["resume"]
     assert exit_code == 0
-    assert resume_line.strip().endswith("False")
+    assert resume is False
 
 
 def test_cli_parse_rejects_removed_resume_flag(tmp_path):

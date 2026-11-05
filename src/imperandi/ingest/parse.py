@@ -24,6 +24,7 @@ from imperandi.utils.archive_io import (
     read_archive_member_bytes,
 )
 from imperandi.utils.logging import (
+    format_namespace,
     log_script_namespace,
     log_task_summary,
     setup_logging,
@@ -498,7 +499,11 @@ def parse_arguments():
     parser = build_parser()
     args = parser.parse_args()
     args = normalize_parse_args(args)
-    logger.info("🚀 Running %s with args: %s", Path(__file__).name, args)
+    logger.info(
+        "🚀 Running %s with args:\n%s",
+        Path(__file__).name,
+        format_namespace(args),
+    )
     return args
 
 

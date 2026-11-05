@@ -20,6 +20,7 @@ from imperandi.utils.archive_io import (
 )
 from imperandi.utils.files import copy_files_to_temp_dir, check_file, is_valid_nifti
 from imperandi.utils.logging import (
+    format_namespace,
     log_script_namespace,
     log_task_summary,
     setup_logging,
@@ -183,7 +184,11 @@ def parse_arguments():
     parser = build_parser()
     args = parser.parse_args()
     args = normalize_convert_args(args)
-    logger.debug("Running %s script with arguments: %s", Path(__file__).name, args)
+    logger.debug(
+        "Running %s script with arguments:\n%s",
+        Path(__file__).name,
+        format_namespace(args),
+    )
     return args
 
 

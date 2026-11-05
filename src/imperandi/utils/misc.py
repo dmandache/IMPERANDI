@@ -2,17 +2,13 @@ import argparse
 import logging
 import pandas as pd
 
+from imperandi.utils.logging import format_namespace
+
 logger = logging.getLogger(__name__)
 
 
 def print_args(args: argparse.Namespace) -> None:
-    items = vars(args)
-    width = max(len(k) for k in items)
-
-    for arg in sorted(items):
-        value = items[arg]
-        value_str = "None" if value is None else repr(value)
-        print(f"{arg:<{width}} : {value_str}")
+    print(format_namespace(args))
 
 
 def report_volumes(df, step_name=None):
