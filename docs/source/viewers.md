@@ -1,6 +1,6 @@
 # Quality-control viewers
 
-![viweer-screenshot](https://raw.githubusercontent.com/dmandache/IMPERANDI/main/static/viewer-demo.png){width=700}
+![viweer-screenshot](https://raw.githubusercontent.com/dmandache/IMPERANDI/main/static/viewer-demo.png)
 
 Use the notebook or browser viewer to inspect CT/MR images and segmentation
 masks from a cohort CSV. Install the viewer dependencies in the environment
