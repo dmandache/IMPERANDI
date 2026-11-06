@@ -1,11 +1,6 @@
 # Quality-control viewers
 
-.. figure:: https://raw.githubusercontent.com/dmandache/IMPERANDI/main/static/viewer-demo.png
-   :alt: Viewer interface example
-   :width: 700px
-   :align: center
-
-   Example of the IMPERANDI interactive viewer interface in a Jupyter Notebook.
+![viweer-screenshot](https://raw.githubusercontent.com/dmandache/IMPERANDI/main/static/viewer-demo.png){width=700}
 
 Use the notebook or browser viewer to inspect CT/MR images and segmentation
 masks from a cohort CSV. Install the viewer dependencies in the environment
