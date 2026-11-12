@@ -46,6 +46,16 @@ Try IMPERANDI on three public TCGA-LIHC patients:
 | [Light demo](examples/demos/demo_light.ipynb) | DICOM ingestion, metadata phase curation, and QC. | [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/dmandache/IMPERANDI/blob/main/examples/demos/demo_light.ipynb) |
 | [Full demo](examples/demos/demo_full.ipynb) | Adds NIfTI conversion, liver segmentation, radiomics, the interactive viewer and TorchIO preprocessing into a PyTorch batch. | [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/dmandache/IMPERANDI/blob/main/examples/demos/demo_full.ipynb) |
 
+## Start here
+
+Choose the path that matches what you want to do:
+
+- **Explore the workflow:** try the [light Colab demo](https://colab.research.google.com/github/dmandache/IMPERANDI/blob/main/examples/demos/demo_light.ipynb) on public data.
+- **Process your own cohort:** follow the [quickstart](#quickstart). Point `--root_path` to the root folder containing your DICOM files.
+- **Adapt IMPERANDI to your dataset:** copy the [manifest blueprint](examples/blueprint_manifest_example.yaml) and customize it for your identifiers and curation rules.
+
+You can start with metadata curation, then add conversion, segmentation, registration or radiomics extraction as needed.
+
 ## What IMPERANDI does
 
 <p align="center">
