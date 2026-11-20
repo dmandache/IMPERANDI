@@ -60,7 +60,7 @@ You can start with metadata curation, then add conversion, segmentation, registr
 
 <p align="center">
   <a href="#">
-  <img src="https://raw.githubusercontent.com/dmandache/IMPERANDI/main/static/imperandi-banner.png"
+  <img src="https://raw.githubusercontent.com/dmandache/IMPERANDI/main/static/imperandi-pipeline.png"
        alt="IMPERANDI"
        width="100%">
   </a>
@@ -77,24 +77,6 @@ You can start with metadata curation, then add conversion, segmentation, registr
 | `register` | Align organs within configured groups and optionally combine masks in native or common-reference space. | Registered/consensus masks, original paths, and registration QC. |
 | `radiomics` | Extract PyRadiomics features using modality-specific settings and cohort filters. | ROI-prefixed feature columns. |
 | QC viewers | Browse images and mask overlays in Jupyter or a browser. | Interactive review of the cohort. |
-
-```text
-DICOM folders / archives
-          |
-        parse ------------> DICOM index (slice-level metadata CSV)
-          |
-        clean ------------> selected cohort (volume-level CSV)
-          |
-        phase ------------> phase provenance + selection per category
-          |
-        convert ----------> NIfTI images
-          |
-        segment ----------> organ + tumor masks
-          |
-        register ---------> organ alignment + tumor consensus 
-          |
-        radiomics --------> feature table
-```
 
 Phase resolution can also run before segmentation. Radiomics needs image and
 mask paths, plus a `phase` column when phase-based filtering is configured.
